@@ -99,3 +99,67 @@ async def test_search_key_crud_and_mask(cat_app):
 
         kid = r2.json()["id"]
         assert (await c.delete(f"/api/search-keys/{kid}")).status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_model_test_endpoint(cat_app, monkeypatch):
+    from deep_research import catalog_api
+
+    async with _client() as c:
+        pid = (
+            await c.post("/api/models", json={"name": "p", "model": "m", "api_key": "sk-xxxx"})
+        ).json()["id"]
+
+        # 成功路径:探针被替换为无操作
+        async def ok_probe(profile, settings):
+            return None
+
+        monkeypatch.setattr(catalog_api, "_probe_llm", ok_probe)
+        body = (await c.post(f"/api/models/{pid}/test")).json()
+        assert body["ok"] is True and body["latency_ms"] >= 0
+
+        # 失败路径:探针抛异常 → ok=false + detail
+        async def bad_probe(profile, settings):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(catalog_api, "_probe_llm", bad_probe)
+        body = (await c.post(f"/api/models/{pid}/test")).json()
+        assert body["ok"] is False and "boom" in body["detail"]
+
+        # 404:不存在的档案
+        assert (await c.post("/api/models/nope/test")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_model_test_without_key(cat_app):
+    async with _client() as c:
+        pid = (await c.post("/api/models", json={"name": "p", "model": "m"})).json()["id"]
+        body = (await c.post(f"/api/models/{pid}/test")).json()
+        assert body["ok"] is False and "API Key" in body["detail"]
+
+
+@pytest.mark.asyncio
+async def test_search_key_test_endpoint(cat_app, monkeypatch):
+    from deep_research import catalog_api
+
+    async with _client() as c:
+        kid = (
+            await c.post("/api/search-keys", json={"api_key": "tvly-x"})
+        ).json()["id"]
+
+        async def ok_probe(api_key):
+            assert api_key == "tvly-x"  # 传入明文 key
+
+        monkeypatch.setattr(catalog_api, "_probe_search", ok_probe)
+        body = (await c.post(f"/api/search-keys/{kid}/test")).json()
+        assert body["ok"] is True
+
+        async def bad_probe(api_key):
+            raise RuntimeError("429 quota")
+
+        monkeypatch.setattr(catalog_api, "_probe_search", bad_probe)
+        body = (await c.post(f"/api/search-keys/{kid}/test")).json()
+        assert body["ok"] is False and "quota" in body["detail"]
+
+        assert (await c.post("/api/search-keys/nope/test")).status_code == 404
+

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
@@ -14,10 +16,13 @@ from .catalog.dto import (
     AgentCardCreate,
     AgentCardUpdate,
     AgentCardView,
+    ModelProfileFull,
     ModelProfileView,
     SearchKeyView,
 )
 from .catalog.repository import CatalogRepository
+from .config import Settings
+from .observability import Tracer
 
 
 class ProfileCreate(BaseModel):
@@ -50,6 +55,54 @@ class KeyUpdate(BaseModel):
     api_key: str | None = Field(None, max_length=500)
     priority: int | None = Field(None, ge=0, le=1000)
     enabled: bool | None = None
+
+
+class TestResult(BaseModel):
+    """「测试连接」结果：ok=是否可用、latency_ms=往返耗时、detail=失败原因。"""
+
+    ok: bool
+    latency_ms: int
+    detail: str = ""
+
+
+# ── 连通性探针（网络调用隔离到此，便于单测 monkeypatch）────────────────────
+async def _probe_llm(profile: ModelProfileFull, settings: Settings) -> None:
+    """用档案参数建一次性 LLM，发最小补全验证端点/key 可用；失败抛异常。"""
+    from .llm import LLM
+
+    llm = LLM.from_params(
+        Tracer(),
+        api_key=profile.api_key,
+        base_url=profile.base_url,
+        model=profile.model,
+        timeout=settings.request_timeout,
+        user_agent=settings.llm_user_agent,
+        temperature=0.0,
+    )
+    try:
+        await llm.complete("connectivity test", "ping", temperature=0.0)
+    finally:
+        await llm.aclose()
+
+
+async def _probe_search(api_key: str) -> None:
+    """用单个 key 发一次最小检索验证可用;失败抛异常。"""
+    from tavily import AsyncTavilyClient
+
+    client = AsyncTavilyClient(api_key=api_key)
+    await client.search("ping", max_results=1)
+
+
+async def _run_probe(coro) -> TestResult:  # type: ignore[no-untyped-def]
+    """统一计时 + 异常归一:成功 ok=true,异常 ok=false 并截断 detail。"""
+    start = time.perf_counter()
+    try:
+        await coro
+    except Exception as e:  # noqa: BLE001 —— 任何失败都归一为不可用,不向上抛
+        elapsed = int((time.perf_counter() - start) * 1000)
+        return TestResult(ok=False, latency_ms=elapsed, detail=str(e)[:300])
+    elapsed = int((time.perf_counter() - start) * 1000)
+    return TestResult(ok=True, latency_ms=elapsed)
 
 
 def _catalog(request: Request) -> CatalogRepository:
@@ -99,6 +152,17 @@ async def delete_model(profile_id: str, request: Request) -> Response:
     if not await _catalog(request).delete_profile(profile_id):
         raise HTTPException(status_code=404, detail="model profile not found")
     return Response(status_code=204)
+
+
+@router.post("/models/{profile_id}/test")
+async def test_model(profile_id: str, request: Request) -> TestResult:
+    """对模型档案发一个最小补全,验证 base_url/key/model 可用。"""
+    profile = await _catalog(request).get_profile_full(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="model profile not found")
+    if not profile.api_key:
+        return TestResult(ok=False, latency_ms=0, detail="未设置 API Key")
+    return await _run_probe(_probe_llm(profile, request.app.state.settings))
 
 
 # ── 角色卡片 ────────────────────────────────────────────────────────────
@@ -157,3 +221,12 @@ async def delete_key(key_id: str, request: Request) -> Response:
     if not await _catalog(request).delete_key(key_id):
         raise HTTPException(status_code=404, detail="search key not found")
     return Response(status_code=204)
+
+
+@router.post("/search-keys/{key_id}/test")
+async def test_key(key_id: str, request: Request) -> TestResult:
+    """对搜索 key 发一次最小检索,验证 key 可用。"""
+    secret = await _catalog(request).get_key_secret(key_id)
+    if secret is None:
+        raise HTTPException(status_code=404, detail="search key not found")
+    return await _run_probe(_probe_search(secret))

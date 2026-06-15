@@ -1239,6 +1239,51 @@ p {
   opacity: 0.5;
 }
 
+/* ── 分页签（角色广场:角色 / 模型档案 / 检索 Key）─────────────────── */
+.tabs {
+  display: flex;
+  gap: 8px;
+}
+.tab {
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+.tab:hover {
+  color: var(--text);
+}
+.tab.active {
+  color: #1a1407;
+  background: var(--gold-grad);
+  border-color: transparent;
+  box-shadow: var(--glow-gold-sm);
+}
+
+/* ── 测试连接结果(就地显示在卡片上)──────────────────────────────── */
+.test-result {
+  font-size: 12px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.03);
+  word-break: break-word;
+}
+.test-result.test-pending {
+  color: var(--muted);
+}
+.test-result.test-ok {
+  color: var(--ok);
+}
+.test-result.test-fail {
+  color: var(--danger);
+}
+
 /* ── 弹窗 ────────────────────────────────────────────────────────── */
 .modal-backdrop {
   position: fixed;

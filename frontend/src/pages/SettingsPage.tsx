@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import Skeleton from '../components/Skeleton'
+import { useModels, useSearchKeys } from '../hooks/useCatalog'
 import { useConfig, useUpdateConfig } from '../hooks/useConfig'
 import type { ConfigUpdate, ConfigView } from '../types'
 
@@ -18,10 +20,6 @@ const NUM_FIELDS: NumField[] = [
 ]
 
 interface FormState {
-  llm_model: string
-  llm_base_url: string
-  llm_api_key: string // 始终留空＝保持不变；填写＝覆盖
-  tavily_api_key: string
   max_sub_questions: number
   max_rounds: number
   max_concurrency: number
@@ -31,10 +29,6 @@ interface FormState {
 
 function toForm(c: ConfigView): FormState {
   return {
-    llm_model: c.llm_model,
-    llm_base_url: c.llm_base_url ?? '',
-    llm_api_key: '',
-    tavily_api_key: '',
     max_sub_questions: c.max_sub_questions,
     max_rounds: c.max_rounds,
     max_concurrency: c.max_concurrency,
@@ -43,8 +37,50 @@ function toForm(c: ConfigView): FormState {
   }
 }
 
-function secretPlaceholder(set: boolean, hint: string): string {
-  return set ? `已设置（${hint}）· 留空不改` : '未设置'
+/** 只读「当前生效配置」摘要：LLM 与检索 key 在角色广场维护,此处仅展示实际生效值 + 兜底来源。 */
+function EffectiveConfig({ config }: { config: ConfigView }) {
+  const models = useModels()
+  const keys = useSearchKeys()
+
+  const defaultProfile = models.data?.find((p) => p.is_default)
+  const activeKeys = keys.data?.filter((k) => k.enabled).length ?? 0
+
+  const modelLine = defaultProfile
+    ? `${defaultProfile.name} · ${defaultProfile.model} · ${defaultProfile.base_url || '官方端点'}`
+    : `${config.llm_model} · ${config.llm_base_url || '官方端点'}（环境变量兜底）`
+
+  const keyLine =
+    activeKeys > 0
+      ? `Key 池：启用 ${activeKeys} 个（主备故障转移）`
+      : config.tavily_api_key_set
+        ? '单个环境变量 key（兜底）'
+        : '未配置'
+
+  return (
+    <div className="panel">
+      <div className="row between">
+        <h3 className="panel-title">当前生效配置</h3>
+        <Link to="/agents" className="nav-link">
+          去角色广场管理 →
+        </Link>
+      </div>
+      <p className="hint" style={{ marginBottom: 14 }}>
+        模型与检索 Key 现统一在角色广场维护。角色绑定的档案 / Key 池优先生效,以下环境变量仅作未配置时的兜底。
+      </p>
+      <div className="list-row">
+        <div>
+          <strong>默认模型</strong>
+          <div className="muted small">{modelLine}</div>
+        </div>
+      </div>
+      <div className="list-row">
+        <div>
+          <strong>检索 Key</strong>
+          <div className="muted small">{keyLine}</div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export default function SettingsPage() {
@@ -52,7 +88,7 @@ export default function SettingsPage() {
   const update = useUpdateConfig()
   const [form, setForm] = useState<FormState | null>(null)
 
-  // 配置到达后初始化表单（密钥保持空）
+  // 配置到达后初始化表单
   useEffect(() => {
     if (data && form === null) setForm(toForm(data))
   }, [data, form])
@@ -67,27 +103,25 @@ export default function SettingsPage() {
   function save() {
     if (!form) return
     const body: ConfigUpdate = {
-      llm_model: form.llm_model.trim(),
-      llm_base_url: form.llm_base_url.trim(),
       max_sub_questions: form.max_sub_questions,
       max_rounds: form.max_rounds,
       max_concurrency: form.max_concurrency,
       results_per_search: form.results_per_search,
       request_timeout: form.request_timeout,
     }
-    if (form.llm_api_key) body.llm_api_key = form.llm_api_key
-    if (form.tavily_api_key) body.tavily_api_key = form.tavily_api_key
     update.mutate(body, {
-      onSuccess: (next) => setForm(toForm(next)), // 重置：密钥清空、回显最新脱敏
+      onSuccess: (next) => setForm(toForm(next)),
     })
   }
 
   return (
     <div className="stack">
+      {data && <EffectiveConfig config={data} />}
+
       <div className="panel">
-        <h3 className="panel-title">全局设置</h3>
+        <h3 className="panel-title">研究行为默认值</h3>
         <p className="hint" style={{ marginBottom: 18 }}>
-          修改后持久化到服务端，对此后创建的研究生效。密钥仅脱敏回显，留空表示不修改。
+          修改后持久化到服务端,对此后创建的研究生效（单次研究亦可在新建页临时覆盖）。
         </p>
 
         {isLoading && <Skeleton rows={6} />}
@@ -97,55 +131,6 @@ export default function SettingsPage() {
 
         {form && data && (
           <div className="stack">
-            <label className="field-label" htmlFor="llm_model">
-              LLM 模型
-            </label>
-            <input
-              id="llm_model"
-              className="input"
-              value={form.llm_model}
-              onChange={(e) => setForm({ ...form, llm_model: e.target.value })}
-              placeholder="如 gpt-4o-mini / deepseek-chat / qwen-plus"
-            />
-
-            <label className="field-label" htmlFor="llm_base_url">
-              LLM Base URL（留空＝官方默认端点）
-            </label>
-            <input
-              id="llm_base_url"
-              className="input"
-              value={form.llm_base_url}
-              onChange={(e) => setForm({ ...form, llm_base_url: e.target.value })}
-              placeholder="https://api.openai.com/v1"
-            />
-
-            <label className="field-label" htmlFor="llm_api_key">
-              LLM API Key
-            </label>
-            <input
-              id="llm_api_key"
-              className="input"
-              type="password"
-              autoComplete="off"
-              value={form.llm_api_key}
-              onChange={(e) => setForm({ ...form, llm_api_key: e.target.value })}
-              placeholder={secretPlaceholder(data.llm_api_key_set, data.llm_api_key_hint)}
-            />
-
-            <label className="field-label" htmlFor="tavily_api_key">
-              Tavily API Key（检索）
-            </label>
-            <input
-              id="tavily_api_key"
-              className="input"
-              type="password"
-              autoComplete="off"
-              value={form.tavily_api_key}
-              onChange={(e) => setForm({ ...form, tavily_api_key: e.target.value })}
-              placeholder={secretPlaceholder(data.tavily_api_key_set, data.tavily_api_key_hint)}
-            />
-
-            <label className="field-label">研究行为默认值</label>
             <div className="settings-grid">
               {NUM_FIELDS.map((f) => (
                 <label key={f.key} className="settings-item">

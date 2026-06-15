@@ -14,6 +14,7 @@ import type {
   SearchKey,
   SearchKeyInput,
   TagCount,
+  TestResult,
 } from '../types'
 
 export class ApiError extends Error {
@@ -191,6 +192,10 @@ export function deleteModel(id: string): Promise<void> {
   return requestVoid(`/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+export function testModel(id: string): Promise<TestResult> {
+  return request<TestResult>(`/api/models/${encodeURIComponent(id)}/test`, { method: 'POST' })
+}
+
 export function listAgents(): Promise<AgentCard[]> {
   return request<AgentCard[]>('/api/agents')
 }
@@ -227,4 +232,8 @@ export function updateSearchKey(id: string, body: SearchKeyInput): Promise<Searc
 
 export function deleteSearchKey(id: string): Promise<void> {
   return requestVoid(`/api/search-keys/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function testSearchKey(id: string): Promise<TestResult> {
+  return request<TestResult>(`/api/search-keys/${encodeURIComponent(id)}/test`, { method: 'POST' })
 }

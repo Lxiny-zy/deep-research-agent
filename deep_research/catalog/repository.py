@@ -226,6 +226,12 @@ class CatalogRepository:
             ).all()
             return [_key_view(r) for r in rows]
 
+    async def get_key_secret(self, key_id: str) -> str | None:
+        """按 id 取明文 key（供「测试连接」单点验证）。不存在返回 None。"""
+        async with self._sm() as s:
+            row = await s.get(orm.SearchKeyRow, key_id)
+            return row.api_key if row else None
+
     async def active_keys(self) -> list[str]:
         """按优先级升序返回启用的明文 key（供检索池故障转移）。"""
         async with self._sm() as s:

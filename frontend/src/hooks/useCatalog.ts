@@ -10,6 +10,8 @@ import {
   listBehaviors,
   listModels,
   listSearchKeys,
+  testModel,
+  testSearchKey,
   updateAgent,
   updateModel,
   updateSearchKey,
@@ -35,6 +37,11 @@ export function useModelMutations() {
     }),
     remove: useMutation({ mutationFn: (id: string) => deleteModel(id), onSuccess: invalidate }),
   }
+}
+
+// 「测试连接」：不 invalidate 缓存，结果由调用方按 id 持有
+export function useTestModel() {
+  return useMutation({ mutationFn: (id: string) => testModel(id) })
 }
 
 // ── 角色卡片 ──────────────────────────────────────────────────────────
@@ -75,4 +82,8 @@ export function useSearchKeyMutations() {
     }),
     remove: useMutation({ mutationFn: (id: string) => deleteSearchKey(id), onSuccess: invalidate }),
   }
+}
+
+export function useTestSearchKey() {
+  return useMutation({ mutationFn: (id: string) => testSearchKey(id) })
 }

@@ -193,3 +193,11 @@ export interface SearchKeyInput {
   priority?: number
   enabled?: boolean
 }
+
+// 「测试连接」结果(POST /api/models|search-keys/{id}/test)
+export interface TestResult {
+  ok: boolean
+  latency_ms: number
+  detail: string
+}
+
