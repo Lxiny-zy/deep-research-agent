@@ -43,6 +43,8 @@ class LLM:
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
             timeout=settings.request_timeout,
+            # 覆盖 SDK 默认 UA：上游网关（Cloudflare 等）可能拦 "OpenAI/Python ..."
+            default_headers={"User-Agent": settings.llm_user_agent},
         )
 
     async def aclose(self) -> None:

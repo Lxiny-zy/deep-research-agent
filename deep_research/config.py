@@ -26,12 +26,24 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+# 部分中转/网关前置 Cloudflare 等 WAF，会按 User-Agent 拦截 openai SDK 默认的
+# "OpenAI/Python ..."（Bot Fight Mode）。默认伪装成常见浏览器 UA 以放行，可经
+# LLM_USER_AGENT 覆盖（若上游无此限制可设任意值，不影响功能）。
+_DEFAULT_LLM_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
 @dataclass
 class Settings:
     # --- LLM（任意 OpenAI 兼容端点）---
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
     llm_base_url: str | None = field(default_factory=lambda: os.getenv("LLM_BASE_URL") or None)
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o-mini"))
+    llm_user_agent: str = field(
+        default_factory=lambda: os.getenv("LLM_USER_AGENT") or _DEFAULT_LLM_UA
+    )
 
     # --- 检索 ---
     tavily_api_key: str = field(default_factory=lambda: os.getenv("TAVILY_API_KEY", ""))
