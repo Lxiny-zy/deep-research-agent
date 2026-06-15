@@ -2,7 +2,7 @@ openai>=1.40,<3
 tavily-python>=0.5,<1
 pydantic>=2.7,<3
 fastapi>=0.110,<1
-uvicorn[standard]>=0.29,<1
+uvicorn[standard]>=0.49.0,<1
 
 # Persistence (PostgreSQL in prod / SQLite locally)
 sqlalchemy[asyncio]>=2.0,<3
