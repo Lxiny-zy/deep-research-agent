@@ -11,6 +11,9 @@ export interface ResearchStreamState {
   status: StreamStatus
   stats: RunStats | null
   dag: DagData | null
+  elapsed: number // 直播耗时下界（已收到事件里的最大 elapsed）
+  tokens: number // 直播累计 token（最新事件携带）
+  findings: number // 直播累计发现数（finding 事件 data.count 之和）
 }
 
 const INITIAL: ResearchStreamState = {
@@ -19,6 +22,9 @@ const INITIAL: ResearchStreamState = {
   status: 'idle',
   stats: null,
   dag: null,
+  elapsed: 0,
+  tokens: 0,
+  findings: 0,
 }
 
 // 只有 ORCHESTRATOR 的 done/error 才是运行终态；
@@ -32,38 +38,49 @@ export function reduceStream(
   prev: ResearchStreamState,
   ev: ResearchEvent,
 ): ResearchStreamState {
+  // 直播统计：耗时取已见最大值（单调），token 取事件携带的累计值（缺省沿用旧值）。
+  // 含 token 事件——合成阶段 token 增量持续到达，可让耗时平滑推进。
+  const base: ResearchStreamState = {
+    ...prev,
+    elapsed: Math.max(prev.elapsed, ev.elapsed ?? 0),
+    tokens: ev.tokens ?? prev.tokens,
+  }
   switch (ev.type) {
     case 'token': {
       const delta = (ev.data as { delta?: string } | null)?.delta ?? ''
-      return { ...prev, reportMarkdown: prev.reportMarkdown + delta }
+      return { ...base, reportMarkdown: base.reportMarkdown + delta }
     }
     case 'report': {
       const report = ev.data as unknown as Report | null
-      return report?.markdown ? { ...prev, reportMarkdown: report.markdown } : prev
+      return report?.markdown ? { ...base, reportMarkdown: report.markdown } : base
+    }
+    case 'finding': {
+      const count = (ev.data as { count?: number } | null)?.count ?? 0
+      return { ...base, findings: base.findings + count, events: [...base.events, ev] }
     }
     case 'done':
       if (!isTerminal(ev)) {
-        return { ...prev, events: [...prev.events, ev] }
+        return { ...base, events: [...base.events, ev] }
       }
       return {
-        ...prev,
+        ...base,
         status: 'done',
-        stats: (ev.data as unknown as RunStats | null) ?? prev.stats,
-        events: [...prev.events, ev],
+        stats: (ev.data as unknown as RunStats | null) ?? base.stats,
+        events: [...base.events, ev],
       }
     case 'error':
       if (!isTerminal(ev)) {
         // 非致命的单点失败：只进时间线，不终止整次运行的展示
-        return { ...prev, events: [...prev.events, ev] }
+        return { ...base, events: [...base.events, ev] }
       }
-      return { ...prev, status: 'error', events: [...prev.events, ev] }
+      return { ...base, status: 'error', events: [...base.events, ev] }
     case 'info': {
       const dag = (ev.data as { dag?: DagData } | null)?.dag
-      return { ...prev, dag: dag ?? prev.dag, events: [...prev.events, ev] }
+      return { ...base, dag: dag ?? base.dag, events: [...base.events, ev] }
     }
     default:
-      // start / finding / round → 时间线
-      return { ...prev, events: [...prev.events, ev] }
+      // start / round → 时间线
+      return { ...base, events: [...base.events, ev] }
   }
 }
 

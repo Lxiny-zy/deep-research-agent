@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from ..models import Report, ResearchPlan, ResearchResult, Source, SubQuestion
 from ..observability import Event
-from .repository import RunDetail, RunSummary
+from .repository import RunDetail, RunSummary, TagCount
 
 
 @dataclass
@@ -23,6 +23,7 @@ class _RunRecord:
     events: list[Event] = field(default_factory=list)
     total_tokens: int = 0
     elapsed: float = 0.0
+    tags: list[str] = field(default_factory=list)
 
 
 class InMemoryRepository:
@@ -70,8 +71,45 @@ class InMemoryRepository:
         rec.total_tokens = total_tokens
         rec.status = "done"
 
-    async def list_runs(self, *, limit: int = 50, offset: int = 0) -> list[RunSummary]:
-        ids = list(reversed(self._order))[offset : offset + limit]
+    async def delete_run(self, run_id: str) -> bool:
+        if run_id not in self._runs:
+            return False
+        del self._runs[run_id]
+        self._order.remove(run_id)
+        return True
+
+    async def set_tags(self, run_id: str, tags: list[str]) -> None:
+        cleaned = list(dict.fromkeys(t.strip() for t in tags if t.strip()))
+        self._runs[run_id].tags = cleaned
+
+    async def list_tags(self) -> list[TagCount]:
+        counts: dict[str, int] = {}
+        for rec in self._runs.values():
+            for tag in rec.tags:
+                counts[tag] = counts.get(tag, 0) + 1
+        # 计数降序、同计数按标签名升序，与 SQL 实现对齐
+        ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        return [TagCount(tag=t, count=c) for t, c in ordered]
+
+    async def list_runs(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        q: str | None = None,
+        tag: str | None = None,
+    ) -> list[RunSummary]:
+        ids = list(reversed(self._order))
+        recs = [self._runs[i] for i in ids]
+        if status:
+            recs = [r for r in recs if r.status == status]
+        if q:
+            ql = q.lower()
+            recs = [r for r in recs if ql in r.query.lower()]
+        if tag:
+            recs = [r for r in recs if tag in r.tags]
+        recs = recs[offset : offset + limit]
         return [
             RunSummary(
                 id=rec.id,
@@ -79,8 +117,9 @@ class InMemoryRepository:
                 status=rec.status,
                 total_tokens=rec.total_tokens,
                 elapsed=rec.elapsed,
+                tags=list(rec.tags),
             )
-            for rec in (self._runs[i] for i in ids)
+            for rec in recs
         ]
 
     async def get_run(self, run_id: str) -> RunDetail | None:
@@ -97,6 +136,7 @@ class InMemoryRepository:
             report=rec.report,
             total_tokens=rec.total_tokens,
             elapsed=rec.elapsed,
+            tags=list(rec.tags),
         )
 
     async def get_events(self, run_id: str, *, after_seq: int = 0) -> list[Event]:

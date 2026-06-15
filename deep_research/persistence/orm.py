@@ -65,6 +65,9 @@ class ResearchRun(Base):
     report: Mapped[ReportRow | None] = relationship(
         back_populates="run", cascade="all, delete-orphan", uselist=False
     )
+    tags: Mapped[list[RunTagRow]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="RunTagRow.tag"
+    )
 
 
 class SubQuestionRow(Base):
@@ -158,3 +161,16 @@ class EventRow(Base):
     data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     run: Mapped[ResearchRun] = relationship(back_populates="events")
+
+
+class RunTagRow(Base):
+    __tablename__ = "run_tag"
+    __table_args__ = (UniqueConstraint("run_id", "tag", name="uq_run_tag"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("research_run.id", ondelete="CASCADE"), index=True
+    )
+    tag: Mapped[str] = mapped_column(String(64))
+
+    run: Mapped[ResearchRun] = relationship(back_populates="tags")

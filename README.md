@@ -106,7 +106,7 @@ cd frontend && npm install && npm run build  # 产出 frontend/dist
 uvicorn deep_research.api:app                # 访问 http://127.0.0.1:8000（加载构建版 SPA）
 ```
 
-页面提供：新建研究（可调研究参数）、实时观看（Agent 时间线 / DAG 分层调度 / 流式报告 / 统计）、历史列表与回放。后端 `GET /` 优先加载 `frontend/dist/index.html`，未构建时回退到占位页。
+页面提供：新建研究（可调研究参数）、实时观看（Agent 时间线 / DAG 分层调度 / 流式报告 / **实时统计**：耗时秒级跳动、token 随阶段累加）、**报告导出**（复制 / 下载 `.md`）、历史列表与回放、**历史管理**（删除单条·批量 / 状态·关键词·标签筛选 / 打标签分类）、**全局设置**（前端改模型 / 端点 / 密钥 / 检索参数并持久化）。后端 `GET /` 优先加载 `frontend/dist/index.html`，未构建时回退到占位页。
 
 ## Docker 一键启动（含 PostgreSQL）
 
@@ -134,11 +134,26 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `POST` | `/api/runs` | 提交研究（后台执行），返回 `run_id` |
-| `GET`  | `/api/runs` | 历史列表（分页 `limit`/`offset`） |
-| `GET`  | `/api/runs/{id}` | 单次详情（计划 + 结果 + 报告） |
+| `GET`  | `/api/runs` | 历史列表（分页 `limit`/`offset`，可按 `status`/`q`/`tag` 筛选） |
+| `GET`  | `/api/runs/{id}` | 单次详情（计划 + 结果 + 报告 + 标签） |
+| `DELETE` | `/api/runs/{id}` | 删除单条（进行中返回 409）；级联清子表 |
+| `POST` | `/api/runs/batch_delete` | 批量删除（body `{ids:[...]}`，跳过进行中） |
+| `PUT`  | `/api/runs/{id}/tags` | 设置标签（替换语义，body `{tags:[...]}`） |
+| `GET`  | `/api/tags` | 全部标签 + 引用计数 |
 | `GET`  | `/api/runs/{id}/events` | 事件回放（支持 `after_seq` 增量） |
 | `GET`  | `/api/runs/{id}/stream` | SSE：进行中实时推送，已结束则从库回放 |
+| `GET`  | `/api/config` | 当前全局配置（密钥脱敏） |
+| `PUT`  | `/api/config` | 更新并持久化全局配置（对后续 run 生效） |
 | `GET`  | `/api/research?q=` | 无持久化的即跑即看快路径（向后兼容） |
+
+## 全局配置 · 前端设置中心
+
+前端「设置」页（`GET`/`PUT /api/config`）可在线修改 LLM 模型 / Base URL / API Key、Tavily Key 与研究行为默认值，**改完即持久化、对后续创建的研究生效**——无需改 `.env` 或重启。
+
+- **加载顺序**：环境变量（基础默认）→ `runtime_config.json`（前端写入的覆盖项）→ per-run `params`（本次运行覆盖）。
+- **密钥安全**：`GET` 只脱敏回显（`…末四位` + 是否已设置），表单留空＝保持不变（不会被回写清空）；端点受 `API_KEY` 鉴权保护。
+- **持久化位置**：默认写当前工作目录 `runtime_config.json`（已 gitignore），可经 `RUNTIME_CONFIG_PATH` 改路径。Docker 部署需把该文件落在挂载卷上才能跨容器重启保留（如设 `RUNTIME_CONFIG_PATH=/data/runtime_config.json` 并挂载 `/data`）。
+- `database_url` 与服务端 `api_key` 不可经前端改（自举 / 鉴权安全），仍只来自环境变量。
 
 ## 数据库迁移（Alembic）
 
@@ -177,6 +192,10 @@ pytest            # 使用假 LLM / 假检索，无需任何密钥或联网
 - [x] 报告流式逐字输出（token streaming）
 - [x] 子问题之间的依赖编排（DAG，而非纯并行）
 - [x] 研究历史持久化 + 事件回放（SQLite / PostgreSQL，Alembic 迁移，Docker 一键起）
+- [x] 实时统计（耗时秒级跳动 + token 随阶段累加，不止结束时一次）
+- [x] 报告导出（Markdown 下载 / 复制）
+- [x] 历史管理（删除单条·批量 / 状态·关键词·标签筛选 / 打标签分类）
+- [x] 前端全局设置中心（模型 / 端点 / 密钥 / 检索参数，持久化生效）
 - [ ] 检索后端增加 Bing / SerpAPI / 自建向量库
 - [ ] 评估接入 LangSmith / Phoenix 做 tracing 看板
-- [ ] 多用户与鉴权、报告导出（PDF / 分享链接）
+- [ ] 多用户与鉴权、报告 PDF 导出 / 分享链接

@@ -2,9 +2,11 @@ import { useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import DagView from '../components/DagView'
 import EventTimeline from '../components/EventTimeline'
+import ReportActions from '../components/ReportActions'
 import ReportView from '../components/ReportView'
 import StatsBar from '../components/StatsBar'
 import StatusBadge from '../components/StatusBadge'
+import TagEditor from '../components/TagEditor'
 import { useResearchStream } from '../hooks/useResearchStream'
 import { useRunDetail } from '../hooks/useRuns'
 import type { RunStatus } from '../types'
@@ -61,9 +63,15 @@ export default function RunPage() {
         {stream.status === 'disconnected' && !dbFinished && (
           <span className="muted small">实时连接已断开，正在轮询获取进度…</span>
         )}
+        {id && <TagEditor runId={id} tags={detail.data?.tags ?? []} />}
       </div>
 
-      <StatsBar stats={stream.stats} detail={detail.data ?? null} />
+      <StatsBar
+        stats={stream.stats}
+        detail={detail.data ?? null}
+        live={{ elapsed: stream.elapsed, tokens: stream.tokens, findings: stream.findings }}
+        streaming={streaming}
+      />
 
       <div className="grid-2">
         <div className="stack">
@@ -79,7 +87,10 @@ export default function RunPage() {
           )}
         </div>
         <div className="panel">
-          <h3 className="panel-title">研究报告</h3>
+          <div className="row between panel-head">
+            <h3 className="panel-title">研究报告</h3>
+            <ReportActions markdown={markdown} query={query} runId={id} />
+          </div>
           <ReportView markdown={markdown} streaming={streaming} />
         </div>
       </div>

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import cast
 
 from ..config import Settings
 from ..llm import LLM
 from ..models import Report, ResearchResult
 from ..observability import Tracer
+from ..registry import register
+from .base import Blackboard, RunContext
 
 SYSTEM = (
     "你是资深分析师。基于给定素材撰写结构化中文研究报告，包含：标题、摘要、分主题的详细分析、结论。"
@@ -17,11 +20,19 @@ SYSTEM = (
 )
 
 
+@register("synthesizer")
 class Synthesizer:
-    def __init__(self, llm: LLM, tracer: Tracer, settings: Settings) -> None:
-        self.llm = llm
-        self.tracer = tracer
-        self.settings = settings
+    def __init__(
+        self, llm: LLM | None = None, tracer: Tracer | None = None, settings: Settings | None = None
+    ) -> None:
+        self.llm = cast(LLM, llm)
+        self.tracer = cast(Tracer, tracer)
+        self.settings = cast(Settings, settings)
+
+    async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
+        self.llm, self.tracer, self.settings = ctx.llm, ctx.tracer, ctx.settings
+        bb.report = await self.run(bb.query, bb.results)
+        return bb
 
     def _material(self, results: list[ResearchResult]) -> tuple[str, dict[str, int]]:
         """整理带 [n] 角标的素材，并返回 URL→编号映射（complete/stream 共用，纯函数）。"""

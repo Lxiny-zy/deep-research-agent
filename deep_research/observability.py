@@ -17,7 +17,10 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-Stage = Literal["PLANNER", "RESEARCHER", "REFLECTOR", "SYNTHESIZER", "ORCHESTRATOR"]
+# Stage 不再是封闭枚举：新增角色（Critic / FactChecker / Coder 等）可直接发自己的事件，
+# 无需改动本文件。下列常量是内置角色的约定值，仅供参考与类型提示，不构成校验白名单。
+Stage = str
+BUILTIN_STAGES = ("PLANNER", "RESEARCHER", "REFLECTOR", "SYNTHESIZER", "ORCHESTRATOR")
 EventType = Literal["start", "info", "finding", "round", "token", "report", "done", "error"]
 
 
@@ -26,6 +29,7 @@ class Event(BaseModel):
     type: EventType
     message: str = ""
     elapsed: float = 0.0  # 距开始的秒数
+    tokens: int = 0  # 事件发生时的累计 token（供前端实时显示；不落库，回放时回退 0）
     data: dict | None = None  # 结构化附带数据（子问题列表、报告内容、token 增量、统计等）
 
 
@@ -65,7 +69,12 @@ class Tracer:
         self, stage: Stage, type: EventType, message: str = "", data: dict | None = None
     ) -> Event:
         event = Event(
-            stage=stage, type=type, message=message, elapsed=round(self.elapsed, 2), data=data
+            stage=stage,
+            type=type,
+            message=message,
+            elapsed=round(self.elapsed, 2),
+            tokens=self.total_tokens,
+            data=data,
         )
         # token 增量是瞬态的：只实时推给 sink，不记录、不落库、不触发同步订阅者（如 CLI 打印）
         if type == "token":

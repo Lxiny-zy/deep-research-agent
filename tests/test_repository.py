@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -29,6 +30,14 @@ async def repo(request):
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
+
+    # 开启外键强制，使 delete_run 的 ondelete=CASCADE 真正级联（与 make_engine 生产路径一致）
+    @sa_event.listens_for(engine.sync_engine, "connect")
+    def _fk(dbapi_conn, _record):  # noqa: ANN001
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+
     await create_all(engine)
     yield SqlRepository(make_sessionmaker(engine))
     await engine.dispose()
@@ -80,6 +89,56 @@ async def test_crud_roundtrip(repo):
 async def test_get_missing_run(repo):
     assert await repo.get_run("does-not-exist") is None
     assert await repo.get_events("does-not-exist") == []
+
+
+@pytest.mark.asyncio
+async def test_delete_run_cascades(repo):
+    run_id = await repo.create_run("待删")
+    await repo.save_report(run_id, Report(query="待删", markdown="# R", citations=[]))
+    await repo.save_events(run_id, [Event(stage="PLANNER", type="start")])
+    await repo.set_tags(run_id, ["x"])
+
+    assert await repo.delete_run(run_id) is True
+    assert await repo.get_run(run_id) is None
+    assert await repo.get_events(run_id) == []  # 子表随之清空
+    assert await repo.list_tags() == []
+    assert await repo.delete_run(run_id) is False  # 再删返回 False
+
+
+@pytest.mark.asyncio
+async def test_set_tags_and_filter_by_tag(repo):
+    a = await repo.create_run("Python 并发")
+    b = await repo.create_run("Rust 所有权")
+    await repo.set_tags(a, ["lang", "py", " py ", ""])  # 去空白 / 去重 / 丢空串
+    await repo.set_tags(b, ["lang", "rust"])
+
+    da = await repo.get_run(a)
+    assert da is not None and sorted(da.tags) == ["lang", "py"]
+
+    summaries = {s.id: s for s in await repo.list_runs()}
+    assert sorted(summaries[a].tags) == ["lang", "py"]
+
+    assert {s.id for s in await repo.list_runs(tag="lang")} == {a, b}
+    assert {s.id for s in await repo.list_runs(tag="py")} == {a}
+
+    counts = {t.tag: t.count for t in await repo.list_tags()}
+    assert counts == {"lang": 2, "py": 1, "rust": 1}
+
+    await repo.set_tags(a, ["only"])  # 替换语义
+    da2 = await repo.get_run(a)
+    assert da2 is not None and da2.tags == ["only"]
+
+
+@pytest.mark.asyncio
+async def test_list_runs_status_and_query_filter(repo):
+    a = await repo.create_run("机器学习入门")
+    b = await repo.create_run("深度学习进阶")
+    await repo.finalize(a, elapsed=1.0, total_tokens=1)  # a → done；b 保持 pending
+
+    assert {s.id for s in await repo.list_runs(status="done")} == {a}
+    assert {s.id for s in await repo.list_runs(status="pending")} == {b}
+    assert {s.id for s in await repo.list_runs(q="学习")} == {a, b}
+    assert {s.id for s in await repo.list_runs(q="深度")} == {b}
 
 
 @pytest.mark.pg

@@ -7,6 +7,7 @@ import './index.css'
 import HistoryPage from './pages/HistoryPage'
 import NewResearchPage from './pages/NewResearchPage'
 import RunPage from './pages/RunPage'
+import SettingsPage from './pages/SettingsPage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 10_000, retry: 1 } },
@@ -20,6 +21,7 @@ const router = createBrowserRouter([
       { index: true, element: <NewResearchPage /> },
       { path: 'runs/:id', element: <RunPage /> },
       { path: 'history', element: <HistoryPage /> },
+      { path: 'settings', element: <SettingsPage /> },
     ],
   },
 ])

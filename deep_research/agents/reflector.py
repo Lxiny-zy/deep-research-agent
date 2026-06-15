@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from ..config import Settings
 from ..llm import LLM
 from ..models import Reflection, ResearchResult
 from ..observability import Tracer
+from ..registry import register
+from .base import Blackboard, RunContext
 
 SYSTEM = (
     "你是研究质检员。评估现有发现是否足以全面、可靠地回答原始问题。"
@@ -13,11 +17,20 @@ SYSTEM = (
 )
 
 
+@register("reflector")
 class Reflector:
-    def __init__(self, llm: LLM, tracer: Tracer, settings: Settings) -> None:
-        self.llm = llm
-        self.tracer = tracer
-        self.settings = settings
+    def __init__(
+        self, llm: LLM | None = None, tracer: Tracer | None = None, settings: Settings | None = None
+    ) -> None:
+        self.llm = cast(LLM, llm)
+        self.tracer = cast(Tracer, tracer)
+        self.settings = cast(Settings, settings)
+
+    async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
+        self.llm, self.tracer, self.settings = ctx.llm, ctx.tracer, ctx.settings
+        reflection = await self.run(bb.query, bb.results)
+        bb.reflections.append(reflection)
+        return bb
 
     async def run(self, query: str, results: list[ResearchResult]) -> Reflection:
         self.tracer.emit("REFLECTOR", "start", "评估证据是否充分…")

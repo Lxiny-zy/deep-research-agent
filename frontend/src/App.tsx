@@ -27,6 +27,9 @@ export default function App() {
           <NavLink to="/history" className={linkClass}>
             历史
           </NavLink>
+          <NavLink to="/settings" className={linkClass}>
+            设置
+          </NavLink>
         </nav>
       </header>
       <main>

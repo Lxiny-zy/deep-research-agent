@@ -20,12 +20,14 @@ def make_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
     engine = create_async_engine(database_url, echo=echo, pool_pre_ping=True)
     if database_url.startswith("sqlite"):
         # SQLite 单写者模型：WAL 允许读写并发、加长 busy_timeout，
-        # 避免多个 run 并发落库时直接抛 "database is locked"
+        # 避免多个 run 并发落库时直接抛 "database is locked"；
+        # 并开启外键强制（默认关闭），使 ondelete=CASCADE 在删除 run 时真正级联清子表
         @sa_event.listens_for(engine.sync_engine, "connect")
         def _sqlite_pragma(dbapi_conn: Any, _record: Any) -> None:
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA busy_timeout=15000")
+            cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
 
     return engine

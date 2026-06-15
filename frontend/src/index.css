@@ -440,6 +440,22 @@ p {
   padding: 14px 32px;
   font-size: 16px;
 }
+.btn.sm {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+/* 面板标题 + 操作同行：保留标题下方间距，但清掉标题自身的 margin 以对齐 */
+.panel-head {
+  margin-bottom: 16px;
+}
+.panel-head .panel-title {
+  margin: 0;
+}
+.report-actions {
+  display: flex;
+  gap: 8px;
+}
 
 .error-text {
   color: var(--danger);
@@ -473,6 +489,12 @@ p {
   border-color: var(--border-gold-strong);
   color: var(--gold-hi);
   background: var(--gold-grad-soft);
+}
+.chip.active {
+  border-color: var(--gold);
+  color: var(--gold-hi);
+  background: var(--gold-grad-soft);
+  font-weight: 600;
 }
 
 /* ============================================================================
@@ -518,12 +540,56 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex-wrap: wrap;
 }
 .run-q {
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--serif);
   font-size: 19px;
   font-weight: 700;
   line-height: 1.35;
+}
+.tag-editor {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.tag-chip.removable {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.tag-x {
+  border: none;
+  background: transparent;
+  color: var(--gold-deep);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.7;
+}
+.tag-x:hover {
+  opacity: 1;
+  color: var(--danger);
+}
+.tag-input {
+  width: 90px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.tag-input:focus {
+  border-color: var(--gold);
+  border-style: solid;
 }
 .grid-2 {
   display: grid;
@@ -751,6 +817,33 @@ p {
 /* ============================================================================
    历史列表
    ========================================================================== */
+.filter-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.filter-bar .input {
+  flex: 1;
+}
+.select {
+  flex: none;
+  width: auto;
+  min-width: 130px;
+  cursor: pointer;
+}
+.run-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0 6px;
+}
+.check-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
 .run-list {
   display: flex;
   flex-direction: column;
@@ -760,7 +853,7 @@ p {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 14px;
   padding: 15px 16px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
@@ -770,21 +863,66 @@ p {
 }
 .run-item:hover {
   border-color: var(--border-gold-strong);
-  transform: translateX(3px);
+}
+.run-check {
+  flex: none;
+  cursor: pointer;
+}
+.run-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text);
 }
 .run-item-q {
-  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
 }
+.run-item-main:hover .run-item-q {
+  color: var(--gold-hi);
+}
+.run-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tag-chip {
+  font-size: 11px;
+  color: var(--gold-deep);
+  background: var(--gold-grad-soft);
+  border: 1px solid var(--border-gold);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
 .run-item-meta {
   flex: none;
   display: flex;
   align-items: center;
   gap: 12px;
+}
+.icon-btn {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.18s var(--ease);
+}
+.icon-btn:hover {
+  border-color: rgba(255, 107, 107, 0.5);
+  color: var(--danger);
 }
 
 /* ============================================================================

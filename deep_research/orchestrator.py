@@ -1,12 +1,16 @@
-"""编排器：把 Planner → Researcher(按依赖 DAG 调度) → Reflector(循环) → Synthesizer 串起来。
+"""编排器：用声明式工作流引擎把角色串起来，跑完落库并产出报告。
 
-两种运行方式：
+重构后本类不再写死「Planner→Researcher→Reflector→Synthesizer」的流程，而是：
+  - 组装 RunContext（共享 llm/search/tracer/settings）
+  - 选择一份 Workflow（默认 deep；可经 workflow 参数路由到 quick 等）
+  - 交给 WorkflowEngine 执行，再把黑板上的产物落库
+
+两种运行方式与持久化语义与重构前完全一致：
   - run(query)        ：跑完返回 Report（CLI / 评估用）
   - run_stream(query) ：以事件流方式产出，供 FastAPI 用 SSE 实时推送（Web Demo 用）
 
-可选注入 repo（ResearchRepository）：注入后把运行全过程落库（计划/结果/报告/事件）；
-repo=None 时行为与无持久化完全一致（CLI / eval / 离线单测）。可传入外部 run_id
-（API 先 create_run 拿到 id 再后台执行），否则运行时自行创建。
+可选注入 repo：注入后把运行全过程落库（计划/结果/报告/事件）；repo=None 时
+行为与无持久化完全一致。可传入外部 run_id（API 先 create_run 拿到 id 再后台执行）。
 """
 
 from __future__ import annotations
@@ -14,14 +18,17 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
-from .agents import Planner, Reflector, Researcher, Synthesizer
+from .agents import Planner, Reflector, Researcher, Synthesizer  # noqa: F401 触发角色注册
+from .agents.base import Blackboard, RunContext
 from .config import Settings
-from .dag import build_dag, detect_cycle, topo_layers
 from .llm import LLM
 from .models import Finding, Report, ResearchResult, SubQuestion
 from .observability import Event, Tracer
 from .persistence.repository import ResearchRepository
+from .scheduler import research_dag
 from .tools.base import SearchTool
+from .workflow import WorkflowEngine
+from .workflows import get_workflow
 
 
 class DeepResearchAgent:
@@ -33,11 +40,13 @@ class DeepResearchAgent:
         search_tool: SearchTool | None = None,
         repo: ResearchRepository | None = None,
         run_id: str | None = None,
+        workflow: str | None = None,
     ) -> None:
         self.settings = settings
         self.tracer = Tracer()
         self.repo = repo
         self._run_id = run_id
+        self._workflow_name = workflow
 
         # 依赖注入：测试时传入假的 LLM / 检索工具，无需真实密钥与网络
         if llm is None or search_tool is None:
@@ -50,6 +59,7 @@ class DeepResearchAgent:
             search_tool = TavilySearch(settings.tavily_api_key)
         self.search_tool = search_tool
 
+        # 仍构造具名角色实例：向后兼容（测试替换 self.researcher、直接调用各角色）
         self.planner = Planner(self.llm, self.tracer, settings)
         self.researcher = Researcher(self.llm, self.search_tool, self.tracer, settings)
         self.reflector = Reflector(self.llm, self.tracer, settings)
@@ -57,10 +67,7 @@ class DeepResearchAgent:
         self._sem = asyncio.Semaphore(settings.max_concurrency)
 
     async def aclose(self) -> None:
-        """释放自建 LLM client 的底层 HTTP 连接池（每个 run 一个 agent，不关则只能靠 GC）。
-
-        Tavily 的 AsyncTavilyClient 按请求创建连接，无持久资源需要释放。
-        """
+        """释放自建 LLM client 的底层 HTTP 连接池。注入的 client 归调用方管。"""
         if self._owns_llm:
             await self.llm.aclose()
 
@@ -71,57 +78,8 @@ class DeepResearchAgent:
             return await self.researcher.run(question, context_findings=context_findings)
 
     async def _research_dag(self, sub_questions: list[SubQuestion]) -> list[ResearchResult]:
-        """按依赖拓扑分层并行检索：同层并发，层间串行（后层可用前层发现作上下文）。
-
-        无依赖时退化为单层全并行，行为与纯并行 fan-out 等价。
-        """
-        if not sub_questions:
-            return []
-
-        dag = build_dag([sq.depends_on for sq in sub_questions])
-        cycle = detect_cycle(dag)
-        if cycle:  # 破环降级为纯并行，保证永不死锁
-            self.tracer.emit(
-                "ORCHESTRATOR", "info", f"子问题依赖存在环（{cycle}），降级为纯并行检索"
-            )
-            dag = {i: [] for i in dag}
-
-        layers = topo_layers(dag)
-        if len(layers) > 1:
-            self.tracer.emit(
-                "ORCHESTRATOR",
-                "info",
-                f"按依赖分 {len(layers)} 层调度（每层 {[len(x) for x in layers]} 个）",
-                data={"dag": {"layers": layers, "deps": {str(i): dag[i] for i in dag}}},
-            )
-
-        collected: dict[int, ResearchResult] = {}
-
-        async def _run_idx(i: int) -> tuple[int, ResearchResult | None]:
-            # 汇集前驱已得到的发现，作为本子问题的背景上下文
-            ctx: list[Finding] = []
-            for p in dag[i]:
-                prev = collected.get(p)
-                if prev:
-                    ctx.extend(prev.findings)
-            res = await self._research_one(sub_questions[i].question, ctx or None)
-            return i, res
-
-        for layer in layers:
-            layer_out = await asyncio.gather(*[_run_idx(i) for i in layer], return_exceptions=True)
-            for item in layer_out:
-                if isinstance(item, asyncio.CancelledError):
-                    raise item  # 取消必须向上传播，不可吞
-                if isinstance(item, BaseException):
-                    # Researcher 内部已兜底常规失败，落到这里的是未预期异常：
-                    # 记录而非静默丢弃，否则该子问题会"无痕消失"，极难排查
-                    self.tracer.emit("RESEARCHER", "error", f"子问题执行出现未预期异常：{item}")
-                    continue
-                idx, res = item
-                if isinstance(res, ResearchResult) and res.findings:
-                    collected[idx] = res
-
-        return [collected[i] for i in sorted(collected)]
+        """按依赖拓扑分层并行检索（保留为公开方法：测试替换 self.researcher 后直接调用）。"""
+        return await research_dag(sub_questions, self._research_one, self.tracer)
 
     async def run(self, query: str) -> Report:
         run_id = self._run_id
@@ -133,32 +91,12 @@ class DeepResearchAgent:
 
             self.tracer.emit("ORCHESTRATOR", "start", f"开始深度研究：{query}")
 
-            plan = await self.planner.run(query)
-            if self.repo is not None and run_id is not None:
-                await self.repo.save_plan(run_id, plan)
+            report = await self._run_workflow(query, run_id)
 
-            results = await self._research_dag(plan.sub_questions)
-
-            for rnd in range(self.settings.max_rounds):
-                reflection = await self.reflector.run(query, results)
-                if reflection.is_sufficient or not reflection.new_sub_questions:
-                    break
-                self.tracer.emit("ORCHESTRATOR", "round", f"第 {rnd + 1} 轮补洞")
-                new_subs = [SubQuestion(question=q) for q in reflection.new_sub_questions]
-                if self.repo is not None and run_id is not None:
-                    await self.repo.add_sub_questions(
-                        run_id, new_subs, origin="reflection", round=rnd + 1
-                    )
-                results += await self._research_dag(new_subs)
-
-            report = await self.synthesizer.run(query, results)
             self.tracer.emit("ORCHESTRATOR", "report", "报告生成完成", data=report.model_dump())
 
             # 先落库再发 done：客户端收到 done 后立刻读详情，必须能读到完整数据
             if self.repo is not None and run_id is not None:
-                for r in results:
-                    await self.repo.save_result(run_id, r)
-                await self.repo.save_report(run_id, report)
                 await self.repo.finalize(
                     run_id, elapsed=self.tracer.elapsed, total_tokens=self.tracer.total_tokens
                 )
@@ -182,6 +120,37 @@ class DeepResearchAgent:
             # run 结束（含异常）后一次性落库全部非 token 事件，seq 即顺序，保证回放有序
             if self.repo is not None and run_id is not None:
                 await self.repo.save_events(run_id, self.tracer.events)
+
+    async def _run_workflow(self, query: str, run_id: str | None) -> Report:
+        """组装上下文、执行工作流，并在产出关键里程碑时落库（计划/结果/报告）。
+
+        落库经黑板的「持久化钩子」在引擎步骤之间触发，保证语义与重构前一致：
+        计划生成即落库、研究结果产出即落库、报告生成即落库。
+        """
+        ctx = RunContext(
+            llm=self.llm,
+            search_tool=self.search_tool,
+            tracer=self.tracer,
+            settings=self.settings,
+        )
+        bb = Blackboard(query=query)
+        engine = WorkflowEngine(ctx)
+        wf = get_workflow(self._workflow_name)
+        await engine.run(wf, bb)
+
+        report = bb.report or Report(query=query, markdown="（未生成报告）", citations=[])
+        if self.repo is not None and run_id is not None:
+            if bb.plan is not None:
+                await self.repo.save_plan(run_id, bb.plan)
+            # 回放反思补洞轮次（origin="reflection"），保留重构前的落库语义
+            for rnd in bb.scratch.get("reflection_rounds", []):
+                await self.repo.add_sub_questions(
+                    run_id, rnd["sub_questions"], origin="reflection", round=rnd["round"]
+                )
+            for r in bb.results:
+                await self.repo.save_result(run_id, r)
+            await self.repo.save_report(run_id, report)
+        return report
 
     async def run_stream(self, query: str) -> AsyncIterator[Event]:
         """以事件流方式运行，供 SSE 实时推送。"""

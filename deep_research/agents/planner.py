@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from ..config import Settings
 from ..llm import LLM
 from ..models import ResearchPlan
 from ..observability import Tracer
+from ..registry import register
+from .base import Blackboard, RunContext
 
 SYSTEM = (
     "你是一名资深研究规划师。把用户的研究问题拆解为若干互补、可独立检索的子问题，"
@@ -16,11 +20,21 @@ SYSTEM = (
 )
 
 
+@register("planner")
 class Planner:
-    def __init__(self, llm: LLM, tracer: Tracer, settings: Settings) -> None:
-        self.llm = llm
-        self.tracer = tracer
-        self.settings = settings
+    def __init__(
+        self, llm: LLM | None = None, tracer: Tracer | None = None, settings: Settings | None = None
+    ) -> None:
+        # 依赖可选：经注册表无参构造时为 None，step() 时从 RunContext 绑定；经 orchestrator
+        # 直接构造时照旧传入。属性按非 Optional 标注——使用前必经 step/构造绑定真实依赖。
+        self.llm = cast(LLM, llm)
+        self.tracer = cast(Tracer, tracer)
+        self.settings = cast(Settings, settings)
+
+    async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
+        self.llm, self.tracer, self.settings = ctx.llm, ctx.tracer, ctx.settings
+        bb.plan = await self.run(bb.query)
+        return bb
 
     async def run(self, query: str) -> ResearchPlan:
         self.tracer.emit("PLANNER", "start", "拆解研究问题…")

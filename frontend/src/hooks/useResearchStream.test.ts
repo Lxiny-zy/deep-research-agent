@@ -7,6 +7,9 @@ const base: ResearchStreamState = {
   status: 'streaming',
   stats: null,
   dag: null,
+  elapsed: 0,
+  tokens: 0,
+  findings: 0,
 }
 
 function ev(partial: Partial<ResearchEvent>): ResearchEvent {
@@ -68,5 +71,20 @@ describe('reduceStream', () => {
     let s = reduceStream(base, ev({ stage: 'PLANNER', type: 'start', message: '开始拆解' }))
     s = reduceStream(s, ev({ stage: 'RESEARCHER', type: 'finding', data: { count: 3 } }))
     expect(s.events).toHaveLength(2)
+  })
+
+  it('直播统计：耗时取最大值、token 取携带值、发现数累加', () => {
+    let s = reduceStream(base, ev({ stage: 'PLANNER', type: 'start', elapsed: 0.5, tokens: 10 }))
+    expect(s.elapsed).toBe(0.5)
+    expect(s.tokens).toBe(10)
+    s = reduceStream(s, ev({ stage: 'RESEARCHER', type: 'finding', elapsed: 1.2, tokens: 30, data: { count: 4 } }))
+    expect(s.elapsed).toBe(1.2)
+    expect(s.tokens).toBe(30)
+    expect(s.findings).toBe(4)
+    // 乱序到达的旧 elapsed 不应回退；缺省 tokens 沿用旧值
+    s = reduceStream(s, ev({ stage: 'RESEARCHER', type: 'finding', elapsed: 0.8, data: { count: 1 } }))
+    expect(s.elapsed).toBe(1.2)
+    expect(s.tokens).toBe(30)
+    expect(s.findings).toBe(5)
   })
 })

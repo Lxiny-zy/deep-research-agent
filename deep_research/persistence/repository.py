@@ -30,6 +30,7 @@ class RunSummary:
     created_at: datetime | None = None
     total_tokens: int = 0
     elapsed: float = 0.0
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -46,6 +47,15 @@ class RunDetail:
     total_tokens: int = 0
     elapsed: float = 0.0
     created_at: datetime | None = None
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass
+class TagCount:
+    """标签 + 引用计数（历史筛选侧栏用）。"""
+
+    tag: str
+    count: int
 
 
 class ResearchRepository(Protocol):
@@ -71,7 +81,21 @@ class ResearchRepository(Protocol):
 
     async def finalize(self, run_id: str, *, elapsed: float, total_tokens: int) -> None: ...
 
-    async def list_runs(self, *, limit: int = 50, offset: int = 0) -> list[RunSummary]: ...
+    async def delete_run(self, run_id: str) -> bool: ...
+
+    async def set_tags(self, run_id: str, tags: list[str]) -> None: ...
+
+    async def list_tags(self) -> list[TagCount]: ...
+
+    async def list_runs(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        q: str | None = None,
+        tag: str | None = None,
+    ) -> list[RunSummary]: ...
 
     async def get_run(self, run_id: str) -> RunDetail | None: ...
 

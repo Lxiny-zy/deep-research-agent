@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+from typing import cast
+
 from ..config import Settings
 from ..llm import LLM
 from ..models import Finding, FindingList, ResearchResult
 from ..observability import Tracer
+from ..registry import register
+from ..scheduler import research_dag
 from ..tools.base import SearchTool
+from .base import Blackboard, RunContext
 
 SYSTEM = (
     "你是严谨的研究员。仅依据【给定来源】抽取与子问题直接相关的关键事实；"
@@ -16,14 +22,45 @@ SYSTEM = (
 )
 
 
+@register("researcher")
 class Researcher:
     def __init__(
-        self, llm: LLM, search_tool: SearchTool, tracer: Tracer, settings: Settings
+        self,
+        llm: LLM | None = None,
+        search_tool: SearchTool | None = None,
+        tracer: Tracer | None = None,
+        settings: Settings | None = None,
     ) -> None:
-        self.llm = llm
-        self.search = search_tool
-        self.tracer = tracer
-        self.settings = settings
+        self.llm = cast(LLM, llm)
+        self.search = cast(SearchTool, search_tool)
+        self.tracer = cast(Tracer, tracer)
+        self.settings = cast(Settings, settings)
+
+    async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
+        """工作流入口：对 bb.plan 中尚未研究的子问题做 DAG 分层并行检索，追加到 bb.results。
+
+        只研究「待处理」子问题——首次为 plan 全量，反思补洞后由引擎把新子问题
+        放进 bb.scratch['pending_sub_questions']，本步消费它，实现增量研究。
+        """
+        self.llm, self.search, self.tracer, self.settings = (
+            ctx.llm,
+            ctx.search_tool,
+            ctx.tracer,
+            ctx.settings,
+        )
+        pending = bb.scratch.pop("pending_sub_questions", None)
+        if pending is None:  # 未指定则取整份计划（首轮）
+            pending = bb.plan.sub_questions if bb.plan else []
+        sem = asyncio.Semaphore(ctx.settings.max_concurrency)
+
+        async def _one(
+            question: str, context_findings: list[Finding] | None
+        ) -> ResearchResult | None:
+            async with sem:  # 限流，避免打爆检索 API
+                return await self.run(question, context_findings=context_findings)
+
+        bb.results += await research_dag(pending, _one, ctx.tracer)
+        return bb
 
     async def run(
         self, sub_question: str, context_findings: list[Finding] | None = None

@@ -7,16 +7,17 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any, cast
 
+from sqlalchemy import CursorResult, func, select
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from ..models import Finding, Report, ResearchPlan, ResearchResult, Source, SubQuestion
 from ..observability import Event
 from . import orm
-from .repository import RunDetail, RunSummary
+from .repository import RunDetail, RunSummary, TagCount
 
 
 class SqlRepository:
@@ -132,16 +133,54 @@ class SqlRepository:
                 run.status = "done"
                 run.finished_at = datetime.now(UTC)
 
-    async def list_runs(self, *, limit: int = 50, offset: int = 0) -> list[RunSummary]:
+    async def delete_run(self, run_id: str) -> bool:
+        # 单条 DELETE：DB 级 ondelete=CASCADE 清子表（SQLite 已开 foreign_keys=ON）
+        async with self._sm() as s, s.begin():
+            result = await s.execute(sa_delete(orm.ResearchRun).where(orm.ResearchRun.id == run_id))
+            return bool(cast("CursorResult[Any]", result).rowcount)
+
+    async def set_tags(self, run_id: str, tags: list[str]) -> None:
+        # 替换语义：先清旧标签再写新（去重 + 去空白）
+        cleaned = list(dict.fromkeys(t.strip() for t in tags if t.strip()))
+        async with self._sm() as s, s.begin():
+            await s.execute(sa_delete(orm.RunTagRow).where(orm.RunTagRow.run_id == run_id))
+            for tag in cleaned:
+                s.add(orm.RunTagRow(run_id=run_id, tag=tag))
+
+    async def list_tags(self) -> list[TagCount]:
         async with self._sm() as s:
             rows = (
-                await s.scalars(
-                    select(orm.ResearchRun)
-                    .order_by(orm.ResearchRun.created_at.desc())
-                    .limit(limit)
-                    .offset(offset)
+                await s.execute(
+                    select(orm.RunTagRow.tag, func.count())
+                    .group_by(orm.RunTagRow.tag)
+                    .order_by(func.count().desc(), orm.RunTagRow.tag)
                 )
             ).all()
+            return [TagCount(tag=tag, count=int(count)) for tag, count in rows]
+
+    async def list_runs(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        q: str | None = None,
+        tag: str | None = None,
+    ) -> list[RunSummary]:
+        async with self._sm() as s:
+            stmt = (
+                select(orm.ResearchRun)
+                .options(selectinload(orm.ResearchRun.tags))
+                .order_by(orm.ResearchRun.created_at.desc())
+            )
+            if status:
+                stmt = stmt.where(orm.ResearchRun.status == status)
+            if q:
+                stmt = stmt.where(orm.ResearchRun.query.ilike(f"%{q}%"))
+            if tag:
+                # join 标签表筛选；distinct 防一行多标签时重复
+                stmt = stmt.join(orm.RunTagRow).where(orm.RunTagRow.tag == tag).distinct()
+            rows = (await s.scalars(stmt.limit(limit).offset(offset))).all()
             return [
                 RunSummary(
                     id=r.id,
@@ -150,6 +189,7 @@ class SqlRepository:
                     created_at=r.created_at,
                     total_tokens=r.total_tokens,
                     elapsed=r.elapsed,
+                    tags=[t.tag for t in r.tags],
                 )
                 for r in rows
             ]
@@ -166,6 +206,7 @@ class SqlRepository:
                             orm.ResearchResultRow.findings
                         ),
                         selectinload(orm.ResearchRun.report),
+                        selectinload(orm.ResearchRun.tags),
                     )
                 )
             ).first()
@@ -213,6 +254,7 @@ class SqlRepository:
                 total_tokens=run.total_tokens,
                 elapsed=run.elapsed,
                 created_at=run.created_at,
+                tags=[t.tag for t in run.tags],
             )
 
     async def get_events(self, run_id: str, *, after_seq: int = 0) -> list[Event]:

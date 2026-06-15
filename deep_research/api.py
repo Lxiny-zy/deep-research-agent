@@ -26,18 +26,19 @@ from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import update
 
+from . import runtime_config
 from .config import Settings
 from .observability import Event, EventHub
 from .orchestrator import DeepResearchAgent
 from .persistence import orm
 from .persistence.db import create_all, make_engine, make_sessionmaker
-from .persistence.repository import ResearchRepository, RunDetail, RunSummary
+from .persistence.repository import ResearchRepository, RunDetail, RunSummary, TagCount
 from .persistence.sql_repository import SqlRepository
 
 logger = logging.getLogger(__name__)
@@ -59,10 +60,68 @@ class ResearchParams(BaseModel):
 class CreateRunRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)  # 限长：query 全文进 prompt，防成本放大
     params: ResearchParams | None = None
+    workflow: str | None = Field(default=None, max_length=64)  # 任务流程选择；None＝默认 deep
 
 
 class CreateRunResponse(BaseModel):
     run_id: str
+
+
+class TagsUpdate(BaseModel):
+    tags: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("tags")
+    @classmethod
+    def _clean(cls, v: list[str]) -> list[str]:
+        # 去空白、丢空串、去重、截断到 64 字（与 ORM run_tag.tag 长度一致）
+        out: list[str] = []
+        for raw in v:
+            t = raw.strip()[:64]
+            if t and t not in out:
+                out.append(t)
+        return out
+
+
+class BatchDeleteRequest(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class BatchDeleteResponse(BaseModel):
+    deleted: int
+    skipped: int  # 进行中、跳过删除的数量
+
+
+class ConfigView(BaseModel):
+    """GET /api/config 响应：密钥脱敏，只透露是否已设置 + 尾部 hint。"""
+
+    llm_model: str
+    llm_base_url: str | None
+    llm_api_key_set: bool
+    llm_api_key_hint: str
+    tavily_api_key_set: bool
+    tavily_api_key_hint: str
+    max_sub_questions: int
+    max_rounds: int
+    max_concurrency: int
+    results_per_search: int
+    request_timeout: float
+
+
+class ConfigUpdate(BaseModel):
+    """PUT /api/config 请求：全部可选，仅覆盖显式提供的字段。
+
+    密钥空/省略＝保持不变（避免脱敏表单回写清空）；llm_base_url 显式空串＝清空。
+    """
+
+    llm_model: str | None = Field(default=None, min_length=1, max_length=100)
+    llm_base_url: str | None = Field(default=None, max_length=500)
+    llm_api_key: str | None = Field(default=None, max_length=500)
+    tavily_api_key: str | None = Field(default=None, max_length=500)
+    max_sub_questions: int | None = Field(default=None, ge=1, le=12)
+    max_rounds: int | None = Field(default=None, ge=0, le=5)
+    max_concurrency: int | None = Field(default=None, ge=1, le=16)
+    results_per_search: int | None = Field(default=None, ge=1, le=15)
+    request_timeout: float | None = Field(default=None, gt=0, le=600)
 
 
 def _settings_for(base: Settings, params: ResearchParams | None) -> Settings:
@@ -71,6 +130,30 @@ def _settings_for(base: Settings, params: ResearchParams | None) -> Settings:
         return base
     overrides = {k: v for k, v in params.model_dump().items() if v is not None}
     return replace(base, **overrides) if overrides else base
+
+
+def _mask_secret(secret: str) -> str:
+    """密钥脱敏：只露尾 4 位（不足 4 位整体视为短密钥，仍只露尾部）。"""
+    if not secret:
+        return ""
+    tail = secret[-4:] if len(secret) >= 4 else secret
+    return f"…{tail}"
+
+
+def _config_view(s: Settings) -> ConfigView:
+    return ConfigView(
+        llm_model=s.llm_model,
+        llm_base_url=s.llm_base_url,
+        llm_api_key_set=bool(s.llm_api_key),
+        llm_api_key_hint=_mask_secret(s.llm_api_key),
+        tavily_api_key_set=bool(s.tavily_api_key),
+        tavily_api_key_hint=_mask_secret(s.tavily_api_key),
+        max_sub_questions=s.max_sub_questions,
+        max_rounds=s.max_rounds,
+        max_concurrency=s.max_concurrency,
+        results_per_search=s.results_per_search,
+        request_timeout=s.request_timeout,
+    )
 
 
 async def require_api_key(
@@ -122,6 +205,13 @@ def _check_rate_limit(request: Request) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
+    # 叠加前端持久化的全局配置（runtime_config.json）；损坏/非法不阻塞启动
+    overrides = runtime_config.load_overrides()
+    if overrides:
+        try:
+            settings = runtime_config.apply_overrides(settings, overrides)
+        except Exception:
+            logger.exception("应用持久化配置失败，回退到环境变量配置")
     engine = make_engine(settings.database_url)
     # SQLite（本地/测试）自动建表；PostgreSQL（生产）由 alembic upgrade head 负责
     if settings.database_url.startswith("sqlite"):
@@ -178,14 +268,16 @@ def _sse(event: Event) -> str:
     return f"data: {event.model_dump_json()}\n\n"
 
 
-async def _execute(app: FastAPI, run_id: str, query: str, settings: Settings) -> None:
+async def _execute(
+    app: FastAPI, run_id: str, query: str, settings: Settings, workflow: str | None = None
+) -> None:
     """后台执行一次研究：事件经 EventHub 实时扇出给 SSE 订阅者，全程落库。"""
     hub: EventHub = app.state.live[run_id]
     agent: DeepResearchAgent | None = None
     try:
         # 构造必须在 try 内：缺 API key 等构造期异常同样要走 finally 收尾，
         # 否则 EventHub 泄漏、SSE 订阅者永久挂起、run 卡死在 pending
-        agent = DeepResearchAgent(settings, repo=app.state.repo, run_id=run_id)
+        agent = DeepResearchAgent(settings, repo=app.state.repo, run_id=run_id, workflow=workflow)
         agent.tracer.add_sink(hub.publish)
         await agent.run(query)
     except asyncio.CancelledError:
@@ -243,10 +335,54 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
     run_id = await repo.create_run(req.query)
     request.app.state.live[run_id] = EventHub()
     settings = _settings_for(request.app.state.settings, req.params)
-    task = asyncio.create_task(_execute(request.app, run_id, req.query, settings))
+    task = asyncio.create_task(_execute(request.app, run_id, req.query, settings, req.workflow))
     request.app.state.tasks.add(task)
     task.add_done_callback(request.app.state.tasks.discard)
     return CreateRunResponse(run_id=run_id)
+
+
+@app.get("/api/workflows", dependencies=[Depends(require_api_key)])
+async def list_workflows() -> list[dict[str, str]]:
+    """可选的任务流程列表（供前端选择器）。default 标记缺省流程。"""
+    from .workflows import DEFAULT_WORKFLOW, WORKFLOWS
+
+    return [
+        {
+            "name": wf.name,
+            "description": wf.description,
+            "default": str(wf.name == DEFAULT_WORKFLOW),
+        }
+        for wf in WORKFLOWS.values()
+    ]
+
+
+@app.get("/api/config", dependencies=[Depends(require_api_key)])
+async def get_config(request: Request) -> ConfigView:
+    """当前全局配置（密钥脱敏）。"""
+    return _config_view(request.app.state.settings)
+
+
+@app.put("/api/config", dependencies=[Depends(require_api_key)])
+async def update_config(req: ConfigUpdate, request: Request) -> ConfigView:
+    """更新并持久化全局配置；对后续创建的 run 生效。"""
+    overrides = runtime_config.load_overrides()
+    payload = req.model_dump(exclude_unset=True)
+    for key, value in payload.items():
+        if key in runtime_config.SECRET_FIELDS:
+            if value:  # 空＝保持不变（不被脱敏表单覆盖清空）
+                overrides[key] = value
+        elif key == "llm_base_url":
+            overrides[key] = value or None  # 显式空串＝清空回默认端点
+        else:
+            overrides[key] = value
+    # 以「环境变量 + 新覆盖」重建，复用 Settings.__post_init__ 范围校验
+    try:
+        new_settings = runtime_config.apply_overrides(Settings(), overrides)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=f"配置非法：{e}") from e
+    request.app.state.settings = new_settings
+    runtime_config.save_overrides(overrides)
+    return _config_view(new_settings)
 
 
 @app.get("/api/runs", dependencies=[Depends(require_api_key)])
@@ -254,9 +390,54 @@ async def list_runs(
     request: Request,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    status: str | None = Query(None),
+    q: str | None = Query(None, max_length=200),
+    tag: str | None = Query(None, max_length=64),
 ) -> list[RunSummary]:
     repo: ResearchRepository = request.app.state.repo
-    return await repo.list_runs(limit=limit, offset=offset)
+    return await repo.list_runs(limit=limit, offset=offset, status=status, q=q, tag=tag)
+
+
+@app.get("/api/tags", dependencies=[Depends(require_api_key)])
+async def list_tags(request: Request) -> list[TagCount]:
+    repo: ResearchRepository = request.app.state.repo
+    return await repo.list_tags()
+
+
+@app.delete("/api/runs/{run_id}", status_code=204, dependencies=[Depends(require_api_key)])
+async def delete_run(run_id: str, request: Request) -> Response:
+    app_ = request.app
+    if app_.state.live.get(run_id) is not None:
+        raise HTTPException(status_code=409, detail="运行进行中，无法删除")
+    deleted = await app_.state.repo.delete_run(run_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="run not found")
+    return Response(status_code=204)
+
+
+@app.post("/api/runs/batch_delete", dependencies=[Depends(require_api_key)])
+async def batch_delete(req: BatchDeleteRequest, request: Request) -> BatchDeleteResponse:
+    app_ = request.app
+    deleted = skipped = 0
+    for run_id in req.ids:
+        if app_.state.live.get(run_id) is not None:
+            skipped += 1  # 进行中：跳过而非报错，批量操作尽量推进
+            continue
+        if await app_.state.repo.delete_run(run_id):
+            deleted += 1
+    return BatchDeleteResponse(deleted=deleted, skipped=skipped)
+
+
+@app.put("/api/runs/{run_id}/tags", dependencies=[Depends(require_api_key)])
+async def set_tags(run_id: str, req: TagsUpdate, request: Request) -> RunDetail:
+    repo: ResearchRepository = request.app.state.repo
+    if await repo.get_run(run_id) is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    await repo.set_tags(run_id, req.tags)
+    detail = await repo.get_run(run_id)
+    if detail is None:  # 理论不可达（上面已校验）；类型收敛
+        raise HTTPException(status_code=404, detail="run not found")
+    return detail
 
 
 @app.get("/api/runs/{run_id}", dependencies=[Depends(require_api_key)])

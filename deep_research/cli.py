@@ -34,10 +34,13 @@ async def _amain() -> None:
         help="研究问题",
     )
     parser.add_argument("-o", "--output", default="research_report.md", help="报告输出路径")
+    parser.add_argument(
+        "-w", "--workflow", default=None, help="任务流程（如 deep / quick）；默认 deep"
+    )
     args = parser.parse_args()
 
     print(f"\n🔍 {args.query}\n")
-    agent = DeepResearchAgent(Settings())
+    agent = DeepResearchAgent(Settings(), workflow=args.workflow)
     agent.tracer.subscribe(_print)  # 把事件实时打印到控制台
     report = await agent.run(args.query)
 
