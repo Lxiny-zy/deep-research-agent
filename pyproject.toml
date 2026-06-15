@@ -1,0 +1,28 @@
+[project]
+name = "deep-research-agent"
+version = "0.1.0"
+description = "多 Agent 深度研究系统（Planner / Researcher / Reflector / Synthesizer）"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/F: pycodestyle+pyflakes，I: isort，UP: pyupgrade，B: bugbear，ASYNC: 异步陷阱
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true        # 第三方库（openai/tavily/...）无 stub 时不报错
+disallow_untyped_defs = true
+# 仅对核心包强制完整类型标注；tests/eval 不强制
+files = ["deep_research"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "pg: 需要 PostgreSQL 的集成测试（默认离线运行时以 -m 'not pg' 跳过）",
+]

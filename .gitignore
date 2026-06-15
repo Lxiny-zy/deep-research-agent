@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+research_report.md
+*.db
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
+
+# 前端
+node_modules/
+frontend/dist/
+.vite/

@@ -1,0 +1,18 @@
+# 默认：仓库内统一用 LF，避免跨平台换行符污染 diff
+* text=auto eol=lf
+
+# Shell 脚本必须是 LF，否则在 Linux/Docker 上会报 "not found"
+*.sh text eol=lf
+
+# Windows 批处理脚本保持 CRLF
+*.bat text eol=crlf
+
+# 二进制文件不做换行符转换
+*.db binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

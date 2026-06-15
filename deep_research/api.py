@@ -1,0 +1,339 @@
+"""FastAPI + SSE：实时观看多 Agent 协作 + 持久化历史与回放。
+
+端点：
+  GET  /                       前端入口（构建后的 SPA；开发期前端走 Vite dev server）
+  GET  /healthz                健康检查（容器探针）
+  POST /api/runs               创建研究（后台执行），返回 run_id
+  GET  /api/runs               历史列表
+  GET  /api/runs/{id}          单次详情（计划 + 结果 + 报告）
+  GET  /api/runs/{id}/events   事件回放（一次性，支持 after_seq 增量）
+  GET  /api/runs/{id}/stream   SSE：进行中实时推送 / 已结束回放 DB
+  GET  /api/research?q=        无持久化的即跑即看快路径（向后兼容）
+
+启动：uvicorn deep_research.api:app
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import secrets
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import replace
+from functools import lru_cache
+from pathlib import Path
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from sqlalchemy import update
+
+from .config import Settings
+from .observability import Event, EventHub
+from .orchestrator import DeepResearchAgent
+from .persistence import orm
+from .persistence.db import create_all, make_engine, make_sessionmaker
+from .persistence.repository import ResearchRepository, RunDetail, RunSummary
+from .persistence.sql_repository import SqlRepository
+
+logger = logging.getLogger(__name__)
+
+# 优先用构建后的 SPA（frontend/dist/index.html）；否则回退到内置静态单页 Demo（frontend/index.html）
+_FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist" / "index.html"
+_FRONTEND_INDEX = Path(__file__).resolve().parents[1] / "frontend" / "index.html"
+
+
+class ResearchParams(BaseModel):
+    """per-run 研究参数覆盖（缺省字段沿用服务端 Settings）。"""
+
+    max_sub_questions: int | None = Field(default=None, ge=1, le=12)
+    max_rounds: int | None = Field(default=None, ge=0, le=5)
+    max_concurrency: int | None = Field(default=None, ge=1, le=16)
+    results_per_search: int | None = Field(default=None, ge=1, le=15)
+
+
+class CreateRunRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)  # 限长：query 全文进 prompt，防成本放大
+    params: ResearchParams | None = None
+
+
+class CreateRunResponse(BaseModel):
+    run_id: str
+
+
+def _settings_for(base: Settings, params: ResearchParams | None) -> Settings:
+    """把 per-run 覆盖合并进基础 Settings（仅覆盖显式提供的字段）。"""
+    if params is None:
+        return base
+    overrides = {k: v for k, v in params.model_dump().items() if v is not None}
+    return replace(base, **overrides) if overrides else base
+
+
+async def require_api_key(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    api_key: str | None = Query(default=None),
+) -> None:
+    """API 认证：设置了 API_KEY 环境变量即启用，所有 /api 端点必须携带。
+
+    支持 X-API-Key 头或 ?api_key= 查询参数（EventSource 无法自定义头）。
+    未配置 API_KEY 时跳过（本地开发零摩擦），但生产部署应当配置。
+    """
+    expected: str = request.app.state.settings.api_key
+    if not expected:
+        return
+    provided = x_api_key or api_key or ""
+    if not secrets.compare_digest(provided.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="invalid or missing API key")
+
+
+class _RateLimiter:
+    """每 IP 滑动窗口限流（进程内）。只挡「触发 LLM 调用」的昂贵端点。"""
+
+    def __init__(self, max_calls: int, window_seconds: float) -> None:
+        self.max_calls = max_calls
+        self.window = window_seconds
+        self._hits: dict[str, list[float]] = {}
+
+    def check(self, key: str) -> bool:
+        now = time.monotonic()
+        hits = [t for t in self._hits.get(key, []) if now - t < self.window]
+        if len(hits) >= self.max_calls:
+            self._hits[key] = hits
+            return False
+        hits.append(now)
+        self._hits[key] = hits
+        return True
+
+
+_run_limiter = _RateLimiter(max_calls=10, window_seconds=60.0)
+
+
+def _check_rate_limit(request: Request) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    if not _run_limiter.check(client_ip):
+        raise HTTPException(status_code=429, detail="too many requests, slow down")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = Settings()
+    engine = make_engine(settings.database_url)
+    # SQLite（本地/测试）自动建表；PostgreSQL（生产）由 alembic upgrade head 负责
+    if settings.database_url.startswith("sqlite"):
+        await create_all(engine)
+    # 启动对账：上次进程非正常退出留下的 pending/running 孤儿 run 永远不会再推进，
+    # 统一标记为 error，避免前端对着僵尸状态无限轮询
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(orm.ResearchRun)
+                .where(orm.ResearchRun.status.in_(("pending", "running")))
+                .values(status="error")
+            )
+    except Exception:
+        logger.exception("启动对账孤儿 run 失败（不阻塞启动）")
+    app.state.settings = settings
+    app.state.engine = engine
+    app.state.repo = SqlRepository(make_sessionmaker(engine))
+    app.state.live = {}  # run_id -> EventHub：进行中 run 的实时事件中枢（向多端 SSE 扇出）
+    app.state.tasks = set()  # 持有后台任务引用，避免被 GC 提前回收
+    try:
+        yield
+    finally:
+        # 先取消并回收后台研究任务，再释放引擎——避免任务在 dispose 后继续发 SQL
+        tasks = list(app.state.tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await engine.dispose()
+
+
+app = FastAPI(title="Deep Research Agent", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+    """统一注入基础安全响应头（SPA 由本服务直接托管，需自带防护）。"""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
+
+
+# 生产同源托管：把 Vite 构建产物的静态资源挂在 /assets/*（须在末尾 catch-all SPA 路由
+# 之前注册）。dist 未构建时跳过——开发期前端走 Vite dev server，不经后端静态服务。
+_FRONTEND_ASSETS = _FRONTEND_DIST.parent / "assets"
+if _FRONTEND_ASSETS.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_ASSETS)), name="assets")
+
+
+def _sse(event: Event) -> str:
+    return f"data: {event.model_dump_json()}\n\n"
+
+
+async def _execute(app: FastAPI, run_id: str, query: str, settings: Settings) -> None:
+    """后台执行一次研究：事件经 EventHub 实时扇出给 SSE 订阅者，全程落库。"""
+    hub: EventHub = app.state.live[run_id]
+    agent: DeepResearchAgent | None = None
+    try:
+        # 构造必须在 try 内：缺 API key 等构造期异常同样要走 finally 收尾，
+        # 否则 EventHub 泄漏、SSE 订阅者永久挂起、run 卡死在 pending
+        agent = DeepResearchAgent(settings, repo=app.state.repo, run_id=run_id)
+        agent.tracer.add_sink(hub.publish)
+        await agent.run(query)
+    except asyncio.CancelledError:
+        # 服务关停：尽力把状态落库后继续传播取消
+        try:
+            await app.state.repo.set_status(run_id, "error")
+        except Exception:
+            logger.exception("run %s 取消后落库状态失败", run_id)
+        raise
+    except Exception:
+        # run() 内部正常路径已 emit error 事件并置 status=error；
+        # 落到这里的是构造期异常或落库自身失败，必须留痕并兜底状态
+        logger.exception("run %s 执行失败", run_id)
+        hub.publish(Event(stage="ORCHESTRATOR", type="error", message="服务器内部错误，运行已终止"))
+        try:
+            await app.state.repo.set_status(run_id, "error")
+        except Exception:
+            logger.exception("run %s 兜底置 error 状态失败", run_id)
+    finally:
+        if agent is not None:
+            try:
+                await agent.aclose()
+            except Exception:
+                logger.exception("run %s 释放 LLM client 失败", run_id)
+        hub.close()  # 通知所有在线 SSE 订阅者收尾
+        app.state.live.pop(run_id, None)
+
+
+@lru_cache(maxsize=8)
+def _read_frontend(path_str: str, mtime: float) -> str:
+    """带 mtime 失效的入口页缓存：catch-all SPA 路由每个请求都要它，避免反复读盘。"""
+    return Path(path_str).read_text(encoding="utf-8")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> str:
+    for path in (_FRONTEND_DIST, _FRONTEND_INDEX):
+        if path.exists():
+            return _read_frontend(str(path), path.stat().st_mtime)
+    return (
+        "<h1>Deep Research Agent</h1>"
+        "<p>未找到前端页面（缺少 <code>frontend/index.html</code>）。</p>"
+    )
+
+
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/api/runs", status_code=202, dependencies=[Depends(require_api_key)])
+async def create_run(req: CreateRunRequest, request: Request) -> CreateRunResponse:
+    _check_rate_limit(request)
+    repo: ResearchRepository = request.app.state.repo
+    run_id = await repo.create_run(req.query)
+    request.app.state.live[run_id] = EventHub()
+    settings = _settings_for(request.app.state.settings, req.params)
+    task = asyncio.create_task(_execute(request.app, run_id, req.query, settings))
+    request.app.state.tasks.add(task)
+    task.add_done_callback(request.app.state.tasks.discard)
+    return CreateRunResponse(run_id=run_id)
+
+
+@app.get("/api/runs", dependencies=[Depends(require_api_key)])
+async def list_runs(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> list[RunSummary]:
+    repo: ResearchRepository = request.app.state.repo
+    return await repo.list_runs(limit=limit, offset=offset)
+
+
+@app.get("/api/runs/{run_id}", dependencies=[Depends(require_api_key)])
+async def get_run(run_id: str, request: Request) -> RunDetail:
+    repo: ResearchRepository = request.app.state.repo
+    detail = await repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return detail
+
+
+@app.get("/api/runs/{run_id}/events", dependencies=[Depends(require_api_key)])
+async def get_events(run_id: str, request: Request, after_seq: int = Query(0, ge=0)) -> list[Event]:
+    """事件回放。after_seq 为「跳过前 N 条」的偏移语义（客户端传已收到的条数）。"""
+    repo: ResearchRepository = request.app.state.repo
+    return await repo.get_events(run_id, after_seq=after_seq)
+
+
+@app.get("/api/runs/{run_id}/stream", dependencies=[Depends(require_api_key)])
+async def stream_run(run_id: str, request: Request) -> StreamingResponse:
+    app_ = request.app
+    # 未知 run 返回 404，而非 200 + 空流（让客户端能区分「不存在」与「无事件」）
+    if app_.state.live.get(run_id) is None and await app_.state.repo.get_run(run_id) is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    async def gen() -> AsyncIterator[str]:
+        hub: EventHub | None = app_.state.live.get(run_id)
+        if hub is not None:
+            # 进行中：从 EventHub 订阅（回放已发生事件 + 续收实时事件），支持多端同时观看
+            async for event in hub.stream():
+                yield _sse(event)
+        else:
+            # 已结束（或未知）：从 DB 按 seq 回放
+            for event in await app_.state.repo.get_events(run_id):
+                yield _sse(event)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/research", dependencies=[Depends(require_api_key)])
+async def research(
+    request: Request,
+    q: str = Query(..., description="研究问题", min_length=1, max_length=2000),
+) -> StreamingResponse:
+    """无持久化的即跑即看快路径（向后兼容旧前端）。"""
+    _check_rate_limit(request)
+    agent = DeepResearchAgent(Settings())
+
+    async def event_stream() -> AsyncIterator[str]:
+        try:
+            async for event in agent.run_stream(q):
+                yield _sse(event)
+        except Exception:  # 兜底：异常详情只进日志，不下发内部信息（base_url/路径等）
+            logger.exception("即时研究流执行失败")
+            payload = {"stage": "ORCHESTRATOR", "type": "error", "message": "服务器内部错误"}
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            await agent.aclose()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+async def spa_fallback(full_path: str) -> str:
+    """SPA history 路由回退：非 /api 路径一律返回前端入口，支持深链接刷新。
+
+    具体路由（/、/healthz、/api/*）按声明顺序优先匹配；此 catch-all 只接管
+    其余未注册的 GET 路径（如 /history、/runs/{id}）。
+    """
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="not found")
+    return await index()
