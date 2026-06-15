@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import App from './App'
 import './index.css'
+import AgentSquarePage from './pages/AgentSquarePage'
 import HistoryPage from './pages/HistoryPage'
 import NewResearchPage from './pages/NewResearchPage'
 import RunPage from './pages/RunPage'
@@ -21,6 +22,7 @@ const router = createBrowserRouter([
       { index: true, element: <NewResearchPage /> },
       { path: 'runs/:id', element: <RunPage /> },
       { path: 'history', element: <HistoryPage /> },
+      { path: 'agents', element: <AgentSquarePage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
   },

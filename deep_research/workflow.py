@@ -12,9 +12,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pydantic import BaseModel, Field
 
-from .agents.base import Blackboard, RunContext
+from .agents.base import Agent, Blackboard, RunContext
 from .models import SubQuestion
 from .registry import create
 
@@ -43,20 +45,23 @@ class Workflow(BaseModel):
 class WorkflowEngine:
     """解释执行一份 Workflow。无状态，可复用；所有运行态都在传入的 Blackboard 上。"""
 
-    def __init__(self, ctx: RunContext) -> None:
+    def __init__(self, ctx: RunContext, resolver: Callable[[str], Agent] | None = None) -> None:
         self.ctx = ctx
+        # 角色解析器：默认从代码注册表取；编排器可注入「先查 DB 角色卡片，再回退注册表」
+        # 的解析器，实现数据驱动角色与内置角色统一调度。
+        self._resolve = resolver or create
 
     async def run(self, wf: Workflow, bb: Blackboard) -> Blackboard:
         for step in wf.steps:
             if step.kind == "reflect_loop":
                 await self._reflect_loop(step, bb)
             else:
-                bb = await create(step.agent).step(bb, self.ctx)
+                bb = await self._resolve(step.agent).step(bb, self.ctx)
         return bb
 
     async def _reflect_loop(self, step: Step, bb: Blackboard) -> None:
-        reflector = create(step.reflector)
-        researcher = create(step.researcher)
+        reflector = self._resolve(step.reflector)
+        researcher = self._resolve(step.researcher)
         rounds = step.max_rounds if step.max_rounds is not None else self.ctx.settings.max_rounds
         for rnd in range(rounds):
             bb = await reflector.step(bb, self.ctx)

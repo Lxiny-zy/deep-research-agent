@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import update
 
 from . import runtime_config
+from .catalog.repository import CatalogRepository
 from .config import Settings
 from .observability import Event, EventHub
 from .orchestrator import DeepResearchAgent
@@ -230,6 +231,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.engine = engine
     app.state.repo = SqlRepository(make_sessionmaker(engine))
+    app.state.catalog = CatalogRepository(make_sessionmaker(engine))  # 角色广场 catalog 仓储
     app.state.live = {}  # run_id -> EventHub：进行中 run 的实时事件中枢（向多端 SSE 扇出）
     app.state.tasks = set()  # 持有后台任务引用，避免被 GC 提前回收
     try:
@@ -245,6 +247,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Deep Research Agent", lifespan=lifespan)
+
+# 角色广场 catalog 路由（模型档案 / 角色卡片 / 搜索 key），统一套用 API key 鉴权
+from .catalog_api import router as catalog_router  # noqa: E402 避免与 app 定义循环
+
+app.include_router(catalog_router, dependencies=[Depends(require_api_key)])
 
 
 @app.middleware("http")
@@ -268,6 +275,20 @@ def _sse(event: Event) -> str:
     return f"data: {event.model_dump_json()}\n\n"
 
 
+async def _build_search_tool(app: FastAPI, settings: Settings):  # type: ignore[no-untyped-def]
+    """优先用搜索 key 池（主备故障转移）；池为空则回退到全局单 key TavilySearch。"""
+    keys: list[str] = []
+    try:
+        keys = await app.state.catalog.active_keys()
+    except Exception:
+        logger.exception("读取搜索 key 池失败，回退单 key")
+    if keys:
+        from .tools.tavily_pool import TavilyKeyPoolSearch
+
+        return TavilyKeyPoolSearch(keys)
+    return None  # None＝交给 DeepResearchAgent 用 settings.tavily_api_key 自建
+
+
 async def _execute(
     app: FastAPI, run_id: str, query: str, settings: Settings, workflow: str | None = None
 ) -> None:
@@ -277,7 +298,15 @@ async def _execute(
     try:
         # 构造必须在 try 内：缺 API key 等构造期异常同样要走 finally 收尾，
         # 否则 EventHub 泄漏、SSE 订阅者永久挂起、run 卡死在 pending
-        agent = DeepResearchAgent(settings, repo=app.state.repo, run_id=run_id, workflow=workflow)
+        search_tool = await _build_search_tool(app, settings)
+        agent = DeepResearchAgent(
+            settings,
+            repo=app.state.repo,
+            run_id=run_id,
+            workflow=workflow,
+            catalog_repo=app.state.catalog,
+            search_tool=search_tool,
+        )
         agent.tracer.add_sink(hub.publish)
         await agent.run(query)
     except asyncio.CancelledError:

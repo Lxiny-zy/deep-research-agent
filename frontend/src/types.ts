@@ -127,3 +127,69 @@ export interface ConfigUpdate {
   results_per_search?: number
   request_timeout?: number
 }
+
+// ── 角色广场 catalog ──────────────────────────────────────────────────
+// 角色行为模板（决定该角色在引擎里的执行逻辑）
+export type Behavior = 'plan' | 'research' | 'reflect' | 'synthesize' | 'critique'
+
+// 模型档案（GET /api/models，api_key 脱敏）
+export interface ModelProfile {
+  id: string
+  name: string
+  base_url: string | null
+  model: string
+  temperature: number
+  is_default: boolean
+  api_key_set: boolean
+  api_key_hint: string
+}
+
+export interface ModelProfileInput {
+  name?: string
+  base_url?: string | null
+  api_key?: string
+  model?: string
+  temperature?: number
+  is_default?: boolean
+}
+
+// 角色卡片（GET /api/agents）
+export interface AgentCard {
+  id: string
+  name: string
+  display_name: string
+  description: string
+  behavior: Behavior
+  system_prompt: string
+  icon: string
+  enabled: boolean
+  model_profile_id: string | null
+  model_profile_name: string | null
+}
+
+export interface AgentCardInput {
+  name?: string
+  display_name?: string
+  description?: string
+  behavior?: Behavior
+  system_prompt?: string
+  icon?: string
+  enabled?: boolean
+  model_profile_id?: string | null
+}
+
+// 搜索 key（GET /api/search-keys，api_key 脱敏）
+export interface SearchKey {
+  id: string
+  label: string
+  priority: number
+  enabled: boolean
+  api_key_hint: string
+}
+
+export interface SearchKeyInput {
+  label?: string
+  api_key?: string
+  priority?: number
+  enabled?: boolean
+}

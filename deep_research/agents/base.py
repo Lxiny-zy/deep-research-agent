@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -41,7 +42,11 @@ class Blackboard(BaseModel):
 
 
 class RunContext:
-    """跨角色共享的运行期依赖（替代旧版散落在各角色构造函数里的重复参数）。"""
+    """跨角色共享的运行期依赖（替代旧版散落在各角色构造函数里的重复参数）。
+
+    llm_resolver 可选：给定角色名返回该角色专属的 LLM（数据驱动角色按卡片绑定的
+    模型档案构造不同 LLM）。返回 None 或未提供时，角色用默认 ctx.llm 兜底。
+    """
 
     def __init__(
         self,
@@ -50,11 +55,21 @@ class RunContext:
         search_tool: SearchTool,
         tracer: Tracer,
         settings: Settings,
+        llm_resolver: Callable[[str], LLM | None] | None = None,
     ) -> None:
         self.llm = llm
         self.search_tool = search_tool
         self.tracer = tracer
         self.settings = settings
+        self._llm_resolver = llm_resolver
+
+    def llm_for(self, agent_name: str) -> LLM:
+        """取某角色应使用的 LLM：有专属档案则用之，否则回退默认。"""
+        if self._llm_resolver is not None:
+            resolved = self._llm_resolver(agent_name)
+            if resolved is not None:
+                return resolved
+        return self.llm
 
 
 @runtime_checkable

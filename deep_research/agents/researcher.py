@@ -24,6 +24,8 @@ SYSTEM = (
 
 @register("researcher")
 class Researcher:
+    name: str  # 由 @register 注入
+
     def __init__(
         self,
         llm: LLM | None = None,
@@ -35,6 +37,7 @@ class Researcher:
         self.search = cast(SearchTool, search_tool)
         self.tracer = cast(Tracer, tracer)
         self.settings = cast(Settings, settings)
+        self.system = SYSTEM  # 可被角色卡片覆盖
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         """工作流入口：对 bb.plan 中尚未研究的子问题做 DAG 分层并行检索，追加到 bb.results。
@@ -43,7 +46,7 @@ class Researcher:
         放进 bb.scratch['pending_sub_questions']，本步消费它，实现增量研究。
         """
         self.llm, self.search, self.tracer, self.settings = (
-            ctx.llm,
+            ctx.llm_for(self.name),
             ctx.search_tool,
             ctx.tracer,
             ctx.settings,
@@ -93,7 +96,7 @@ class Researcher:
         user_parts.append(f"\n给定来源：\n{context}")
 
         try:
-            extracted = await self.llm.parse(SYSTEM, "\n".join(user_parts), FindingList)
+            extracted = await self.llm.parse(self.system, "\n".join(user_parts), FindingList)
         except Exception as e:
             self.tracer.emit("RESEARCHER", "error", f"抽取失败「{sub_question}」：{e}")
             return ResearchResult(sub_question=sub_question, findings=[])

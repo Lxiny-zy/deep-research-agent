@@ -1,0 +1,159 @@
+"""角色广场 catalog 的 REST API：模型档案 / 角色卡片 / 搜索 key 的 CRUD。
+
+挂载在 /api 下，复用主 app 的 require_api_key 鉴权与 app.state.catalog 仓储。
+密钥一律脱敏回显、空值不覆盖（与全局配置同语义）。
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel, Field
+
+from .catalog.dto import (
+    BEHAVIORS,
+    AgentCardCreate,
+    AgentCardUpdate,
+    AgentCardView,
+    ModelProfileView,
+    SearchKeyView,
+)
+from .catalog.repository import CatalogRepository
+
+
+class ProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    base_url: str | None = Field(None, max_length=500)
+    api_key: str = Field("", max_length=500)
+    model: str = Field("gpt-4o-mini", min_length=1, max_length=100)
+    temperature: float = Field(0.3, ge=0.0, le=2.0)
+    is_default: bool = False
+
+
+class ProfileUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=64)
+    base_url: str | None = Field(None, max_length=500)
+    api_key: str | None = Field(None, max_length=500)  # 空/省略＝不改
+    model: str | None = Field(None, min_length=1, max_length=100)
+    temperature: float | None = Field(None, ge=0.0, le=2.0)
+    is_default: bool | None = None
+
+
+class KeyCreate(BaseModel):
+    label: str = Field("", max_length=64)
+    api_key: str = Field(min_length=1, max_length=500)
+    priority: int = Field(0, ge=0, le=1000)
+    enabled: bool = True
+
+
+class KeyUpdate(BaseModel):
+    label: str | None = Field(None, max_length=64)
+    api_key: str | None = Field(None, max_length=500)
+    priority: int | None = Field(None, ge=0, le=1000)
+    enabled: bool | None = None
+
+
+def _catalog(request: Request) -> CatalogRepository:
+    return request.app.state.catalog
+
+
+router = APIRouter(prefix="/api")
+
+
+# ── 元信息 ──────────────────────────────────────────────────────────────
+@router.get("/behaviors")
+async def list_behaviors() -> list[str]:
+    """可选的角色行为模板（新建角色卡片时从中选一）。"""
+    return list(BEHAVIORS)
+
+
+# ── 模型档案 ────────────────────────────────────────────────────────────
+@router.get("/models")
+async def list_models(request: Request) -> list[ModelProfileView]:
+    return await _catalog(request).list_profiles()
+
+
+@router.post("/models", status_code=201)
+async def create_model(req: ProfileCreate, request: Request) -> ModelProfileView:
+    return await _catalog(request).create_profile(
+        name=req.name,
+        base_url=req.base_url,
+        api_key=req.api_key,
+        model=req.model,
+        temperature=req.temperature,
+        is_default=req.is_default,
+    )
+
+
+@router.put("/models/{profile_id}")
+async def update_model(profile_id: str, req: ProfileUpdate, request: Request) -> ModelProfileView:
+    view = await _catalog(request).update_profile(
+        profile_id, req.model_dump(exclude_unset=True)
+    )
+    if view is None:
+        raise HTTPException(status_code=404, detail="model profile not found")
+    return view
+
+
+@router.delete("/models/{profile_id}", status_code=204)
+async def delete_model(profile_id: str, request: Request) -> Response:
+    if not await _catalog(request).delete_profile(profile_id):
+        raise HTTPException(status_code=404, detail="model profile not found")
+    return Response(status_code=204)
+
+
+# ── 角色卡片 ────────────────────────────────────────────────────────────
+@router.get("/agents")
+async def list_agents(request: Request) -> list[AgentCardView]:
+    return await _catalog(request).list_agents()
+
+
+@router.post("/agents", status_code=201)
+async def create_agent(req: AgentCardCreate, request: Request) -> AgentCardView:
+    if req.behavior not in BEHAVIORS:
+        raise HTTPException(status_code=422, detail=f"behavior 必须是 {list(BEHAVIORS)} 之一")
+    return await _catalog(request).create_agent(req)
+
+
+@router.put("/agents/{agent_id}")
+async def update_agent(agent_id: str, req: AgentCardUpdate, request: Request) -> AgentCardView:
+    if req.behavior is not None and req.behavior not in BEHAVIORS:
+        raise HTTPException(status_code=422, detail=f"behavior 必须是 {list(BEHAVIORS)} 之一")
+    view = await _catalog(request).update_agent(agent_id, req)
+    if view is None:
+        raise HTTPException(status_code=404, detail="agent card not found")
+    return view
+
+
+@router.delete("/agents/{agent_id}", status_code=204)
+async def delete_agent(agent_id: str, request: Request) -> Response:
+    if not await _catalog(request).delete_agent(agent_id):
+        raise HTTPException(status_code=404, detail="agent card not found")
+    return Response(status_code=204)
+
+
+# ── 搜索 key 池 ─────────────────────────────────────────────────────────
+@router.get("/search-keys")
+async def list_keys(request: Request) -> list[SearchKeyView]:
+    return await _catalog(request).list_keys()
+
+
+@router.post("/search-keys", status_code=201)
+async def create_key(req: KeyCreate, request: Request) -> SearchKeyView:
+    return await _catalog(request).create_key(
+        label=req.label, api_key=req.api_key, priority=req.priority, enabled=req.enabled
+    )
+
+
+@router.put("/search-keys/{key_id}")
+async def update_key(key_id: str, req: KeyUpdate, request: Request) -> SearchKeyView:
+    view = await _catalog(request).update_key(key_id, req.model_dump(exclude_unset=True))
+    if view is None:
+        raise HTTPException(status_code=404, detail="search key not found")
+    return view
+
+
+@router.delete("/search-keys/{key_id}", status_code=204)
+async def delete_key(key_id: str, request: Request) -> Response:
+    if not await _catalog(request).delete_key(key_id):
+        raise HTTPException(status_code=404, detail="search key not found")
+    return Response(status_code=204)

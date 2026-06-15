@@ -1,11 +1,18 @@
 // 类型化的 HTTP 客户端：统一错误处理，所有路径走 Vite proxy / 同源后端。
 import type {
+  AgentCard,
+  AgentCardInput,
+  Behavior,
   ConfigUpdate,
   ConfigView,
   CreateRunRequest,
   CreateRunResponse,
+  ModelProfile,
+  ModelProfileInput,
   RunDetail,
   RunSummary,
+  SearchKey,
+  SearchKeyInput,
   TagCount,
 } from '../types'
 
@@ -158,4 +165,66 @@ export function updateConfig(body: ConfigUpdate): Promise<ConfigView> {
     method: 'PUT',
     body: JSON.stringify(body),
   })
+}
+
+// ── 角色广场 catalog ──────────────────────────────────────────────────
+export function listBehaviors(): Promise<Behavior[]> {
+  return request<Behavior[]>('/api/behaviors')
+}
+
+export function listModels(): Promise<ModelProfile[]> {
+  return request<ModelProfile[]>('/api/models')
+}
+
+export function createModel(body: ModelProfileInput): Promise<ModelProfile> {
+  return request<ModelProfile>('/api/models', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function updateModel(id: string, body: ModelProfileInput): Promise<ModelProfile> {
+  return request<ModelProfile>(`/api/models/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteModel(id: string): Promise<void> {
+  return requestVoid(`/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function listAgents(): Promise<AgentCard[]> {
+  return request<AgentCard[]>('/api/agents')
+}
+
+export function createAgent(body: AgentCardInput): Promise<AgentCard> {
+  return request<AgentCard>('/api/agents', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function updateAgent(id: string, body: AgentCardInput): Promise<AgentCard> {
+  return request<AgentCard>(`/api/agents/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteAgent(id: string): Promise<void> {
+  return requestVoid(`/api/agents/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function listSearchKeys(): Promise<SearchKey[]> {
+  return request<SearchKey[]>('/api/search-keys')
+}
+
+export function createSearchKey(body: SearchKeyInput): Promise<SearchKey> {
+  return request<SearchKey>('/api/search-keys', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function updateSearchKey(id: string, body: SearchKeyInput): Promise<SearchKey> {
+  return request<SearchKey>(`/api/search-keys/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteSearchKey(id: string): Promise<void> {
+  return requestVoid(`/api/search-keys/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }

@@ -22,6 +22,8 @@ SYSTEM = (
 
 @register("planner")
 class Planner:
+    name: str  # 由 @register 注入
+
     def __init__(
         self, llm: LLM | None = None, tracer: Tracer | None = None, settings: Settings | None = None
     ) -> None:
@@ -30,16 +32,17 @@ class Planner:
         self.llm = cast(LLM, llm)
         self.tracer = cast(Tracer, tracer)
         self.settings = cast(Settings, settings)
+        self.system = SYSTEM  # 可被角色卡片的 system_prompt 覆盖（数据驱动角色）
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
-        self.llm, self.tracer, self.settings = ctx.llm, ctx.tracer, ctx.settings
+        self.llm, self.tracer, self.settings = ctx.llm_for(self.name), ctx.tracer, ctx.settings
         bb.plan = await self.run(bb.query)
         return bb
 
     async def run(self, query: str) -> ResearchPlan:
         self.tracer.emit("PLANNER", "start", "拆解研究问题…")
         plan = await self.llm.parse(
-            SYSTEM,
+            self.system,
             f"研究问题：{query}\n\n请给出不超过 {self.settings.max_sub_questions} 个子问题。",
             ResearchPlan,
         )

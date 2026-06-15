@@ -34,21 +34,24 @@ class Critique(BaseModel):
 
 @register("critic")
 class Critic:
+    name: str  # 由 @register 注入
+
     def __init__(
         self, llm: LLM | None = None, tracer: Tracer | None = None, settings: Settings | None = None
     ) -> None:
         self.llm = cast(LLM, llm)
         self.tracer = cast(Tracer, tracer)
         self.settings = cast(Settings, settings)
+        self.system = SYSTEM  # 可被角色卡片覆盖
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
-        self.llm, self.tracer, self.settings = ctx.llm, ctx.tracer, ctx.settings
+        self.llm, self.tracer, self.settings = ctx.llm_for(self.name), ctx.tracer, ctx.settings
         self.tracer.emit("CRITIC", "start", "复核研究报告…")
         if bb.report is None:
             self.tracer.emit("CRITIC", "info", "无报告可复核，跳过")
             return bb
         critique = await self.llm.parse(
-            SYSTEM, f"研究报告：\n{bb.report.markdown}", Critique
+            self.system, f"研究报告：\n{bb.report.markdown}", Critique
         )
         bb.scratch["critique"] = critique.model_dump()
         self.tracer.emit(

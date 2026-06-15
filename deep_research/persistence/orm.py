@@ -174,3 +174,61 @@ class RunTagRow(Base):
     tag: Mapped[str] = mapped_column(String(64))
 
     run: Mapped[ResearchRun] = relationship(back_populates="tags")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 角色广场 catalog：模型档案 / 角色卡片 / 搜索 key 池（独立于单次 run，全局配置）
+# ──────────────────────────────────────────────────────────────────────────
+
+
+class ModelProfileRow(Base):
+    """一个可复用的 LLM 模型档案：不同任务可绑定不同档案（不同 base_url/key/model）。"""
+
+    __tablename__ = "model_profile"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(64), unique=True)  # 展示名，唯一
+    base_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # None=官方默认端点
+    api_key: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str] = mapped_column(String(100), default="gpt-4o-mini")
+    temperature: Mapped[float] = mapped_column(Float, default=0.3)
+    is_default: Mapped[bool] = mapped_column(Integer, default=0)  # 1=全局兜底档案
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    agents: Mapped[list[AgentCardRow]] = relationship(back_populates="model_profile")
+
+
+class AgentCardRow(Base):
+    """角色卡片：数据驱动的角色定义。behavior 选一种内置行为模板，prompt 与模型可自定。"""
+
+    __tablename__ = "agent_card"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(64), unique=True)  # 工作流按此名引用，唯一
+    display_name: Mapped[str] = mapped_column(String(100), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    # 行为模板：plan / research / reflect / synthesize / critique
+    behavior: Mapped[str] = mapped_column(String(20))
+    system_prompt: Mapped[str] = mapped_column(Text, default="")  # 空=用该行为的内置默认
+    icon: Mapped[str] = mapped_column(String(16), default="🧩")  # 卡片图标（emoji）
+    enabled: Mapped[bool] = mapped_column(Integer, default=1)
+    # 绑定的模型档案；NULL=用全局默认档案兜底（按角色绑模型）
+    model_profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("model_profile.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    model_profile: Mapped[ModelProfileRow | None] = relationship(back_populates="agents")
+
+
+class SearchKeyRow(Base):
+    """搜索 API key 池：主备故障转移——按 priority 升序使用，配额/限流错误切下一个。"""
+
+    __tablename__ = "search_key"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    label: Mapped[str] = mapped_column(String(64), default="")  # 备注名（如 "主账号"）
+    api_key: Mapped[str] = mapped_column(Text)
+    priority: Mapped[int] = mapped_column(Integer, default=0)  # 越小越先用
+    enabled: Mapped[bool] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

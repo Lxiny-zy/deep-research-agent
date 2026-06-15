@@ -47,6 +47,39 @@ class LLM:
             default_headers={"User-Agent": settings.llm_user_agent},
         )
 
+    @classmethod
+    def from_params(
+        cls,
+        tracer: Tracer,
+        *,
+        api_key: str,
+        base_url: str | None,
+        model: str,
+        timeout: float,
+        user_agent: str,
+        temperature: float = 0.3,
+    ) -> LLM:
+        """按模型档案的显式参数构造（角色绑不同模型档案时用）。
+
+        复用 __init__ 的 client 配置，但不经全局 Settings——每个角色可有独立
+        base_url/key/model/temperature。temperature 作为该档案的默认采样温度。
+        """
+        from dataclasses import replace
+
+        s = replace(
+            Settings(),  # 以环境变量默认打底，再覆盖档案关键字段
+            llm_api_key=api_key,
+            llm_base_url=base_url or None,
+            llm_model=model,
+            llm_user_agent=user_agent,
+            request_timeout=timeout,
+        )
+        inst = cls(s, tracer)
+        inst.default_temperature = temperature
+        return inst
+
+    default_temperature: float = 0.3
+
     async def aclose(self) -> None:
         """关闭底层 httpx 连接池（AsyncOpenAI 不关闭只能靠 GC 兜底，会泄漏 FD）。"""
         await self.client.close()

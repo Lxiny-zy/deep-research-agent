@@ -1159,3 +1159,108 @@ p {
     align-items: flex-start;
   }
 }
+
+/* ── 角色广场 ────────────────────────────────────────────────────── */
+.row.gap {
+  gap: 12px;
+}
+.row.gap-sm {
+  gap: 6px;
+}
+.btn.small {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.btn.danger,
+.btn.ghost.danger {
+  color: #d4665a;
+}
+.btn.ghost.danger:hover:not(:disabled) {
+  background: rgba(212, 102, 90, 0.1);
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.role-card {
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.15s;
+}
+.role-card:hover {
+  border-color: var(--accent, #6ea8fe);
+}
+.role-card.disabled {
+  opacity: 0.5;
+}
+.role-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.role-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+.role-meta {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.role-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.role-desc {
+  font-size: 13px;
+  color: var(--muted, #9aa4b2);
+  margin: 0;
+  min-height: 18px;
+}
+.role-card-foot {
+  margin-top: auto;
+}
+
+.list-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border, #2a2f3a);
+}
+.list-row.disabled {
+  opacity: 0.5;
+}
+
+/* ── 弹窗 ────────────────────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  z-index: 50;
+  overflow-y: auto;
+}
+.modal {
+  background: var(--panel-bg, #161a22);
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 14px;
+  padding: 22px 24px;
+  width: 100%;
+  max-width: 520px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+.modal textarea.input {
+  resize: vertical;
+  font-family: inherit;
+}

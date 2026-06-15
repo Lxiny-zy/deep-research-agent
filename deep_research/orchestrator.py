@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
 from .agents import Planner, Reflector, Researcher, Synthesizer  # noqa: F401 触发角色注册
 from .agents.base import Blackboard, RunContext
@@ -30,6 +31,9 @@ from .tools.base import SearchTool
 from .workflow import WorkflowEngine
 from .workflows import get_workflow
 
+if TYPE_CHECKING:
+    from .catalog.runtime import CatalogRuntime, CatalogSource
+
 
 class DeepResearchAgent:
     def __init__(
@@ -41,12 +45,16 @@ class DeepResearchAgent:
         repo: ResearchRepository | None = None,
         run_id: str | None = None,
         workflow: str | None = None,
+        catalog_repo: CatalogSource | None = None,
     ) -> None:
         self.settings = settings
         self.tracer = Tracer()
         self.repo = repo
         self._run_id = run_id
         self._workflow_name = workflow
+        self._catalog_repo = catalog_repo  # 数据驱动角色/模型档案来源（鸭子类型）
+        # 运行期延迟加载（需 await），收尾时关闭其 LLM 池
+        self._catalog_runtime: CatalogRuntime | None = None
 
         # 依赖注入：测试时传入假的 LLM / 检索工具，无需真实密钥与网络
         if llm is None or search_tool is None:
@@ -68,6 +76,8 @@ class DeepResearchAgent:
 
     async def aclose(self) -> None:
         """释放自建 LLM client 的底层 HTTP 连接池。注入的 client 归调用方管。"""
+        if self._catalog_runtime is not None:
+            await self._catalog_runtime.aclose()  # 关闭按档案新建的 LLM 池
         if self._owns_llm:
             await self.llm.aclose()
 
@@ -127,14 +137,21 @@ class DeepResearchAgent:
         落库经黑板的「持久化钩子」在引擎步骤之间触发，保证语义与重构前一致：
         计划生成即落库、研究结果产出即落库、报告生成即落库。
         """
+        # 加载数据驱动角色/模型档案（无 catalog 或无自定义角色时为 None，走纯内置路径）
+        from .catalog.runtime import load_catalog_runtime
+
+        cr = await load_catalog_runtime(self._catalog_repo, self.tracer, self.settings)
+        self._catalog_runtime = cr
+
         ctx = RunContext(
             llm=self.llm,
             search_tool=self.search_tool,
             tracer=self.tracer,
             settings=self.settings,
+            llm_resolver=cr.resolve_llm if cr is not None else None,
         )
         bb = Blackboard(query=query)
-        engine = WorkflowEngine(ctx)
+        engine = WorkflowEngine(ctx, resolver=cr.resolve_agent if cr is not None else None)
         wf = get_workflow(self._workflow_name)
         await engine.run(wf, bb)
 

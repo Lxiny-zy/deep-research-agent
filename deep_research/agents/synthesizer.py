@@ -22,15 +22,18 @@ SYSTEM = (
 
 @register("synthesizer")
 class Synthesizer:
+    name: str  # 由 @register 注入
+
     def __init__(
         self, llm: LLM | None = None, tracer: Tracer | None = None, settings: Settings | None = None
     ) -> None:
         self.llm = cast(LLM, llm)
         self.tracer = cast(Tracer, tracer)
         self.settings = cast(Settings, settings)
+        self.system = SYSTEM  # 可被角色卡片覆盖
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
-        self.llm, self.tracer, self.settings = ctx.llm, ctx.tracer, ctx.settings
+        self.llm, self.tracer, self.settings = ctx.llm_for(self.name), ctx.tracer, ctx.settings
         bb.report = await self.run(bb.query, bb.results)
         return bb
 
@@ -62,7 +65,7 @@ class Synthesizer:
         self.tracer.emit("SYNTHESIZER", "start", "综合研究报告…")
         material, url_to_idx = self._material(results)
         user = f"研究问题：{query}\n\n素材（角标即引用编号）：\n{material}"
-        async for delta in self.llm.stream(SYSTEM, user, temperature=0.4):
+        async for delta in self.llm.stream(self.system, user, temperature=0.4):
             self.tracer.emit("SYNTHESIZER", "token", data={"delta": delta})
             yield delta
         self.tracer.emit("SYNTHESIZER", "info", f"报告完成，引用 {len(url_to_idx)} 个来源")
