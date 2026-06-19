@@ -1,8 +1,8 @@
 """验证声明式工作流引擎与可扩展性：
 
-  - 不同 workflow 走不同流程（deep vs quick vs reviewed）
-  - 新增 Critic 角色 + reviewed 流程：未改引擎/编排器即可被调度并发出自有事件
-  - 角色注册表按名解析
+- 不同 workflow 走不同流程（deep vs quick vs reviewed）
+- 新增 Critic 角色 + reviewed 流程：未改引擎/编排器即可被调度并发出自有事件
+- 角色注册表按名解析
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from deep_research.agents.critic import Critique
 from deep_research.models import Report
 from deep_research.orchestrator import DeepResearchAgent
 from deep_research.registry import available, create
+from deep_research.workflow import Step, validate_workflow
 from tests.fakes import FakeLLM, FakeSearch
 
 
@@ -34,9 +35,7 @@ async def test_registry_resolves_builtin_roles():
 
 @pytest.mark.asyncio
 async def test_quick_workflow_skips_reflection(settings):
-    agent = DeepResearchAgent(
-        settings, llm=FakeLLM(), search_tool=FakeSearch(), workflow="quick"
-    )
+    agent = DeepResearchAgent(settings, llm=FakeLLM(), search_tool=FakeSearch(), workflow="quick")
     report = await agent.run("测试问题")
     assert isinstance(report, Report)
     stages = {e.stage for e in agent.tracer.events}
@@ -74,3 +73,33 @@ async def test_unknown_workflow_falls_back_to_default(settings):
     await agent.run("测试问题")
     stages = {e.stage for e in agent.tracer.events}
     assert {"PLANNER", "RESEARCHER", "REFLECTOR", "SYNTHESIZER"} <= stages  # 回退到 deep
+
+
+def test_validate_workflow_rules_and_custom_terminal():
+    """校验器：拒未注册角色 / 无终端 / 嵌套 compose；terminal_roles 可把自定义角色计为终端。"""
+    avail = {"planner", "researcher", "synthesizer", "my_writer"}
+
+    # 合法：以内置 synthesizer 收尾
+    ok = [Step(kind="agent", agent="researcher"), Step(kind="agent", agent="synthesizer")]
+    assert validate_workflow(ok, avail, max_rounds_cap=2) == []
+
+    # 引用未注册角色
+    assert validate_workflow(
+        [Step(kind="agent", agent="ghost"), Step(kind="agent", agent="synthesizer")],
+        avail,
+        max_rounds_cap=2,
+    )
+
+    # 缺终端角色
+    assert any(
+        "终端" in e
+        for e in validate_workflow([Step(kind="agent", agent="planner")], avail, max_rounds_cap=2)
+    )
+
+    # 禁止顶层编排原语出现在自建流程里
+    assert validate_workflow([Step(kind="compose", agent="coordinator")], avail, max_rounds_cap=2)
+
+    # 自定义 synthesize 卡片经 terminal_roles 计为终端 → 通过
+    custom = [Step(kind="agent", agent="researcher"), Step(kind="agent", agent="my_writer")]
+    assert validate_workflow(custom, avail, max_rounds_cap=2) != []  # 默认不认 my_writer
+    assert validate_workflow(custom, avail, max_rounds_cap=2, terminal_roles={"my_writer"}) == []

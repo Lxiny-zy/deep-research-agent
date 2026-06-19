@@ -27,9 +27,10 @@ from .models import Finding, Report, ResearchResult, SubQuestion
 from .observability import Event, Tracer
 from .persistence.repository import ResearchRepository
 from .scheduler import research_dag
+from .token_budget import TokenBudget
 from .tools.base import SearchTool
-from .workflow import WorkflowEngine
-from .workflows import get_workflow
+from .workflow import Step, Workflow, WorkflowEngine
+from .workflows import WORKFLOWS, get_workflow
 
 if TYPE_CHECKING:
     from .catalog.runtime import CatalogRuntime, CatalogSource
@@ -131,6 +132,27 @@ class DeepResearchAgent:
             if self.repo is not None and run_id is not None:
                 await self.repo.save_events(run_id, self.tracer.events)
 
+    async def _resolve_workflow(self) -> Workflow:
+        """解析本次要跑的工作流：内置预置优先 → 自定义（catalog 按名）→ 兜底默认。
+
+        自定义工作流来自 catalog DB（构建器页面存的命名流程）；存时已 validate_workflow 校验过，
+        这里再 Step.model_validate 还原。catalog 不可用 / 未命中时一律回退 get_workflow（→deep）。
+        """
+        name = self._workflow_name
+        if name and name not in WORKFLOWS and self._catalog_repo is not None:
+            try:
+                wd = await self._catalog_repo.get_workflow_def(name)
+            except Exception:
+                self.tracer.emit("ORCHESTRATOR", "info", f"加载自定义工作流「{name}」失败，回退")
+                wd = None
+            if wd is not None and wd.enabled:
+                return Workflow(
+                    name=wd.name,
+                    description=wd.description,
+                    steps=[Step.model_validate(s) for s in wd.steps],
+                )
+        return get_workflow(name)
+
     async def _run_workflow(self, query: str, run_id: str | None) -> Report:
         """组装上下文、执行工作流，并在产出关键里程碑时落库（计划/结果/报告）。
 
@@ -151,8 +173,11 @@ class DeepResearchAgent:
             llm_resolver=cr.resolve_llm if cr is not None else None,
         )
         bb = Blackboard(query=query)
-        engine = WorkflowEngine(ctx, resolver=cr.resolve_agent if cr is not None else None)
-        wf = get_workflow(self._workflow_name)
+        budget = TokenBudget(max_tokens=self.settings.max_tokens)
+        engine = WorkflowEngine(
+            ctx, resolver=cr.resolve_agent if cr is not None else None, budget=budget
+        )
+        wf = await self._resolve_workflow()
         await engine.run(wf, bb)
 
         report = bb.report or Report(query=query, markdown="（未生成报告）", citations=[])

@@ -17,15 +17,16 @@ from ..config import Settings
 from ..llm import LLM
 from ..observability import Tracer
 from ..registry import create as registry_create
-from .dto import AgentCardView, ModelProfileFull
+from .dto import AgentCardView, ModelProfileFull, WorkflowDefView
 
 
 class CatalogSource(Protocol):
-    """load_catalog_runtime 所需的最小 catalog 仓储接口（鸭子类型，避免硬依赖）。"""
+    """load_catalog_runtime / 编排器所需的最小 catalog 仓储接口（鸭子类型，避免硬依赖）。"""
 
     async def list_agents(self) -> list[AgentCardView]: ...
     async def get_profile_full(self, profile_id: str) -> ModelProfileFull | None: ...
     async def get_default_profile(self) -> ModelProfileFull | None: ...
+    async def get_workflow_def(self, name: str) -> WorkflowDefView | None: ...
 
 
 class CatalogRuntime:

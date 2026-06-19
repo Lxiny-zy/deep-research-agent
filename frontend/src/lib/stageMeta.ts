@@ -14,4 +14,5 @@ export const STAGE_META: Record<Stage, StageMeta> = {
   REFLECTOR: { label: '反思', color: 'var(--stage-reflector)', icon: '↻' },
   SYNTHESIZER: { label: '综合', color: 'var(--stage-synthesizer)', icon: '✎' },
   ORCHESTRATOR: { label: '编排', color: 'var(--stage-orchestrator)', icon: '✦' },
+  COORDINATOR: { label: '协调', color: 'var(--stage-coordinator)', icon: '⚙' },
 }

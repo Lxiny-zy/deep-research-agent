@@ -56,6 +56,7 @@ class ResearchParams(BaseModel):
     max_rounds: int | None = Field(default=None, ge=0, le=5)
     max_concurrency: int | None = Field(default=None, ge=1, le=16)
     results_per_search: int | None = Field(default=None, ge=1, le=15)
+    max_tokens: int | None = Field(default=None, ge=1, le=10_000_000)  # 本次研究 token 预算上限
 
 
 class CreateRunRequest(BaseModel):
@@ -371,18 +372,62 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
 
 
 @app.get("/api/workflows", dependencies=[Depends(require_api_key)])
-async def list_workflows() -> list[dict[str, str]]:
-    """可选的任务流程列表（供前端选择器）。default 标记缺省流程。"""
+async def list_workflows(request: Request) -> list[dict[str, str]]:
+    """可选的任务流程列表（供前端选择器）：内置预置 + 已启用的自定义工作流。"""
     from .workflows import DEFAULT_WORKFLOW, WORKFLOWS
 
-    return [
+    out = [
         {
             "name": wf.name,
             "description": wf.description,
             "default": str(wf.name == DEFAULT_WORKFLOW),
+            "custom": "False",
         }
         for wf in WORKFLOWS.values()
     ]
+    try:  # 并入自定义工作流；catalog 不可用时优雅降级，仅返回内置
+        for wd in await request.app.state.catalog.list_workflow_defs():
+            if wd.enabled:
+                out.append(
+                    {
+                        "name": wd.name,
+                        "description": wd.description or wd.display_name,
+                        "default": "False",
+                        "custom": "True",
+                    }
+                )
+    except Exception:
+        logger.exception("读取自定义工作流失败，仅返回内置流程")
+    return out
+
+
+# 可编排进自定义工作流的内置角色（排除 coordinator/aggregator——它们是 compose/fanout 专用原语）
+_COMPOSABLE_BUILTINS = {"planner", "researcher", "reflector", "synthesizer", "critic"}
+
+
+@app.get("/api/roles", dependencies=[Depends(require_api_key)])
+async def list_roles(request: Request) -> list[dict[str, object]]:
+    """可编排角色（供构建器角色选择器）：内置可组合角色 + 已启用自定义卡片。"""
+    from .registry import available
+
+    builtin = {n for n in available() if n in _COMPOSABLE_BUILTINS}
+    roles: list[dict[str, object]] = [
+        {"name": n, "label": n, "icon": "◆", "builtin": True} for n in sorted(builtin)
+    ]
+    try:
+        for card in await request.app.state.catalog.list_agents():
+            if card.enabled and card.name not in builtin:
+                roles.append(
+                    {
+                        "name": card.name,
+                        "label": card.display_name or card.name,
+                        "icon": card.icon,
+                        "builtin": False,
+                    }
+                )
+    except Exception:
+        logger.exception("读取自定义角色卡片失败，仅返回内置角色")
+    return roles
 
 
 @app.get("/api/config", dependencies=[Depends(require_api_key)])

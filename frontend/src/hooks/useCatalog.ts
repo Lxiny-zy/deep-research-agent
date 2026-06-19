@@ -1,22 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   createAgent,
+  createCustomWorkflow,
   createModel,
   createSearchKey,
   deleteAgent,
+  deleteCustomWorkflow,
   deleteModel,
   deleteSearchKey,
   listAgents,
   listBehaviors,
+  listCustomWorkflows,
   listModels,
+  listRoles,
   listSearchKeys,
   testModel,
   testSearchKey,
   updateAgent,
+  updateCustomWorkflow,
   updateModel,
   updateSearchKey,
 } from '../api/client'
-import type { AgentCardInput, ModelProfileInput, SearchKeyInput } from '../types'
+import type {
+  AgentCardInput,
+  ModelProfileInput,
+  SearchKeyInput,
+  WorkflowDefInput,
+} from '../types'
 
 // ── 模型档案 ──────────────────────────────────────────────────────────
 export function useModels() {
@@ -86,4 +96,36 @@ export function useSearchKeyMutations() {
 
 export function useTestSearchKey() {
   return useMutation({ mutationFn: (id: string) => testSearchKey(id) })
+}
+
+// ── 自定义工作流（构建器）──────────────────────────────────────────────
+export function useRoles() {
+  return useQuery({ queryKey: ['roles'], queryFn: listRoles, staleTime: 60_000 })
+}
+
+export function useCustomWorkflows() {
+  return useQuery({ queryKey: ['custom-workflows'], queryFn: listCustomWorkflows })
+}
+
+export function useWorkflowMutations() {
+  const qc = useQueryClient()
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['custom-workflows'] })
+    qc.invalidateQueries({ queryKey: ['workflows'] }) // 新建研究的选择器列表也要刷新
+  }
+  return {
+    create: useMutation({
+      mutationFn: (b: WorkflowDefInput) => createCustomWorkflow(b),
+      onSuccess: invalidate,
+    }),
+    update: useMutation({
+      mutationFn: ({ id, body }: { id: string; body: WorkflowDefInput }) =>
+        updateCustomWorkflow(id, body),
+      onSuccess: invalidate,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => deleteCustomWorkflow(id),
+      onSuccess: invalidate,
+    }),
+  }
 }

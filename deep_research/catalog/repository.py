@@ -17,6 +17,9 @@ from .dto import (
     ModelProfileFull,
     ModelProfileView,
     SearchKeyView,
+    WorkflowDefCreate,
+    WorkflowDefUpdate,
+    WorkflowDefView,
 )
 
 
@@ -75,6 +78,17 @@ def _key_view(r: orm.SearchKeyRow) -> SearchKeyView:
         priority=r.priority,
         enabled=bool(r.enabled),
         api_key_hint=mask(r.api_key),
+    )
+
+
+def _workflow_view(r: orm.WorkflowDefRow) -> WorkflowDefView:
+    return WorkflowDefView(
+        id=r.id,
+        name=r.name,
+        display_name=r.display_name,
+        description=r.description,
+        steps=list(r.steps or []),
+        enabled=bool(r.enabled),
     )
 
 
@@ -273,6 +287,56 @@ class CatalogRepository:
     async def delete_key(self, key_id: str) -> bool:
         async with self._sm() as s, s.begin():
             row = await s.get(orm.SearchKeyRow, key_id)
+            if row is None:
+                return False
+            await s.delete(row)
+            return True
+
+    # ── 自定义工作流 ────────────────────────────────────────────────────
+    async def list_workflow_defs(self) -> list[WorkflowDefView]:
+        async with self._sm() as s:
+            rows = (
+                await s.scalars(select(orm.WorkflowDefRow).order_by(orm.WorkflowDefRow.name))
+            ).all()
+            return [_workflow_view(r) for r in rows]
+
+    async def get_workflow_def(self, name: str) -> WorkflowDefView | None:
+        async with self._sm() as s:
+            row = await s.scalar(select(orm.WorkflowDefRow).where(orm.WorkflowDefRow.name == name))
+            return _workflow_view(row) if row else None
+
+    async def create_workflow_def(self, payload: WorkflowDefCreate) -> WorkflowDefView:
+        async with self._sm() as s, s.begin():
+            row = orm.WorkflowDefRow(
+                name=payload.name,
+                display_name=payload.display_name,
+                description=payload.description,
+                steps=payload.steps,
+                enabled=1 if payload.enabled else 0,
+            )
+            s.add(row)
+            await s.flush()
+            return _workflow_view(row)
+
+    async def update_workflow_def(
+        self, workflow_id: str, payload: WorkflowDefUpdate
+    ) -> WorkflowDefView | None:
+        fields = payload.model_dump(exclude_unset=True)
+        async with self._sm() as s, s.begin():
+            row = await s.get(orm.WorkflowDefRow, workflow_id)
+            if row is None:
+                return None
+            for k, v in fields.items():
+                if k == "enabled":
+                    row.enabled = bool(v)
+                else:
+                    setattr(row, k, v)
+            await s.flush()
+            return _workflow_view(row)
+
+    async def delete_workflow_def(self, workflow_id: str) -> bool:
+        async with self._sm() as s, s.begin():
+            row = await s.get(orm.WorkflowDefRow, workflow_id)
             if row is None:
                 return False
             await s.delete(row)

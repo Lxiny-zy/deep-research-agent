@@ -1,7 +1,13 @@
 // 后端数据契约的 TypeScript 映射（与 deep_research/models.py、observability.py、
 // persistence/repository.py 对齐）。Event 命名为 ResearchEvent 以避开 DOM 全局 Event。
 
-export type Stage = 'PLANNER' | 'RESEARCHER' | 'REFLECTOR' | 'SYNTHESIZER' | 'ORCHESTRATOR'
+export type Stage =
+  | 'PLANNER'
+  | 'RESEARCHER'
+  | 'REFLECTOR'
+  | 'SYNTHESIZER'
+  | 'ORCHESTRATOR'
+  | 'COORDINATOR'
 
 export type EventType =
   | 'start'
@@ -76,11 +82,56 @@ export interface ResearchParams {
   max_rounds?: number
   max_concurrency?: number
   results_per_search?: number
+  max_tokens?: number
+}
+
+// GET /api/workflows 行：可选研究流程（default 为后端 str(bool)，"True"/"False"）
+export interface WorkflowInfo {
+  name: string
+  description: string
+  default: string
+  custom?: string // "True"＝自定义工作流（构建器创建），"False"/缺省＝内置预置
+}
+
+// 自定义工作流的一个步骤（与后端 Step 对齐，顺序即数组序）
+export interface WorkflowStep {
+  kind: 'agent' | 'reflect_loop'
+  agent?: string // kind=agent 时：角色名
+  reflector?: string // kind=reflect_loop 时
+  researcher?: string // kind=reflect_loop 时
+  max_rounds?: number | null
+}
+
+// 自定义工作流（GET /api/workflows/custom）
+export interface WorkflowDef {
+  id: string
+  name: string
+  display_name: string
+  description: string
+  steps: WorkflowStep[]
+  enabled: boolean
+}
+
+export interface WorkflowDefInput {
+  name?: string
+  display_name?: string
+  description?: string
+  steps?: WorkflowStep[]
+  enabled?: boolean
+}
+
+// GET /api/roles 行：可编排进自定义工作流的角色
+export interface RoleInfo {
+  name: string
+  label: string
+  icon: string
+  builtin: boolean
 }
 
 export interface CreateRunRequest {
   query: string
   params?: ResearchParams | null
+  workflow?: string | null
 }
 
 export interface CreateRunResponse {

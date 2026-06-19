@@ -79,3 +79,29 @@ class AgentCardUpdate(BaseModel):
     icon: str | None = Field(None, max_length=16)
     enabled: bool | None = None
     model_profile_id: str | None = None  # 显式传 None 不区分清空——用 set_unset 语义处理
+
+
+class WorkflowDefView(BaseModel):
+    """自定义工作流对外视图（无密钥，steps 原样透出供前端编辑/后端运行）。"""
+
+    id: str
+    name: str
+    display_name: str = ""
+    description: str = ""
+    steps: list[dict] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class WorkflowDefCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    display_name: str = Field("", max_length=100)
+    description: str = Field("", max_length=2000)
+    steps: list[dict] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class WorkflowDefUpdate(BaseModel):
+    display_name: str | None = Field(None, max_length=100)
+    description: str | None = Field(None, max_length=2000)
+    steps: list[dict] | None = None
+    enabled: bool | None = None

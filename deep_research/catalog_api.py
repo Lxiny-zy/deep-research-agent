@@ -19,6 +19,9 @@ from .catalog.dto import (
     ModelProfileFull,
     ModelProfileView,
     SearchKeyView,
+    WorkflowDefCreate,
+    WorkflowDefUpdate,
+    WorkflowDefView,
 )
 from .catalog.repository import CatalogRepository
 from .config import Settings
@@ -109,6 +112,39 @@ def _catalog(request: Request) -> CatalogRepository:
     return request.app.state.catalog
 
 
+def _reject_builtin_name(name: str) -> None:
+    """自定义流程名不得与内置流程同名（否则运行解析时被内置优先级永久屏蔽）。"""
+    from .workflows import WORKFLOWS
+
+    if name in WORKFLOWS:
+        raise HTTPException(status_code=422, detail=f"名称「{name}」与内置流程冲突，请改名")
+
+
+async def _validate_custom_steps(
+    steps: list[dict], catalog: CatalogRepository, settings: Settings
+) -> None:
+    """校验自定义工作流的 steps 是否安全可执行（复用引擎的 validate_workflow）；不合法抛 422。"""
+    from .registry import available
+    from .workflow import Step, validate_workflow
+
+    enabled_cards = [c for c in await catalog.list_agents() if c.enabled]
+    # 可编排角色 = 内置注册角色 + 已启用自定义卡片名（运行期 resolve_agent 能解析这两类）
+    available_roles = set(available()) | {c.name for c in enabled_cards}
+    # 终端角色 = 内置终端 + behavior=synthesize 的自定义卡片（它们也能产出报告）
+    terminal_roles = {"synthesizer", "aggregator"} | {
+        c.name for c in enabled_cards if c.behavior == "synthesize"
+    }
+    try:
+        parsed = [Step.model_validate(s) for s in steps]
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"步骤格式非法：{e}") from e
+    errors = validate_workflow(
+        parsed, available_roles, max_rounds_cap=settings.max_rounds, terminal_roles=terminal_roles
+    )
+    if errors:
+        raise HTTPException(status_code=422, detail="工作流不合法：" + "；".join(errors))
+
+
 router = APIRouter(prefix="/api")
 
 
@@ -139,9 +175,7 @@ async def create_model(req: ProfileCreate, request: Request) -> ModelProfileView
 
 @router.put("/models/{profile_id}")
 async def update_model(profile_id: str, req: ProfileUpdate, request: Request) -> ModelProfileView:
-    view = await _catalog(request).update_profile(
-        profile_id, req.model_dump(exclude_unset=True)
-    )
+    view = await _catalog(request).update_profile(profile_id, req.model_dump(exclude_unset=True))
     if view is None:
         raise HTTPException(status_code=404, detail="model profile not found")
     return view
@@ -230,3 +264,35 @@ async def test_key(key_id: str, request: Request) -> TestResult:
     if secret is None:
         raise HTTPException(status_code=404, detail="search key not found")
     return await _run_probe(_probe_search(secret))
+
+
+# ── 自定义工作流 ──────────────────────────────────────────────────────────
+@router.get("/workflows/custom")
+async def list_custom_workflows(request: Request) -> list[WorkflowDefView]:
+    return await _catalog(request).list_workflow_defs()
+
+
+@router.post("/workflows/custom", status_code=201)
+async def create_custom_workflow(req: WorkflowDefCreate, request: Request) -> WorkflowDefView:
+    _reject_builtin_name(req.name)
+    await _validate_custom_steps(req.steps, _catalog(request), request.app.state.settings)
+    return await _catalog(request).create_workflow_def(req)
+
+
+@router.put("/workflows/custom/{workflow_id}")
+async def update_custom_workflow(
+    workflow_id: str, req: WorkflowDefUpdate, request: Request
+) -> WorkflowDefView:
+    if req.steps is not None:
+        await _validate_custom_steps(req.steps, _catalog(request), request.app.state.settings)
+    view = await _catalog(request).update_workflow_def(workflow_id, req)
+    if view is None:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    return view
+
+
+@router.delete("/workflows/custom/{workflow_id}", status_code=204)
+async def delete_custom_workflow(workflow_id: str, request: Request) -> Response:
+    if not await _catalog(request).delete_workflow_def(workflow_id):
+        raise HTTPException(status_code=404, detail="workflow not found")
+    return Response(status_code=204)

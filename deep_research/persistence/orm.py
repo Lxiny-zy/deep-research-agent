@@ -232,3 +232,24 @@ class SearchKeyRow(Base):
     priority: Mapped[int] = mapped_column(Integer, default=0)  # 越小越先用
     enabled: Mapped[bool] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WorkflowDefRow(Base):
+    """自定义工作流定义：用户在构建器里拼出的有序流程，存为可复用的命名实体。
+
+    steps 存 Step[] 的 JSON 序列（kind/agent/reflector/researcher/max_rounds…）；运行时
+    编排器按 name 取出、Step.model_validate 还原后交引擎执行。独立于单次 run，属全局配置。
+    """
+
+    __tablename__ = "workflow_def"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(64), unique=True)  # 运行按此名引用，唯一
+    display_name: Mapped[str] = mapped_column(String(100), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    steps: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    enabled: Mapped[bool] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

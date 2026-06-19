@@ -16,6 +16,17 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _int_env_opt(name: str) -> int | None:
+    """可选整型环境变量：未设置返回 None（语义：不限 / 采用内置默认）。"""
+    raw = os.getenv(name)
+    if not raw or not raw.strip():
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def _float_env(name: str, default: float) -> float:
     raw = os.getenv(name)
     if not raw or not raw.strip():
@@ -62,6 +73,12 @@ class Settings:
     max_concurrency: int = field(default_factory=lambda: _int_env("MAX_CONCURRENCY", 4))
     results_per_search: int = field(default_factory=lambda: _int_env("RESULTS_PER_SEARCH", 5))
 
+    # 单次研究累计 token 预算上限（防反思/补洞无限烧）；None＝不限。引擎以 Tracer 累计为准，
+    # 耗尽则跳过后续研究/反思但仍综合，产出尽力而为的部分报告而非报错。
+    max_tokens: int | None = field(default_factory=lambda: _int_env_opt("MAX_TOKENS"))
+    # 自组合（auto 流程）生成的流程执行失败/零产出时，Coordinator 重规划的最大次数。
+    max_replans: int = field(default_factory=lambda: _int_env("MAX_REPLANS", 1))
+
     # --- 网络 ---
     request_timeout: float = field(default_factory=lambda: _float_env("REQUEST_TIMEOUT", 60.0))
 
@@ -75,6 +92,10 @@ class Settings:
             raise ValueError("max_concurrency 必须 >= 1")
         if self.results_per_search < 1:
             raise ValueError("results_per_search 必须 >= 1")
+        if self.max_tokens is not None and self.max_tokens < 1:
+            raise ValueError("max_tokens 必须 >= 1 或为 None（不限）")
+        if self.max_replans < 0:
+            raise ValueError("max_replans 必须 >= 0")
         if self.request_timeout <= 0:
             raise ValueError("request_timeout 必须 > 0")
 

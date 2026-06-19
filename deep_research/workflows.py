@@ -41,7 +41,23 @@ REVIEWED = Workflow(
     steps=[*DEEP.steps, Step(agent="critic")],
 )
 
-WORKFLOWS = {wf.name: wf for wf in (DEEP, QUICK, REVIEWED)}
+# 自组合（L3）：Coordinator 角色在运行时按问题现场生成流程，引擎递归执行。
+# 这一条同样没有改引擎——compose 是引擎的一类控制原语，Coordinator 是一个普通注册角色。
+AUTO = Workflow(
+    name="auto",
+    description="自组合：Coordinator 运行时按问题生成研究流程（动态组队）",
+    steps=[Step(kind="compose", agent="coordinator")],
+)
+
+# 多团队并行（L4）：planner 切出子主题后，team_fanout 把每个子主题分给隔离的子团队
+# 并行研究，最后 aggregator 归并成统一报告（map-reduce）。同样未改引擎——只是新控制原语 + 新角色。
+TEAMS = Workflow(
+    name="teams",
+    description="多团队并行：规划子主题 → 隔离子团队各自检索 → 归并成报告（map-reduce）",
+    steps=[Step(agent="planner"), Step(kind="team_fanout", aggregator="aggregator")],
+)
+
+WORKFLOWS = {wf.name: wf for wf in (DEEP, QUICK, REVIEWED, AUTO, TEAMS)}
 
 DEFAULT_WORKFLOW = "deep"
 

@@ -9,12 +9,16 @@ import type {
   CreateRunResponse,
   ModelProfile,
   ModelProfileInput,
+  RoleInfo,
   RunDetail,
   RunSummary,
   SearchKey,
   SearchKeyInput,
   TagCount,
   TestResult,
+  WorkflowDef,
+  WorkflowDefInput,
+  WorkflowInfo,
 } from '../types'
 
 export class ApiError extends Error {
@@ -103,6 +107,37 @@ export function createRun(body: CreateRunRequest): Promise<CreateRunResponse> {
     method: 'POST',
     body: JSON.stringify(body),
   })
+}
+
+export function listWorkflows(): Promise<WorkflowInfo[]> {
+  return request<WorkflowInfo[]>('/api/workflows')
+}
+
+// ── 自定义工作流（构建器）──────────────────────────────────────────────
+export function listRoles(): Promise<RoleInfo[]> {
+  return request<RoleInfo[]>('/api/roles')
+}
+
+export function listCustomWorkflows(): Promise<WorkflowDef[]> {
+  return request<WorkflowDef[]>('/api/workflows/custom')
+}
+
+export function createCustomWorkflow(body: WorkflowDefInput): Promise<WorkflowDef> {
+  return request<WorkflowDef>('/api/workflows/custom', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function updateCustomWorkflow(id: string, body: WorkflowDefInput): Promise<WorkflowDef> {
+  return request<WorkflowDef>(`/api/workflows/custom/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteCustomWorkflow(id: string): Promise<void> {
+  return requestVoid(`/api/workflows/custom/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 export function listRuns(

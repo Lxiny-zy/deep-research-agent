@@ -39,6 +39,7 @@
   --stage-reflector: #d9a441;
   --stage-synthesizer: #ffe3a3;
   --stage-orchestrator: #9a958a;
+  --stage-coordinator: #f3c969;
 
   /* —— 发光 / 阴影 —— */
   --glow-gold: 0 0 24px rgba(245, 208, 97, 0.28);
@@ -1308,4 +1309,37 @@ p {
 .modal textarea.input {
   resize: vertical;
   font-family: inherit;
+}
+
+/* —— 工作流构建器 —— */
+.modal.wide {
+  max-width: 720px;
+}
+.step-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 10px;
+  background: var(--surface-1, #12151c);
+}
+.step-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--stage-coordinator, #f3c969);
+  color: #1a1a1a;
+  font-size: 12px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.step-summary {
+  color: var(--muted, #8b94a3);
+  font-size: 13px;
+  margin-top: 6px;
+  word-break: break-word;
 }

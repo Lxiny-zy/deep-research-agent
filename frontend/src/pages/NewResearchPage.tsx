@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { createRun } from '../api/client'
+import { useEffect, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { createRun, listWorkflows } from '../api/client'
 import SettingsPanel from '../components/SettingsPanel'
-import type { ResearchParams } from '../types'
+import type { ResearchParams, WorkflowInfo } from '../types'
 
 const DEFAULT_QUERY = '2026 年主流 AI Agent 框架有哪些？各自的设计取舍是什么？'
 const SAMPLES = [
@@ -13,10 +13,26 @@ const SAMPLES = [
 
 export default function NewResearchPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [query, setQuery] = useState(DEFAULT_QUERY)
   const [params, setParams] = useState<ResearchParams>({})
+  const [workflows, setWorkflows] = useState<WorkflowInfo[]>([])
+  const [workflow, setWorkflow] = useState<string>('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // 拉取可选研究流程；优先选中 URL ?workflow=（构建器「去研究」跳转），否则后端标记的 default
+  useEffect(() => {
+    const preferred = searchParams.get('workflow')
+    listWorkflows()
+      .then((ws) => {
+        setWorkflows(ws)
+        const match = preferred ? ws.find((w) => w.name === preferred) : undefined
+        const def = match ?? ws.find((w) => w.default === 'True') ?? ws[0]
+        if (def) setWorkflow(def.name)
+      })
+      .catch(() => {})
+  }, [searchParams])
 
   async function start() {
     const q = query.trim()
@@ -25,13 +41,19 @@ export default function NewResearchPage() {
     setError(null)
     try {
       const hasParams = Object.values(params).some((v) => v != null)
-      const { run_id } = await createRun({ query: q, params: hasParams ? params : null })
+      const { run_id } = await createRun({
+        query: q,
+        params: hasParams ? params : null,
+        workflow: workflow || null,
+      })
       navigate(`/runs/${run_id}`)
     } catch (e) {
       setError(e instanceof Error ? e.message : '提交失败')
       setSubmitting(false)
     }
   }
+
+  const activeWf = workflows.find((w) => w.name === workflow)
 
   return (
     <div className="stack">
@@ -64,14 +86,31 @@ export default function NewResearchPage() {
             </button>
           ))}
         </div>
+        {workflows.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <label className="field-label" htmlFor="workflow">
+              研究流程
+            </label>
+            <select
+              id="workflow"
+              className="input"
+              value={workflow}
+              onChange={(e) => setWorkflow(e.target.value)}
+            >
+              {workflows.map((w) => (
+                <option key={w.name} value={w.name}>
+                  {w.name}
+                  {w.default === 'True' ? '（默认）' : ''}
+                </option>
+              ))}
+            </select>
+            {activeWf && <p className="hint">{activeWf.description}</p>}
+          </div>
+        )}
         <SettingsPanel value={params} onChange={setParams} />
         <div className="row between" style={{ marginTop: 18 }}>
           <span className="hint">提交后创建一次可持久化研究并跳转实时观看，全程可在「历史」回放。</span>
-          <button
-            className="btn lg"
-            onClick={start}
-            disabled={submitting || !query.trim()}
-          >
+          <button className="btn lg" onClick={start} disabled={submitting || !query.trim()}>
             {submitting ? '提交中…' : '开始研究 →'}
           </button>
         </div>
