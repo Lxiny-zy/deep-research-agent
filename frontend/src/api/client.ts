@@ -51,18 +51,43 @@ function formatDetail(detail: unknown, fallback: string): string {
   return fallback
 }
 
-// 后端启用 API_KEY 认证时，在浏览器控制台执行
-// localStorage.setItem('dr_api_key', '<你的密钥>') 后刷新即可。
-function apiKey(): string | null {
+const API_KEY_STORAGE = 'dr_api_key'
+
+// 后端启用 API_KEY 鉴权时，前端用此 key 走 X-API-Key 头 / ?api_key= 参数。
+// 由密钥登录 gate（LoginGate）写入；也可在浏览器控制台手动设置。
+export function getApiKey(): string | null {
   try {
-    return localStorage.getItem('dr_api_key')
+    return localStorage.getItem(API_KEY_STORAGE)
   } catch {
     return null
   }
 }
 
+export function setApiKey(key: string): void {
+  try {
+    localStorage.setItem(API_KEY_STORAGE, key)
+  } catch {
+    // localStorage 不可用（隐私模式等）：忽略
+  }
+}
+
+export function clearApiKey(): void {
+  try {
+    localStorage.removeItem(API_KEY_STORAGE)
+  } catch {
+    // 忽略
+  }
+}
+
+// 收到 401 时广播：App 监听后弹出密钥登录。仅浏览器环境派发。
+function signalUnauthorized(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('dr:unauthorized'))
+  }
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const key = apiKey()
+  const key = getApiKey()
   const res = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
@@ -71,6 +96,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     ...init,
   })
   if (!res.ok) {
+    if (res.status === 401) signalUnauthorized()
     let detail = res.statusText
     try {
       const body = (await res.json()) as { detail?: unknown }
@@ -85,12 +111,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 // 用于 204 No Content（如 DELETE）：仅校验状态，不解析响应体
 async function requestVoid(url: string, init?: RequestInit): Promise<void> {
-  const key = apiKey()
+  const key = getApiKey()
   const res = await fetch(url, {
     headers: { ...(key ? { 'X-API-Key': key } : {}) },
     ...init,
   })
   if (!res.ok) {
+    if (res.status === 401) signalUnauthorized()
     let detail = res.statusText
     try {
       const body = (await res.json()) as { detail?: unknown }
@@ -187,7 +214,7 @@ export function listTags(): Promise<TagCount[]> {
 
 export function streamUrl(id: string): string {
   const base = `/api/runs/${encodeURIComponent(id)}/stream`
-  const key = apiKey()
+  const key = getApiKey()
   // EventSource 无法自定义请求头，认证走查询参数
   return key ? `${base}?api_key=${encodeURIComponent(key)}` : base
 }

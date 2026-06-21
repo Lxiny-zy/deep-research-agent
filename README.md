@@ -120,7 +120,7 @@ docker compose down -v # 停止并清库（含数据卷）
 
 `docker-compose.yml` 起两个服务：`db`（postgres:16-alpine，带健康检查）与 `api`（构建本仓库镜像，待数据库就绪后启动）。`DATABASE_URL` 已在 compose 中指向内部 `db` 服务，LLM / 检索密钥从根目录 `.env` 注入。
 
-安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问请经反向代理（TLS/限流）。生产建议在 `.env` 中设置 `API_KEY` —— 设置后所有 `/api` 端点要求 `X-API-Key` 请求头（或 `?api_key=` 参数，供 EventSource 使用）。
+安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问请经反向代理（TLS/限流）。生产建议在 `.env` 中设置 `API_KEY` —— 设置后所有 `/api` 端点要求 `X-API-Key` 请求头（或 `?api_key=` 参数，供 EventSource 使用）。前端无需手改：首次遇到 401 会自动弹出**密钥登录**，输入后密钥存于浏览器 `localStorage`；也可点导航栏「🔑 密钥」随时设置 / 更换 / 清除。
 
 ## 持久化 · 历史与回放
 

@@ -1,9 +1,20 @@
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
+import LoginGate from './components/LoginGate'
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   isActive ? 'nav-link active' : 'nav-link'
 
 export default function App() {
+  const [showLogin, setShowLogin] = useState(false)
+
+  // 任意 /api 请求返回 401 时（client.ts 派发），弹出密钥登录
+  useEffect(() => {
+    const onUnauthorized = () => setShowLogin(true)
+    window.addEventListener('dr:unauthorized', onUnauthorized)
+    return () => window.removeEventListener('dr:unauthorized', onUnauthorized)
+  }, [])
+
   return (
     <div className="container">
       <header className="site-header">
@@ -36,6 +47,13 @@ export default function App() {
           <NavLink to="/settings" className={linkClass}>
             设置
           </NavLink>
+          <button
+            className="btn ghost sm"
+            onClick={() => setShowLogin(true)}
+            title="设置 / 更换 API 密钥"
+          >
+            🔑 密钥
+          </button>
         </nav>
       </header>
       <main>
@@ -44,6 +62,7 @@ export default function App() {
       <footer className="footer">
         多 Agent 深度研究 · 拆解 → 并行检索 → 反思补洞 → 带引用的研究报告
       </footer>
+      {showLogin && <LoginGate onClose={() => setShowLogin(false)} />}
     </div>
   )
 }
