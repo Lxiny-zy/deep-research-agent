@@ -1,0 +1,442 @@
+/* ============================================================================
+   研究页面布局优化 - 限制高度，添加滚动
+   ========================================================================== */
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+/* 左侧：事件时间线和 DAG */
+.grid-2 > .stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-height: calc(100vh - 280px);
+  overflow-y: auto;
+}
+
+/* 右侧：报告面板 */
+.grid-2 > .panel {
+  position: sticky;
+  top: 24px;
+  max-height: calc(100vh - 280px);
+  display: flex;
+  flex-direction: column;
+}
+
+/* 事件时间线容器 - 固定高度，内部滚动 */
+.timeline {
+  max-height: 500px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+/* 报告内容区域 - 固定高度，内部滚动 */
+.report-view {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+/* 自定义滚动条 - 细节优化 */
+.timeline::-webkit-scrollbar,
+.report-view::-webkit-scrollbar,
+.grid-2 > .stack::-webkit-scrollbar {
+  width: 6px;
+}
+
+.timeline::-webkit-scrollbar-track,
+.report-view::-webkit-scrollbar-track,
+.grid-2 > .stack::-webkit-scrollbar-track {
+  background: var(--surface-1);
+}
+
+.timeline::-webkit-scrollbar-thumb,
+.report-view::-webkit-scrollbar-thumb,
+.grid-2 > .stack::-webkit-scrollbar-thumb {
+  background: var(--border-primary);
+  border-radius: 3px;
+}
+
+.timeline::-webkit-scrollbar-thumb:hover,
+.report-view::-webkit-scrollbar-thumb:hover,
+.grid-2 > .stack::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
+}
+
+/* ============================================================================
+   事件时间线样式
+   ========================================================================== */
+.event-row {
+  display: grid;
+  grid-template-columns: 16px 60px 1fr;
+  gap: 12px;
+  padding: 12px 0;
+  border-left: 2px solid var(--border-secondary);
+  margin-left: 8px;
+  padding-left: 16px;
+  position: relative;
+  transition: all 0.3s var(--ease-smooth);
+}
+
+.event-row:hover {
+  background: var(--surface-2);
+  margin-left: 4px;
+  padding-left: 20px;
+}
+
+.event-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 3px solid var(--bg-primary);
+  position: absolute;
+  left: -8px;
+  top: 16px;
+}
+
+.event-row.live .event-dot {
+  animation: pulse-ring 2s ease-out infinite;
+}
+
+.event-time {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.event-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.event-stage {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.event-msg {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* ============================================================================
+   统计栏动画优化
+   ========================================================================== */
+.statsbar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--surface-1);
+  border: 2px solid var(--border-primary);
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s var(--ease-smooth);
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--accent-gradient);
+  transition: width 0.3s var(--ease-smooth);
+}
+
+.stat-card:hover::before {
+  width: 8px;
+}
+
+.stat-ico {
+  font-size: 2rem;
+  color: var(--accent-primary);
+  animation: stat-pulse 2s ease-in-out infinite;
+}
+
+@keyframes stat-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.05);
+  }
+}
+
+.stat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-num {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  /* 数字跳动时平滑过渡 */
+  transition: all 0.3s var(--ease-smooth);
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* 流式中数字闪烁效果 */
+@keyframes number-update {
+  0% {
+    color: var(--accent-primary);
+    transform: scale(1.1);
+  }
+  100% {
+    color: var(--text-primary);
+    transform: scale(1);
+  }
+}
+
+.stat-num.updating {
+  animation: number-update 0.3s ease-out;
+}
+
+/* ============================================================================
+   响应式：小屏幕改为单列
+   ========================================================================== */
+@media (max-width: 1024px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .grid-2 > .panel {
+    position: relative;
+    max-height: 600px;
+  }
+
+  .grid-2 > .stack {
+    max-height: none;
+  }
+}
+
+/* ============================================================================
+   Tabs 标签页样式
+   ========================================================================== */
+.tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 2px solid var(--border-primary);
+  margin-bottom: 24px;
+}
+
+.tab {
+  padding: 12px 24px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.3s var(--ease-smooth);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+  background: var(--surface-1);
+}
+
+.tab.active {
+  color: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
+  background: var(--surface-1);
+}
+
+/* ============================================================================
+   按钮变体补充
+   ========================================================================== */
+.btn.ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+}
+
+.btn.ghost:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: var(--surface-1);
+}
+
+.btn.ghost.small,
+.btn.small {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+}
+
+.btn.ghost.danger {
+  color: var(--error);
+  border-color: var(--border-primary);
+}
+
+.btn.ghost.danger:hover {
+  border-color: var(--error);
+  background: rgba(255, 107, 107, 0.1);
+}
+
+/* ============================================================================
+   Card Grid 卡片网格
+   ========================================================================== */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+/* Role Card 角色卡片 */
+.role-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-primary);
+  padding: 20px;
+  transition: all 0.3s var(--ease-smooth);
+}
+
+.role-card:hover {
+  border-color: var(--accent-primary);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.role-card.disabled {
+  opacity: 0.5;
+}
+
+.role-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.role-icon {
+  font-size: 1.5rem;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-3);
+  border: 1px solid var(--border-primary);
+}
+
+.role-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.role-meta strong {
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.role-desc {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 12px 0;
+}
+
+.role-card-foot {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-secondary);
+}
+
+/* ============================================================================
+   通用辅助类
+   ========================================================================== */
+.hint {
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+  font-style: italic;
+  line-height: 1.6;
+}
+
+.muted {
+  color: var(--text-tertiary);
+}
+
+.small {
+  font-size: 0.8rem;
+}
+
+.error-text {
+  color: var(--error);
+  padding: 12px;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid var(--error);
+  font-size: 0.9rem;
+}
+
+.gap-sm {
+  gap: 8px;
+}
+
+.between {
+  justify-content: space-between;
+}
+
+/* ============================================================================
+   修复原生 button 样式，避免白色背景
+   ========================================================================== */
+button {
+  background: var(--surface-2);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+button:not([class]) {
+  /* 没有 class 的原生 button 也使用深色 */
+  background: var(--surface-2) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-primary) !important;
+  padding: 8px 16px;
+}
+
+/* Run Page 特定样式 */
+.run-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.run-q {
+  flex: 1;
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 300px;
+}

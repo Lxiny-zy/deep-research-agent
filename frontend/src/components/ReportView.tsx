@@ -16,7 +16,7 @@ export default function ReportView({
     )
   }
   return (
-    <div className="report">
+    <div className="report markdown-content">
       <Markdown remarkPlugins={[remarkGfm]}>{markdown}</Markdown>
       {streaming && <span className="cursor">▍</span>}
     </div>

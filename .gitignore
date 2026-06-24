@@ -6,6 +6,8 @@ venv/
 research_report.md
 runtime_config.json
 *.db
+*.db-shm
+*.db-wal
 *.egg-info/
 .pytest_cache/
 .mypy_cache/

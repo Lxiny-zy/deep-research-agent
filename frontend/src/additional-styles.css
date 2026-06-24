@@ -1,0 +1,189 @@
+/* ============================================================================
+   Tabs 标签页样式
+   ========================================================================== */
+.tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 2px solid var(--border-primary);
+  margin-bottom: 24px;
+}
+
+.tab {
+  padding: 12px 24px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.3s var(--ease-smooth);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+  background: var(--surface-1);
+}
+
+.tab.active {
+  color: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
+  background: var(--surface-1);
+}
+
+/* ============================================================================
+   按钮变体补充
+   ========================================================================== */
+.btn.ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+}
+
+.btn.ghost:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: var(--surface-1);
+}
+
+.btn.ghost.small,
+.btn.small {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+}
+
+.btn.ghost.danger {
+  color: var(--error);
+  border-color: var(--border-primary);
+}
+
+.btn.ghost.danger:hover {
+  border-color: var(--error);
+  background: rgba(255, 107, 107, 0.1);
+}
+
+/* ============================================================================
+   Card Grid 卡片网格
+   ========================================================================== */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+/* Role Card 角色卡片 */
+.role-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-primary);
+  padding: 20px;
+  transition: all 0.3s var(--ease-smooth);
+}
+
+.role-card:hover {
+  border-color: var(--accent-primary);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.role-card.disabled {
+  opacity: 0.5;
+}
+
+.role-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.role-icon {
+  font-size: 1.5rem;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-3);
+  border: 1px solid var(--border-primary);
+}
+
+.role-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.role-meta strong {
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.role-desc {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 12px 0;
+}
+
+.role-card-foot {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-secondary);
+}
+
+/* ============================================================================
+   通用辅助类
+   ========================================================================== */
+.hint {
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+  font-style: italic;
+  line-height: 1.6;
+}
+
+.muted {
+  color: var(--text-tertiary);
+}
+
+.small {
+  font-size: 0.8rem;
+}
+
+.error-text {
+  color: var(--error);
+  padding: 12px;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid var(--error);
+  font-size: 0.9rem;
+}
+
+.gap-sm {
+  gap: 8px;
+}
+
+.between {
+  justify-content: space-between;
+}
+
+/* ============================================================================
+   修复原生 button 样式，避免白色背景
+   ========================================================================== */
+button {
+  background: var(--surface-2);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+button:not([class]) {
+  /* 没有 class 的原生 button 也使用深色 */
+  background: var(--surface-2) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-primary) !important;
+  padding: 8px 16px;
+}
