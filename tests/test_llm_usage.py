@@ -40,6 +40,7 @@ class FakeCompletions:
 @pytest.mark.asyncio
 async def test_stream_tokens_update_live_then_reconcile_exact_usage(settings):
     tracer = Tracer()
+    settings.llm_api_key = "test-key"
     llm = LLM(settings, tracer)
     completions = FakeCompletions()
     llm.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
