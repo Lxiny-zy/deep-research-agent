@@ -13,6 +13,7 @@ export interface ResearchStreamState {
   dag: DagData | null
   elapsed: number // 直播耗时下界（已收到事件里的最大 elapsed）
   tokens: number // 直播累计 token（最新事件携带）
+  tokensEstimated: boolean // Token 是否包含实时估算值
   findings: number // 直播累计发现数（finding 事件 data.count 之和）
 }
 
@@ -24,6 +25,7 @@ const INITIAL: ResearchStreamState = {
   dag: null,
   elapsed: 0,
   tokens: 0,
+  tokensEstimated: false,
   findings: 0,
 }
 
@@ -44,6 +46,7 @@ export function reduceStream(
     ...prev,
     elapsed: Math.max(prev.elapsed, ev.elapsed ?? 0),
     tokens: ev.tokens ?? prev.tokens,
+    tokensEstimated: ev.tokens_estimated ?? prev.tokensEstimated,
   }
   switch (ev.type) {
     case 'token': {

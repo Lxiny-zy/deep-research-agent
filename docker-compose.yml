@@ -36,13 +36,19 @@ services:
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       # API 认证（强烈建议生产设置；空则所有 /api 端点无认证开放）
       API_KEY: ${API_KEY:-}
+      # 前端设置中心写入的运行时配置持久化到独立数据卷，容器重建不丢失
+      RUNTIME_CONFIG_PATH: /app/data/runtime_config.json
     # 仅绑回环：对外访问应经反向代理（nginx/caddy）做 TLS 与速率限制
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${APP_BIND:-127.0.0.1}:8000:8000"
+    volumes:
+      - appdata:/app/data
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
+    stop_grace_period: 30s
 
 volumes:
   pgdata:
+  appdata:

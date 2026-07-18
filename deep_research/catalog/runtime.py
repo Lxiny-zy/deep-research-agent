@@ -82,6 +82,8 @@ class CatalogRuntime:
             timeout=self._settings.request_timeout,
             user_agent=self._settings.llm_user_agent,
             temperature=profile.temperature,
+            parameter_mode=profile.parameter_mode,
+            reasoning_effort=profile.reasoning_effort,
         )
         self._llm_cache[profile.id] = llm
         return llm

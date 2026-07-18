@@ -118,9 +118,43 @@ docker compose up --build
 docker compose down -v # 停止并清库（含数据卷）
 ```
 
-`docker-compose.yml` 起两个服务：`db`（postgres:16-alpine，带健康检查）与 `api`（构建本仓库镜像，待数据库就绪后启动）。`DATABASE_URL` 已在 compose 中指向内部 `db` 服务，LLM / 检索密钥从根目录 `.env` 注入。
+`docker-compose.yml` 起两个服务：`db`（postgres:16-alpine，带健康检查）与 `api`（构建本仓库镜像，待数据库就绪后启动）。`DATABASE_URL` 已在 compose 中指向内部 `db` 服务，LLM / 检索密钥从根目录 `.env` 注入。数据库使用 `pgdata` 卷，前端设置中心的运行时配置使用 `appdata` 卷，容器重建后仍会保留。
 
 安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问请经反向代理（TLS/限流）。生产建议在 `.env` 中设置 `API_KEY` —— 设置后所有 `/api` 端点要求 `X-API-Key` 请求头（或 `?api_key=` 参数，供 EventSource 使用）。前端无需手改：首次遇到 401 会自动弹出**密钥登录**，输入后密钥存于浏览器 `localStorage`；也可点导航栏「🔑 密钥」随时设置 / 更换 / 清除。
+
+Nginx 反向代理可从 `docker/nginx.conf.example` 起步。SSE 实时进度要求关闭 `proxy_buffering`，并把读写超时提高到覆盖最长研究任务；若不用反向代理、明确要直接暴露端口，可在 `.env` 设置 `APP_BIND=0.0.0.0`，但仍应在安全组中限制来源并配置 HTTPS。
+
+### 服务器端口与配置清单
+
+推荐生产拓扑：公网 → Nginx/Caddy（HTTPS）→ `127.0.0.1:8000` → API 容器，API 容器通过 Docker 内部网络访问 PostgreSQL。
+
+| 端口 | 是否开放公网 | 用途 |
+|------|--------------|------|
+| `80/tcp` | 是 | HTTP 与 HTTPS 跳转；若只使用 443 可按实际策略关闭 |
+| `443/tcp` | 是 | Web 页面、API 与 SSE 实时进度 |
+| `8000/tcp` | 否 | FastAPI 宿主机回环端口，仅供反向代理访问 |
+| `5432/tcp` | 否 | PostgreSQL，仅在 Compose 内部网络访问 |
+
+服务器需要允许**出站 `443/tcp`**，用于访问 OpenAI 兼容模型端点、Tavily 检索服务和 GitHub。
+
+部署时主要维护以下文件：
+
+- `.env`：服务器私有配置，不提交 Git。至少设置 `POSTGRES_PASSWORD`、`LLM_API_KEY`、`TAVILY_API_KEY`，生产环境建议设置 `API_KEY`。
+- `docker-compose.yml`：应用、PostgreSQL、数据卷和端口绑定。
+- `docker/nginx.conf.example`：Nginx 反向代理与 SSE 长连接示例；复制到服务器 Nginx 配置目录后修改域名。
+- `.env.example`：环境变量模板，不包含真实密钥。
+
+服务器拉取与启动：
+
+```bash
+git clone https://github.com/Lxiny-zy/deep-research-agent.git
+cd deep-research-agent
+cp .env.example .env
+# 编辑 .env，填写口令与 API Key
+docker compose up --build -d
+docker compose ps
+curl http://127.0.0.1:8000/healthz
+```
 
 ## 持久化 · 历史与回放
 
@@ -152,7 +186,7 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 
 - **加载顺序**：环境变量（基础默认）→ `runtime_config.json`（前端写入的覆盖项）→ per-run `params`（本次运行覆盖）。
 - **密钥安全**：`GET` 只脱敏回显（`…末四位` + 是否已设置），表单留空＝保持不变（不会被回写清空）；端点受 `API_KEY` 鉴权保护。
-- **持久化位置**：默认写当前工作目录 `runtime_config.json`（已 gitignore），可经 `RUNTIME_CONFIG_PATH` 改路径。Docker 部署需把该文件落在挂载卷上才能跨容器重启保留（如设 `RUNTIME_CONFIG_PATH=/data/runtime_config.json` 并挂载 `/data`）。
+- **持久化位置**：默认写当前工作目录 `runtime_config.json`（已 gitignore），可经 `RUNTIME_CONFIG_PATH` 改路径。Docker Compose 已自动设置为 `/app/data/runtime_config.json` 并挂载 `appdata` 数据卷，容器重建后不会丢失。
 - `database_url` 与服务端 `api_key` 不可经前端改（自举 / 鉴权安全），仍只来自环境变量。
 
 ## 数据库迁移（Alembic）

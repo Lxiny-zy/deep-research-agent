@@ -9,6 +9,7 @@ const base: ResearchStreamState = {
   dag: null,
   elapsed: 0,
   tokens: 0,
+  tokensEstimated: false,
   findings: 0,
 }
 
@@ -74,9 +75,13 @@ describe('reduceStream', () => {
   })
 
   it('直播统计：耗时取最大值、token 取携带值、发现数累加', () => {
-    let s = reduceStream(base, ev({ stage: 'PLANNER', type: 'start', elapsed: 0.5, tokens: 10 }))
+    let s = reduceStream(
+      base,
+      ev({ stage: 'PLANNER', type: 'start', elapsed: 0.5, tokens: 10, tokens_estimated: true }),
+    )
     expect(s.elapsed).toBe(0.5)
     expect(s.tokens).toBe(10)
+    expect(s.tokensEstimated).toBe(true)
     s = reduceStream(s, ev({ stage: 'RESEARCHER', type: 'finding', elapsed: 1.2, tokens: 30, data: { count: 4 } }))
     expect(s.elapsed).toBe(1.2)
     expect(s.tokens).toBe(30)

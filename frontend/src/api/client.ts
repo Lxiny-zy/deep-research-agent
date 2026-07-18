@@ -9,6 +9,8 @@ import type {
   CreateRunResponse,
   ModelProfile,
   ModelProfileInput,
+  ModelProbeInput,
+  ModelDiscoveryResult,
   RoleInfo,
   RunDetail,
   RunSummary,
@@ -256,6 +258,20 @@ export function deleteModel(id: string): Promise<void> {
 
 export function testModel(id: string): Promise<TestResult> {
   return request<TestResult>(`/api/models/${encodeURIComponent(id)}/test`, { method: 'POST' })
+}
+
+export function testModelConfig(body: ModelProbeInput): Promise<TestResult> {
+  return request<TestResult>('/api/models/test-config', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function discoverModels(body: ModelProbeInput): Promise<ModelDiscoveryResult> {
+  return request<ModelDiscoveryResult>('/api/models/discover', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 export function listAgents(): Promise<AgentCard[]> {

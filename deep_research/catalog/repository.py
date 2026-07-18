@@ -38,6 +38,8 @@ def _profile_view(r: orm.ModelProfileRow) -> ModelProfileView:
         base_url=r.base_url,
         model=r.model,
         temperature=r.temperature,
+        parameter_mode=r.parameter_mode,
+        reasoning_effort=r.reasoning_effort,
         is_default=bool(r.is_default),
         api_key_set=bool(r.api_key),
         api_key_hint=mask(r.api_key),
@@ -52,6 +54,8 @@ def _profile_full(r: orm.ModelProfileRow) -> ModelProfileFull:
         api_key=r.api_key,
         model=r.model,
         temperature=r.temperature,
+        parameter_mode=r.parameter_mode,
+        reasoning_effort=r.reasoning_effort,
         is_default=bool(r.is_default),
     )
 
@@ -88,6 +92,10 @@ def _workflow_view(r: orm.WorkflowDefRow) -> WorkflowDefView:
         display_name=r.display_name,
         description=r.description,
         steps=list(r.steps or []),
+        nodes=list(r.nodes or []),
+        edges=list(r.edges or []),
+        viewport=dict(r.viewport or {}),
+        version=r.version,
         enabled=bool(r.enabled),
     )
 
@@ -123,6 +131,8 @@ class CatalogRepository:
         api_key: str,
         model: str,
         temperature: float,
+        parameter_mode: str = "temperature",
+        reasoning_effort: str = "medium",
         is_default: bool,
     ) -> ModelProfileView:
         async with self._sm() as s, s.begin():
@@ -134,6 +144,8 @@ class CatalogRepository:
                 api_key=api_key,
                 model=model,
                 temperature=temperature,
+                parameter_mode=parameter_mode,
+                reasoning_effort=reasoning_effort,
                 is_default=1 if is_default else 0,
             )
             s.add(row)
@@ -312,6 +324,10 @@ class CatalogRepository:
                 display_name=payload.display_name,
                 description=payload.description,
                 steps=payload.steps,
+                nodes=payload.nodes,
+                edges=payload.edges,
+                viewport=payload.viewport,
+                version=payload.version,
                 enabled=1 if payload.enabled else 0,
             )
             s.add(row)

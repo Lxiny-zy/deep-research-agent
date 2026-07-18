@@ -27,7 +27,8 @@ export default function ModelProfileCard({ profile: p, onEdit, onDelete }: Props
         )}
       </div>
       <p className="role-desc">
-        {p.base_url || '官方端点'} · 温度 {p.temperature} ·{' '}
+        {p.base_url || '官方端点'} ·{' '}
+        {p.parameter_mode === 'reasoning' ? `推理 ${p.reasoning_effort}` : `温度 ${p.temperature}`} ·{' '}
         {p.api_key_set ? `key ${p.api_key_hint}` : '未设 key'}
       </p>
 

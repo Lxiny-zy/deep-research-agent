@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ResearchProgress } from '../lib/runProgress'
 import type { RunDetail, RunStats } from '../types'
 
 interface LiveStats {
@@ -7,132 +8,228 @@ interface LiveStats {
   findings: number
 }
 
-// 统计条：流式中实时显示（耗时秒级跳动 + token / 发现数随阶段累加）；
-// 结束用 done 事件的精确统计；回放回退到已落库 detail。
+function useAnimatedNumber(target: number, duration = 480): number {
+  const [value, setValue] = useState(target)
+  const current = useRef(target)
+
+  useEffect(() => {
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (reduceMotion || duration <= 0) {
+      current.current = target
+      setValue(target)
+      return
+    }
+    const start = current.current
+    const delta = target - start
+    if (Math.abs(delta) < 0.001) return
+    const startedAt = performance.now()
+    let frame = 0
+    const animate = (now: number) => {
+      const t = Math.min(1, (now - startedAt) / duration)
+      const eased = 1 - Math.pow(1 - t, 3)
+      const next = start + delta * eased
+      current.current = next
+      setValue(next)
+      if (t < 1) frame = requestAnimationFrame(animate)
+    }
+    frame = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(frame)
+  }, [duration, target])
+
+  return value
+}
+
+function useChangePulse(value: number, enabled: boolean): boolean {
+  const previous = useRef(value)
+  const [pulsing, setPulsing] = useState(false)
+  useEffect(() => {
+    if (!enabled || value === previous.current) {
+      previous.current = value
+      return
+    }
+    previous.current = value
+    setPulsing(true)
+    const timer = window.setTimeout(() => setPulsing(false), 520)
+    return () => window.clearTimeout(timer)
+  }, [enabled, value])
+  return pulsing
+}
+
+function formatElapsed(value: number): string {
+  if (value < 60) return `${value.toFixed(1)} 秒`
+  const minutes = Math.floor(value / 60)
+  const seconds = Math.floor(value % 60)
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+const numberFormat = new Intl.NumberFormat('zh-CN')
+
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12 7v5l3.5 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function TokenIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M7 4 3.5 12 7 20M17 4l3.5 8-3.5 8M10 8h4M9 12h6M10 16h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function FindingIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="m15.5 15.5 4 4M8 10.5l1.6 1.6L13.5 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function LiveMetric({ icon, label, value, note, pulsing }: {
+  icon: React.ReactNode
+  label: string
+  value: string
+  note: string
+  pulsing: boolean
+}) {
+  return (
+    <div className={`live-metric${pulsing ? ' is-updating' : ''}`}>
+      <span className="live-metric-icon">{icon}</span>
+      <span className="live-metric-copy">
+        <span className="live-metric-label">{label}</span>
+        <strong className="live-metric-value">{value}</strong>
+        <span className="live-metric-note">{note}</span>
+      </span>
+    </div>
+  )
+}
+
 export default function StatsBar({
   stats,
   detail,
+  progress,
   live = null,
-  streaming = false,
+  liveActive = false,
+  connectionStatus = 'idle',
+  tokensEstimated = false,
 }: {
   stats: RunStats | null
   detail: RunDetail | null
+  progress: ResearchProgress
   live?: LiveStats | null
-  streaming?: boolean
+  liveActive?: boolean
+  connectionStatus?: 'idle' | 'streaming' | 'disconnected' | 'done' | 'error'
+  tokensEstimated?: boolean
 }) {
-  // 耗时秒级跳动：锚定在最新事件的 elapsed 上，两次事件之间用墙钟补齐。
   const liveElapsed = live?.elapsed ?? 0
   const anchor = useRef({ base: liveElapsed, at: Date.now() })
-  const [, setTick] = useState(0)
-
-  // 追踪数字变化，触发动画
-  const prevTokens = useRef(live?.tokens ?? 0)
-  const prevFindings = useRef(live?.findings ?? 0)
-  const [tokensUpdating, setTokensUpdating] = useState(false)
-  const [findingsUpdating, setFindingsUpdating] = useState(false)
+  const [clock, setClock] = useState(Date.now())
 
   useEffect(() => {
     anchor.current = { base: liveElapsed, at: Date.now() }
   }, [liveElapsed])
 
   useEffect(() => {
-    if (!streaming) return
-    const id = setInterval(() => setTick((t) => t + 1), 500)
-    return () => clearInterval(id)
-  }, [streaming])
+    if (!liveActive) return
+    const id = window.setInterval(() => setClock(Date.now()), 250)
+    return () => window.clearInterval(id)
+  }, [liveActive])
 
-  // Token 更新动画
-  useEffect(() => {
-    const currentTokens = live?.tokens ?? 0
-    if (streaming && currentTokens !== prevTokens.current && currentTokens > 0) {
-      setTokensUpdating(true)
-      prevTokens.current = currentTokens
-      const timer = setTimeout(() => setTokensUpdating(false), 300)
-      return () => clearTimeout(timer)
-    }
-  }, [live?.tokens, streaming])
-
-  // Findings 更新动画
-  useEffect(() => {
-    const currentFindings = live?.findings ?? 0
-    if (streaming && currentFindings !== prevFindings.current && currentFindings > 0) {
-      setFindingsUpdating(true)
-      prevFindings.current = currentFindings
-      const timer = setTimeout(() => setFindingsUpdating(false), 300)
-      return () => clearTimeout(timer)
-    }
-  }, [live?.findings, streaming])
-
-  const finalElapsed = stats?.elapsed ?? detail?.elapsed
-  const elapsed = streaming
-    ? anchor.current.base + (Date.now() - anchor.current.at) / 1000
+  const finalElapsed = stats?.elapsed ?? detail?.elapsed ?? 0
+  const elapsedTarget = liveActive
+    ? anchor.current.base + (clock - anchor.current.at) / 1000
     : finalElapsed
-  const tokens = stats?.total_tokens ?? (streaming ? live?.tokens : detail?.total_tokens)
+  const tokenTarget = stats?.total_tokens ?? (liveActive ? live?.tokens ?? 0 : detail?.total_tokens ?? 0)
   const sources = stats?.sources ?? detail?.report?.citations.length
-  const findings = streaming ? live?.findings : undefined
+  const findingTarget = sources ?? live?.findings ?? 0
+  const isEstimate = stats?.tokens_estimated ?? tokensEstimated
 
-  const cards: { ico: React.ReactNode; num: string; label: string; updating?: boolean }[] = []
+  const elapsed = useAnimatedNumber(Math.max(0, elapsedTarget), 220)
+  const tokens = useAnimatedNumber(Math.max(0, tokenTarget), 620)
+  const findings = useAnimatedNumber(Math.max(0, findingTarget), 460)
+  const animatedProgress = useAnimatedNumber(progress.percent, 720)
 
-  if (elapsed != null) cards.push({
-    ico: (
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-        <path d="M12 6V12L16 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-      </svg>
-    ),
-    num: `${Number(elapsed).toFixed(1)}s`,
-    label: '耗时'
-  })
+  const tokenPulse = useChangePulse(tokenTarget, liveActive)
+  const findingPulse = useChangePulse(findingTarget, liveActive)
+  const progressPulse = useChangePulse(progress.percent, liveActive)
 
-  if (tokens != null) cards.push({
-    ico: (
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M4 8H20M4 16H20M8 4V20M16 4V20" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-      </svg>
-    ),
-    num: `${tokens}`,
-    label: 'Tokens',
-    updating: tokensUpdating
-  })
-
-  if (sources != null) cards.push({
-    ico: (
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M12 2L15 8L22 9L17 14L18 21L12 18L6 21L7 14L2 9L9 8L12 2Z" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-      </svg>
-    ),
-    num: `${sources}`,
-    label: '引用来源'
-  })
-  else if (findings != null && findings > 0)
-    cards.push({
-      ico: (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-          <path d="M21 21L16.5 16.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-          <circle cx="11" cy="11" r="3" fill="currentColor"/>
-        </svg>
-      ),
-      num: `${findings}`,
-      label: '发现',
-      updating: findingsUpdating
-    })
-
-  if (cards.length === 0) return null
+  const connectionLabel =
+    connectionStatus === 'disconnected'
+      ? '连接恢复中'
+      : liveActive
+        ? '实时同步'
+        : progress.percent >= 100
+          ? '统计已确认'
+          : '等待运行'
 
   return (
-    <div className="statsbar">
-      {cards.map((c) => (
-        <div className="stat-card" key={c.label}>
-          <span className="stat-ico" aria-hidden>
-            {c.ico}
-          </span>
-          <span className="stat-body">
-            <span className={`stat-num${c.updating ? ' updating' : ''}`}>{c.num}</span>
-            <span className="stat-label">{c.label}</span>
+    <section className={`research-live-overview${liveActive ? ' is-live' : ''}`} aria-label="研究实时统计">
+      <div className={`research-progress-summary${progressPulse ? ' is-updating' : ''}`}>
+        <div className="research-progress-topline">
+          <span className="research-progress-kicker">总体进度</span>
+          <span className={`live-sync-state ${connectionStatus}`}>
+            <i aria-hidden />
+            {connectionLabel}
           </span>
         </div>
-      ))}
-    </div>
+
+        <div className="research-progress-main">
+          <strong className="research-progress-value">
+            {Math.round(animatedProgress)}<small>%</small>
+          </strong>
+          <div className="research-progress-context">
+            <span>{progress.currentLabel}</span>
+            <small>
+              {progress.total > 0
+                ? `${progress.completed} / ${progress.total} 个阶段已处理`
+                : '正在确认工作流阶段'}
+              {progress.estimated && ' · 阶段估算'}
+            </small>
+          </div>
+        </div>
+
+        <div
+          className="research-progress-track"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(animatedProgress)}
+          aria-label="研究总体进度"
+        >
+          <span style={{ transform: `scaleX(${Math.max(0, Math.min(100, animatedProgress)) / 100})` }}>
+            <i aria-hidden />
+          </span>
+        </div>
+      </div>
+
+      <div className="live-metrics">
+        <LiveMetric
+          icon={<ClockIcon />}
+          label="已耗时"
+          value={formatElapsed(elapsed)}
+          note={liveActive ? '持续计时中' : '本次运行总耗时'}
+          pulsing={liveActive}
+        />
+        <LiveMetric
+          icon={<TokenIcon />}
+          label="Token 消耗"
+          value={`${isEstimate ? '≈ ' : ''}${numberFormat.format(Math.round(tokens))}`}
+          note={isEstimate ? '流式阶段含估算值' : liveActive ? '随模型调用累计' : '最终累计用量'}
+          pulsing={tokenPulse}
+        />
+        <LiveMetric
+          icon={<FindingIcon />}
+          label={sources != null ? '引用来源' : '研究发现'}
+          value={numberFormat.format(Math.round(findings))}
+          note={sources != null ? '报告引用的有效来源' : '随检索结果动态增加'}
+          pulsing={findingPulse}
+        />
+      </div>
+    </section>
   )
 }

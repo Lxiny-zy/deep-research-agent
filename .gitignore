@@ -15,7 +15,19 @@ runtime_config.json
 .idea/
 .vscode/
 
+# 本地运行与构建产物
+*.log
+*.pid
+*.backup-*
+/dist/
+/dr-*.png
+
 # 前端
 node_modules/
 frontend/dist/
 .vite/
+
+# Desktop packaging
+.venv-desktop/
+build/
+*.spec

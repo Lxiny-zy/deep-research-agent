@@ -20,6 +20,8 @@ class ModelProfileView(BaseModel):
     base_url: str | None = None
     model: str
     temperature: float
+    parameter_mode: str = "temperature"
+    reasoning_effort: str = "medium"
     is_default: bool
     api_key_set: bool
     api_key_hint: str
@@ -34,6 +36,8 @@ class ModelProfileFull(BaseModel):
     api_key: str = ""
     model: str
     temperature: float = 0.3
+    parameter_mode: str = "temperature"
+    reasoning_effort: str = "medium"
     is_default: bool = False
 
 
@@ -89,6 +93,10 @@ class WorkflowDefView(BaseModel):
     display_name: str = ""
     description: str = ""
     steps: list[dict] = Field(default_factory=list)
+    nodes: list[dict] = Field(default_factory=list)
+    edges: list[dict] = Field(default_factory=list)
+    viewport: dict = Field(default_factory=dict)
+    version: int = 1
     enabled: bool = True
 
 
@@ -97,6 +105,10 @@ class WorkflowDefCreate(BaseModel):
     display_name: str = Field("", max_length=100)
     description: str = Field("", max_length=2000)
     steps: list[dict] = Field(default_factory=list)
+    nodes: list[dict] = Field(default_factory=list)
+    edges: list[dict] = Field(default_factory=list)
+    viewport: dict = Field(default_factory=dict)
+    version: int = Field(1, ge=1)
     enabled: bool = True
 
 
@@ -104,4 +116,8 @@ class WorkflowDefUpdate(BaseModel):
     display_name: str | None = Field(None, max_length=100)
     description: str | None = Field(None, max_length=2000)
     steps: list[dict] | None = None
+    nodes: list[dict] | None = None
+    edges: list[dict] | None = None
+    viewport: dict | None = None
+    version: int | None = Field(None, ge=1)
     enabled: bool | None = None

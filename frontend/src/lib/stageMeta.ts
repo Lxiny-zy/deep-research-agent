@@ -8,11 +8,21 @@ export interface StageMeta {
   icon: string
 }
 
-export const STAGE_META: Record<Stage, StageMeta> = {
+export const STAGE_META: Record<string, StageMeta> = {
   PLANNER: { label: '规划', color: 'var(--stage-planner)', icon: '◆' },
   RESEARCHER: { label: '检索', color: 'var(--stage-researcher)', icon: '⌕' },
   REFLECTOR: { label: '反思', color: 'var(--stage-reflector)', icon: '↻' },
   SYNTHESIZER: { label: '综合', color: 'var(--stage-synthesizer)', icon: '✎' },
   ORCHESTRATOR: { label: '编排', color: 'var(--stage-orchestrator)', icon: '✦' },
   COORDINATOR: { label: '协调', color: 'var(--stage-coordinator)', icon: '⚙' },
+}
+
+const FALLBACK_META: StageMeta = {
+  label: '执行',
+  color: 'var(--stage-orchestrator)',
+  icon: '·',
+}
+
+export function getStageMeta(stage: Stage): StageMeta {
+  return STAGE_META[stage] ?? { ...FALLBACK_META, label: stage || FALLBACK_META.label }
 }

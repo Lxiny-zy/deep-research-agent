@@ -34,6 +34,8 @@ class ProfileCreate(BaseModel):
     api_key: str = Field("", max_length=500)
     model: str = Field("gpt-4o-mini", min_length=1, max_length=100)
     temperature: float = Field(0.3, ge=0.0, le=2.0)
+    parameter_mode: str = Field("temperature", pattern="^(temperature|reasoning)$")
+    reasoning_effort: str = Field("medium", pattern="^(low|medium|high)$")
     is_default: bool = False
 
 
@@ -43,6 +45,8 @@ class ProfileUpdate(BaseModel):
     api_key: str | None = Field(None, max_length=500)  # 空/省略＝不改
     model: str | None = Field(None, min_length=1, max_length=100)
     temperature: float | None = Field(None, ge=0.0, le=2.0)
+    parameter_mode: str | None = Field(None, pattern="^(temperature|reasoning)$")
+    reasoning_effort: str | None = Field(None, pattern="^(low|medium|high)$")
     is_default: bool | None = None
 
 
@@ -66,6 +70,20 @@ class TestResult(BaseModel):
     ok: bool
     latency_ms: int
     detail: str = ""
+
+
+class ProfileProbe(BaseModel):
+    profile_id: str | None = None
+    base_url: str | None = Field(None, max_length=500)
+    api_key: str = Field("", max_length=500)
+    model: str = Field("gpt-4o-mini", max_length=100)
+    parameter_mode: str | None = Field(None, pattern="^(temperature|reasoning)$")
+    reasoning_effort: str | None = Field(None, pattern="^(low|medium|high)$")
+
+
+class ModelDiscoveryResult(BaseModel):
+    models: list[str]
+    latency_ms: int
 
 
 # ── 连通性探针（网络调用隔离到此，便于单测 monkeypatch）────────────────────
@@ -94,6 +112,35 @@ async def _probe_search(api_key: str) -> None:
 
     client = AsyncTavilyClient(api_key=api_key)
     await client.search("ping", max_results=1)
+
+
+def _exception_detail(exc: BaseException) -> str:
+    """Return a bounded exception chain so connection failures remain diagnosable."""
+    parts: list[str] = []
+    current: BaseException | None = exc
+    while current is not None and len(parts) < 4:
+        message = str(current).strip() or current.__class__.__name__
+        item = f"{current.__class__.__name__}: {message}"
+        if item not in parts:
+            parts.append(item)
+        current = current.__cause__ or current.__context__
+    return " <- ".join(parts)[:600]
+
+
+async def _resolve_probe(req: ProfileProbe, catalog: CatalogRepository) -> ModelProfileFull:
+    stored = await catalog.get_profile_full(req.profile_id) if req.profile_id else None
+    return ModelProfileFull(
+        id=req.profile_id or "probe",
+        name=stored.name if stored else "probe",
+        base_url=(
+            req.base_url if req.base_url is not None else (stored.base_url if stored else None)
+        ),
+        api_key=req.api_key or (stored.api_key if stored else ""),
+        model=req.model or (stored.model if stored else "gpt-4o-mini"),
+        temperature=stored.temperature if stored else 0.0,
+        parameter_mode=req.parameter_mode or (stored.parameter_mode if stored else "temperature"),
+        reasoning_effort=req.reasoning_effort or (stored.reasoning_effort if stored else "medium"),
+    )
 
 
 async def _run_probe(coro) -> TestResult:  # type: ignore[no-untyped-def]
@@ -145,6 +192,42 @@ async def _validate_custom_steps(
         raise HTTPException(status_code=422, detail="工作流不合法：" + "；".join(errors))
 
 
+def _normalize_graph_payload(payload: WorkflowDefCreate | WorkflowDefUpdate) -> list[dict] | None:
+    """Keep legacy steps and the graph representation synchronized during migration."""
+    from .orchestration import (
+        WorkflowEdge,
+        WorkflowNode,
+        WorkflowViewport,
+        evaluate_condition,
+        graph_topological_steps,
+        steps_to_graph,
+    )
+
+    fields = payload.model_fields_set
+    try:
+        if "nodes" in fields:
+            nodes = [WorkflowNode.model_validate(node) for node in (payload.nodes or [])]
+            edges = [WorkflowEdge.model_validate(edge) for edge in (payload.edges or [])]
+            for edge in edges:
+                evaluate_condition(edge.condition, {})
+            steps = graph_topological_steps(nodes, edges)
+            payload.steps = steps
+            payload.nodes = [node.model_dump() for node in nodes]
+            payload.edges = [edge.model_dump() for edge in edges]
+            payload.viewport = WorkflowViewport.model_validate(payload.viewport or {}).model_dump()
+            return steps
+        if "steps" in fields or isinstance(payload, WorkflowDefCreate):
+            steps = payload.steps or []
+            nodes, edges = steps_to_graph(steps)
+            payload.nodes = [node.model_dump() for node in nodes]
+            payload.edges = [edge.model_dump() for edge in edges]
+            payload.viewport = WorkflowViewport().model_dump()
+            return steps
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"工作流图非法：{exc}") from exc
+    return None
+
+
 router = APIRouter(prefix="/api")
 
 
@@ -169,6 +252,8 @@ async def create_model(req: ProfileCreate, request: Request) -> ModelProfileView
         api_key=req.api_key,
         model=req.model,
         temperature=req.temperature,
+        parameter_mode=req.parameter_mode,
+        reasoning_effort=req.reasoning_effort,
         is_default=req.is_default,
     )
 
@@ -197,6 +282,42 @@ async def test_model(profile_id: str, request: Request) -> TestResult:
     if not profile.api_key:
         return TestResult(ok=False, latency_ms=0, detail="未设置 API Key")
     return await _run_probe(_probe_llm(profile, request.app.state.settings))
+
+
+@router.post("/models/test-config")
+async def test_model_config(req: ProfileProbe, request: Request) -> TestResult:
+    profile = await _resolve_probe(req, _catalog(request))
+    if not profile.api_key:
+        return TestResult(ok=False, latency_ms=0, detail="未设置 API Key")
+    return await _run_probe(_probe_llm(profile, request.app.state.settings))
+
+
+@router.post("/models/discover")
+async def discover_models(req: ProfileProbe, request: Request) -> ModelDiscoveryResult:
+    from openai import AsyncOpenAI
+
+    profile = await _resolve_probe(req, _catalog(request))
+    if not profile.api_key:
+        raise HTTPException(status_code=422, detail="请先填写 API Key")
+    started = time.perf_counter()
+    client = AsyncOpenAI(
+        api_key=profile.api_key,
+        base_url=profile.base_url,
+        timeout=20.0,
+        max_retries=0,
+    )
+    try:
+        page = await client.models.list()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"拉取模型列表失败：{_exception_detail(exc)}",
+        ) from exc
+    finally:
+        await client.close()
+    models = sorted({item.id for item in page.data if item.id}, key=str.lower)
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    return ModelDiscoveryResult(models=models, latency_ms=latency_ms)
 
 
 # ── 角色卡片 ────────────────────────────────────────────────────────────
@@ -275,7 +396,8 @@ async def list_custom_workflows(request: Request) -> list[WorkflowDefView]:
 @router.post("/workflows/custom", status_code=201)
 async def create_custom_workflow(req: WorkflowDefCreate, request: Request) -> WorkflowDefView:
     _reject_builtin_name(req.name)
-    await _validate_custom_steps(req.steps, _catalog(request), request.app.state.settings)
+    steps = _normalize_graph_payload(req) or []
+    await _validate_custom_steps(steps, _catalog(request), request.app.state.settings)
     return await _catalog(request).create_workflow_def(req)
 
 
@@ -283,8 +405,9 @@ async def create_custom_workflow(req: WorkflowDefCreate, request: Request) -> Wo
 async def update_custom_workflow(
     workflow_id: str, req: WorkflowDefUpdate, request: Request
 ) -> WorkflowDefView:
-    if req.steps is not None:
-        await _validate_custom_steps(req.steps, _catalog(request), request.app.state.settings)
+    steps = _normalize_graph_payload(req)
+    if steps is not None:
+        await _validate_custom_steps(steps, _catalog(request), request.app.state.settings)
     view = await _catalog(request).update_workflow_def(workflow_id, req)
     if view is None:
         raise HTTPException(status_code=404, detail="workflow not found")

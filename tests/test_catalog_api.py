@@ -14,6 +14,44 @@ from deep_research.config import Settings
 from deep_research.persistence.db import create_all
 
 
+@pytest.mark.asyncio
+async def test_model_config_probe_and_discovery(cat_app, monkeypatch) -> None:
+    async def ok_probe(profile, settings):  # type: ignore[no-untyped-def]
+        assert profile.api_key == "sk-test"
+
+    monkeypatch.setattr("deep_research.catalog_api._probe_llm", ok_probe)
+
+    class Item:
+        def __init__(self, id_: str) -> None:
+            self.id = id_
+
+    class Models:
+        async def list(self):  # type: ignore[no-untyped-def]
+            return type("Page", (), {"data": [Item("model-b"), Item("model-a")]})()
+
+    class Client:
+        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.models = Models()
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("openai.AsyncOpenAI", Client)
+    async with _client() as c:
+        tested = await c.post(
+            "/api/models/test-config",
+            json={"api_key": "sk-test", "model": "model-a"},
+        )
+        assert tested.status_code == 200 and tested.json()["ok"] is True
+
+        discovered = await c.post(
+            "/api/models/discover",
+            json={"api_key": "sk-test", "base_url": "https://example.test/v1"},
+        )
+        assert discovered.status_code == 200
+        assert discovered.json()["models"] == ["model-a", "model-b"]
+
+
 def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=api.app), base_url="http://test")
 
@@ -162,4 +200,3 @@ async def test_search_key_test_endpoint(cat_app, monkeypatch):
         assert body["ok"] is False and "quota" in body["detail"]
 
         assert (await c.post("/api/search-keys/nope/test")).status_code == 404
-

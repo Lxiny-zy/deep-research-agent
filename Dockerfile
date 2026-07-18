@@ -29,7 +29,7 @@ COPY alembic.ini ./
 # 前端：只拷 Vite 构建产物（api.py 优先加载 frontend/dist/index.html）
 COPY --from=frontend /fe/dist ./frontend/dist
 COPY docker/entrypoint.sh ./docker/entrypoint.sh
-RUN chmod +x docker/entrypoint.sh
+RUN chmod +x docker/entrypoint.sh && mkdir -p /app/data
 
 # 非 root 运行：应用层被攻破时不直接获得容器 root。
 # chown /app：entrypoint 跑 alembic，且 SQLite 默认库（无 DATABASE_URL 时）写在 /app 下

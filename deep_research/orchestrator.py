@@ -25,6 +25,7 @@ from .config import Settings
 from .llm import LLM
 from .models import Finding, Report, ResearchResult, SubQuestion
 from .observability import Event, Tracer
+from .orchestration import WorkflowRun
 from .persistence.repository import ResearchRepository
 from .scheduler import research_dag
 from .token_budget import TokenBudget
@@ -47,6 +48,7 @@ class DeepResearchAgent:
         run_id: str | None = None,
         workflow: str | None = None,
         catalog_repo: CatalogSource | None = None,
+        resume_execution: WorkflowRun | None = None,
     ) -> None:
         self.settings = settings
         self.tracer = Tracer()
@@ -54,6 +56,7 @@ class DeepResearchAgent:
         self._run_id = run_id
         self._workflow_name = workflow
         self._catalog_repo = catalog_repo  # 数据驱动角色/模型档案来源（鸭子类型）
+        self._resume_execution = resume_execution
         # 运行期延迟加载（需 await），收尾时关闭其 LLM 池
         self._catalog_runtime: CatalogRuntime | None = None
 
@@ -118,6 +121,7 @@ class DeepResearchAgent:
                 data={
                     "elapsed": round(self.tracer.elapsed, 1),
                     "total_tokens": self.tracer.total_tokens,
+                    "tokens_estimated": self.tracer.tokens_estimated,
                     "sources": len(report.citations),
                 },
             )
@@ -150,6 +154,8 @@ class DeepResearchAgent:
                     name=wd.name,
                     description=wd.description,
                     steps=[Step.model_validate(s) for s in wd.steps],
+                    nodes=wd.nodes,
+                    edges=wd.edges,
                 )
         return get_workflow(name)
 
@@ -172,16 +178,33 @@ class DeepResearchAgent:
             settings=self.settings,
             llm_resolver=cr.resolve_llm if cr is not None else None,
         )
-        bb = Blackboard(query=query)
-        budget = TokenBudget(max_tokens=self.settings.max_tokens)
-        engine = WorkflowEngine(
-            ctx, resolver=cr.resolve_agent if cr is not None else None, budget=budget
+        bb = (
+            Blackboard.model_validate(self._resume_execution.checkpoint)
+            if self._resume_execution is not None and self._resume_execution.checkpoint
+            else Blackboard(query=query)
         )
-        wf = await self._resolve_workflow()
+        budget = TokenBudget(max_tokens=self.settings.max_tokens)
+        async def save_checkpoint(execution):  # type: ignore[no-untyped-def]
+            if self.repo is not None and run_id is not None:
+                await self.repo.save_orchestration(run_id, execution)
+
+        engine = WorkflowEngine(
+            ctx,
+            resolver=cr.resolve_agent if cr is not None else None,
+            budget=budget,
+            checkpoint_sink=save_checkpoint,
+            resume_run=self._resume_execution,
+        )
+        if self._resume_execution is not None and self._resume_execution.definition:
+            wf = Workflow.model_validate(self._resume_execution.definition)
+        else:
+            wf = await self._resolve_workflow()
         await engine.run(wf, bb)
 
         report = bb.report or Report(query=query, markdown="（未生成报告）", citations=[])
         if self.repo is not None and run_id is not None:
+            if engine.runtime.run is not None:
+                await self.repo.save_orchestration(run_id, engine.runtime.run)
             if bb.plan is not None:
                 await self.repo.save_plan(run_id, bb.plan)
             # 回放反思补洞轮次（origin="reflection"），保留重构前的落库语义

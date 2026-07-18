@@ -13,12 +13,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
 from .models import SubQuestion
+from .orchestration import OrchestrationRuntime, RunStatus, StepRun, StepStatus, WorkflowRun
 from .registry import available, create
 
 if TYPE_CHECKING:
@@ -43,12 +44,19 @@ class Step(BaseModel):
     max_rounds: int | None = None  # None＝用 settings.max_rounds
     aggregator: str = "aggregator"  # kind="team_fanout" 时：归并各团队结果的角色名
     max_teams: int | None = None  # kind="team_fanout" 时：最多并行的子团队数（None＝不限）
+    timeout_seconds: float | None = Field(None, gt=0, le=3600)
+    max_attempts: int = Field(1, ge=1, le=10)
+    retry_backoff: float = Field(0.5, ge=0, le=60)
+    failure_policy: Literal["continue", "fail_fast"] = "continue"
+    fallback_agent: str | None = None
 
 
 class Workflow(BaseModel):
     name: str
     description: str = ""
     steps: list[Step] = Field(default_factory=list)
+    nodes: list[dict] = Field(default_factory=list)
+    edges: list[dict] = Field(default_factory=list)
 
 
 # 自组合流程的硬上限：防止 LLM 生成超长流程烧 token，并与「可证终止」挂钩。
@@ -102,6 +110,8 @@ def validate_workflow(
         errors.append(f"步骤数 {len(steps)} 超过上限 {max_steps}")
     has_terminal = False
     for i, step in enumerate(steps):
+        if step.fallback_agent and step.fallback_agent not in available_roles:
+            errors.append(f"第 {i} 步引用未注册 fallback 角色：{step.fallback_agent}")
         if step.kind in ("compose", "team_fanout"):
             errors.append(f"第 {i} 步禁止在生成流程中使用顶层编排原语 {step.kind}")
         elif step.kind == "reflect_loop":
@@ -131,6 +141,8 @@ class WorkflowEngine:
         resolver: Callable[[str], Agent] | None = None,
         *,
         budget: TokenBudget | None = None,
+        checkpoint_sink: Callable[[WorkflowRun], Awaitable[None]] | None = None,
+        resume_run: WorkflowRun | None = None,
     ) -> None:
         self.ctx = ctx
         # 角色解析器：默认从代码注册表取；编排器可注入「先查 DB 角色卡片，再回退注册表」
@@ -138,6 +150,99 @@ class WorkflowEngine:
         self._resolve = resolver or create
         # token 预算（None＝不限）；以 ctx.tracer.total_tokens 为唯一真相源，避免双重计数。
         self.budget = budget
+        self.runtime = OrchestrationRuntime(self._emit_runtime_event)
+        self._run_depth = 0
+        self._checkpoint_sink = checkpoint_sink
+        self._resuming = resume_run is not None
+        if resume_run is not None:
+            self.runtime.restore(resume_run)
+
+    async def _checkpoint(self, wf: Workflow, bb: Blackboard) -> None:
+        definition = {
+            "name": wf.name,
+            "description": wf.description,
+            "steps": [step.model_dump(mode="json") for step in wf.steps],
+            "nodes": wf.nodes,
+            "edges": wf.edges,
+        }
+        run = self.runtime.save_checkpoint(bb.model_dump(mode="json"), definition)
+        if self._checkpoint_sink is not None:
+            await self._checkpoint_sink(run)
+
+    def _emit_runtime_event(self, name: str, data: dict) -> None:
+        """把统一运行时生命周期桥接到已有 SSE/持久化事件流。"""
+        self.ctx.tracer.emit(
+            "ORCHESTRATOR", "info", name, data={"event_name": name, **data}
+        )
+
+    def _emit_workflow_plan(self, wf: Workflow) -> None:
+        """在首个步骤开始前公布总阶段数，供前端计算可信的总体阶段进度。"""
+        if wf.nodes:
+            planned = [Step.model_validate(node["step"]) for node in wf.nodes]
+        else:
+            planned = list(wf.steps)
+        self.ctx.tracer.emit(
+            "ORCHESTRATOR",
+            "info",
+            f"研究流程已就绪，共 {len(planned)} 个阶段",
+            data={
+                "event_name": "workflow.plan",
+                "workflow": wf.name,
+                "total_steps": len(planned),
+                "steps": [self._step_label(step) for step in planned],
+            },
+        )
+
+    async def _invoke_step(
+        self, step: Step, bb: Blackboard, *, agent_override: str | None = None
+    ) -> Blackboard:
+        if agent_override is not None:
+            return await self._resolve(agent_override).step(bb, self.ctx)
+        if step.kind == "reflect_loop":
+            await self._reflect_loop(step, bb)
+        elif step.kind == "compose":
+            await self._compose(step, bb)
+        elif step.kind == "team_fanout":
+            await self._team_fanout(step, bb)
+        else:
+            bb = await self._resolve(step.agent).step(bb, self.ctx)
+        return bb
+
+    async def _execute_with_policy(
+        self, step: Step, bb: Blackboard, step_run: StepRun
+    ) -> Blackboard:
+        last_error: Exception | None = None
+        for attempt in range(step.max_attempts):
+            self.runtime.start_step(step_run)
+            try:
+                if step.timeout_seconds is None:
+                    bb = await self._invoke_step(step, bb)
+                else:
+                    async with asyncio.timeout(step.timeout_seconds):
+                        bb = await self._invoke_step(step, bb)
+            except Exception as exc:
+                last_error = exc
+                if attempt + 1 < step.max_attempts:
+                    delay = step.retry_backoff * (2**attempt)
+                    self.runtime.retry_step(step_run, exc, delay)
+                    if delay:
+                        await asyncio.sleep(delay)
+                    continue
+                break
+            else:
+                self.runtime.complete_step(step_run)
+                return bb
+
+        if step.fallback_agent:
+            try:
+                bb = await self._invoke_step(step, bb, agent_override=step.fallback_agent)
+            except Exception as exc:
+                last_error = exc
+            else:
+                self.runtime.complete_step(step_run)
+                return bb
+        assert last_error is not None
+        raise last_error
 
     def _exhausted(self) -> bool:
         if self.budget is None:
@@ -175,29 +280,223 @@ class WorkflowEngine:
         return "ENGINE"
 
     async def run(self, wf: Workflow, bb: Blackboard) -> Blackboard:
-        for step in wf.steps:
-            # 预算耗尽：跳过研究/反思/自组合等非终端步骤，但仍执行 synthesizer 产出部分报告
-            if self._exhausted() and not self._is_terminal(step):
-                self.ctx.tracer.emit(
-                    "ORCHESTRATOR", "info", f"token 预算耗尽，跳过 {self._step_label(step)}"
+        if wf.nodes:
+            return await self._run_graph(wf, bb)
+        return await self._run_steps(wf, bb)
+
+    async def _run_steps(self, wf: Workflow, bb: Blackboard) -> Blackboard:
+        is_root = self._run_depth == 0
+        if is_root:
+            if self.runtime.run is None:
+                self.runtime.start(wf.name, {"query": bb.query})
+            self._emit_workflow_plan(wf)
+        self._run_depth += 1
+        restored_steps = (
+            list(self.runtime.run.steps)
+            if is_root and self._resuming and self.runtime.run is not None
+            else []
+        )
+        try:
+            for index, step in enumerate(wf.steps):
+                if index < len(restored_steps) and restored_steps[index].status in {
+                    StepStatus.SUCCEEDED,
+                    StepStatus.FAILED,
+                    StepStatus.SKIPPED,
+                }:
+                    continue
+                step_run = self.runtime.create_step(
+                    label=self._step_label(step), kind=step.kind, agent=step.agent
                 )
-                continue
-            # 失败隔离：单步异常不炸穿整条工作流（与 researcher 内部按子问题隔离同一思路），
-            # 记一条该步自有 Stage 的 error 事件后继续，让流程仍能走到终端综合产出报告。
-            try:
-                if step.kind == "reflect_loop":
-                    await self._reflect_loop(step, bb)
-                elif step.kind == "compose":
-                    await self._compose(step, bb)
-                elif step.kind == "team_fanout":
-                    await self._team_fanout(step, bb)
-                else:
-                    bb = await self._resolve(step.agent).step(bb, self.ctx)
-            except Exception as e:  # 不含 CancelledError（继承 BaseException）：断连仍能正常取消
-                self.ctx.tracer.emit(
-                    self._stage_for(step), "error", f"{self._step_label(step)} 失败，已隔离：{e}"
+                # 预算耗尽：显式记录 skipped，而不是让步骤从运行历史中消失。
+                if self._exhausted() and not self._is_terminal(step):
+                    self.runtime.skip_step(step_run, "token budget exhausted")
+                    self.ctx.tracer.emit(
+                        "ORCHESTRATOR", "info", f"token 预算耗尽，跳过 {self._step_label(step)}"
+                    )
+                    continue
+                try:
+                    bb = await self._execute_with_policy(step, bb, step_run)
+                except Exception as e:  # 单步失败隔离，但进入明确 FAILED 状态
+                    self.runtime.fail_step(step_run, e)
+                    self.ctx.tracer.emit(
+                        self._stage_for(step),
+                        "error",
+                        f"{self._step_label(step)} 失败，已隔离：{e}",
+                    )
+                    if step.failure_policy == "fail_fast":
+                        raise
+                await self._checkpoint(wf, bb)
+            return bb
+        except asyncio.CancelledError:
+            if is_root and self.runtime.run is not None:
+                self.runtime.finish(RunStatus.CANCELLED)
+                await self._checkpoint(wf, bb)
+            raise
+        except Exception:
+            if is_root and self.runtime.run is not None:
+                self.runtime.finish(RunStatus.FAILED)
+                await self._checkpoint(wf, bb)
+            raise
+        finally:
+            self._run_depth -= 1
+            if (
+                is_root
+                and self.runtime.run is not None
+                and self.runtime.run.status == RunStatus.RUNNING
+            ):
+                run = self.runtime.finish(
+                    RunStatus.SUCCEEDED,
+                    output={"has_report": bb.report is not None, "result_count": len(bb.results)},
                 )
-        return bb
+                bb.scratch["_orchestration_run"] = run.model_dump(mode="json")
+
+    async def _run_graph(self, wf: Workflow, bb: Blackboard) -> Blackboard:
+        """Execute a DAG layer by layer; nodes in the same layer run concurrently."""
+        from .orchestration import (
+            WorkflowEdge,
+            WorkflowNode,
+            evaluate_condition,
+            graph_topo_layers,
+        )
+
+        nodes = [WorkflowNode.model_validate(raw) for raw in wf.nodes]
+        edges = [WorkflowEdge.model_validate(raw) for raw in wf.edges]
+        layers = graph_topo_layers(nodes, edges)
+        incoming: dict[str, list[WorkflowEdge]] = {node.id: [] for node in nodes}
+        for edge in edges:
+            incoming[edge.target].append(edge)
+        is_root = self._run_depth == 0
+        active_nodes: set[str] = set()
+        successful_nodes: set[str] = set()
+        restored = {
+            step.node_id: step
+            for step in (
+                self.runtime.run.steps
+                if is_root and self._resuming and self.runtime.run is not None
+                else []
+            )
+        }
+        active_nodes.update(
+            node_id
+            for node_id, step in restored.items()
+            if step.status in {StepStatus.SUCCEEDED, StepStatus.FAILED}
+        )
+        successful_nodes.update(
+            node_id for node_id, step in restored.items() if step.status == StepStatus.SUCCEEDED
+        )
+        if is_root:
+            self.runtime.start(wf.name, {"query": bb.query})
+            self._emit_workflow_plan(wf)
+        self._run_depth += 1
+        try:
+            for layer_index, layer in enumerate(layers):
+                self.ctx.tracer.emit(
+                    "ORCHESTRATOR",
+                    "info",
+                    f"执行图层 {layer_index + 1}，并行节点 {len(layer)} 个",
+                    data={"graph_layer": layer_index, "nodes": [node.id for node in layer]},
+                )
+                base_results = len(bb.results)
+                base_reflections = len(bb.reflections)
+
+                async def execute_node(node: WorkflowNode) -> tuple[Blackboard, bool]:
+                    child = bb.model_copy(deep=True)
+                    step = Step.model_validate(node.step)
+                    previous = restored.get(node.id)
+                    if previous is not None and previous.status in {
+                        StepStatus.SUCCEEDED,
+                        StepStatus.FAILED,
+                        StepStatus.SKIPPED,
+                    }:
+                        return child, previous.status in {
+                            StepStatus.SUCCEEDED,
+                            StepStatus.FAILED,
+                        }
+                    step_run = self.runtime.create_step(
+                        node_id=node.id,
+                        label=self._step_label(step),
+                        kind=step.kind,
+                        agent=step.agent,
+                    )
+                    node_edges = incoming[node.id]
+                    active_inputs = [
+                        edge.source in active_nodes and evaluate_condition(edge.condition, bb)
+                        for edge in node_edges
+                    ]
+                    if not node_edges:
+                        should_run = True
+                    elif node.join_mode == "all":
+                        should_run = all(active_inputs)
+                    elif node.join_mode == "success_all":
+                        should_run = all(active_inputs) and all(
+                            edge.source in successful_nodes for edge in node_edges
+                        )
+                    else:
+                        should_run = any(active_inputs)
+                    if not should_run:
+                        self.runtime.skip_step(step_run, "incoming conditions not matched")
+                        return child, False
+                    if self._exhausted() and not self._is_terminal(step):
+                        self.runtime.skip_step(step_run, "token budget exhausted")
+                        return child, False
+                    try:
+                        child = await self._execute_with_policy(step, child, step_run)
+                    except Exception as exc:
+                        self.runtime.fail_step(step_run, exc)
+                        self.ctx.tracer.emit(
+                            self._stage_for(step),
+                            "error",
+                            f"{self._step_label(step)} 失败，已隔离：{exc}",
+                        )
+                        if step.failure_policy == "fail_fast":
+                            raise
+                    return child, True
+
+                outcomes = await asyncio.gather(*(execute_node(node) for node in layer))
+                # Merge in declaration order; append-only collections avoid concurrent writes.
+                for node, (child, active) in zip(layer, outcomes, strict=True):
+                    if active:
+                        active_nodes.add(node.id)
+                        runtime_run = self.runtime.run
+                        assert runtime_run is not None
+                        current_step = next(
+                            step for step in runtime_run.steps if step.node_id == node.id
+                        )
+                        if current_step.status == StepStatus.SUCCEEDED:
+                            successful_nodes.add(node.id)
+                    else:
+                        continue
+                    if child.plan is not None:
+                        bb.plan = child.plan
+                    bb.results.extend(child.results[base_results:])
+                    bb.reflections.extend(child.reflections[base_reflections:])
+                    if child.report is not None:
+                        bb.report = child.report
+                    bb.scratch.update(child.scratch)
+                await self._checkpoint(wf, bb)
+            return bb
+        except asyncio.CancelledError:
+            if is_root and self.runtime.run is not None:
+                self.runtime.finish(RunStatus.CANCELLED)
+                await self._checkpoint(wf, bb)
+            raise
+        except Exception:
+            if is_root and self.runtime.run is not None:
+                self.runtime.finish(RunStatus.FAILED)
+                await self._checkpoint(wf, bb)
+            raise
+        finally:
+            self._run_depth -= 1
+            if (
+                is_root
+                and self.runtime.run is not None
+                and self.runtime.run.status == RunStatus.RUNNING
+            ):
+                run = self.runtime.finish(
+                    RunStatus.SUCCEEDED,
+                    output={"has_report": bb.report is not None, "result_count": len(bb.results)},
+                )
+                bb.scratch["_orchestration_run"] = run.model_dump(mode="json")
 
     async def _compose(self, step: Step, bb: Blackboard) -> None:
         """L3 运行时自组合：Coordinator 生成一份流程，校验后在同一黑板上递归执行。

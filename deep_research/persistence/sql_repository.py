@@ -6,16 +6,17 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, func, select
+from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from ..models import Finding, Report, ResearchPlan, ResearchResult, Source, SubQuestion
 from ..observability import Event
+from ..orchestration import StepRun, WorkflowRun
 from . import orm
 from .repository import RunDetail, RunSummary, TagCount
 
@@ -124,6 +125,74 @@ class SqlRepository:
                     )
                 )
 
+    async def save_orchestration(self, run_id: str, execution: WorkflowRun) -> None:
+        async with self._sm() as s, s.begin():
+            row = await s.scalar(
+                select(orm.WorkflowRunRow).where(orm.WorkflowRunRow.research_run_id == run_id)
+            )
+            if row is None:
+                row = orm.WorkflowRunRow(id=execution.id, research_run_id=run_id)
+                s.add(row)
+            row.workflow_name = execution.workflow_name
+            row.status = execution.status.value
+            row.input = execution.input
+            row.output = execution.output
+            row.definition = execution.definition
+            row.checkpoint = execution.checkpoint
+            row.started_at = execution.started_at
+            row.finished_at = execution.finished_at
+            await s.execute(
+                sa_delete(orm.StepRunRow).where(
+                    orm.StepRunRow.workflow_run_id == execution.id
+                )
+            )
+            for idx, step in enumerate(execution.steps):
+                s.add(
+                    orm.StepRunRow(
+                        id=step.id,
+                        workflow_run_id=execution.id,
+                        idx=idx,
+                        node_id=step.node_id,
+                        label=step.label,
+                        kind=step.kind,
+                        agent=step.agent,
+                        status=step.status.value,
+                        attempt=step.attempt,
+                        error=step.error,
+                        started_at=step.started_at,
+                        finished_at=step.finished_at,
+                    )
+                )
+
+    async def acquire_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool:
+        now = datetime.now(UTC)
+        expires = now + timedelta(seconds=seconds)
+        async with self._sm() as s, s.begin():
+            result = await s.execute(
+                update(orm.WorkflowRunRow)
+                .where(
+                    orm.WorkflowRunRow.research_run_id == run_id,
+                    or_(
+                        orm.WorkflowRunRow.lease_owner.is_(None),
+                        orm.WorkflowRunRow.lease_owner == owner,
+                        orm.WorkflowRunRow.lease_expires_at < now,
+                    ),
+                )
+                .values(lease_owner=owner, lease_expires_at=expires)
+            )
+            return bool(cast("CursorResult[Any]", result).rowcount)
+
+    async def release_lease(self, run_id: str, owner: str) -> None:
+        async with self._sm() as s, s.begin():
+            await s.execute(
+                update(orm.WorkflowRunRow)
+                .where(
+                    orm.WorkflowRunRow.research_run_id == run_id,
+                    orm.WorkflowRunRow.lease_owner == owner,
+                )
+                .values(lease_owner=None, lease_expires_at=None)
+            )
+
     async def finalize(self, run_id: str, *, elapsed: float, total_tokens: int) -> None:
         async with self._sm() as s, s.begin():
             run = await s.get(orm.ResearchRun, run_id)
@@ -207,6 +276,9 @@ class SqlRepository:
                         ),
                         selectinload(orm.ResearchRun.report),
                         selectinload(orm.ResearchRun.tags),
+                        selectinload(orm.ResearchRun.orchestration).selectinload(
+                            orm.WorkflowRunRow.steps
+                        ),
                     )
                 )
             ).first()
@@ -243,6 +315,34 @@ class SqlRepository:
                 if run.report is not None
                 else None
             )
+            orchestration = None
+            if run.orchestration is not None:
+                orchestration = WorkflowRun(
+                    id=run.orchestration.id,
+                    workflow_name=run.orchestration.workflow_name,
+                    status=run.orchestration.status,
+                    input=run.orchestration.input or {},
+                    output=run.orchestration.output or {},
+                    definition=run.orchestration.definition or {},
+                    checkpoint=run.orchestration.checkpoint or {},
+                    started_at=run.orchestration.started_at,
+                    finished_at=run.orchestration.finished_at,
+                    steps=[
+                        StepRun(
+                            id=step.id,
+                            node_id=step.node_id,
+                            label=step.label,
+                            kind=step.kind,
+                            agent=step.agent,
+                            status=step.status,
+                            attempt=step.attempt,
+                            error=step.error,
+                            started_at=step.started_at,
+                            finished_at=step.finished_at,
+                        )
+                        for step in run.orchestration.steps
+                    ],
+                )
             return RunDetail(
                 id=run.id,
                 query=run.query,
@@ -255,6 +355,7 @@ class SqlRepository:
                 elapsed=run.elapsed,
                 created_at=run.created_at,
                 tags=[t.tag for t in run.tags],
+                orchestration=orchestration,
             )
 
     async def get_events(self, run_id: str, *, after_seq: int = 0) -> list[Event]:

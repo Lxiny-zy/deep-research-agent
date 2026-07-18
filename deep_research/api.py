@@ -19,25 +19,26 @@ import asyncio
 import json
 import logging
 import secrets
+import sys
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import update
 
 from . import runtime_config
 from .catalog.repository import CatalogRepository
 from .config import Settings
 from .observability import Event, EventHub
+from .orchestration import WorkflowRun
 from .orchestrator import DeepResearchAgent
-from .persistence import orm
 from .persistence.db import create_all, make_engine, make_sessionmaker
 from .persistence.repository import ResearchRepository, RunDetail, RunSummary, TagCount
 from .persistence.sql_repository import SqlRepository
@@ -45,8 +46,16 @@ from .persistence.sql_repository import SqlRepository
 logger = logging.getLogger(__name__)
 
 # 优先用构建后的 SPA（frontend/dist/index.html）；否则回退到内置静态单页 Demo（frontend/index.html）
-_FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist" / "index.html"
-_FRONTEND_INDEX = Path(__file__).resolve().parents[1] / "frontend" / "index.html"
+def _bundle_root() -> Path:
+    """Return the project root in source mode, or PyInstaller data root when frozen."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    return Path(__file__).resolve().parents[1]
+
+
+_FRONTEND_ROOT = _bundle_root() / "frontend"
+_FRONTEND_DIST = _FRONTEND_ROOT / "dist" / "index.html"
+_FRONTEND_INDEX = _FRONTEND_ROOT / "index.html"
 
 
 class ResearchParams(BaseModel):
@@ -218,23 +227,43 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # SQLite（本地/测试）自动建表；PostgreSQL（生产）由 alembic upgrade head 负责
     if settings.database_url.startswith("sqlite"):
         await create_all(engine)
-    # 启动对账：上次进程非正常退出留下的 pending/running 孤儿 run 永远不会再推进，
-    # 统一标记为 error，避免前端对着僵尸状态无限轮询
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(
-                update(orm.ResearchRun)
-                .where(orm.ResearchRun.status.in_(("pending", "running")))
-                .values(status="error")
-            )
-    except Exception:
-        logger.exception("启动对账孤儿 run 失败（不阻塞启动）")
     app.state.settings = settings
     app.state.engine = engine
     app.state.repo = SqlRepository(make_sessionmaker(engine))
     app.state.catalog = CatalogRepository(make_sessionmaker(engine))  # 角色广场 catalog 仓储
     app.state.live = {}  # run_id -> EventHub：进行中 run 的实时事件中枢（向多端 SSE 扇出）
     app.state.tasks = set()  # 持有后台任务引用，避免被 GC 提前回收
+    app.state.instance_id = str(uuid4())
+    # 自动恢复上次进程中断且已有 checkpoint 的任务；无 checkpoint 的孤儿任务置 error。
+    try:
+        orphaned = [
+            *await app.state.repo.list_runs(status="pending", limit=1000),
+            *await app.state.repo.list_runs(status="running", limit=1000),
+        ]
+        for summary in orphaned:
+            detail = await app.state.repo.get_run(summary.id)
+            execution = detail.orchestration if detail is not None else None
+            if detail is None or execution is None or not execution.checkpoint:
+                await app.state.repo.set_status(summary.id, "error")
+                continue
+            if not await app.state.repo.acquire_lease(summary.id, app.state.instance_id):
+                continue
+            app.state.live[summary.id] = EventHub()
+            task = asyncio.create_task(
+                _execute(
+                    app,
+                    summary.id,
+                    detail.query,
+                    settings,
+                    execution.workflow_name,
+                    execution,
+                    app.state.instance_id,
+                )
+            )
+            app.state.tasks.add(task)
+            task.add_done_callback(app.state.tasks.discard)
+    except Exception:
+        logger.exception("启动恢复未完成任务失败（不阻塞启动）")
     try:
         yield
     finally:
@@ -291,12 +320,26 @@ async def _build_search_tool(app: FastAPI, settings: Settings):  # type: ignore[
 
 
 async def _execute(
-    app: FastAPI, run_id: str, query: str, settings: Settings, workflow: str | None = None
+    app: FastAPI,
+    run_id: str,
+    query: str,
+    settings: Settings,
+    workflow: str | None = None,
+    resume_execution: WorkflowRun | None = None,
+    lease_owner: str | None = None,
 ) -> None:
     """后台执行一次研究：事件经 EventHub 实时扇出给 SSE 订阅者，全程落库。"""
     hub: EventHub = app.state.live[run_id]
     agent: DeepResearchAgent | None = None
+    heartbeat: asyncio.Task[None] | None = None
     try:
+        if lease_owner is not None:
+            async def renew_lease() -> None:
+                while True:
+                    await asyncio.sleep(60)
+                    await app.state.repo.acquire_lease(run_id, lease_owner)
+
+            heartbeat = asyncio.create_task(renew_lease())
         # 构造必须在 try 内：缺 API key 等构造期异常同样要走 finally 收尾，
         # 否则 EventHub 泄漏、SSE 订阅者永久挂起、run 卡死在 pending
         search_tool = await _build_search_tool(app, settings)
@@ -307,7 +350,13 @@ async def _execute(
             workflow=workflow,
             catalog_repo=app.state.catalog,
             search_tool=search_tool,
+            resume_execution=resume_execution,
         )
+        if resume_execution is not None:
+            # Seed the new tracer because save_events uses replacement semantics.
+            agent.tracer.events = await app.state.repo.get_events(run_id)
+            for historical_event in agent.tracer.events:
+                hub.publish(historical_event)
         agent.tracer.add_sink(hub.publish)
         await agent.run(query)
     except asyncio.CancelledError:
@@ -327,6 +376,11 @@ async def _execute(
         except Exception:
             logger.exception("run %s 兜底置 error 状态失败", run_id)
     finally:
+        if heartbeat is not None:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+        if lease_owner is not None:
+            await app.state.repo.release_lease(run_id, lease_owner)
         if agent is not None:
             try:
                 await agent.aclose()
@@ -366,6 +420,42 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
     request.app.state.live[run_id] = EventHub()
     settings = _settings_for(request.app.state.settings, req.params)
     task = asyncio.create_task(_execute(request.app, run_id, req.query, settings, req.workflow))
+    request.app.state.tasks.add(task)
+    task.add_done_callback(request.app.state.tasks.discard)
+    return CreateRunResponse(run_id=run_id)
+
+
+@app.post(
+    "/api/runs/{run_id}/resume",
+    status_code=202,
+    dependencies=[Depends(require_api_key)],
+)
+async def resume_run(run_id: str, request: Request) -> CreateRunResponse:
+    if run_id in request.app.state.live:
+        raise HTTPException(status_code=409, detail="run is already active")
+    detail = await request.app.state.repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    execution = detail.orchestration
+    if execution is None or not execution.checkpoint or not execution.definition:
+        raise HTTPException(status_code=409, detail="run has no recoverable checkpoint")
+    if detail.status == "done":
+        raise HTTPException(status_code=409, detail="completed run cannot be resumed")
+    owner = getattr(request.app.state, "instance_id", "test-instance")
+    if not await request.app.state.repo.acquire_lease(run_id, owner):
+        raise HTTPException(status_code=409, detail="run is leased by another instance")
+    request.app.state.live[run_id] = EventHub()
+    task = asyncio.create_task(
+        _execute(
+            request.app,
+            run_id,
+            detail.query,
+            request.app.state.settings,
+            execution.workflow_name,
+            execution,
+            owner,
+        )
+    )
     request.app.state.tasks.add(task)
     task.add_done_callback(request.app.state.tasks.discard)
     return CreateRunResponse(run_id=run_id)

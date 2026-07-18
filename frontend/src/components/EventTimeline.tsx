@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { STAGE_META } from '../lib/stageMeta'
+import { getStageMeta } from '../lib/stageMeta'
 import type { ResearchEvent } from '../types'
 
 // 时间线：每条事件按 stage 着色圆点；进行中时最后一条脉冲；新事件自动滚到底。
@@ -22,7 +22,7 @@ export default function EventTimeline({
   return (
     <div className="timeline">
       {events.map((ev, i) => {
-        const meta = STAGE_META[ev.stage]
+        const meta = getStageMeta(ev.stage)
         const live = streaming && i === events.length - 1
         return (
           <div

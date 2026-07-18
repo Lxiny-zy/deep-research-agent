@@ -1,13 +1,7 @@
 // 后端数据契约的 TypeScript 映射（与 deep_research/models.py、observability.py、
 // persistence/repository.py 对齐）。Event 命名为 ResearchEvent 以避开 DOM 全局 Event。
 
-export type Stage =
-  | 'PLANNER'
-  | 'RESEARCHER'
-  | 'REFLECTOR'
-  | 'SYNTHESIZER'
-  | 'ORCHESTRATOR'
-  | 'COORDINATOR'
+export type Stage = string
 
 export type EventType =
   | 'start'
@@ -27,6 +21,7 @@ export interface ResearchEvent {
   message: string
   elapsed: number
   tokens?: number
+  tokens_estimated?: boolean
   data?: Record<string, unknown> | null
 }
 
@@ -68,6 +63,44 @@ export interface RunDetail extends RunSummary {
   sub_questions: SubQuestion[]
   results: ResearchResult[]
   report: Report | null
+  orchestration: WorkflowRun | null
+}
+
+export type WorkflowRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export type StepRunStatus =
+  | 'pending'
+  | 'ready'
+  | 'running'
+  | 'retrying'
+  | 'succeeded'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled'
+
+export interface StepRun {
+  id: string
+  node_id: string
+  label: string
+  kind: string
+  agent: string
+  status: StepRunStatus
+  attempt: number
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface WorkflowRun {
+  id: string
+  workflow_name: string
+  status: WorkflowRunStatus
+  input: Record<string, unknown>
+  output: Record<string, unknown>
+  definition?: Record<string, unknown>
+  checkpoint?: Record<string, unknown>
+  steps: StepRun[]
+  started_at: string | null
+  finished_at: string | null
 }
 
 // GET /api/tags 行：标签 + 引用计数
@@ -100,6 +133,32 @@ export interface WorkflowStep {
   reflector?: string // kind=reflect_loop 时
   researcher?: string // kind=reflect_loop 时
   max_rounds?: number | null
+  timeout_seconds?: number | null
+  max_attempts?: number
+  retry_backoff?: number
+  failure_policy?: 'continue' | 'fail_fast'
+  fallback_agent?: string | null
+}
+
+export interface WorkflowNode {
+  id: string
+  type: string
+  position: { x: number; y: number }
+  step: WorkflowStep
+  join_mode?: 'any' | 'all' | 'success_all'
+}
+
+export interface WorkflowEdge {
+  id: string
+  source: string
+  target: string
+  condition?: string | null
+}
+
+export interface WorkflowViewport {
+  x: number
+  y: number
+  zoom: number
 }
 
 // 自定义工作流（GET /api/workflows/custom）
@@ -109,6 +168,10 @@ export interface WorkflowDef {
   display_name: string
   description: string
   steps: WorkflowStep[]
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+  viewport: WorkflowViewport
+  version: number
   enabled: boolean
 }
 
@@ -117,6 +180,10 @@ export interface WorkflowDefInput {
   display_name?: string
   description?: string
   steps?: WorkflowStep[]
+  nodes?: WorkflowNode[]
+  edges?: WorkflowEdge[]
+  viewport?: WorkflowViewport
+  version?: number
   enabled?: boolean
 }
 
@@ -143,6 +210,7 @@ export interface RunStats {
   elapsed: number
   total_tokens: number
   sources: number
+  tokens_estimated?: boolean
 }
 
 // info + ORCHESTRATOR 事件的 data.dag 负载（用于分层可视化）
@@ -190,6 +258,8 @@ export interface ModelProfile {
   base_url: string | null
   model: string
   temperature: number
+  parameter_mode: 'temperature' | 'reasoning'
+  reasoning_effort: 'low' | 'medium' | 'high'
   is_default: boolean
   api_key_set: boolean
   api_key_hint: string
@@ -201,6 +271,8 @@ export interface ModelProfileInput {
   api_key?: string
   model?: string
   temperature?: number
+  parameter_mode?: 'temperature' | 'reasoning'
+  reasoning_effort?: 'low' | 'medium' | 'high'
   is_default?: boolean
 }
 
@@ -252,3 +324,16 @@ export interface TestResult {
   detail: string
 }
 
+export interface ModelProbeInput {
+  profile_id?: string | null
+  base_url?: string | null
+  api_key?: string
+  model?: string
+  parameter_mode?: 'temperature' | 'reasoning'
+  reasoning_effort?: 'low' | 'medium' | 'high'
+}
+
+export interface ModelDiscoveryResult {
+  models: string[]
+  latency_ms: number
+}

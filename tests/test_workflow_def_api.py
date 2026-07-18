@@ -47,6 +47,10 @@ async def test_create_list_and_merge_into_workflows(cat_app):
             json={"name": "my-deep", "display_name": "我的深度", "steps": _VALID},
         )
         assert r.status_code == 201, r.text
+        created = r.json()
+        assert len(created["nodes"]) == 3
+        assert len(created["edges"]) == 2
+        assert created["version"] == 1
 
         custom = (await c.get("/api/workflows/custom")).json()
         assert any(w["name"] == "my-deep" for w in custom)
@@ -71,6 +75,65 @@ async def test_create_rejects_invalid_steps(cat_app):
             json={"name": "ghost", "steps": [{"kind": "agent", "agent": "不存在"}, *_VALID]},
         )
         assert ghost.status_code == 422  # 引用未注册角色
+
+
+@pytest.mark.asyncio
+async def test_create_accepts_linear_and_branch_graph(cat_app):
+    nodes = [
+        {"id": "a", "type": "step", "position": {"x": 0, "y": 0}, "step": _VALID[0]},
+        {"id": "b", "type": "step", "position": {"x": 0, "y": 100}, "step": _VALID[1]},
+        {"id": "c", "type": "step", "position": {"x": 0, "y": 200}, "step": _VALID[2]},
+    ]
+    async with _client() as c:
+        ok = await c.post(
+            "/api/workflows/custom",
+            json={
+                "name": "graph-linear",
+                "nodes": nodes,
+                "edges": [
+                    {"id": "ab", "source": "a", "target": "b"},
+                    {"id": "bc", "source": "b", "target": "c"},
+                ],
+            },
+        )
+        assert ok.status_code == 201, ok.text
+        assert [step["agent"] for step in ok.json()["steps"]] == [
+            "planner",
+            "researcher",
+            "synthesizer",
+        ]
+
+        branch = await c.post(
+            "/api/workflows/custom",
+            json={
+                "name": "graph-branch",
+                "nodes": nodes,
+                "edges": [
+                    {"id": "ab", "source": "a", "target": "b"},
+                    {"id": "ac", "source": "a", "target": "c"},
+                ],
+            },
+        )
+        assert branch.status_code == 201, branch.text
+        assert len(branch.json()["edges"]) == 2
+
+        invalid_condition = await c.post(
+            "/api/workflows/custom",
+            json={
+                "name": "bad-condition",
+                "nodes": nodes,
+                "edges": [
+                    {
+                        "id": "ab",
+                        "source": "a",
+                        "target": "b",
+                        "condition": "__import__('os')",
+                    },
+                    {"id": "bc", "source": "b", "target": "c"},
+                ],
+            },
+        )
+        assert invalid_condition.status_code == 422
 
 
 @pytest.mark.asyncio

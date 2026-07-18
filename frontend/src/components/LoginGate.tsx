@@ -12,12 +12,23 @@ interface Props {
 export default function LoginGate({ onClose }: Props) {
   const existing = getApiKey() ?? ''
   const [key, setKey] = useState(existing)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
 
-  function save() {
+  async function save() {
     const k = key.trim()
-    if (!k) return
-    setApiKey(k)
-    window.location.reload() // 重载让所有请求带上新密钥重试
+    if (!k || pending) return
+    setPending(true)
+    setError('')
+    try {
+      const response = await fetch('/api/config', { headers: { 'X-API-Key': k } })
+      if (!response.ok) throw new Error(response.status === 401 ? '管理员凭证无效' : `验证失败（${response.status}）`)
+      setApiKey(k)
+      window.location.reload()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '无法验证管理员凭证')
+      setPending(false)
+    }
   }
 
   function logout() {
@@ -76,12 +87,14 @@ export default function LoginGate({ onClose }: Props) {
                 type="password"
                 value={key}
                 onChange={(e) => setKey(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && save()}
+                onKeyDown={(e) => e.key === 'Enter' && void save()}
                 placeholder="粘贴服务端 API_KEY"
                 autoFocus
                 style={{ fontFamily: 'var(--font-mono)' }}
               />
             </div>
+
+            {error && <p className="test-result test-fail">{error}</p>}
 
             <div style={{
               display: 'flex',
@@ -101,11 +114,11 @@ export default function LoginGate({ onClose }: Props) {
                   取消
                 </button>
               )}
-              <button className="btn btn-primary" onClick={save} disabled={!key.trim()} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button className="btn btn-primary" onClick={() => void save()} disabled={!key.trim() || pending} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M13 2L14 3V14H2V2H11L13 2ZM13 2L11 4M11 4V2M11 4H13M5 9H11M5 11H9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
                 </svg>
-                保存并刷新
+                {pending ? '验证中…' : '验证并进入'}
               </button>
             </div>
           </div>

@@ -68,6 +68,9 @@ class ResearchRun(Base):
     tags: Mapped[list[RunTagRow]] = relationship(
         back_populates="run", cascade="all, delete-orphan", order_by="RunTagRow.tag"
     )
+    orchestration: Mapped[WorkflowRunRow | None] = relationship(
+        back_populates="research_run", cascade="all, delete-orphan", uselist=False
+    )
 
 
 class SubQuestionRow(Base):
@@ -176,6 +179,53 @@ class RunTagRow(Base):
     run: Mapped[ResearchRun] = relationship(back_populates="tags")
 
 
+class WorkflowRunRow(Base):
+    __tablename__ = "workflow_run"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    research_run_id: Mapped[str] = mapped_column(
+        ForeignKey("research_run.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    workflow_name: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(20))
+    input: Mapped[dict] = mapped_column(JSON, default=dict)
+    output: Mapped[dict] = mapped_column(JSON, default=dict)
+    definition: Mapped[dict] = mapped_column(JSON, default=dict)
+    checkpoint: Mapped[dict] = mapped_column(JSON, default=dict)
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    research_run: Mapped[ResearchRun] = relationship(back_populates="orchestration")
+    steps: Mapped[list[StepRunRow]] = relationship(
+        back_populates="workflow_run", cascade="all, delete-orphan", order_by="StepRunRow.idx"
+    )
+
+
+class StepRunRow(Base):
+    __tablename__ = "step_run"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workflow_run_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_run.id", ondelete="CASCADE"), index=True
+    )
+    idx: Mapped[int] = mapped_column(Integer)
+    node_id: Mapped[str] = mapped_column(String(100))
+    label: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(32))
+    agent: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(20))
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    workflow_run: Mapped[WorkflowRunRow] = relationship(back_populates="steps")
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # 角色广场 catalog：模型档案 / 角色卡片 / 搜索 key 池（独立于单次 run，全局配置）
 # ──────────────────────────────────────────────────────────────────────────
@@ -192,6 +242,8 @@ class ModelProfileRow(Base):
     api_key: Mapped[str] = mapped_column(Text, default="")
     model: Mapped[str] = mapped_column(String(100), default="gpt-4o-mini")
     temperature: Mapped[float] = mapped_column(Float, default=0.3)
+    parameter_mode: Mapped[str] = mapped_column(String(16), default="temperature")
+    reasoning_effort: Mapped[str] = mapped_column(String(16), default="medium")
     is_default: Mapped[bool] = mapped_column(Integer, default=0)  # 1=全局兜底档案
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -248,6 +300,10 @@ class WorkflowDefRow(Base):
     display_name: Mapped[str] = mapped_column(String(100), default="")
     description: Mapped[str] = mapped_column(Text, default="")
     steps: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    nodes: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    edges: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    viewport: Mapped[dict] = mapped_column(JSON, default=dict)
+    version: Mapped[int] = mapped_column(Integer, default=1)
     enabled: Mapped[bool] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

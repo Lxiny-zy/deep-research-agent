@@ -15,6 +15,8 @@ import {
   listRoles,
   listSearchKeys,
   testModel,
+  testModelConfig,
+  discoverModels,
   testSearchKey,
   updateAgent,
   updateCustomWorkflow,
@@ -52,6 +54,13 @@ export function useModelMutations() {
 // 「测试连接」：不 invalidate 缓存，结果由调用方按 id 持有
 export function useTestModel() {
   return useMutation({ mutationFn: (id: string) => testModel(id) })
+}
+
+export function useModelProbe() {
+  return {
+    test: useMutation({ mutationFn: testModelConfig }),
+    discover: useMutation({ mutationFn: discoverModels }),
+  }
 }
 
 // ── 角色卡片 ──────────────────────────────────────────────────────────

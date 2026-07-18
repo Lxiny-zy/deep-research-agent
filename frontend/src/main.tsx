@@ -9,6 +9,7 @@ import './run-page-styles.css'
 import './design-system.css'
 import AgentSquarePage from './pages/AgentSquarePage'
 import HistoryPage from './pages/HistoryPage'
+import LiveTelemetryPreviewPage from './pages/LiveTelemetryPreviewPage'
 import NewResearchPage from './pages/NewResearchPage'
 import RunPage from './pages/RunPage'
 import SettingsPage from './pages/SettingsPage'
@@ -19,6 +20,9 @@ const queryClient = new QueryClient({
 })
 
 const router = createBrowserRouter([
+  ...(import.meta.env.DEV
+    ? [{ path: '/preview/live-telemetry', element: <LiveTelemetryPreviewPage /> }]
+    : []),
   {
     path: '/',
     element: <App />,

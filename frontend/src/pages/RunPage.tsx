@@ -2,6 +2,7 @@ import { useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import DagView from '../components/DagView'
 import EventTimeline from '../components/EventTimeline'
+import OrchestrationPipeline from '../components/OrchestrationPipeline'
 import ReportActions from '../components/ReportActions'
 import ReportView from '../components/ReportView'
 import StatsBar from '../components/StatsBar'
@@ -9,6 +10,7 @@ import StatusBadge from '../components/StatusBadge'
 import TagEditor from '../components/TagEditor'
 import { useResearchStream } from '../hooks/useResearchStream'
 import { useRunDetail } from '../hooks/useRuns'
+import { deriveResearchProgress } from '../lib/runProgress'
 import type { RunStatus } from '../types'
 
 export default function RunPage() {
@@ -38,6 +40,14 @@ export default function RunPage() {
   // 报告：优先流式累积；为空时回退到已落库报告（回放 / 断连兜底场景）
   const markdown = stream.reportMarkdown || detail.data?.report?.markdown || ''
   const streaming = stream.status === 'streaming'
+  const liveActive = streamActive && !dbFinished
+  const connectionStatus =
+    status === 'done' ? 'done' : status === 'error' ? 'error' : stream.status
+  const progress = deriveResearchProgress({
+    execution: detail.data?.orchestration,
+    events: stream.events,
+    runStatus: status,
+  })
 
   if (detail.isError) {
     const notFound = detail.error instanceof ApiError && detail.error.status === 404
@@ -69,8 +79,17 @@ export default function RunPage() {
       <StatsBar
         stats={stream.stats}
         detail={detail.data ?? null}
+        progress={progress}
         live={{ elapsed: stream.elapsed, tokens: stream.tokens, findings: stream.findings }}
-        streaming={streaming}
+        liveActive={liveActive}
+        connectionStatus={connectionStatus}
+        tokensEstimated={stream.tokensEstimated}
+      />
+
+      <OrchestrationPipeline
+        execution={detail.data?.orchestration}
+        events={stream.events}
+        runStatus={status}
       />
 
       <div className="grid-2">

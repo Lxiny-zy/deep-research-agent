@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from sqlalchemy import event as sa_event
@@ -14,6 +15,8 @@ from sqlalchemy.ext.asyncio import (
 
 from .orm import Base
 
+_SQLITE_JOURNAL_MODES = {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"}
+
 
 def make_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
     """创建 async 引擎。database_url 形如 postgresql+asyncpg://... 或 sqlite+aiosqlite://..."""
@@ -25,7 +28,10 @@ def make_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
         @sa_event.listens_for(engine.sync_engine, "connect")
         def _sqlite_pragma(dbapi_conn: Any, _record: Any) -> None:
             cursor = dbapi_conn.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
+            journal_mode = os.getenv("SQLITE_JOURNAL_MODE", "WAL").strip().upper()
+            if journal_mode not in _SQLITE_JOURNAL_MODES:
+                journal_mode = "WAL"
+            cursor.execute(f"PRAGMA journal_mode={journal_mode}")
             cursor.execute("PRAGMA busy_timeout=15000")
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()

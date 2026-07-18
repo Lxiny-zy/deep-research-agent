@@ -17,6 +17,15 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('@xyflow')) return 'workflow-canvas'
+          if (id.includes('react-markdown') || id.includes('remark-')) return 'markdown'
+          if (id.includes('node_modules/react')) return 'react-vendor'
+        },
+      },
+    },
   },
   test: {
     globals: true,

@@ -30,6 +30,7 @@ class Event(BaseModel):
     message: str = ""
     elapsed: float = 0.0  # 距开始的秒数
     tokens: int = 0  # 事件发生时的累计 token（供前端实时显示；不落库，回放时回退 0）
+    tokens_estimated: bool = False  # 累计值中是否仍含尚未被 provider usage 校准的估算
     data: dict | None = None  # 结构化附带数据（子问题列表、报告内容、token 增量、统计等）
 
 
@@ -39,6 +40,7 @@ class Tracer:
     def __init__(self) -> None:
         self._t0 = time.perf_counter()
         self.total_tokens = 0
+        self.estimated_tokens = 0
         self.events: list[Event] = []
         self._subscribers: list[Callable[[Event], None]] = []
         # 实时 sink：接收含 token 在内的全部事件，供 run_stream / EventHub(SSE) 消费
@@ -62,8 +64,22 @@ class Tracer:
         except ValueError:
             pass
 
-    def add_tokens(self, n: int) -> None:
-        self.total_tokens += max(0, n)
+    @property
+    def tokens_estimated(self) -> bool:
+        return self.estimated_tokens > 0
+
+    def add_tokens(self, n: int, *, estimated: bool = False) -> None:
+        amount = max(0, n)
+        self.total_tokens += amount
+        if estimated:
+            self.estimated_tokens += amount
+
+    def reconcile_tokens(self, estimated: int, exact: int) -> None:
+        """把一次流式调用的临时估算替换为 provider 最终返回的精确 usage。"""
+        estimated_amount = max(0, estimated)
+        exact_amount = max(0, exact)
+        self.total_tokens = max(0, self.total_tokens - estimated_amount + exact_amount)
+        self.estimated_tokens = max(0, self.estimated_tokens - estimated_amount)
 
     def emit(
         self, stage: Stage, type: EventType, message: str = "", data: dict | None = None
@@ -74,6 +90,7 @@ class Tracer:
             message=message,
             elapsed=round(self.elapsed, 2),
             tokens=self.total_tokens,
+            tokens_estimated=self.tokens_estimated,
             data=data,
         )
         # token 增量是瞬态的：只实时推给 sink，不记录、不落库、不触发同步订阅者（如 CLI 打印）

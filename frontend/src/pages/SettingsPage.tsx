@@ -20,6 +20,9 @@ const NUM_FIELDS: NumField[] = [
 ]
 
 interface FormState {
+  llm_model: string
+  llm_base_url: string
+  llm_api_key: string
   max_sub_questions: number
   max_rounds: number
   max_concurrency: number
@@ -29,6 +32,9 @@ interface FormState {
 
 function toForm(c: ConfigView): FormState {
   return {
+    llm_model: c.llm_model,
+    llm_base_url: c.llm_base_url ?? '',
+    llm_api_key: '',
     max_sub_questions: c.max_sub_questions,
     max_rounds: c.max_rounds,
     max_concurrency: c.max_concurrency,
@@ -87,6 +93,7 @@ export default function SettingsPage() {
   const { data, isLoading, isError, error } = useConfig()
   const update = useUpdateConfig()
   const [form, setForm] = useState<FormState | null>(null)
+  const [editingGlobalKey, setEditingGlobalKey] = useState(false)
 
   // 配置到达后初始化表单
   useEffect(() => {
@@ -103,14 +110,20 @@ export default function SettingsPage() {
   function save() {
     if (!form) return
     const body: ConfigUpdate = {
+      llm_model: form.llm_model.trim(),
+      llm_base_url: form.llm_base_url.trim() || null,
       max_sub_questions: form.max_sub_questions,
       max_rounds: form.max_rounds,
       max_concurrency: form.max_concurrency,
       results_per_search: form.results_per_search,
       request_timeout: form.request_timeout,
     }
+    if (editingGlobalKey && form.llm_api_key.trim()) body.llm_api_key = form.llm_api_key.trim()
     update.mutate(body, {
-      onSuccess: (next) => setForm(toForm(next)),
+      onSuccess: (next) => {
+        setForm(toForm(next))
+        setEditingGlobalKey(false)
+      },
     })
   }
 
@@ -131,6 +144,38 @@ export default function SettingsPage() {
 
         {form && data && (
           <div className="stack">
+            <div className="global-model-config">
+              <div className="row between">
+                <div>
+                  <h3 className="panel-title">全局默认模型</h3>
+                  <p className="hint">模型档案不可用或未绑定角色时，系统使用这里的兜底配置。</p>
+                </div>
+                <span className={`badge ${data.llm_api_key_set ? 'success' : 'warning'}`}>
+                  {data.llm_api_key_set ? `密钥已设置 ${data.llm_api_key_hint}` : '尚未设置密钥'}
+                </span>
+              </div>
+              <div className="settings-grid global-model-grid">
+                <label className="settings-item">
+                  <span className="muted small">默认模型 ID</span>
+                  <input className="input" value={form.llm_model} onChange={(e) => setForm({ ...form, llm_model: e.target.value })} placeholder="gpt-4o-mini" />
+                </label>
+                <label className="settings-item">
+                  <span className="muted small">Base URL</span>
+                  <input className="input" value={form.llm_base_url} onChange={(e) => setForm({ ...form, llm_base_url: e.target.value })} placeholder="https://api.openai.com/v1" />
+                </label>
+              </div>
+              {!editingGlobalKey ? (
+                <div className="saved-credential-row">
+                  <div><strong>全局 API Key</strong><small>密钥不会回显；更新后立即成为全局兜底凭据</small></div>
+                  <button type="button" className="btn ghost small" onClick={() => setEditingGlobalKey(true)}>{data.llm_api_key_set ? '更换密钥' : '设置密钥'}</button>
+                </div>
+              ) : (
+                <div className="credential-input-row">
+                  <input className="input" type="password" name="global-llm-key-new" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true" value={form.llm_api_key} onChange={(e) => setForm({ ...form, llm_api_key: e.target.value })} placeholder="输入新的全局模型 API Key" />
+                  <button type="button" className="btn ghost small" onClick={() => { setForm({ ...form, llm_api_key: '' }); setEditingGlobalKey(false) }}>取消</button>
+                </div>
+              )}
+            </div>
             <div className="settings-grid">
               {NUM_FIELDS.map((f) => (
                 <label key={f.key} className="settings-item">

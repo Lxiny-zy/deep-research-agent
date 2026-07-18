@@ -15,6 +15,7 @@ from sqlalchemy.pool import StaticPool
 
 from deep_research.models import Finding, Report, ResearchPlan, ResearchResult, SubQuestion
 from deep_research.observability import Event
+from deep_research.orchestration import OrchestrationRuntime, RunStatus, StepStatus
 from deep_research.persistence.db import create_all, make_engine, make_sessionmaker
 from deep_research.persistence.memory_repository import InMemoryRepository
 from deep_research.persistence.sql_repository import SqlRepository
@@ -65,6 +66,14 @@ async def test_crud_roundtrip(repo):
         run_id,
         [Event(stage="PLANNER", type="start"), Event(stage="ORCHESTRATOR", type="done")],
     )
+    runtime = OrchestrationRuntime()
+    execution = runtime.start("deep", {"query": "Q"})
+    step = runtime.create_step(label="planner", kind="agent", agent="planner")
+    runtime.start_step(step)
+    runtime.complete_step(step)
+    runtime.save_checkpoint({"query": "Q", "scratch": {}}, {"name": "deep", "steps": []})
+    runtime.finish(RunStatus.SUCCEEDED, {"has_report": True})
+    await repo.save_orchestration(run_id, execution)
     await repo.finalize(run_id, elapsed=2.5, total_tokens=42)
 
     detail = await repo.get_run(run_id)
@@ -76,6 +85,11 @@ async def test_crud_roundtrip(repo):
     assert detail.report is not None
     assert detail.report.citations == ["https://a.com"]
     assert detail.total_tokens == 42
+    assert detail.orchestration is not None
+    assert detail.orchestration.workflow_name == "deep"
+    assert detail.orchestration.steps[0].status == StepStatus.SUCCEEDED
+    assert detail.orchestration.checkpoint["query"] == "Q"
+    assert detail.orchestration.definition["name"] == "deep"
 
     events = await repo.get_events(run_id)
     assert len(events) == 2
@@ -89,6 +103,20 @@ async def test_crud_roundtrip(repo):
 async def test_get_missing_run(repo):
     assert await repo.get_run("does-not-exist") is None
     assert await repo.get_events("does-not-exist") == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_lease_is_exclusive(repo):
+    run_id = await repo.create_run("lease")
+    runtime = OrchestrationRuntime()
+    execution = runtime.start("deep", {"query": "lease"})
+    await repo.save_orchestration(run_id, execution)
+
+    assert await repo.acquire_lease(run_id, "worker-a") is True
+    assert await repo.acquire_lease(run_id, "worker-b") is False
+    assert await repo.acquire_lease(run_id, "worker-a") is True
+    await repo.release_lease(run_id, "worker-a")
+    assert await repo.acquire_lease(run_id, "worker-b") is True
 
 
 @pytest.mark.asyncio

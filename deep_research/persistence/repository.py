@@ -18,6 +18,7 @@ from typing import Protocol
 
 from ..models import Report, ResearchPlan, ResearchResult, Source, SubQuestion
 from ..observability import Event
+from ..orchestration import WorkflowRun
 
 
 @dataclass
@@ -48,6 +49,7 @@ class RunDetail:
     elapsed: float = 0.0
     created_at: datetime | None = None
     tags: list[str] = field(default_factory=list)
+    orchestration: WorkflowRun | None = None
 
 
 @dataclass
@@ -78,6 +80,12 @@ class ResearchRepository(Protocol):
     async def save_report(self, run_id: str, report: Report) -> None: ...
 
     async def save_events(self, run_id: str, events: list[Event]) -> None: ...
+
+    async def save_orchestration(self, run_id: str, execution: WorkflowRun) -> None: ...
+
+    async def acquire_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool: ...
+
+    async def release_lease(self, run_id: str, owner: str) -> None: ...
 
     async def finalize(self, run_id: str, *, elapsed: float, total_tokens: int) -> None: ...
 

@@ -8,3 +8,6 @@ uvicorn[standard]>=0.29,<1
 sqlalchemy[asyncio]>=2.0,<3
 asyncpg>=0.29,<1
 alembic>=1.13,<2
+
+# Async SQLite runtime for the default local database.
+aiosqlite>=0.20,<1
