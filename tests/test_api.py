@@ -26,6 +26,7 @@ def repo(monkeypatch) -> InMemoryRepository:
     api.app.state.repo = r
     api.app.state.live = {}
     api.app.state.tasks = set()
+
     async def _noop(app, run_id, query, settings, workflow=None):  # 不跑真实 agent
         return None
 

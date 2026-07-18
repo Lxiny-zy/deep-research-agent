@@ -140,9 +140,7 @@ class LLM:
                 raise  # 重试预算耗尽：原样抛出网络层异常，便于上层区分
             raw = resp.choices[0].message.content or ""
             usage = _tokens(resp)
-            self.tracer.add_tokens(
-                usage or _estimate_tokens(sys, user, raw), estimated=usage == 0
-            )
+            self.tracer.add_tokens(usage or _estimate_tokens(sys, user, raw), estimated=usage == 0)
             try:
                 return schema.model_validate(extract_json(raw))
             except Exception as e:  # JSON 非法或字段缺失 → 把错误回灌再试

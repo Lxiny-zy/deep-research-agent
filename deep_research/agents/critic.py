@@ -50,9 +50,7 @@ class Critic:
         if bb.report is None:
             self.tracer.emit("CRITIC", "info", "无报告可复核，跳过")
             return bb
-        critique = await self.llm.parse(
-            self.system, f"研究报告：\n{bb.report.markdown}", Critique
-        )
+        critique = await self.llm.parse(self.system, f"研究报告：\n{bb.report.markdown}", Critique)
         bb.scratch["critique"] = critique.model_dump()
         self.tracer.emit(
             "CRITIC",

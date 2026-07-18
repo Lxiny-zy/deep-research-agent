@@ -37,9 +37,7 @@ async def test_workflow_engine_records_failed_step_and_continues(settings) -> No
         "synthesizer": RecordingAgent("synthesizer", calls),
     }
     tracer = Tracer()
-    ctx = RunContext(
-        llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings
-    )
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings)
     engine = WorkflowEngine(ctx, resolver=agents.__getitem__)
     bb = Blackboard(query="test")
 
@@ -72,12 +70,8 @@ async def test_budget_exhaustion_records_skip_but_runs_terminal(settings) -> Non
         "synthesizer": RecordingAgent("synthesizer", calls),
     }
     tracer = Tracer()
-    ctx = RunContext(
-        llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings
-    )
-    engine = WorkflowEngine(
-        ctx, resolver=agents.__getitem__, budget=TokenBudget(max_tokens=0)
-    )
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings)
+    engine = WorkflowEngine(ctx, resolver=agents.__getitem__, budget=TokenBudget(max_tokens=0))
 
     await engine.run(
         Workflow(
@@ -99,7 +93,8 @@ async def test_budget_exhaustion_records_skip_but_runs_terminal(settings) -> Non
         if event.data and "event_name" in event.data
     ]
     plan = next(
-        event for event in tracer.events
+        event
+        for event in tracer.events
         if event.data and event.data.get("event_name") == "workflow.plan"
     )
     assert plan.data is not None

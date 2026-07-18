@@ -26,8 +26,12 @@ async def cat():
 @pytest.mark.asyncio
 async def test_profile_crud_and_mask(cat):
     v = await cat.create_profile(
-        name="gpt", base_url="https://x/v1", api_key="sk-secret9999",
-        model="gpt-4o", temperature=0.5, is_default=True,
+        name="gpt",
+        base_url="https://x/v1",
+        api_key="sk-secret9999",
+        model="gpt-4o",
+        temperature=0.5,
+        is_default=True,
     )
     assert v.is_default and v.api_key_set and v.api_key_hint == "…9999"
     assert "secret" not in v.api_key_hint  # 脱敏：明文不外泄
@@ -58,13 +62,21 @@ async def test_single_default_profile(cat):
 @pytest.mark.asyncio
 async def test_agent_crud_with_profile_binding(cat):
     prof = await cat.create_profile(
-        name="cheap", base_url=None, api_key="k", model="deepseek",
-        temperature=0.3, is_default=False,
+        name="cheap",
+        base_url=None,
+        api_key="k",
+        model="deepseek",
+        temperature=0.3,
+        is_default=False,
     )
     card = await cat.create_agent(
         AgentCardCreate(
-            name="my-critic", display_name="我的评审员", behavior="critique",
-            system_prompt="挑刺", icon="🔍", model_profile_id=prof.id,
+            name="my-critic",
+            display_name="我的评审员",
+            behavior="critique",
+            system_prompt="挑刺",
+            icon="🔍",
+            model_profile_id=prof.id,
         )
     )
     assert card.name == "my-critic"

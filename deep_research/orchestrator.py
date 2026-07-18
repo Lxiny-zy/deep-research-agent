@@ -184,6 +184,7 @@ class DeepResearchAgent:
             else Blackboard(query=query)
         )
         budget = TokenBudget(max_tokens=self.settings.max_tokens)
+
         async def save_checkpoint(execution):  # type: ignore[no-untyped-def]
             if self.repo is not None and run_id is not None:
                 await self.repo.save_orchestration(run_id, execution)

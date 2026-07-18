@@ -43,9 +43,7 @@ def steps_to_graph(steps: list[dict]) -> tuple[list[WorkflowNode], list[Workflow
         for index, step in enumerate(steps)
     ]
     edges = [
-        WorkflowEdge(
-            id=f"edge-{index + 1}", source=nodes[index].id, target=nodes[index + 1].id
-        )
+        WorkflowEdge(id=f"edge-{index + 1}", source=nodes[index].id, target=nodes[index + 1].id)
         for index in range(max(0, len(nodes) - 1))
     ]
     return nodes, edges

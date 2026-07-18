@@ -142,9 +142,7 @@ class SqlRepository:
             row.started_at = execution.started_at
             row.finished_at = execution.finished_at
             await s.execute(
-                sa_delete(orm.StepRunRow).where(
-                    orm.StepRunRow.workflow_run_id == execution.id
-                )
+                sa_delete(orm.StepRunRow).where(orm.StepRunRow.workflow_run_id == execution.id)
             )
             for idx, step in enumerate(execution.steps):
                 s.add(

@@ -171,9 +171,7 @@ class WorkflowEngine:
 
     def _emit_runtime_event(self, name: str, data: dict) -> None:
         """把统一运行时生命周期桥接到已有 SSE/持久化事件流。"""
-        self.ctx.tracer.emit(
-            "ORCHESTRATOR", "info", name, data={"event_name": name, **data}
-        )
+        self.ctx.tracer.emit("ORCHESTRATOR", "info", name, data={"event_name": name, **data})
 
     def _emit_workflow_plan(self, wf: Workflow) -> None:
         """在首个步骤开始前公布总阶段数，供前端计算可信的总体阶段进度。"""

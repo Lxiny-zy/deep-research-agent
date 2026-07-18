@@ -33,15 +33,10 @@ class GraphAgent:
 @pytest.mark.asyncio
 async def test_graph_engine_runs_parallel_branch_then_merge(settings) -> None:
     tracer = Tracer()
-    ctx = RunContext(
-        llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings
-    )
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings)
     names = ["planner", "research-a", "research-b", "synthesizer"]
     agents = {name: GraphAgent(name) for name in names}
-    nodes = [
-        {"id": name, "step": {"kind": "agent", "agent": name}}
-        for name in names
-    ]
+    nodes = [{"id": name, "step": {"kind": "agent", "agent": name}} for name in names]
     edges = [
         {"id": "p-a", "source": "planner", "target": "research-a"},
         {"id": "p-b", "source": "planner", "target": "research-b"},
@@ -71,9 +66,7 @@ async def test_graph_engine_runs_parallel_branch_then_merge(settings) -> None:
 @pytest.mark.asyncio
 async def test_graph_conditions_skip_unmatched_branch(settings) -> None:
     tracer = Tracer()
-    ctx = RunContext(
-        llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings
-    )
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings)
     names = ["router", "research-a", "research-b", "synthesizer"]
     agents = {name: GraphAgent(name) for name in names}
     nodes = [{"id": name, "step": {"kind": "agent", "agent": name}} for name in names]
@@ -110,9 +103,7 @@ async def test_graph_conditions_skip_unmatched_branch(settings) -> None:
 @pytest.mark.asyncio
 async def test_all_join_waits_for_every_active_input(settings) -> None:
     tracer = Tracer()
-    ctx = RunContext(
-        llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings
-    )
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings)
     names = ["router", "research-a", "research-b", "synthesizer"]
     agents = {name: GraphAgent(name) for name in names}
     nodes = [

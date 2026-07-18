@@ -45,6 +45,7 @@ from .persistence.sql_repository import SqlRepository
 
 logger = logging.getLogger(__name__)
 
+
 # 优先用构建后的 SPA（frontend/dist/index.html）；否则回退到内置静态单页 Demo（frontend/index.html）
 def _bundle_root() -> Path:
     """Return the project root in source mode, or PyInstaller data root when frozen."""
@@ -334,6 +335,7 @@ async def _execute(
     heartbeat: asyncio.Task[None] | None = None
     try:
         if lease_owner is not None:
+
             async def renew_lease() -> None:
                 while True:
                     await asyncio.sleep(60)

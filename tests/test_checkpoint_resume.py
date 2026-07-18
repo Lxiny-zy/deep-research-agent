@@ -42,9 +42,7 @@ async def test_graph_resume_skips_completed_nodes(settings) -> None:
 
     calls: list[str] = []
     agents = {name: ResumeAgent(name, calls) for name in ("a", "b")}
-    ctx = RunContext(
-        llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings
-    )
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
     engine = WorkflowEngine(ctx, resolver=agents.__getitem__, resume_run=execution)
     bb = await engine.run(
         definition,

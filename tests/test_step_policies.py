@@ -29,9 +29,7 @@ class PolicyAgent:
 
 
 def context(settings) -> RunContext:  # type: ignore[no-untyped-def]
-    return RunContext(
-        llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings
-    )
+    return RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
 
 
 @pytest.mark.asyncio

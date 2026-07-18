@@ -60,8 +60,12 @@ async def test_catalog_runtime_resolves_card_and_falls_back():
     """CatalogRuntime：已注册卡片名 → CardAgent；未知名 → 回退内置注册表。"""
     cards = [
         AgentCardView(
-            id="1", name="my-critic", behavior="critique",
-            system_prompt="挑刺", enabled=True, model_profile_id="p1",
+            id="1",
+            name="my-critic",
+            behavior="critique",
+            system_prompt="挑刺",
+            enabled=True,
+            model_profile_id="p1",
         ),
         AgentCardView(id="2", name="disabled-one", behavior="plan", enabled=False),
     ]
@@ -69,8 +73,11 @@ async def test_catalog_runtime_resolves_card_and_falls_back():
         "p1": ModelProfileFull(id="p1", name="cheap", base_url=None, api_key="k", model="m")
     }
     rt = CatalogRuntime(
-        cards=cards, profiles=profiles, default_profile=None,
-        tracer=Tracer(), settings=Settings(),
+        cards=cards,
+        profiles=profiles,
+        default_profile=None,
+        tracer=Tracer(),
+        settings=Settings(),
     )
 
     # 启用的卡片 → CardAgent

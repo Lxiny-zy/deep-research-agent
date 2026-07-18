@@ -181,9 +181,7 @@ async def test_search_key_test_endpoint(cat_app, monkeypatch):
     from deep_research import catalog_api
 
     async with _client() as c:
-        kid = (
-            await c.post("/api/search-keys", json={"api_key": "tvly-x"})
-        ).json()["id"]
+        kid = (await c.post("/api/search-keys", json={"api_key": "tvly-x"})).json()["id"]
 
         async def ok_probe(api_key):
             assert api_key == "tvly-x"  # 传入明文 key
