@@ -2095,23 +2095,158 @@ img, svg, canvas { max-width: 100%; }
 }
 
 
-/* Welcome headline collision final fix */
+/* Public welcome: stable two-line headline and mobile-first reading order. */
+.welcome-hero {
+  position: relative;
+  isolation: isolate;
+}
+.welcome-copy {
+  min-width: 0;
+  width: 100%;
+}
 .welcome-copy h1 {
   display: grid;
   gap: clamp(8px, 1.1vw, 18px);
   font-size: clamp(3.45rem, 6.25vw, 6.9rem);
   line-height: .88;
 }
-.welcome-copy h1 > span { line-height: 1; }
+.welcome-copy h1 > span {
+  display: block;
+  min-width: 0;
+  line-height: 1;
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  text-wrap: nowrap;
+}
+
 @media (max-width: 1180px) {
-  .welcome-copy h1 { gap: 10px; font-size: clamp(3.35rem, 6.15vw, 5.55rem); }
+  .welcome-copy h1 {
+    gap: 10px;
+    font-size: clamp(3.35rem, 6.15vw, 5.55rem);
+  }
 }
-@media (max-width: 880px) {
-  .welcome-copy h1 { gap: 9px; font-size: clamp(3.35rem, 9.4vw, 5.7rem); }
+
+/* Switch before the two-column layout can squeeze Chinese display text. */
+@media (max-width: 1020px) {
+  .welcome-hero {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 46px;
+    padding-top: 100px;
+  }
+  .welcome-copy {
+    max-width: 820px;
+  }
+  .welcome-copy h1 {
+    gap: 9px;
+    font-size: clamp(3.15rem, 9vw, 5.4rem);
+  }
+  .welcome-orbit {
+    width: min(58vw, 420px);
+    margin-top: 4px;
+  }
+  .welcome-capabilities {
+    grid-template-columns: 1fr;
+  }
+  .welcome-telemetry-heading {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 20px;
+  }
 }
+
 @media (max-width: 620px) {
-  .welcome-copy h1 { gap: 7px; font-size: clamp(2.75rem, 13.6vw, 4.7rem); }
+  .visitor-welcome .ambient-block {
+    opacity: .2;
+  }
+  .visitor-welcome .ambient-grid {
+    opacity: .09;
+  }
+  .welcome-hero {
+    min-height: auto;
+    gap: 34px;
+    padding: 82px 18px 46px;
+  }
+  .welcome-topline {
+    top: 25px;
+    left: 18px;
+    right: 18px;
+  }
+  .welcome-copy {
+    max-width: none;
+  }
+  .welcome-kicker {
+    max-width: 100%;
+    margin-bottom: 20px;
+    padding: 8px 11px;
+    font-size: .8rem;
+    white-space: nowrap;
+  }
+  .welcome-copy h1 {
+    gap: 8px;
+    font-size: clamp(1.95rem, 11vw, 3.15rem);
+    line-height: .94;
+    letter-spacing: -.055em;
+  }
+  .welcome-copy p {
+    max-width: 34rem;
+    margin-top: 24px;
+    font-size: .94rem;
+    line-height: 1.72;
+  }
+  .welcome-actions {
+    width: 100%;
+    margin-top: 28px;
+  }
+  .welcome-actions .btn {
+    width: 100%;
+    min-height: 48px;
+    justify-content: center;
+  }
+  .welcome-orbit {
+    width: min(72vw, 270px);
+    margin: 0 auto;
+  }
+  .orbit-core {
+    border-radius: 14px;
+    font-size: 1.65rem;
+    box-shadow: 8px 9px 0 var(--signal-lime);
+  }
+  .orbit-node {
+    padding: 7px 8px;
+    font-size: 8px;
+    box-shadow: 4px 5px 0 var(--signal-blue);
+  }
+  .welcome-capabilities {
+    margin: 0 12px 52px;
+    overflow: hidden;
+    border-radius: 16px;
+  }
+  .welcome-capabilities article {
+    min-height: 156px;
+    padding: 24px 22px;
+  }
+  .welcome-capabilities article:hover {
+    transform: none;
+  }
 }
-@media (max-width: 390px) {
-  .welcome-copy h1 { font-size: 2.58rem; }
+
+@media (max-width: 360px) {
+  .welcome-hero {
+    padding-inline: 14px;
+  }
+  .welcome-topline {
+    left: 14px;
+    right: 14px;
+  }
+  .welcome-kicker {
+    font-size: .74rem;
+  }
+  .welcome-copy h1 {
+    font-size: clamp(1.9rem, 10.6vw, 2.4rem);
+  }
+  .welcome-orbit {
+    width: min(74vw, 238px);
+  }
 }
