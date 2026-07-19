@@ -1490,6 +1490,8 @@ body::before, body::after { display: none; }
 .flow-agent-node.reflect_loop .flow-node-kind { color: #111318; }
 .flow-agent-node small { color: rgba(255,255,255,.7); }
 .flow-agent-node .react-flow__handle { background: #111318; border-color: var(--signal-cream); }
+.workflow-canvas .react-flow__edges svg,
+.workflow-canvas svg.react-flow__connectionline { max-width: none; }
 .workflow-canvas .react-flow__edge-path { stroke: var(--signal-cream); stroke-width: 2.2; }
 .workflow-canvas .conditional-edge .react-flow__edge-path { stroke: var(--signal-lime); }
 .workflow-canvas .react-flow__controls { border-radius: 12px; }
