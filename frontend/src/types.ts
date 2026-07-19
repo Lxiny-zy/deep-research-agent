@@ -159,6 +159,8 @@ export interface WorkflowViewport {
   x: number
   y: number
   zoom: number
+  input_position?: { x: number; y: number }
+  output_position?: { x: number; y: number }
 }
 
 // 自定义工作流（GET /api/workflows/custom）

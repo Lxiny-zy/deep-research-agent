@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from deep_research.orchestration import WorkflowEdge, WorkflowNode, graph_to_steps, steps_to_graph
+from deep_research.orchestration import (
+    WorkflowEdge,
+    WorkflowNode,
+    graph_to_steps,
+    graph_topo_layers,
+    steps_to_graph,
+)
 
 STEPS = [
     {"kind": "agent", "agent": "planner"},
@@ -28,9 +34,14 @@ def test_graph_rejects_cycle() -> None:
         graph_to_steps(nodes, edges)
 
 
-def test_graph_topology_supports_branch() -> None:
-    from deep_research.orchestration import graph_topo_layers
+def test_graph_rejects_disconnected_nodes() -> None:
+    nodes, edges = steps_to_graph(STEPS)
+    edges.pop()
+    with pytest.raises(ValueError, match="未连接节点"):
+        graph_topo_layers(nodes, edges)
 
+
+def test_graph_topology_supports_branch() -> None:
     nodes = [
         WorkflowNode(id="a", step=STEPS[0]),
         WorkflowNode(id="b", step=STEPS[1]),

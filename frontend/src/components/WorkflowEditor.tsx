@@ -73,11 +73,15 @@ export default function WorkflowEditor({
     () => Object.fromEntries((initial?.nodes ?? []).map((node) => [node.id, node.join_mode ?? 'any'])),
   )
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>(() =>
-    Object.fromEntries(
-      initial?.nodes?.length
-        ? initial.nodes.map((node) => [node.id, node.position])
-        : initialSteps.map((_, index) => [`node-${index + 1}`, { x: 220, y: 70 + index * 150 }]),
-    ),
+    ({
+      ...Object.fromEntries(
+        initial?.nodes?.length
+          ? initial.nodes.map((node) => [node.id, node.position])
+          : initialSteps.map((_, index) => [`node-${index + 1}`, { x: 220, y: 70 + index * 150 }]),
+      ),
+      ...(initial?.viewport?.input_position ? { __input__: initial.viewport.input_position } : {}),
+      ...(initial?.viewport?.output_position ? { __output__: initial.viewport.output_position } : {}),
+    }),
   )
   const [selected, setSelected] = useState(0)
   const [mobilePane, setMobilePane] = useState<'library' | 'canvas' | 'inspector'>('canvas')
@@ -88,8 +92,28 @@ export default function WorkflowEditor({
   const validation = useMemo(() => {
     if (!steps.length) return '画布至少需要一个节点'
     if (!hasSynth) return '缺少可产出报告的 Synthesizer 节点'
+    if (steps.length > 1) {
+      const connected = new Set<string>()
+      const neighbors = new Map<string, string[]>()
+      for (const key of nodeKeys) neighbors.set(key, [])
+      for (const [target, sources] of Object.entries(dependencies)) {
+        for (const source of sources) {
+          if (!neighbors.has(source) || !neighbors.has(target)) continue
+          neighbors.get(source)!.push(target)
+          neighbors.get(target)!.push(source)
+        }
+      }
+      const queue = nodeKeys.length ? [nodeKeys[0]] : []
+      while (queue.length) {
+        const key = queue.shift()!
+        if (connected.has(key)) continue
+        connected.add(key)
+        queue.push(...(neighbors.get(key) ?? []))
+      }
+      if (connected.size !== nodeKeys.length) return '工作流包含未连接节点，请先完成节点连线'
+    }
     return null
-  }, [hasSynth, steps.length])
+  }, [dependencies, hasSynth, nodeKeys, steps.length])
 
   function patchStep(index: number, patch: Partial<WorkflowStep>) {
     setSteps((prev) => prev.map((step, i) => (i === index ? { ...step, ...patch } : step)))
@@ -190,7 +214,13 @@ export default function WorkflowEditor({
       steps,
       nodes,
       edges,
-      viewport: { x: 0, y: 0, zoom: 1 },
+      viewport: {
+        x: initial?.viewport?.x ?? 0,
+        y: initial?.viewport?.y ?? 0,
+        zoom: initial?.viewport?.zoom ?? 1,
+        input_position: positions.__input__,
+        output_position: positions.__output__,
+      },
       version: initial?.version ?? 1,
       enabled: true,
     }
@@ -278,7 +308,7 @@ export default function WorkflowEditor({
           >
             <div className="canvas-toolbar">
               <span><strong>{steps.length}</strong> 节点</span>
-              <span>拖动节点 · 端口连线 · 双击连线删除</span>
+              <span>点击卡片后拖动 · 点击输出端口，再点击目标输入端口</span>
               <span className="canvas-mode">FREE CANVAS</span>
             </div>
             <div className="flow-canvas-shell">

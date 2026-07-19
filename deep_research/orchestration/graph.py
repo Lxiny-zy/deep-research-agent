@@ -31,6 +31,8 @@ class WorkflowViewport(BaseModel):
     x: float = 0
     y: float = 0
     zoom: float = Field(1, ge=0.1, le=4)
+    input_position: NodePosition | None = None
+    output_position: NodePosition | None = None
 
 
 def steps_to_graph(steps: list[dict]) -> tuple[list[WorkflowNode], list[WorkflowEdge]]:
@@ -102,6 +104,21 @@ def graph_topo_layers(
             raise ValueError(f"边 {edge.id} 引用了不存在的节点")
         outgoing[edge.source].append(edge.target)
         incoming[edge.target] += 1
+    if len(nodes) > 1:
+        neighbors: dict[str, set[str]] = {node_id: set() for node_id in by_id}
+        for edge in edges:
+            neighbors[edge.source].add(edge.target)
+            neighbors[edge.target].add(edge.source)
+        connected: set[str] = set()
+        queue = [nodes[0].id]
+        while queue:
+            node_id = queue.pop()
+            if node_id in connected:
+                continue
+            connected.add(node_id)
+            queue.extend(neighbors[node_id] - connected)
+        if len(connected) != len(nodes):
+            raise ValueError("工作流图包含未连接节点")
     ready = sorted(
         (node_id for node_id, count in incoming.items() if count == 0),
         key=lambda node_id: order[node_id],

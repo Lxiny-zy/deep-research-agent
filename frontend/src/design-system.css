@@ -1553,7 +1553,13 @@ body::before, body::after { display: none; }
 }
 .flow-agent-node.input .flow-node-kind, .flow-agent-node.output .flow-node-kind,
 .flow-agent-node.input small, .flow-agent-node.output small { color: rgba(17,19,24,.64); }
-.workflow-canvas .semantic-edge .react-flow__edge-path { stroke: rgba(216,255,79,.68); stroke-dasharray: 7 6; }
+.workflow-canvas .semantic-edge .react-flow__edge-path { stroke: rgba(216,255,79,.68); }
+.flow-agent-node .react-flow__handle.port-interactive { cursor: crosshair; transition: transform .16s ease, background .16s ease, box-shadow .16s ease; }
+.flow-agent-node .react-flow__handle.port-interactive:hover { transform: scale(1.45); background: var(--signal-lime); box-shadow: 0 0 0 5px rgba(216,255,79,.16); }
+.flow-agent-node .react-flow__handle.port-active { transform: scale(1.55); background: var(--signal-coral); box-shadow: 0 0 0 6px rgba(255,107,69,.2), 0 0 18px rgba(255,107,69,.55); }
+.flow-agent-node .react-flow__handle.port-valid { transform: scale(1.45); background: var(--signal-lime); box-shadow: 0 0 0 6px rgba(216,255,79,.18); }
+.flow-agent-node .react-flow__handle.port-invalid { opacity: .35; cursor: not-allowed; }
+.flow-agent-node .react-flow__handle.port-disabled { pointer-events: none; opacity: .58; }
 .canvas-graph-error {
   position: absolute;
   z-index: 12;
