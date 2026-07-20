@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added a Docker-deployment-specific feature, implementation-path, configuration, and full code-review reference for interview and production-readiness analysis.
+- Added a Docker-runtime-scoped Agent project interview guide focused on system capabilities, workflow principles, end-to-end implementation paths, reliability design, limitations, and interview answers rather than deployment mechanics.
 - Added a public Lxiny project welcome experience with verified administrator entry, startup credential validation, and visitor-facing capability highlights.
 - Added semantic workflow input/output nodes, immediate cycle prevention, editable global fallback model settings, and dimensional card interactions.
 - Added a versioned multi-agent workflow graph model with nodes, edges, viewport state, DAG
@@ -31,6 +33,8 @@
 
 ### Fixed
 
+- Fixed workflow drag-and-drop negotiation, preserved disabled workflow state on edits, and removed stale edge conditions when dependencies are unchecked.
+- Fixed runtime settings being ignored by the legacy research stream, kept API keys out of SSE URLs, and made Docker PostgreSQL passwords safe for reserved URL characters.
 - Fixed welcome-page headline collisions, project-capability navigation, card alignment, hover overflow, and narrow-device form/modal overflow.
 - Added deterministic Blackboard merging for parallel graph layers and explicit lifecycle states
   for failed, skipped, retrying, and cancelled nodes.

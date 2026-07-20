@@ -92,6 +92,33 @@ async def test_stream_replays_from_db(repo):
 
 
 @pytest.mark.asyncio
+async def test_legacy_research_uses_runtime_settings(repo, monkeypatch):
+    runtime_settings = Settings(llm_model='saved-model', llm_api_key='saved-key')
+    api.app.state.settings = runtime_settings
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, settings):
+            captured['settings'] = settings
+
+        async def run_stream(self, query):
+            assert query == 'Q'
+            yield Event(stage='ORCHESTRATOR', type='done')
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(api, 'DeepResearchAgent', FakeAgent)
+    monkeypatch.setattr(api, '_check_rate_limit', lambda request: None)
+
+    async with _client() as c:
+        resp = await c.get('/api/research', params={'q': 'Q'})
+
+    assert resp.status_code == 200
+    assert captured['settings'] is runtime_settings
+
+
+@pytest.mark.asyncio
 async def test_delete_run(repo):
     run_id = await repo.create_run("待删")
     async with _client() as c:

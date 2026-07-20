@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { streamUrl } from '../api/client'
+import { streamRun } from '../api/client'
 import type { DagData, Report, ResearchEvent, RunStats } from '../types'
 
 // disconnected：连接中断但运行未到终态——由 RunPage 的详情轮询接管兜底
@@ -103,30 +103,44 @@ export function useResearchStream(runId: string | null): ResearchStreamState {
       return
     }
     setState({ ...INITIAL, status: 'streaming' })
-    const es = new EventSource(streamUrl(runId))
+    const controller = new AbortController()
+    let disposed = false
+    let terminal = false
 
-    es.onmessage = (e: MessageEvent<string>) => {
+    const onMessage = (data: string) => {
       let ev: ResearchEvent
       try {
-        ev = JSON.parse(e.data) as ResearchEvent
+        ev = JSON.parse(data) as ResearchEvent
       } catch {
         return
       }
       setState((prev) => reduceStream(prev, ev))
       if (isTerminal(ev)) {
-        es.close()
+        terminal = true
+        controller.abort()
       }
     }
 
-    es.onerror = () => {
-      es.close()
-      // 已到终态后的连接关闭是正常收尾；否则标记断连，交给轮询兜底
-      setState((prev) =>
-        prev.status === 'streaming' ? { ...prev, status: 'disconnected' } : prev,
-      )
-    }
+    void streamRun(runId, onMessage, controller.signal)
+      .then(() => {
+        if (!disposed && !terminal) {
+          setState((prev) =>
+            prev.status === 'streaming' ? { ...prev, status: 'disconnected' } : prev,
+          )
+        }
+      })
+      .catch((error: unknown) => {
+        if (disposed || terminal || (error instanceof DOMException && error.name === 'AbortError')) return
+        // 未到终态的网络或鉴权错误交给详情轮询兜底。
+        setState((prev) =>
+          prev.status === 'streaming' ? { ...prev, status: 'disconnected' } : prev,
+        )
+      })
 
-    return () => es.close()
+    return () => {
+      disposed = true
+      controller.abort()
+    }
   }, [runId])
 
   return state

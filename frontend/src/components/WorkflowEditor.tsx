@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import WorkflowFlowCanvas from './WorkflowFlowCanvas'
+import { findAvailableNodePosition } from './workflowEditorLogic'
 import type { RoleInfo, WorkflowDef, WorkflowDefInput, WorkflowStep } from '../types'
 
 interface Props {
@@ -22,6 +23,8 @@ const DEFAULT_STEPS: WorkflowStep[] = [
   { kind: 'agent', agent: 'researcher' },
   { kind: 'agent', agent: 'synthesizer' },
 ]
+
+type CanvasPosition = { x: number; y: number }
 
 function nodeTitle(step: WorkflowStep, roles: RoleInfo[]): string {
   if (step.kind === 'reflect_loop') return '反思循环'
@@ -83,11 +86,15 @@ export default function WorkflowEditor({
       ...(initial?.viewport?.output_position ? { __output__: initial.viewport.output_position } : {}),
     }),
   )
-  const [selected, setSelected] = useState(0)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(() =>
+    initial?.nodes?.[0]?.id ?? (initialSteps.length ? 'node-1' : null),
+  )
   const [mobilePane, setMobilePane] = useState<'library' | 'canvas' | 'inspector'>('canvas')
   const [graphError, setGraphError] = useState('')
+  const nodeSequence = useRef(initialSteps.length)
 
-  const current = steps[selected]
+  const selected = selectedNodeId ? nodeKeys.indexOf(selectedNodeId) : -1
+  const current = selected >= 0 ? steps[selected] : undefined
   const hasSynth = steps.some((step) => step.kind === 'agent' && step.agent === 'synthesizer')
   const validation = useMemo(() => {
     if (!steps.length) return '画布至少需要一个节点'
@@ -119,29 +126,35 @@ export default function WorkflowEditor({
     setSteps((prev) => prev.map((step, i) => (i === index ? { ...step, ...patch } : step)))
   }
 
-  function appendAgent(agent: string) {
-    setSteps((prev) => {
-      const key = `node-${Date.now()}-${prev.length}`
-      setNodeKeys((keys) => [...keys, key])
-      setPositions((value) => ({ ...value, [key]: { x: 220 + (prev.length % 3) * 280, y: 100 + Math.floor(prev.length / 3) * 170 } }))
-      setDependencies((deps) => ({ ...deps, [key]: [] }))
-      setSelected(prev.length)
-      return [...prev, { kind: 'agent', agent }]
-    })
+  function appendStep(step: WorkflowStep, preferredPosition?: CanvasPosition) {
+    const key = `node-${Date.now()}-${nodeSequence.current}`
+    nodeSequence.current += 1
+    const existingPositions = nodeKeys
+      .map((nodeKey) => positions[nodeKey])
+      .filter((position): position is CanvasPosition => !!position)
+    const anchor = selectedNodeId
+      ? positions[selectedNodeId]
+      : positions[nodeKeys[nodeKeys.length - 1]]
+    const position = findAvailableNodePosition(existingPositions, anchor, preferredPosition)
+
+    setSteps((prev) => [...prev, step])
+    setNodeKeys((prev) => [...prev, key])
+    setPositions((prev) => ({ ...prev, [key]: position }))
+    setDependencies((prev) => ({ ...prev, [key]: [] }))
+    setSelectedNodeId(key)
+    setGraphError('')
+    setMobilePane('canvas')
   }
 
-  function appendReflection() {
-    setSteps((prev) => {
-      const key = `node-${Date.now()}-${prev.length}`
-      setNodeKeys((keys) => [...keys, key])
-      setPositions((value) => ({ ...value, [key]: { x: 220 + (prev.length % 3) * 280, y: 100 + Math.floor(prev.length / 3) * 170 } }))
-      setDependencies((deps) => ({ ...deps, [key]: [] }))
-      setSelected(prev.length)
-      return [
-        ...prev,
-        { kind: 'reflect_loop', reflector: 'reflector', researcher: 'researcher' },
-      ]
-    })
+  function appendAgent(agent: string, preferredPosition?: CanvasPosition) {
+    appendStep({ kind: 'agent', agent }, preferredPosition)
+  }
+
+  function appendReflection(preferredPosition?: CanvasPosition) {
+    appendStep(
+      { kind: 'reflect_loop', reflector: 'reflector', researcher: 'researcher' },
+      preferredPosition,
+    )
   }
 
   function cyclePath(source: string, target: string): string[] | null {
@@ -162,6 +175,7 @@ export default function WorkflowEditor({
   }
 
   function connectNodes(source: string, target: string) {
+    if (!nodeKeys.includes(source) || !nodeKeys.includes(target) || source === target) return
     const cycle = cyclePath(source, target)
     if (cycle) {
       const labels = cycle.map((key) => {
@@ -178,10 +192,26 @@ export default function WorkflowEditor({
     }))
   }
 
+  function disconnectNodes(source: string, target: string) {
+    setGraphError('')
+    setDependencies((prev) => ({
+      ...prev,
+      [target]: (prev[target] ?? []).filter((item) => item !== source),
+    }))
+    setEdgeConditions((prev) => {
+      const next = { ...prev }
+      delete next[`${source}->${target}`]
+      return next
+    })
+  }
+
   function removeSelected() {
+    if (selected < 0) return
     const removedKey = nodeKeys[selected]
+    const remainingKeys = nodeKeys.filter((_, index) => index !== selected)
+    const nextSelection = remainingKeys[Math.min(selected, remainingKeys.length - 1)] ?? null
     setSteps((prev) => prev.filter((_, i) => i !== selected))
-    setNodeKeys((prev) => prev.filter((_, i) => i !== selected))
+    setNodeKeys(remainingKeys)
     setDependencies((prev) => {
       const next: Record<string, string[]> = {}
       for (const [key, parents] of Object.entries(prev)) {
@@ -189,7 +219,26 @@ export default function WorkflowEditor({
       }
       return next
     })
-    setSelected((prev) => Math.max(0, Math.min(prev, steps.length - 2)))
+    setEdgeConditions((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).filter(([edgeKey]) => {
+          const [source, target] = edgeKey.split('->')
+          return source !== removedKey && target !== removedKey
+        }),
+      ),
+    )
+    setJoinModes((prev) => {
+      const next = { ...prev }
+      delete next[removedKey]
+      return next
+    })
+    setPositions((prev) => {
+      const next = { ...prev }
+      delete next[removedKey]
+      return next
+    })
+    setSelectedNodeId(nextSelection)
+    setGraphError('')
   }
 
   function submit() {
@@ -222,7 +271,7 @@ export default function WorkflowEditor({
         output_position: positions.__output__,
       },
       version: initial?.version ?? 1,
-      enabled: true,
+      enabled: initial?.enabled ?? true,
     }
     if (!editing) body.name = name.trim()
     onSubmit(body)
@@ -277,7 +326,10 @@ export default function WorkflowEditor({
                   key={role.name}
                   className="workflow-role-item"
                   draggable
-                  onDragStart={(event) => event.dataTransfer.setData('agent-role', role.name)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'copy'
+                    event.dataTransfer.setData('agent-role', role.name)
+                  }}
                   onClick={() => appendAgent(role.name)}
                 >
                   <span className="role-monogram">{role.label.slice(0, 1)}</span>
@@ -290,7 +342,15 @@ export default function WorkflowEditor({
               ))}
             </div>
             <div className="workflow-library-divider" />
-            <button className="workflow-role-item control" onClick={appendReflection}>
+            <button
+              className="workflow-role-item control"
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = 'copy'
+                event.dataTransfer.setData('workflow-control', 'reflect_loop')
+              }}
+              onClick={() => appendReflection()}
+            >
               <span className="role-monogram">↻</span>
               <span><strong>反思循环</strong><small>评估证据并补充研究</small></span>
               <span className="role-add">＋</span>
@@ -299,17 +359,11 @@ export default function WorkflowEditor({
 
           <main
             className={`workflow-canvas mobile-pane ${mobilePane === 'canvas' ? 'mobile-active' : ''}`}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault()
-              const role = event.dataTransfer.getData('agent-role')
-              if (role) appendAgent(role)
-            }}
           >
             <div className="canvas-toolbar">
-              <span><strong>{steps.length}</strong> 节点</span>
-              <span>点击卡片后拖动 · 点击输出端口，再点击目标输入端口</span>
-              <span className="canvas-mode">FREE CANVAS</span>
+              <span><strong>{steps.length}</strong> 节点 · <strong>{Object.values(dependencies).reduce((count, parents) => count + parents.length, 0)}</strong> 条依赖</span>
+              <span>拖动卡片移动 · 从端口拖线或依次点击两端 · 选中实线后按 Delete</span>
+              <span className="canvas-mode">DAG CANVAS</span>
             </div>
             <div className="flow-canvas-shell">
               <WorkflowFlowCanvas
@@ -319,25 +373,22 @@ export default function WorkflowEditor({
                 dependencies={dependencies}
                 conditions={edgeConditions}
                 positions={positions}
-                selected={selected}
-                onSelect={setSelected}
+                selectedNodeId={selectedNodeId}
+                onSelectNode={setSelectedNodeId}
                 onPositionsChange={setPositions}
                 onConnect={connectNodes}
-                onDisconnect={(source, target) => {
-                  setDependencies((prev) => ({
-                    ...prev,
-                    [target]: (prev[target] ?? []).filter((item) => item !== source),
-                  }))
-                  setEdgeConditions((prev) => {
-                    const next = { ...prev }
-                    delete next[`${source}->${target}`]
-                    return next
-                  })
-                }}
+                onDisconnect={disconnectNodes}
+                onAddAgent={appendAgent}
+                onAddReflection={appendReflection}
               />
             </div>
             {!steps.length && <div className="canvas-empty">从左侧角色库拖入第一个 Agent</div>}
-            {graphError && <div className="canvas-graph-error">{graphError}</div>}
+            {graphError && (
+              <div className="canvas-graph-error" role="alert">
+                <span>{graphError}</span>
+                <button type="button" onClick={() => setGraphError('')} aria-label="关闭提示">×</button>
+              </div>
+            )}
           </main>
 
           <aside className={`workflow-inspector mobile-pane ${mobilePane === 'inspector' ? 'mobile-active' : ''}`}>
@@ -391,11 +442,7 @@ export default function WorkflowEditor({
                                 if (event.target.checked) {
                                   connectNodes(key, target)
                                 } else {
-                                  setGraphError('')
-                                  setDependencies((prev) => ({
-                                    ...prev,
-                                    [target]: (prev[target] ?? []).filter((parent) => parent !== key),
-                                  }))
+                                  disconnectNodes(key, target)
                                 }
                               }}
                             />

@@ -214,11 +214,52 @@ export function listTags(): Promise<TagCount[]> {
   return request<TagCount[]>('/api/tags')
 }
 
-export function streamUrl(id: string): string {
-  const base = `/api/runs/${encodeURIComponent(id)}/stream`
+export async function streamRun(
+  id: string,
+  onMessage: (data: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
   const key = getApiKey()
-  // EventSource 无法自定义请求头，认证走查询参数
-  return key ? `${base}?api_key=${encodeURIComponent(key)}` : base
+  const res = await fetch(`/api/runs/${encodeURIComponent(id)}/stream`, {
+    headers: {
+      Accept: 'text/event-stream',
+      ...(key ? { 'X-API-Key': key } : {}),
+    },
+    signal,
+  })
+  if (!res.ok) {
+    if (res.status === 401) signalUnauthorized()
+    throw new ApiError(res.status, res.statusText)
+  }
+  if (!res.body) throw new ApiError(0, 'SSE response has no body')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const dispatchCompleteEvents = () => {
+    let boundary = buffer.match(/\r?\n\r?\n/)
+    while (boundary?.index != null) {
+      const block = buffer.slice(0, boundary.index)
+      buffer = buffer.slice(boundary.index + boundary[0].length)
+      const data = block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).replace(/^ /, ''))
+        .join('\n')
+      if (data) onMessage(data)
+      boundary = buffer.match(/\r?\n\r?\n/)
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    dispatchCompleteEvents()
+  }
+  buffer += decoder.decode()
+  dispatchCompleteEvents()
 }
 
 export function getConfig(): Promise<ConfigView> {

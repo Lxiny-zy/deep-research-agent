@@ -28,7 +28,9 @@ services:
     build: .
     environment:
       # 指向 compose 内的 Postgres（async 驱动）
-      DATABASE_URL: postgresql+asyncpg://dr:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, set it in .env}@db:5432/deep_research
+      DATABASE_URL: postgresql+asyncpg://dr@db:5432/deep_research
+      # 避免把含 @、:、/ 等字符的密码直接拼进 URL；asyncpg 会读取标准 libpq 环境变量。
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, set it in .env}
       # 以下从根目录 .env 自动插值（缺省时用兜底值，仍可启动但调用真实 LLM 会报缺 key）
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}

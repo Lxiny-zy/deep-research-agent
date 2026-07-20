@@ -654,7 +654,7 @@ async def research(
 ) -> StreamingResponse:
     """无持久化的即跑即看快路径（向后兼容旧前端）。"""
     _check_rate_limit(request)
-    agent = DeepResearchAgent(Settings())
+    agent = DeepResearchAgent(request.app.state.settings)
 
     async def event_stream() -> AsyncIterator[str]:
         try:
