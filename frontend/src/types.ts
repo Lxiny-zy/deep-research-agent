@@ -44,7 +44,21 @@ export interface SubQuestion {
 export interface Finding {
   statement: string
   source_url: string
+  evidence_quote: string
   confidence: number
+  verification: {
+    status: 'unverified' | 'verified'
+    method: 'none' | 'normalized_quote'
+    source_content_hash: string
+    reason: string
+    semantic_status: 'not_checked' | 'supported' | 'unsupported' | 'uncertain'
+    semantic_confidence: number
+    semantic_reason: string
+    claim_id: string
+    consistency_status: 'not_checked' | 'clear' | 'conflicted'
+    contradicts_claim_ids: string[]
+    contradiction_reason: string
+  }
 }
 
 export interface ResearchResult {

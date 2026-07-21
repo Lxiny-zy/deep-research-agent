@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import cast
 
 from ..config import Settings
+from ..guardrails import report_eligible
 from ..llm import LLM
 from ..models import Reflection, ResearchResult
 from ..observability import Tracer
@@ -54,5 +55,10 @@ class Reflector:
 
 
 def _digest(results: list[ResearchResult], limit: int = 40) -> str:
-    lines = [f"- ({r.sub_question}) {f.statement}" for r in results for f in r.findings]
+    lines = [
+        f"- ({r.sub_question}) {f.statement}"
+        for r in results
+        for f in r.findings
+        if report_eligible(f)
+    ]
     return "\n".join(lines[:limit]) or "（暂无发现）"

@@ -428,23 +428,29 @@ Synthesizer 在送入 LLM 前，先由代码遍历 Findings，为真实 URL 建�
 ### 10.1 当前已实现的防线
 
 1. **检索来源边界**：每个子问题先获得本轮真实 Source 列表。
-2. **不可信内容隔离**：网页正文用来源边界包装，并在 Prompt 中声明其是数据而不是指令。
-3. **结构化抽取**：LLM 输出必须通过 Pydantic `FindingList` 校验。
-4. **URL 白名单**：只保留来源 URL 属于本轮搜索结果的 Finding。
-5. **前驱证据降权**：依赖节点的已有 Findings 仅作背景，不能冒充新来源。
-6. **有界反思**：证据不足时补充问题，而不是让 Synthesizer直接填空。
-7. **引用映射由代码维护**：URL 编号和最终参考来源列表不是模型自由生成。
-8. **报告可回溯**：Finding、source_url、子问题和最终 citations 保留关联链。
+2. **来源策略门禁**：SourcePolicy 拒绝危险 scheme、非公网地址、嵌入凭据，并隔离命中 Prompt Injection 规则的来源；决策原因进入事件审计。
+3. **不可信内容隔离**：放行的网页正文仍用来源边界包装，并在 Prompt 中声明其是数据而不是指令。
+4. **结构化抽取**：LLM 输出必须通过 Pydantic `FindingList` 校验。
+5. **URL 白名单**：只保留来源 URL 属于本轮安全来源集合的 Finding。
+6. **原文证据验证**：Finding 必须给出 evidence_quote；程序归一化匹配对应 Source，并记录内容 SHA-256 与验证状态，模型不能自行授信。
+7. **语义支持验证**：在逐字 quote 已通过后，再判断原文是否真的支持论断；unsupported/uncertain 不进入 Reflector 和 Synthesizer。
+8. **跨论断一致性验证**：为已支持论断生成 claim_id，标记互相矛盾的论断对，并保留冲突原因，避免报告阶段静默吞掉争议。
+9. **报告输入门禁**：只有 `verified + supported` Finding 才能进入 Synthesizer；原文 quote 与论断共同进入报告素材。
+10. **前驱证据降权**：依赖节点的已有 Findings 仅作背景，不能冒充新来源。
+11. **有界反思**：证据不足时补充问题，而不是让 Synthesizer直接填空。
+12. **引用映射由代码维护**：URL 编号和最终参考来源列表不是模型自由生成。
+13. **报告可回溯**：Finding、source_url、evidence_quote、内容哈希、claim_id、矛盾关系、子问题和最终 citations 保留关联链。
 
 ### 10.2 仍然存在的风险
 
 - 搜索引擎返回的网页可能过时、错误或互相复制；
-- URL 合法只证明“检索到过”，不证明事实正确；
-- LLM 可能错误概括来源，或在正文中把编号放到不匹配的论断后；
+- 语义支持判定只能约束 quote 与 statement 的关系，不代表网页本身正确；
+- LLM 仍可能错误概括来源，或在正文中把编号放到不匹配的论断后；
+- 规则型 Prompt Injection 检测可能漏掉混淆/跨语言攻击，也可能误报安全文章；
 - 当前没有成熟的跨来源一致性投票、矛盾检测和权威性评分；
 - 自定义 system prompt 仍需要更细的权限和安全策略。
 
-因此简历中应写“通过来源白名单和引用映射降低伪造引用风险”，不要写“彻底解决大模型幻觉”。
+因此简历中应写“通过来源策略、原文 quote 校验、语义支持判定和引用映射降低注入与伪造引用风险”，不要写“完成事实核验”或“彻底解决大模型幻觉”。
 
 ### 10.3 结构化输出可靠性
 
@@ -653,7 +659,7 @@ LLM、SearchTool、Repository 和运行配置都通过协议或上下文注入�
 
 当前工作树已有以下验证记录：
 
-- 后端：`156 passed, 1 deselected`；
+- 后端：`175 passed, 1 skipped`；
 - 前端：`27 passed`；
 - Ruff、mypy、ESLint、TypeScript/Vite production build 通过；
 - SQLite `upgrade head + alembic check` 通过；
@@ -745,7 +751,7 @@ Judge 使用独立 Tracer，避免污染被评估 Agent 的 Token 统计。它�
 ### 17.6 空间允许时可追加的两条
 
 - 建设数据驱动 Agent Catalog，通过 `behavior + system_prompt + model_profile` 配置角色，同一流程内按角色路由不同 OpenAI-compatible 模型；React Flow 画布支持 DAG、条件边、Join 和节点可靠性参数。
-- 通过依赖注入和 Fake LLM/Search 建立离线回归体系，当前验证后端 156 项、前端 27 项测试，并通过 Ruff、mypy、ESLint、生产构建及 Alembic schema 一致性检查。
+- 通过依赖注入和 Fake LLM/Search 建立离线回归体系，当前验证后端 175 项、前端 27 项测试，并通过 Ruff、mypy、ESLint、生产构建及 Alembic schema 一致性检查。
 
 ### 17.7 个人项目与团队项目措辞
 

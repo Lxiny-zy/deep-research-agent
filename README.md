@@ -2,7 +2,7 @@
 
 把「一个问题」自动**拆解 → 并行检索 → 反思补洞 → 综合成带引用的研究报告**的多 Agent 系统。
 
-面向 AI Agent 工程岗位的简历项目，重点展示 **多 Agent 编排、并行 fan-out、流式可观测、引用溯源、自动化评估** 等工程能力（而非又一个对话机器人）。
+面向 AI Agent 工程岗位的简历项目，重点展示 **多 Agent 编排、并行 fan-out、来源安全策略、证据验证、流式可观测、自动化评估** 等工程能力（而非又一个对话机器人）。
 
 ---
 
@@ -11,7 +11,9 @@
 - **多 Agent 协作**：Planner / Researcher / Reflector / Synthesizer 各司其职，职责清晰。
 - **并行 fan-out**：子问题用 `asyncio` 并发检索，墙钟时间 ≈ 最慢的一条链，而非求和。
 - **反思循环**：Reflector 自评证据是否充分，不足则自动补洞（loop-until-sufficient）。
-- **引用溯源**：每条发现绑定来源 URL，报告用 `[n]` 引用 + 自动生成参考列表，拒绝无据幻觉。
+- **来源策略门禁**：检索内容进入 LLM 前检查 URL scheme、非公网地址、嵌入凭据和中英文 Prompt Injection 信号；隔离/拒绝决策进入结构化事件审计。
+- **论断证据门禁**：Finding 必须携带来源原文 `evidence_quote`；程序执行归一化逐字匹配并记录内容哈希，只有 `verified` 且语义判定为 `supported` 的论断能进入 Reflector / Synthesizer 和最终引用。
+- **论断一致性标记**：程序为已支持论断生成稳定 `claim_id`，再做跨论断矛盾检测；冲突不会被静默丢弃，而是以 `conflicted`、反向 claim 链接和原因进入审计与报告素材。
 - **流式可观测**：SSE 把每个 Agent 的动作实时推到浏览器；内置 Tracer 统计耗时 / token。
 - **持久化与回放**：每次研究全过程落库（计划 / 结果 / 报告 / 事件）；提供历史列表、详情、SSE 事件回放。仓储接口双实现（内存 / async SQLAlchemy），本地 SQLite 零配置、生产切 PostgreSQL，Alembic 管 schema 版本。
 - **provider 无关**：任意 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / GLM / Moonshot …）。
@@ -56,6 +58,7 @@ deep-research-agent/
 │   ├── models.py            # Pydantic 数据模型（各 Agent 的 schema）
 │   ├── observability.py     # Event + Tracer（控制台订阅 / SSE 队列）
 │   ├── llm.py               # LLM 封装（complete + 流式 + 结构化 parse，provider 无关）
+│   ├── guardrails.py        # 来源安全策略 + 原文证据确定性验证
 │   ├── dag.py               # 子问题依赖图：构建 / 环检测 / 拓扑分层
 │   ├── tools/               # 检索后端抽象 + Tavily 实现
 │   ├── agents/              # Planner / Researcher / Reflector / Synthesizer

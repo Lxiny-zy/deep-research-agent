@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from deep_research.guardrails import ClaimConsistencyReport, SemanticEvidenceDecisionList
 from deep_research.models import (
+    EvidenceVerification,
     Finding,
     FindingList,
     Reflection,
@@ -17,6 +19,31 @@ from deep_research.models import (
     SubQuestion,
 )
 from deep_research.tools.base import SearchTool
+
+
+def verified_finding(
+    statement: str = "发现X",
+    source_url: str = "https://a.com",
+    evidence_quote: str = "内容A提供了可核验的原文证据",
+) -> Finding:
+    """Build trusted fixture data for tests that bypass Researcher."""
+    return Finding(
+        statement=statement,
+        source_url=source_url,
+        evidence_quote=evidence_quote,
+        confidence=0.9,
+        verification=EvidenceVerification(
+            status="verified",
+            method="normalized_quote",
+            source_content_hash="fixture-hash",
+            reason="test_fixture",
+            semantic_status="supported",
+            semantic_confidence=0.95,
+            semantic_reason="test_fixture",
+            claim_id="fixture-claim",
+            consistency_status="clear",
+        ),
+    )
 
 
 class FakeLLM:
@@ -52,16 +79,42 @@ class FakeLLM:
             )
         if schema is FindingList:
             return FindingList(
-                findings=[Finding(statement="发现X", source_url="https://a.com", confidence=0.9)]
+                findings=[
+                    Finding(
+                        statement="发现X",
+                        source_url="https://a.com",
+                        evidence_quote="内容A提供了可核验的原文证据",
+                        confidence=0.9,
+                    )
+                ]
             )
         if schema is Reflection:
             return Reflection(is_sufficient=True, gaps=[], new_sub_questions=[])
+        if schema is SemanticEvidenceDecisionList:
+            indexes = [
+                int(line.removeprefix("Index: "))
+                for line in user.splitlines()
+                if line.startswith("Index: ")
+            ]
+            return SemanticEvidenceDecisionList(
+                decisions=[
+                    {
+                        "index": index,
+                        "verdict": "supported",
+                        "confidence": 0.95,
+                        "reason": "fixture",
+                    }
+                    for index in indexes
+                ]
+            )
+        if schema is ClaimConsistencyReport:
+            return ClaimConsistencyReport(contradictions=[])
         raise AssertionError(f"未预设的 schema：{schema}")
 
 
 class FakeSearch(SearchTool):
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
         return [
-            Source(title="A", url="https://a.com", content="内容A"),
-            Source(title="B", url="https://b.com", content="内容B"),
+            Source(title="A", url="https://a.com", content="内容A提供了可核验的原文证据"),
+            Source(title="B", url="https://b.com", content="内容B提供了另一条参考材料"),
         ]

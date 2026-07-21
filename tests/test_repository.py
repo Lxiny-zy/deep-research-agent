@@ -13,7 +13,14 @@ from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from deep_research.models import Finding, Report, ResearchPlan, ResearchResult, SubQuestion
+from deep_research.models import (
+    EvidenceVerification,
+    Finding,
+    Report,
+    ResearchPlan,
+    ResearchResult,
+    SubQuestion,
+)
 from deep_research.observability import Event
 from deep_research.orchestration import OrchestrationRuntime, RunStatus, StepStatus
 from deep_research.persistence.db import create_all, make_engine, make_sessionmaker
@@ -58,7 +65,27 @@ async def test_crud_roundtrip(repo):
     await repo.save_result(
         run_id,
         ResearchResult(
-            sub_question="a", findings=[Finding(statement="s", source_url="https://a.com")]
+            sub_question="a",
+            findings=[
+                Finding(
+                    statement="s",
+                    source_url="https://a.com",
+                    evidence_quote="verbatim source evidence",
+                    verification=EvidenceVerification(
+                        status="verified",
+                        method="normalized_quote",
+                        source_content_hash="abc123",
+                        reason="quote_found_in_source",
+                        semantic_status="supported",
+                        semantic_confidence=0.87,
+                        semantic_reason="quote directly supports statement",
+                        claim_id="claim-a",
+                        consistency_status="conflicted",
+                        contradicts_claim_ids=["claim-b"],
+                        contradiction_reason="opposite trend",
+                    ),
+                )
+            ],
         ),
     )
     await repo.save_report(run_id, Report(query="Q", markdown="# R", citations=["https://a.com"]))
@@ -84,6 +111,14 @@ async def test_crud_roundtrip(repo):
     assert detail.sub_questions[1].depends_on == [0]
     assert detail.report is not None
     assert detail.report.citations == ["https://a.com"]
+    assert detail.results[0].findings[0].evidence_quote == "verbatim source evidence"
+    assert detail.results[0].findings[0].verification.status == "verified"
+    assert detail.results[0].findings[0].verification.source_content_hash == "abc123"
+    assert detail.results[0].findings[0].verification.semantic_status == "supported"
+    assert detail.results[0].findings[0].verification.semantic_confidence == 0.87
+    assert detail.results[0].findings[0].verification.claim_id == "claim-a"
+    assert detail.results[0].findings[0].verification.consistency_status == "conflicted"
+    assert detail.results[0].findings[0].verification.contradicts_claim_ids == ["claim-b"]
     assert detail.total_tokens == 42
     assert detail.orchestration is not None
     assert detail.orchestration.workflow_name == "deep"

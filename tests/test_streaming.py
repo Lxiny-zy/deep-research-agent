@@ -5,17 +5,17 @@ from __future__ import annotations
 import pytest
 
 from deep_research.agents.synthesizer import Synthesizer
-from deep_research.models import Finding, Report, ResearchResult
+from deep_research.models import Report, ResearchResult
 from deep_research.observability import Tracer
 from deep_research.orchestrator import DeepResearchAgent
-from tests.fakes import FakeLLM, FakeSearch
+from tests.fakes import FakeLLM, FakeSearch, verified_finding
 
 
 def _results() -> list[ResearchResult]:
     return [
         ResearchResult(
             sub_question="Q",
-            findings=[Finding(statement="s", source_url="https://a.com")],
+            findings=[verified_finding(statement="s")],
         )
     ]
 

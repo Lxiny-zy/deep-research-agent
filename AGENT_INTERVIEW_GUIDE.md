@@ -6,7 +6,7 @@
 
 ## 一、项目一句话介绍
 
-设计并实现了一套可配置的多 Agent 深度研究系统：将复杂问题拆解成带依赖的子问题，通过 DAG 分层并发检索、反思补洞和引用约束生成研究报告；同时提供可视化工作流编排、节点级可靠性策略、Checkpoint 恢复、SSE 实时观测、运行历史回放和 LLM-as-judge 自动评估。
+设计并实现了一套可配置的多 Agent 深度研究系统：将复杂问题拆解成带依赖的子问题，通过 DAG 分层并发检索、来源策略门禁、原文证据验证、反思补洞和引用约束生成研究报告；同时提供可视化工作流编排、节点级可靠性策略、Checkpoint 恢复、SSE 实时观测、运行历史回放和 LLM-as-judge 自动评估。
 
 核心技术栈：Python 3.11、FastAPI、Pydantic、asyncio、OpenAI-compatible API、SQLAlchemy 2.0、SQLite/PostgreSQL、Alembic、React、TypeScript、React Flow、SSE、pytest。
 
@@ -67,7 +67,7 @@
 
 #### 简历精炼版
 
-- 实现“问题拆解—依赖检索—证据反思—增量补洞—引用综合”的闭环研究链路：对子问题进行 DAG 并行检索，强制发现绑定真实来源 URL，过滤模型伪造引用，并通过 Reflector 有界补充证据；引入 LLM-as-judge 从覆盖度、可靠性、深度和可读性评估不同工作流的质量/Token 成本。
+- 实现“问题拆解—依赖检索—来源门禁—证据验证—反思补洞—引用综合”的闭环：对子问题进行 DAG 并行检索，在内容进入 LLM 前执行 URL/Prompt Injection 策略；要求 Finding 携带来源原文 quote，由程序验证匹配、语义支持和跨论断一致性，只有 `verified + supported` 论断可进入报告；通过 Reflector 有界补充证据，并以 LLM-as-judge 对比工作流质量/Token 成本。
 
 #### 项目解决了什么问题
 
@@ -92,10 +92,13 @@
    - `Semaphore` 控制最大检索并发，避免打爆模型或搜索 API。
 
 3. **引用与来源约束**
-   - Researcher 明确把网页内容视为不可信数据，忽略网页中的指令性文本，降低间接 Prompt Injection 风险。
-   - 模型输出结构化 `FindingList`，每条 Finding 必须带 `source_url`。
-   - 代码再次检查 `source_url` 是否属于本次搜索真实返回的 URL 集合，不合法引用直接过滤。
-   - Synthesizer 只接收经过验证的发现，由系统建立稳定的 `URL → [n]` 映射并自动追加参考来源，模型不负责自行编造引用列表。
+   - SourcePolicy 在网页内容进入 LLM 前拒绝非 HTTP(S)、非公网 IP/主机名和嵌入凭据 URL，并隔离命中中英文 Prompt Injection 规则的来源。
+   - 模型输出结构化 `FindingList`，每条 Finding 必须带 `source_url` 和逐字复制的 `evidence_quote`。
+   - EvidenceVerifier 先检查 URL 白名单，再对 quote 与对应 Source 做 Unicode/空白归一化匹配；验证状态和来源内容 SHA-256 由程序生成，模型不能自行授信。
+   - SemanticEvidenceVerifier 只在确定性 quote gate 之后判断原文是否真的支持论断；unsupported/uncertain 不进入反思和综合材料。
+   - ClaimConsistencyVerifier 为已支持论断生成稳定 claim_id，并标记跨来源矛盾对；conflicted 论断保留冲突链路和原因，供报告显式呈现争议。
+   - 策略决策、候选数、拒绝数和拒绝原因进入 Tracer 事件，支持 SSE 观察与历史审计。
+   - Synthesizer 只接收 `verified + supported` 发现，由系统建立稳定的 `URL → [n]` 映射并自动追加参考来源，模型不负责自行编造引用列表。
 
 4. **反思补洞闭环**
    - Reflector 判断证据是否足以回答原始问题。
@@ -294,22 +297,24 @@
 
 **答案：**
 
-不能仅靠 Prompt 保证，所以项目采用双层约束：
+不能仅靠 Prompt 保证，所以项目采用多层约束：
 
 1. Prompt 要求 Finding 的 URL 只能来自给定来源；
 2. 代码建立真实搜索 URL 集合，对模型输出逐条过滤；
-3. Synthesizer 不直接接触任意 URL，只接收通过校验的 Finding；
-4. 引用编号和参考来源列表由代码生成，而不是交给模型自由生成。
+3. Finding 必须提供来源原文 quote，程序确认 quote 确实存在并生成内容哈希；
+4. Synthesizer 不直接接触任意候选，只接收状态为 `verified + supported` 的 Finding；
+5. 引用编号和参考来源列表由代码生成，而不是交给模型自由生成。
 
-仍然存在的边界是：URL 真实不代表网页内容一定正确，Finding statement 也可能误读来源。更强方案包括保存原始片段、引用 span、二次 entailment 校验、多来源交叉验证和来源可信度评分。
+仍然存在的边界是：语义支持判定可以约束 quote 与 statement 的关系，但不能证明网页本身正确，也不能替代多来源事实交叉验证。下一步应增加独立评测集、多来源交叉验证和来源可信度评分。
 
 ### 11. 如何防御搜索结果中的 Prompt Injection？
 
 **答案：**
 
-项目在 Researcher 和 Synthesizer 的系统提示中明确声明网页内容是数据，不是指令，并使用明显的来源边界标记包裹每段内容。模型输出又受到结构化 Schema 和 URL 白名单约束。
+项目不再只依赖 Prompt。SourcePolicy 在检索结果进入 LLM 上下文前执行确定性门禁：拒绝危险 scheme、非公网地址和嵌入凭据 URL；命中“忽略前序指令”“泄露系统提示词”或特权角色标签等规则的来源会被隔离。每次判定以结构化事件记录原因，同时 Researcher 和 Synthesizer 仍把网页明确视为不可信数据。
+在论断层面，EvidenceVerifier 的逐字 quote 匹配仍是硬门禁；SemanticEvidenceVerifier 只能在硬门禁通过后补充 `supported/unsupported/uncertain` 状态，不能把未命中的引用提升为可信。ClaimConsistencyVerifier 则在已支持论断之间标记矛盾关系，让系统保留“存在争议”的审计链，而不是让 Synthesizer 随机选择一边。
 
-但 Prompt 约束不是完整安全边界。生产强化方案包括：网页清洗、移除脚本/隐藏文本、限制每个来源长度、对指令型片段分类、工具调用权限最小化、使用独立模型抽取事实，以及不让网页内容进入高权限系统 Prompt。
+规则门禁仍不是完整防线：它可能误报讨论 Prompt Injection 的正常文章，也可能漏掉混淆、图片或跨语言攻击；域名当前只做字面检查，没有解析后 IP 与 DNS rebinding 防护。生产强化应加入抓取层网络沙箱、DNS/IP 二次校验、内容分类器、工具最小权限和红队数据集。
 
 ### 12. 反思循环会不会只是增加 Token，却不提高质量？
 
@@ -627,7 +632,7 @@ Function Calling 由 provider 提供工具/参数协议，通常可靠性更好�
 1. 为并行 Blackboard 增加字段级 Reducer 和冲突检测；
 2. 为 Checkpoint 写入增加 fencing token 和工具调用幂等日志；
 3. 将后台运行迁移到独立 Worker/Temporal；
-4. 为引用加入原文片段和 entailment 校验；
+4. 建立固定评测集、人工基准和多来源交叉验证指标；
 5. 建立固定评测集、确定性指标和 CI 质量门禁；
 6. 增加缓存、模型路由和硬成本预算；
 7. 完善多租户鉴权与操作审计。

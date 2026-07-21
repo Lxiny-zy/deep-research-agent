@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from typing import cast
 
 from ..config import Settings
+from ..guardrails import report_eligible
 from ..llm import LLM
 from ..models import Report, ResearchResult
 from ..observability import Tracer
@@ -38,18 +39,33 @@ class Synthesizer:
         return bb
 
     def _material(self, results: list[ResearchResult]) -> tuple[str, dict[str, int]]:
-        """整理带 [n] 角标的素材，并返回 URL→编号映射（complete/stream 共用，纯函数）。"""
+        """Only verified findings may cross the evidence-to-report boundary."""
         url_to_idx: dict[str, int] = {}
         for r in results:
             for f in r.findings:
+                if not report_eligible(f):
+                    continue
                 url_to_idx.setdefault(f.source_url, len(url_to_idx) + 1)
         blocks: list[str] = []
         for r in results:
-            if not r.findings:
+            verified = [f for f in r.findings if report_eligible(f)]
+            if not verified:
                 continue
             blocks.append(f"\n### 子问题：{r.sub_question}")
-            for f in r.findings:
-                blocks.append(f"- {f.statement} [{url_to_idx[f.source_url]}]")
+            for f in verified:
+                conflict = (
+                    f"\n  Consistency note: conflicts with "
+                    f"{', '.join(f.verification.contradicts_claim_ids)}; "
+                    f"{f.verification.contradiction_reason}"
+                    if f.verification.consistency_status == "conflicted"
+                    else ""
+                )
+                blocks.append(
+                    f"- 论断：{f.statement} [{url_to_idx[f.source_url]}]\n"
+                    f"  原文证据：{f.evidence_quote}"
+                )
+                if conflict:
+                    blocks.append(conflict)
         return ("\n".join(blocks) or "（无可用素材）"), url_to_idx
 
     def _finalize(self, query: str, body: str, url_to_idx: dict[str, int]) -> Report:

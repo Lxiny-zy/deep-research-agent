@@ -14,7 +14,15 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from ..models import Finding, Report, ResearchPlan, ResearchResult, Source, SubQuestion
+from ..models import (
+    EvidenceVerification,
+    Finding,
+    Report,
+    ResearchPlan,
+    ResearchResult,
+    Source,
+    SubQuestion,
+)
 from ..observability import Event
 from ..orchestration import StepRun, WorkflowRun
 from . import orm
@@ -90,7 +98,19 @@ class SqlRepository:
                         result_id=row.id,
                         statement=f.statement,
                         source_url=f.source_url,
+                        evidence_quote=f.evidence_quote,
                         confidence=f.confidence,
+                        verification_status=f.verification.status,
+                        verification_method=f.verification.method,
+                        source_content_hash=f.verification.source_content_hash,
+                        verification_reason=f.verification.reason,
+                        semantic_status=f.verification.semantic_status,
+                        semantic_confidence=f.verification.semantic_confidence,
+                        semantic_reason=f.verification.semantic_reason,
+                        claim_id=f.verification.claim_id,
+                        consistency_status=f.verification.consistency_status,
+                        contradicts_claim_ids=f.verification.contradicts_claim_ids,
+                        contradiction_reason=f.verification.contradiction_reason,
                     )
                 )
 
@@ -297,7 +317,21 @@ class SqlRepository:
                         Finding(
                             statement=f.statement,
                             source_url=f.source_url,
+                            evidence_quote=f.evidence_quote,
                             confidence=f.confidence,
+                            verification=EvidenceVerification(
+                                status=f.verification_status,
+                                method=f.verification_method,
+                                source_content_hash=f.source_content_hash,
+                                reason=f.verification_reason,
+                                semantic_status=f.semantic_status,
+                                semantic_confidence=f.semantic_confidence,
+                                semantic_reason=f.semantic_reason,
+                                claim_id=f.claim_id,
+                                consistency_status=f.consistency_status,
+                                contradicts_claim_ids=list(f.contradicts_claim_ids or []),
+                                contradiction_reason=f.contradiction_reason,
+                            ),
                         )
                         for f in rr.findings
                     ],

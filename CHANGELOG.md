@@ -4,6 +4,16 @@
 
 ### Added
 
+- Added a deterministic trust boundary between search and synthesis: source URL/prompt-injection
+  policy decisions are audited, findings require a verbatim evidence quote, and only
+  program-verified findings can reach report generation.
+- Added second-pass claim validation: deterministic quote checks remain the hard gate, while
+  LLM-based semantic support checks and cross-claim contradiction markers constrain which
+  findings can be used by Reflector and Synthesizer.
+- Persisted evidence quotes, verification status/method, source-content hashes, and verification
+  reasons with an Alembic migration and API schema support.
+- Persisted semantic support status, claim IDs, consistency status, contradiction links, and
+  verification rationales with an Alembic migration and API schema support.
 - Added a Docker-deployment-specific feature, implementation-path, configuration, and full code-review reference for interview and production-readiness analysis.
 - Added a Docker-runtime-scoped Agent project interview guide focused on system capabilities, workflow principles, end-to-end implementation paths, reliability design, limitations, and interview answers rather than deployment mechanics.
 - Added a public Lxiny project welcome experience with verified administrator entry, startup credential validation, and visitor-facing capability highlights.

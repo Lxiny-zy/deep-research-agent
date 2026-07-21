@@ -7,7 +7,7 @@ import pytest
 from deep_research.agents import Planner, Reflector, Researcher, Synthesizer
 from deep_research.models import Finding, Reflection, Report, ResearchPlan, ResearchResult
 from deep_research.observability import Tracer
-from tests.fakes import FakeLLM, FakeSearch
+from tests.fakes import FakeLLM, FakeSearch, verified_finding
 
 
 @pytest.mark.asyncio
@@ -33,6 +33,7 @@ async def test_researcher_keeps_only_grounded_findings(settings):
     assert result is not None
     assert result.findings  # FakeLLM 的发现引用 a.com，在 FakeSearch 来源内，应保留
     assert all(f.source_url in {"https://a.com", "https://b.com"} for f in result.findings)
+    assert all(f.verification.status == "verified" for f in result.findings)
 
 
 @pytest.mark.asyncio
@@ -53,7 +54,7 @@ async def test_synthesizer_appends_citation_list(settings):
     results = [
         ResearchResult(
             sub_question="A",
-            findings=[Finding(statement="发现X", source_url="https://a.com", confidence=0.9)],
+            findings=[verified_finding()],
         )
     ]
     report = await Synthesizer(FakeLLM(), Tracer(), settings).run("测试问题", results)
