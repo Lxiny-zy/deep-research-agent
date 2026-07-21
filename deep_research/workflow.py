@@ -19,7 +19,15 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, Field
 
 from .models import SubQuestion
-from .orchestration import OrchestrationRuntime, RunStatus, StepRun, StepStatus, WorkflowRun
+from .orchestration import (
+    OrchestrationRuntime,
+    RunStatus,
+    StepRun,
+    StepStatus,
+    WorkflowEdge,
+    WorkflowNode,
+    WorkflowRun,
+)
 from .registry import available, create
 
 if TYPE_CHECKING:
@@ -84,6 +92,48 @@ class SubTask(BaseModel):
     steps: list[Step] = Field(default_factory=list)
 
 
+def validate_workflow_graph_terminal(
+    nodes: list[dict],
+    edges: list[dict],
+    *,
+    terminal_roles: set[str] | None = None,
+) -> list[str]:
+    """Require every graph branch to end at a report-producing node."""
+    terminals = terminal_roles if terminal_roles is not None else _TERMINAL_ROLES
+    parsed_nodes = [WorkflowNode.model_validate(node) for node in nodes]
+    parsed_edges = [WorkflowEdge.model_validate(edge) for edge in edges]
+    outgoing = {edge.source for edge in parsed_edges}
+    terminal_steps: list[Step] = []
+    report_steps: list[tuple[str, Step]] = []
+    for node in parsed_nodes:
+        step = Step.model_validate(node.step)
+        if node.id not in outgoing:
+            terminal_steps.append(step)
+        if step.kind == "agent" and step.agent in terminals:
+            report_steps.append((node.id, step))
+    if (
+        len(terminal_steps) == 1
+        and len(report_steps) == 1
+        and report_steps[0][0] not in outgoing
+    ):
+        return []
+    return ["所有工作流分支都必须汇入唯一的终端报告角色（如 Synthesizer）"]
+
+
+def validate_workflow_steps_terminal(
+    steps: list[Step], *, terminal_roles: set[str] | None = None
+) -> list[str]:
+    terminals = terminal_roles if terminal_roles is not None else _TERMINAL_ROLES
+    report_indexes = [
+        index
+        for index, step in enumerate(steps)
+        if step.kind == "agent" and step.agent in terminals
+    ]
+    if report_indexes == [len(steps) - 1]:
+        return []
+    return ["流程必须由唯一的终端角色（如 synthesizer）收尾"]
+
+
 def validate_workflow(
     steps: list[Step],
     available_roles: set[str],
@@ -91,6 +141,7 @@ def validate_workflow(
     max_rounds_cap: int,
     max_steps: int = MAX_GENERATED_STEPS,
     terminal_roles: set[str] | None = None,
+    require_terminal_last: bool = True,
 ) -> list[str]:
     """校验「运行时生成 / 用户自建的流程」是否安全可执行，返回错误列表（空＝通过）。
 
@@ -99,7 +150,7 @@ def validate_workflow(
       - 只引用已注册角色（白名单 available_roles）；
       - 禁止 compose / team_fanout（顶层编排原语，不允许出现在生成/自建流程里，杜绝无限递归）；
       - reflect_loop 轮数 ≤ max_rounds_cap；
-      - 必须含终端角色收尾（默认 synthesizer/aggregator；自定义可经 terminal_roles 扩展，
+      - 必须由终端角色收尾（默认 synthesizer/aggregator；自定义可经 terminal_roles 扩展，
         如把 behavior=synthesize 的自定义卡片计为终端），否则产不出报告。
     """
     terminals = terminal_roles if terminal_roles is not None else _TERMINAL_ROLES
@@ -129,6 +180,8 @@ def validate_workflow(
             errors.append(f"第 {i} 步未知步骤类型：{step.kind}")
     if not has_terminal:
         errors.append("流程缺少终端角色（如 synthesizer），无法产出报告")
+    elif require_terminal_last:
+        errors.extend(validate_workflow_steps_terminal(steps, terminal_roles=terminals))
     return errors
 
 
@@ -143,6 +196,8 @@ class WorkflowEngine:
         budget: TokenBudget | None = None,
         checkpoint_sink: Callable[[WorkflowRun], Awaitable[None]] | None = None,
         resume_run: WorkflowRun | None = None,
+        require_report: bool = False,
+        terminal_roles: set[str] | None = None,
     ) -> None:
         self.ctx = ctx
         # 角色解析器：默认从代码注册表取；编排器可注入「先查 DB 角色卡片，再回退注册表」
@@ -154,6 +209,8 @@ class WorkflowEngine:
         self._run_depth = 0
         self._checkpoint_sink = checkpoint_sink
         self._resuming = resume_run is not None
+        self._require_report = require_report
+        self._terminal_roles = terminal_roles if terminal_roles is not None else _TERMINAL_ROLES
         if resume_run is not None:
             self.runtime.restore(resume_run)
 
@@ -248,10 +305,9 @@ class WorkflowEngine:
         self.budget.update(self.ctx.tracer.total_tokens)
         return self.budget.exhausted
 
-    @staticmethod
-    def _is_terminal(step: Step) -> bool:
+    def _is_terminal(self, step: Step) -> bool:
         """能产出报告的终端步骤：预算耗尽时仍执行，保证尽力而为的报告。"""
-        return step.kind == "agent" and step.agent in _TERMINAL_ROLES
+        return step.kind == "agent" and step.agent in self._terminal_roles
 
     @staticmethod
     def _step_label(step: Step) -> str:
@@ -324,6 +380,8 @@ class WorkflowEngine:
                     if step.failure_policy == "fail_fast":
                         raise
                 await self._checkpoint(wf, bb)
+            if is_root and self._require_report and bb.report is None:
+                raise RuntimeError("工作流结束但未生成报告")
             return bb
         except asyncio.CancelledError:
             if is_root and self.runtime.run is not None:
@@ -472,6 +530,8 @@ class WorkflowEngine:
                         bb.report = child.report
                     bb.scratch.update(child.scratch)
                 await self._checkpoint(wf, bb)
+            if is_root and self._require_report and bb.report is None:
+                raise RuntimeError("工作流结束但未生成报告")
             return bb
         except asyncio.CancelledError:
             if is_root and self.runtime.run is not None:

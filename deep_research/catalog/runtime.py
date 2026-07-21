@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Protocol
 
 from ..agents.base import Agent
@@ -27,6 +28,19 @@ class CatalogSource(Protocol):
     async def get_profile_full(self, profile_id: str) -> ModelProfileFull | None: ...
     async def get_default_profile(self) -> ModelProfileFull | None: ...
     async def get_workflow_def(self, name: str) -> WorkflowDefView | None: ...
+
+
+_BUILTIN_TERMINAL_ROLES = {"synthesizer", "aggregator"}
+
+
+def terminal_roles_for_cards(cards: Iterable[AgentCardView]) -> set[str]:
+    """Return report-producing names after enabled catalog cards override built-ins."""
+    overrides = {card.name: card for card in cards if card.enabled}
+    terminals = _BUILTIN_TERMINAL_ROLES - overrides.keys()
+    terminals.update(
+        card.name for card in overrides.values() if card.behavior == "synthesize"
+    )
+    return terminals
 
 
 class CatalogRuntime:
@@ -56,6 +70,10 @@ class CatalogRuntime:
                 name=card.name, behavior=card.behavior, system_prompt=card.system_prompt
             )
         return registry_create(name)  # 回退内置注册表
+
+    @property
+    def terminal_roles(self) -> set[str]:
+        return terminal_roles_for_cards(self._cards.values())
 
     # ── 模型解析 ────────────────────────────────────────────────────────
     def resolve_llm(self, agent_name: str) -> LLM | None:

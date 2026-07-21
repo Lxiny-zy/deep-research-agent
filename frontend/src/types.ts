@@ -195,6 +195,7 @@ export interface RoleInfo {
   label: string
   icon: string
   builtin: boolean
+  produces_report?: boolean
 }
 
 export interface CreateRunRequest {

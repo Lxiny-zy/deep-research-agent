@@ -39,6 +39,8 @@ async def test_workflow_def_crud_roundtrip(cat):
 
     got = await cat.get_workflow_def("my-deep")
     assert got is not None and got.steps[0]["agent"] == "planner"  # JSON 往返保真
+    by_id = await cat.get_workflow_def_by_id(v.id)
+    assert by_id is not None and by_id.name == "my-deep"
 
     listed = await cat.list_workflow_defs()
     assert any(w.name == "my-deep" for w in listed)
@@ -52,5 +54,6 @@ async def test_workflow_def_crud_roundtrip(cat):
 
 @pytest.mark.asyncio
 async def test_missing_returns_none_and_false(cat):
+    assert await cat.get_workflow_def_by_id("nope") is None
     assert await cat.update_workflow_def("nope", WorkflowDefUpdate(description="x")) is None
     assert await cat.delete_workflow_def("nope") is False

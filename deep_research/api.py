@@ -500,26 +500,34 @@ _COMPOSABLE_BUILTINS = {"planner", "researcher", "reflector", "synthesizer", "cr
 @app.get("/api/roles", dependencies=[Depends(require_api_key)])
 async def list_roles(request: Request) -> list[dict[str, object]]:
     """可编排角色（供构建器角色选择器）：内置可组合角色 + 已启用自定义卡片。"""
+    from .catalog.runtime import terminal_roles_for_cards
     from .registry import available
 
     builtin = {n for n in available() if n in _COMPOSABLE_BUILTINS}
-    roles: list[dict[str, object]] = [
-        {"name": n, "label": n, "icon": "◆", "builtin": True} for n in sorted(builtin)
-    ]
+    roles: dict[str, dict[str, object]] = {
+        name: {
+            "name": name,
+            "label": name,
+            "icon": "◆",
+            "builtin": True,
+            "produces_report": name == "synthesizer",
+        }
+        for name in sorted(builtin)
+    }
     try:
-        for card in await request.app.state.catalog.list_agents():
-            if card.enabled and card.name not in builtin:
-                roles.append(
-                    {
-                        "name": card.name,
-                        "label": card.display_name or card.name,
-                        "icon": card.icon,
-                        "builtin": False,
-                    }
-                )
+        cards = [card for card in await request.app.state.catalog.list_agents() if card.enabled]
+        terminal_roles = terminal_roles_for_cards(cards)
+        for card in cards:
+            roles[card.name] = {
+                "name": card.name,
+                "label": card.display_name or card.name,
+                "icon": card.icon,
+                "builtin": False,
+                "produces_report": card.name in terminal_roles,
+            }
     except Exception:
         logger.exception("读取自定义角色卡片失败，仅返回内置角色")
-    return roles
+    return list(roles.values())
 
 
 @app.get("/api/config", dependencies=[Depends(require_api_key)])

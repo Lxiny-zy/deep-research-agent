@@ -74,7 +74,10 @@ export function useBehaviors() {
 
 export function useAgentMutations() {
   const qc = useQueryClient()
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['agents'] })
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['agents'] })
+    qc.invalidateQueries({ queryKey: ['roles'] })
+  }
   return {
     create: useMutation({ mutationFn: (b: AgentCardInput) => createAgent(b), onSuccess: invalidate }),
     update: useMutation({

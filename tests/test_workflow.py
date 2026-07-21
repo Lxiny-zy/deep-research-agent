@@ -96,6 +96,12 @@ def test_validate_workflow_rules_and_custom_terminal():
         for e in validate_workflow([Step(kind="agent", agent="planner")], avail, max_rounds_cap=2)
     )
 
+    # 报告角色存在但不收尾：会在研究结果写入前生成空报告
+    wrong_order = [Step(agent="synthesizer"), Step(agent="researcher")]
+    assert any(
+        "收尾" in e for e in validate_workflow(wrong_order, avail, max_rounds_cap=2)
+    )
+
     # 禁止顶层编排原语出现在自建流程里
     assert validate_workflow([Step(kind="compose", agent="coordinator")], avail, max_rounds_cap=2)
 

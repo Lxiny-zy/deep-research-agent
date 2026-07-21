@@ -30,7 +30,13 @@ from .persistence.repository import ResearchRepository
 from .scheduler import research_dag
 from .token_budget import TokenBudget
 from .tools.base import SearchTool
-from .workflow import Step, Workflow, WorkflowEngine
+from .workflow import (
+    Step,
+    Workflow,
+    WorkflowEngine,
+    validate_workflow_graph_terminal,
+    validate_workflow_steps_terminal,
+)
 from .workflows import WORKFLOWS, get_workflow
 
 if TYPE_CHECKING:
@@ -195,14 +201,33 @@ class DeepResearchAgent:
             budget=budget,
             checkpoint_sink=save_checkpoint,
             resume_run=self._resume_execution,
+            require_report=True,
+            terminal_roles=cr.terminal_roles if cr is not None else None,
         )
         if self._resume_execution is not None and self._resume_execution.definition:
             wf = Workflow.model_validate(self._resume_execution.definition)
         else:
             wf = await self._resolve_workflow()
+        if wf.nodes:
+            errors = validate_workflow_graph_terminal(
+                wf.nodes,
+                wf.edges,
+                terminal_roles=cr.terminal_roles if cr is not None else None,
+            )
+            if errors:
+                raise ValueError("工作流不合法：" + "；".join(errors))
+        elif wf.name not in WORKFLOWS:
+            errors = validate_workflow_steps_terminal(
+                wf.steps,
+                terminal_roles=cr.terminal_roles if cr is not None else None,
+            )
+            if errors:
+                raise ValueError("工作流不合法：" + "；".join(errors))
         await engine.run(wf, bb)
 
-        report = bb.report or Report(query=query, markdown="（未生成报告）", citations=[])
+        if bb.report is None:  # WorkflowEngine(require_report=True) should have raised first.
+            raise RuntimeError("工作流结束但未生成报告")
+        report = bb.report
         if self.repo is not None and run_id is not None:
             if engine.runtime.run is not None:
                 await self.repo.save_orchestration(run_id, engine.runtime.run)

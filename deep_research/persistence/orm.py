@@ -21,6 +21,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -181,10 +182,14 @@ class RunTagRow(Base):
 
 class WorkflowRunRow(Base):
     __tablename__ = "workflow_run"
+    __table_args__ = (
+        UniqueConstraint("research_run_id"),
+        Index("ix_workflow_run_research_run_id", "research_run_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     research_run_id: Mapped[str] = mapped_column(
-        ForeignKey("research_run.id", ondelete="CASCADE"), unique=True, index=True
+        ForeignKey("research_run.id", ondelete="CASCADE")
     )
     workflow_name: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(20))

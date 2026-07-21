@@ -68,6 +68,8 @@ async def test_catalog_runtime_resolves_card_and_falls_back():
             model_profile_id="p1",
         ),
         AgentCardView(id="2", name="disabled-one", behavior="plan", enabled=False),
+        AgentCardView(id="3", name="synthesizer", behavior="research", enabled=True),
+        AgentCardView(id="4", name="my-writer", behavior="synthesize", enabled=True),
     ]
     profiles = {
         "p1": ModelProfileFull(id="p1", name="cheap", base_url=None, api_key="k", model="m")
@@ -90,4 +92,5 @@ async def test_catalog_runtime_resolves_card_and_falls_back():
     # 绑定档案的卡片 → 解析出专属 LLM；未知角色 → None（回退默认）
     assert rt.resolve_llm("my-critic") is not None
     assert rt.resolve_llm("unknown") is None
+    assert rt.terminal_roles == {"aggregator", "my-writer"}
     await rt.aclose()

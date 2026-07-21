@@ -317,6 +317,11 @@ class CatalogRepository:
             row = await s.scalar(select(orm.WorkflowDefRow).where(orm.WorkflowDefRow.name == name))
             return _workflow_view(row) if row else None
 
+    async def get_workflow_def_by_id(self, workflow_id: str) -> WorkflowDefView | None:
+        async with self._sm() as s:
+            row = await s.get(orm.WorkflowDefRow, workflow_id)
+            return _workflow_view(row) if row else None
+
     async def create_workflow_def(self, payload: WorkflowDefCreate) -> WorkflowDefView:
         async with self._sm() as s, s.begin():
             row = orm.WorkflowDefRow(

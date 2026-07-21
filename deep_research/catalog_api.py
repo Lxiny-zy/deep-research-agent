@@ -168,31 +168,51 @@ def _reject_builtin_name(name: str) -> None:
 
 
 async def _validate_custom_steps(
-    steps: list[dict], catalog: CatalogRepository, settings: Settings
+    steps: list[dict],
+    catalog: CatalogRepository,
+    settings: Settings,
+    *,
+    nodes: list[dict] | None = None,
+    edges: list[dict] | None = None,
 ) -> None:
     """校验自定义工作流的 steps 是否安全可执行（复用引擎的 validate_workflow）；不合法抛 422。"""
+    from .catalog.runtime import terminal_roles_for_cards
     from .registry import available
-    from .workflow import Step, validate_workflow
+    from .workflow import Step, validate_workflow, validate_workflow_graph_terminal
 
     enabled_cards = [c for c in await catalog.list_agents() if c.enabled]
     # 可编排角色 = 内置注册角色 + 已启用自定义卡片名（运行期 resolve_agent 能解析这两类）
     available_roles = set(available()) | {c.name for c in enabled_cards}
-    # 终端角色 = 内置终端 + behavior=synthesize 的自定义卡片（它们也能产出报告）
-    terminal_roles = {"synthesizer", "aggregator"} | {
-        c.name for c in enabled_cards if c.behavior == "synthesize"
-    }
+    # 终端角色按最终生效的角色卡片行为计算，避免同名覆盖造成误判。
+    terminal_roles = terminal_roles_for_cards(enabled_cards)
     try:
         parsed = [Step.model_validate(s) for s in steps]
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"步骤格式非法：{e}") from e
     errors = validate_workflow(
-        parsed, available_roles, max_rounds_cap=settings.max_rounds, terminal_roles=terminal_roles
+        parsed,
+        available_roles,
+        max_rounds_cap=settings.max_rounds,
+        terminal_roles=terminal_roles,
+        require_terminal_last=nodes is None,
     )
+    if nodes is not None and edges is not None:
+        errors.extend(
+            validate_workflow_graph_terminal(
+                nodes,
+                edges,
+                terminal_roles=terminal_roles,
+            )
+        )
     if errors:
         raise HTTPException(status_code=422, detail="工作流不合法：" + "；".join(errors))
 
 
-def _normalize_graph_payload(payload: WorkflowDefCreate | WorkflowDefUpdate) -> list[dict] | None:
+def _normalize_graph_payload(
+    payload: WorkflowDefCreate | WorkflowDefUpdate,
+    *,
+    existing: WorkflowDefView | None = None,
+) -> list[dict] | None:
     """Keep legacy steps and the graph representation synchronized during migration."""
     from .orchestration import (
         WorkflowEdge,
@@ -205,24 +225,44 @@ def _normalize_graph_payload(payload: WorkflowDefCreate | WorkflowDefUpdate) -> 
 
     fields = payload.model_fields_set
     try:
-        if "nodes" in fields:
-            nodes = [WorkflowNode.model_validate(node) for node in (payload.nodes or [])]
-            edges = [WorkflowEdge.model_validate(edge) for edge in (payload.edges or [])]
+        if fields & {"nodes", "edges"}:
+            existing_nodes = existing.nodes if existing is not None else []
+            existing_edges = existing.edges if existing is not None else []
+            if existing is not None and not existing_nodes and existing.steps:
+                legacy_nodes, legacy_edges = steps_to_graph(existing.steps)
+                existing_nodes = [node.model_dump() for node in legacy_nodes]
+                existing_edges = [edge.model_dump() for edge in legacy_edges]
+            raw_nodes = payload.nodes if "nodes" in fields else existing_nodes
+            raw_edges = payload.edges if "edges" in fields else existing_edges
+            nodes = [WorkflowNode.model_validate(node) for node in (raw_nodes or [])]
+            edges = [WorkflowEdge.model_validate(edge) for edge in (raw_edges or [])]
             for edge in edges:
                 evaluate_condition(edge.condition, {})
             steps = graph_topological_steps(nodes, edges)
             payload.steps = steps
             payload.nodes = [node.model_dump() for node in nodes]
             payload.edges = [edge.model_dump() for edge in edges]
-            payload.viewport = WorkflowViewport.model_validate(payload.viewport or {}).model_dump()
+            raw_viewport = (
+                payload.viewport
+                if "viewport" in fields
+                else (existing.viewport if existing is not None else {})
+            )
+            payload.viewport = WorkflowViewport.model_validate(raw_viewport or {}).model_dump()
             return steps
         if "steps" in fields or isinstance(payload, WorkflowDefCreate):
             steps = payload.steps or []
             nodes, edges = steps_to_graph(steps)
             payload.nodes = [node.model_dump() for node in nodes]
             payload.edges = [edge.model_dump() for edge in edges]
-            payload.viewport = WorkflowViewport().model_dump()
+            raw_viewport = (
+                payload.viewport
+                if "viewport" in fields
+                else (existing.viewport if existing is not None else {})
+            )
+            payload.viewport = WorkflowViewport.model_validate(raw_viewport or {}).model_dump()
             return steps
+        if "viewport" in fields:
+            payload.viewport = WorkflowViewport.model_validate(payload.viewport or {}).model_dump()
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"工作流图非法：{exc}") from exc
     return None
@@ -397,7 +437,13 @@ async def list_custom_workflows(request: Request) -> list[WorkflowDefView]:
 async def create_custom_workflow(req: WorkflowDefCreate, request: Request) -> WorkflowDefView:
     _reject_builtin_name(req.name)
     steps = _normalize_graph_payload(req) or []
-    await _validate_custom_steps(steps, _catalog(request), request.app.state.settings)
+    await _validate_custom_steps(
+        steps,
+        _catalog(request),
+        request.app.state.settings,
+        nodes=req.nodes,
+        edges=req.edges,
+    )
     return await _catalog(request).create_workflow_def(req)
 
 
@@ -405,10 +451,20 @@ async def create_custom_workflow(req: WorkflowDefCreate, request: Request) -> Wo
 async def update_custom_workflow(
     workflow_id: str, req: WorkflowDefUpdate, request: Request
 ) -> WorkflowDefView:
-    steps = _normalize_graph_payload(req)
+    catalog = _catalog(request)
+    existing = await catalog.get_workflow_def_by_id(workflow_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    steps = _normalize_graph_payload(req, existing=existing)
     if steps is not None:
-        await _validate_custom_steps(steps, _catalog(request), request.app.state.settings)
-    view = await _catalog(request).update_workflow_def(workflow_id, req)
+        await _validate_custom_steps(
+            steps,
+            catalog,
+            request.app.state.settings,
+            nodes=req.nodes,
+            edges=req.edges,
+        )
+    view = await catalog.update_workflow_def(workflow_id, req)
     if view is None:
         raise HTTPException(status_code=404, detail="workflow not found")
     return view

@@ -5,6 +5,47 @@ const NODE_SPACING_Y = 150
 const NODE_COLLISION_X = 270
 const NODE_COLLISION_Y = 132
 
+/** Return the nodes with no outgoing dependency (the graph's terminal nodes). */
+export function terminalNodeKeys(
+  nodeKeys: string[],
+  dependencies: Record<string, string[]>,
+): Set<string> {
+  const validKeys = new Set(nodeKeys)
+  const sources = new Set<string>()
+  for (const [target, parents] of Object.entries(dependencies)) {
+    if (!validKeys.has(target)) continue
+    for (const source of parents) {
+      if (validKeys.has(source)) sources.add(source)
+    }
+  }
+  return new Set(nodeKeys.filter((key) => !sources.has(key)))
+}
+
+export function hasSingleTerminalAgent(
+  steps: Array<{ kind: string; agent?: string }>,
+  nodeKeys: string[],
+  dependencies: Record<string, string[]>,
+  agents: string | ReadonlySet<string>,
+): boolean {
+  const terminals = terminalNodeKeys(nodeKeys, dependencies)
+  const reportAgents = typeof agents === 'string' ? new Set([agents]) : agents
+  const matching = nodeKeys.filter(
+    (_key, index) =>
+      steps[index]?.kind === 'agent' && reportAgents.has(steps[index]?.agent ?? ''),
+  )
+  return terminals.size === 1 && matching.length === 1 && terminals.has(matching[0])
+}
+
+export function reportAgentNames(
+  roles: Array<{ name: string; produces_report?: boolean }>,
+): Set<string> {
+  return new Set(
+    roles
+      .filter((role) => role.produces_report ?? role.name === 'synthesizer')
+      .map((role) => role.name),
+  )
+}
+
 export function findAvailableNodePosition(
   existing: CanvasPosition[],
   anchor?: CanvasPosition,

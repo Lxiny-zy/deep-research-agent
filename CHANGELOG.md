@@ -33,6 +33,11 @@
 
 ### Fixed
 
+- Required the single report-producing workflow role, including custom synthesize cards, to be the
+  graph terminal in the editor, API, and runtime; partial graph updates are merged and revalidated,
+  and runs without a report can no longer finish successfully.
+- Aligned five catalog/workflow timestamp columns with ORM non-nullability through an Alembic
+  migration that backfills existing NULL values before enforcing `NOT NULL`.
 - Fixed workflow drag-and-drop negotiation, preserved disabled workflow state on edits, and removed stale edge conditions when dependencies are unchecked.
 - Fixed runtime settings being ignored by the legacy research stream, kept API keys out of SSE URLs, and made Docker PostgreSQL passwords safe for reserved URL characters.
 - Fixed welcome-page headline collisions, project-capability navigation, card alignment, hover overflow, and narrow-device form/modal overflow.

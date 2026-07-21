@@ -6,7 +6,11 @@ import {
   primaryComponentKeys,
   workflowPathKeys,
 } from './workflowCanvasLogic'
-import { findAvailableNodePosition } from './workflowEditorLogic'
+import {
+  findAvailableNodePosition,
+  hasSingleTerminalAgent,
+  reportAgentNames,
+} from './workflowEditorLogic'
 
 describe('workflow canvas interaction logic', () => {
   it('places an added node beside the selected node without overlapping existing cards', () => {
@@ -31,6 +35,102 @@ describe('workflow canvas interaction logic', () => {
 
     expect(position).not.toEqual({ x: 500, y: 200 })
     expect(Math.abs(position.x - 500) >= 270 || Math.abs(position.y - 200) >= 132).toBe(true)
+  })
+
+  it('requires the synthesizer to have no downstream node', () => {
+    const steps = [
+      { kind: 'agent', agent: 'synthesizer' },
+      { kind: 'agent', agent: 'researcher' },
+    ]
+    const nodeKeys = ['synth', 'research']
+
+    expect(
+      hasSingleTerminalAgent(
+        steps,
+        nodeKeys,
+        { synth: [], research: ['synth'] },
+        'synthesizer',
+      ),
+    ).toBe(false)
+    expect(
+      hasSingleTerminalAgent(
+        steps,
+        nodeKeys,
+        { synth: ['research'], research: [] },
+        'synthesizer',
+      ),
+    ).toBe(true)
+  })
+
+  it('requires every branch to merge into a synthesizer', () => {
+    const steps = [
+      { kind: 'agent', agent: 'planner' },
+      { kind: 'agent', agent: 'researcher' },
+      { kind: 'agent', agent: 'synthesizer' },
+    ]
+
+    expect(
+      hasSingleTerminalAgent(
+        steps,
+        ['planner', 'research', 'synth'],
+        { planner: [], research: ['planner'], synth: ['planner'] },
+        'synthesizer',
+      ),
+    ).toBe(false)
+  })
+
+  it('rejects an early synthesizer even when another synthesizer is terminal', () => {
+    const steps = [
+      { kind: 'agent', agent: 'synthesizer' },
+      { kind: 'agent', agent: 'researcher' },
+      { kind: 'agent', agent: 'synthesizer' },
+    ]
+
+    expect(
+      hasSingleTerminalAgent(
+        steps,
+        ['early-synth', 'research', 'final-synth'],
+        { 'early-synth': [], research: ['early-synth'], 'final-synth': ['research'] },
+        'synthesizer',
+      ),
+    ).toBe(false)
+  })
+
+  it('supports custom report roles while counting every report-producing node', () => {
+    const reportAgents = reportAgentNames([
+      { name: 'synthesizer' },
+      { name: 'my-writer', produces_report: true },
+      { name: 'critic', produces_report: false },
+    ])
+    expect([...reportAgents]).toEqual(['synthesizer', 'my-writer'])
+    expect(
+      hasSingleTerminalAgent(
+        [
+          { kind: 'agent', agent: 'researcher' },
+          { kind: 'agent', agent: 'my-writer' },
+        ],
+        ['research', 'writer'],
+        { research: [], writer: ['research'] },
+        reportAgents,
+      ),
+    ).toBe(true)
+    expect(
+      hasSingleTerminalAgent(
+        [
+          { kind: 'agent', agent: 'my-writer' },
+          { kind: 'agent', agent: 'synthesizer' },
+        ],
+        ['writer', 'synth'],
+        { writer: [], synth: ['writer'] },
+        reportAgents,
+      ),
+    ).toBe(false)
+  })
+
+  it('lets explicit capability metadata override the legacy synthesizer fallback', () => {
+    expect(
+      reportAgentNames([{ name: 'synthesizer', produces_report: false }]),
+    ).toEqual(new Set())
   })
 
   it('rejects duplicate and cyclic connections', () => {

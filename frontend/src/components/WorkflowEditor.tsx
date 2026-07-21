@@ -1,6 +1,10 @@
 import { useMemo, useRef, useState } from 'react'
 import WorkflowFlowCanvas from './WorkflowFlowCanvas'
-import { findAvailableNodePosition } from './workflowEditorLogic'
+import {
+  findAvailableNodePosition,
+  hasSingleTerminalAgent,
+  reportAgentNames,
+} from './workflowEditorLogic'
 import type { RoleInfo, WorkflowDef, WorkflowDefInput, WorkflowStep } from '../types'
 
 interface Props {
@@ -95,10 +99,19 @@ export default function WorkflowEditor({
 
   const selected = selectedNodeId ? nodeKeys.indexOf(selectedNodeId) : -1
   const current = selected >= 0 ? steps[selected] : undefined
-  const hasSynth = steps.some((step) => step.kind === 'agent' && step.agent === 'synthesizer')
+  const reportAgents = useMemo(() => reportAgentNames(roles), [roles])
+  const hasReportAgent = steps.some(
+    (step) => step.kind === 'agent' && reportAgents.has(step.agent ?? ''),
+  )
+  const hasSingleTerminalReportAgent = hasSingleTerminalAgent(
+    steps,
+    nodeKeys,
+    dependencies,
+    reportAgents,
+  )
   const validation = useMemo(() => {
     if (!steps.length) return '画布至少需要一个节点'
-    if (!hasSynth) return '缺少可产出报告的 Synthesizer 节点'
+    if (!hasReportAgent) return '缺少可产出报告的终端角色节点'
     if (steps.length > 1) {
       const connected = new Set<string>()
       const neighbors = new Map<string, string[]>()
@@ -119,8 +132,9 @@ export default function WorkflowEditor({
       }
       if (connected.size !== nodeKeys.length) return '工作流包含未连接节点，请先完成节点连线'
     }
+    if (!hasSingleTerminalReportAgent) return '所有分支都必须汇入唯一的终端报告角色节点'
     return null
-  }, [dependencies, hasSynth, nodeKeys, steps.length])
+  }, [dependencies, hasReportAgent, hasSingleTerminalReportAgent, nodeKeys, steps.length])
 
   function patchStep(index: number, patch: Partial<WorkflowStep>) {
     setSteps((prev) => prev.map((step, i) => (i === index ? { ...step, ...patch } : step)))
