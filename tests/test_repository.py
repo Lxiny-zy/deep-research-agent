@@ -10,6 +10,7 @@ import os
 
 import pytest
 from sqlalchemy import event as sa_event
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -23,7 +24,12 @@ from deep_research.models import (
 )
 from deep_research.observability import Event
 from deep_research.orchestration import OrchestrationRuntime, RunStatus, StepStatus
-from deep_research.persistence.db import create_all, make_engine, make_sessionmaker
+from deep_research.persistence.db import (
+    create_all,
+    make_engine,
+    make_sessionmaker,
+    prepare_sqlite_schema,
+)
 from deep_research.persistence.memory_repository import InMemoryRepository
 from deep_research.persistence.sql_repository import SqlRepository
 
@@ -132,6 +138,67 @@ async def test_crud_roundtrip(repo):
 
     summaries = await repo.list_runs()
     assert summaries[0].id == run_id
+
+
+@pytest.mark.asyncio
+async def test_prepare_sqlite_schema_repairs_legacy_finding_columns(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    database_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
+    engine = make_engine(database_url)
+    await create_all(engine)
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE finding"))
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE finding (
+                    id VARCHAR(36) NOT NULL PRIMARY KEY,
+                    result_id VARCHAR(36) NOT NULL,
+                    statement TEXT NOT NULL,
+                    source_url TEXT NOT NULL,
+                    confidence FLOAT NOT NULL DEFAULT 0.7,
+                    FOREIGN KEY(result_id) REFERENCES research_result (id) ON DELETE CASCADE
+                )
+                """
+            )
+        )
+
+    await prepare_sqlite_schema(engine, database_url)
+    repo = SqlRepository(make_sessionmaker(engine))
+    run_id = await repo.create_run("legacy")
+    await repo.save_result(
+        run_id,
+        ResearchResult(
+            sub_question="a",
+            findings=[
+                Finding(
+                    statement="s",
+                    source_url="https://a.com",
+                    evidence_quote="legacy quote",
+                    verification=EvidenceVerification(
+                        status="verified",
+                        method="normalized_quote",
+                        source_content_hash="hash",
+                        reason="ok",
+                        semantic_status="supported",
+                        semantic_confidence=0.9,
+                        semantic_reason="ok",
+                        claim_id="c1",
+                        consistency_status="clear",
+                    ),
+                )
+            ],
+        ),
+    )
+    detail = await repo.get_run(run_id)
+    assert detail is not None
+    assert detail.results[0].findings[0].evidence_quote == "legacy quote"
+    assert detail.results[0].findings[0].verification.claim_id == "c1"
+
+    async with engine.begin() as conn:
+        version = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+    assert version == "0013"
+    await engine.dispose()
 
 
 @pytest.mark.asyncio

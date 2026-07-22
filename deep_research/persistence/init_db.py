@@ -9,12 +9,16 @@ from __future__ import annotations
 import asyncio
 
 from ..config import Settings
-from .db import create_all, make_engine
+from .db import create_all, make_engine, prepare_sqlite_schema
 
 
 async def init() -> None:
-    engine = make_engine(Settings().database_url)
-    await create_all(engine)
+    settings = Settings()
+    engine = make_engine(settings.database_url)
+    if settings.database_url.startswith("sqlite"):
+        await prepare_sqlite_schema(engine, settings.database_url)
+    else:
+        await create_all(engine)
     await engine.dispose()
 
 

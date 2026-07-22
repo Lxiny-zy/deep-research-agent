@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
+from .guardrails import ClaimConsistencyVerifier, verify_claim_consistency
 from .models import SubQuestion
 from .orchestration import (
     OrchestrationRuntime,
@@ -111,11 +112,7 @@ def validate_workflow_graph_terminal(
             terminal_steps.append(step)
         if step.kind == "agent" and step.agent in terminals:
             report_steps.append((node.id, step))
-    if (
-        len(terminal_steps) == 1
-        and len(report_steps) == 1
-        and report_steps[0][0] not in outgoing
-    ):
+    if len(terminal_steps) == 1 and len(report_steps) == 1 and report_steps[0][0] not in outgoing:
         return []
     return ["所有工作流分支都必须汇入唯一的终端报告角色（如 Synthesizer）"]
 
@@ -655,6 +652,13 @@ class WorkflowEngine:
         for child in children:  # 串行合并，避免并发写父黑板的竞态
             if child is not None:
                 bb.results += child.results
+        await verify_claim_consistency(
+            bb.results,
+            ClaimConsistencyVerifier(),
+            self.ctx.llm_for("evidence_verifier"),
+            self.ctx.tracer,
+            stage="AGGREGATOR",
+        )
         await self._resolve(step.aggregator).step(bb, self.ctx)
 
     async def _reflect_loop(self, step: Step, bb: Blackboard) -> None:

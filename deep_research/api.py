@@ -39,7 +39,7 @@ from .config import Settings
 from .observability import Event, EventHub
 from .orchestration import WorkflowRun
 from .orchestrator import DeepResearchAgent
-from .persistence.db import create_all, make_engine, make_sessionmaker
+from .persistence.db import make_engine, make_sessionmaker, prepare_sqlite_schema
 from .persistence.repository import ResearchRepository, RunDetail, RunSummary, TagCount
 from .persistence.sql_repository import SqlRepository
 
@@ -225,9 +225,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("应用持久化配置失败，回退到环境变量配置")
     engine = make_engine(settings.database_url)
-    # SQLite（本地/测试）自动建表；PostgreSQL（生产）由 alembic upgrade head 负责
+    # SQLite 本地启动也准备 schema，避免旧 create_all 库升级后缺列；PostgreSQL 由 entrypoint 迁移。
     if settings.database_url.startswith("sqlite"):
-        await create_all(engine)
+        await prepare_sqlite_schema(engine, settings.database_url)
     app.state.settings = settings
     app.state.engine = engine
     app.state.repo = SqlRepository(make_sessionmaker(engine))

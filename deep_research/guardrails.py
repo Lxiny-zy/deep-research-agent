@@ -12,11 +12,11 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import unquote, unquote_plus, urlsplit
 
 from pydantic import BaseModel, Field
 
-from .models import EvidenceVerification, Finding, Source
+from .models import EvidenceVerification, Finding, ResearchResult, Source
 
 PolicyVerdict = Literal["allow", "quarantine", "deny"]
 
@@ -36,6 +36,7 @@ class SourcePolicy:
     """First-pass policy for sources crossing the search-to-LLM trust boundary."""
 
     _NON_PUBLIC_SUFFIXES = (".internal", ".local", ".localhost", ".home", ".lan")
+    _IPV4_NUMERIC_LABEL = re.compile(r"(?:0[xX][0-9a-fA-F]+|[0-9]+)")
     _INJECTION_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         (
             "ignore_previous_instructions",
@@ -76,7 +77,13 @@ class SourcePolicy:
                 reason_codes=url_reasons,
             )
 
-        untrusted_text = f"{source.title}\n{source.content}"
+        untrusted_text = "\n".join(
+            [
+                source.title,
+                source.content,
+                self._url_untrusted_text(source.url),
+            ]
+        )
         matched = [
             code for code, pattern in self._INJECTION_RULES if pattern.search(untrusted_text)
         ]
@@ -109,8 +116,38 @@ class SourcePolicy:
         try:
             address = ipaddress.ip_address(hostname)
         except ValueError:
+            if self._looks_like_ambiguous_ipv4(hostname):
+                return ["ambiguous_ip_hostname"]
             return [] if _is_valid_public_hostname(hostname) else ["invalid_hostname"]
-        return [] if address.is_global else ["non_public_ip"]
+        return [] if _is_public_web_ip(address) else ["non_public_ip"]
+
+    def _url_untrusted_text(self, url: str) -> str:
+        """Return raw and decoded URL text that will cross into model context."""
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            return url
+
+        parts = [url, parsed.path, parsed.query, parsed.fragment]
+        decoded_parts: list[str] = []
+        for part in parts:
+            queue = [part, part.replace("+", " ")]
+            for decoder in (unquote, unquote_plus):
+                current = part
+                for _ in range(2):
+                    decoded = decoder(current)
+                    if decoded == current:
+                        break
+                    queue.append(decoded)
+                    current = decoded
+            decoded_parts.extend(queue)
+        return "\n".join(dict.fromkeys([*parts, *decoded_parts]))
+
+    def _looks_like_ambiguous_ipv4(self, hostname: str) -> bool:
+        labels = hostname.split(".")
+        return len(labels) == 4 and all(
+            self._IPV4_NUMERIC_LABEL.fullmatch(label) for label in labels
+        )
 
 
 @dataclass(frozen=True)
@@ -266,9 +303,7 @@ class ClaimConsistencyVerifier:
 
     async def verify_batch(self, findings: list[Finding], llm: Any) -> list[Finding]:
         eligible = [
-            _ensure_claim_id(finding)
-            for finding in findings
-            if _semantically_supported(finding)
+            _ensure_claim_id(finding) for finding in findings if _semantically_supported(finding)
         ]
         if not eligible:
             return list(findings)
@@ -347,6 +382,44 @@ def report_eligible(finding: Finding) -> bool:
     return verification.status == "verified" and verification.semantic_status == "supported"
 
 
+async def verify_claim_consistency(
+    results: list[ResearchResult],
+    verifier: ClaimConsistencyVerifier,
+    llm: Any,
+    tracer: Any | None = None,
+    *,
+    stage: str = "RESEARCHER",
+) -> None:
+    """Run consistency verification over all report-eligible findings in place."""
+    slots: list[tuple[int, int, Finding]] = []
+    for result_index, result in enumerate(results):
+        for finding_index, finding in enumerate(result.findings):
+            if report_eligible(finding):
+                slots.append((result_index, finding_index, finding))
+    if not slots:
+        return
+
+    updated = await verifier.verify_batch(
+        [finding for _, _, finding in slots],
+        llm,
+    )
+    for (result_index, finding_index, _), finding in zip(slots, updated, strict=True):
+        results[result_index].findings[finding_index] = finding
+
+    if tracer is None:
+        return
+    counts: dict[str, int] = {}
+    for finding in updated:
+        status = finding.verification.consistency_status
+        counts[status] = counts.get(status, 0) + 1
+    tracer.emit(
+        stage,
+        "info",
+        f"claim consistency checked: {counts}",
+        data={"category": "claim_consistency", "counts": counts},
+    )
+
+
 def _normalize_text(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return " ".join(normalized.split())
@@ -361,6 +434,18 @@ def _is_valid_public_hostname(hostname: str) -> bool:
         return False
     label_pattern = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.I)
     return all(label_pattern.fullmatch(label) for label in ascii_hostname.split("."))
+
+
+def _is_public_web_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return (
+        address.is_global
+        and not address.is_private
+        and not address.is_loopback
+        and not address.is_link_local
+        and not address.is_multicast
+        and not address.is_reserved
+        and not address.is_unspecified
+    )
 
 
 def _claim_id(finding: Finding) -> str:
@@ -428,6 +513,7 @@ def _with_consistency(
 
 
 def _same_claim(left: Finding, right: Finding) -> bool:
-    return _ensure_claim_id(left).verification.claim_id == _ensure_claim_id(
-        right
-    ).verification.claim_id
+    return (
+        _ensure_claim_id(left).verification.claim_id
+        == _ensure_claim_id(right).verification.claim_id
+    )

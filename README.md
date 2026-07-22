@@ -11,11 +11,11 @@
 - **多 Agent 协作**：Planner / Researcher / Reflector / Synthesizer 各司其职，职责清晰。
 - **并行 fan-out**：子问题用 `asyncio` 并发检索，墙钟时间 ≈ 最慢的一条链，而非求和。
 - **反思循环**：Reflector 自评证据是否充分，不足则自动补洞（loop-until-sufficient）。
-- **来源策略门禁**：检索内容进入 LLM 前检查 URL scheme、非公网地址、嵌入凭据和中英文 Prompt Injection 信号；隔离/拒绝决策进入结构化事件审计。
+- **来源策略门禁**：检索内容进入 LLM 前检查 URL scheme、非公网/歧义 IP、嵌入凭据，以及网页标题/正文/URL path/query/fragment 中的中英文 Prompt Injection 信号；隔离/拒绝决策进入结构化事件审计。
 - **论断证据门禁**：Finding 必须携带来源原文 `evidence_quote`；程序执行归一化逐字匹配并记录内容哈希，只有 `verified` 且语义判定为 `supported` 的论断能进入 Reflector / Synthesizer 和最终引用。
 - **论断一致性标记**：程序为已支持论断生成稳定 `claim_id`，再做跨论断矛盾检测；冲突不会被静默丢弃，而是以 `conflicted`、反向 claim 链接和原因进入审计与报告素材。
 - **流式可观测**：SSE 把每个 Agent 的动作实时推到浏览器；内置 Tracer 统计耗时 / token。
-- **持久化与回放**：每次研究全过程落库（计划 / 结果 / 报告 / 事件）；提供历史列表、详情、SSE 事件回放。仓储接口双实现（内存 / async SQLAlchemy），本地 SQLite 零配置、生产切 PostgreSQL，Alembic 管 schema 版本。
+- **持久化与回放**：每次研究全过程落库（计划 / 结果 / 报告 / 事件）；提供历史列表、详情、SSE 事件回放。仓储接口双实现（内存 / async SQLAlchemy），本地 SQLite 零配置并在启动时准备 schema，生产切 PostgreSQL，Alembic 管 schema 版本。
 - **provider 无关**：任意 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / GLM / Moonshot …）。
 - **可测试**：依赖注入（LLM / 检索后端可替换为假实现），单测无需密钥与网络。
 - **自动化评估**：内置 LLM-as-judge，从覆盖度/可靠性/深度/可读性四维给报告打分。
@@ -201,7 +201,7 @@ make migrate            # = alembic upgrade head，应用到最新版本
 make revision m="说明"  # = alembic revision --autogenerate，按模型变更生成迁移
 ```
 
-> SQLite 本地 / 单测走 `create_all` 快速建表；生产 PostgreSQL 用 `alembic upgrade head`（容器 entrypoint 已自动执行）。
+> API 启动时会为本地 SQLite 准备 schema：新库/已有 Alembic 库走迁移，历史 `create_all` 旧库会补齐新增验证列并 stamp 到当前 head；单测仍可直接用 `create_all` 快速建临时库。生产 PostgreSQL 用 `alembic upgrade head`（容器 entrypoint 已自动执行）。
 
 ## 自动化评估
 

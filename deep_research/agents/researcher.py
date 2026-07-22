@@ -12,6 +12,7 @@ from ..guardrails import (
     SemanticEvidenceVerifier,
     SourcePolicy,
     report_eligible,
+    verify_claim_consistency,
 )
 from ..llm import LLM
 from ..models import Finding, FindingList, ResearchResult
@@ -82,7 +83,13 @@ class Researcher:
                 return await self.run(question, context_findings=context_findings)
 
         bb.results += await research_dag(pending, _one, ctx.tracer)
-        await self._verify_consistency(bb.results)
+        await verify_claim_consistency(
+            bb.results,
+            self.consistency_verifier,
+            self.verification_llm,
+            self.tracer,
+            stage="RESEARCHER",
+        )
         return bb
 
     async def run(
@@ -177,33 +184,6 @@ class Researcher:
             },
         )
         return ResearchResult(sub_question=sub_question, findings=findings)
-
-    async def _verify_consistency(self, results: list[ResearchResult]) -> None:
-        slots: list[tuple[int, int, Finding]] = []
-        for result_index, result in enumerate(results):
-            for finding_index, finding in enumerate(result.findings):
-                if report_eligible(finding):
-                    slots.append((result_index, finding_index, finding))
-        if not slots:
-            return
-
-        updated = await self.consistency_verifier.verify_batch(
-            [finding for _, _, finding in slots],
-            self.verification_llm,
-        )
-        for (result_index, finding_index, _), finding in zip(slots, updated, strict=True):
-            results[result_index].findings[finding_index] = finding
-
-        counts: dict[str, int] = {}
-        for finding in updated:
-            status = finding.verification.consistency_status
-            counts[status] = counts.get(status, 0) + 1
-        self.tracer.emit(
-            "RESEARCHER",
-            "info",
-            f"claim consistency checked: {counts}",
-            data={"category": "claim_consistency", "counts": counts},
-        )
 
 
 def _semantic_counts(findings: list[Finding]) -> dict[str, int]:

@@ -43,6 +43,12 @@
 
 ### Fixed
 
+- Scanned raw and decoded source URL path/query/fragment for prompt-injection signals before
+  sources enter LLM context, and rejected multicast, non-public, and ambiguous numeric IP hosts.
+- Re-ran claim consistency verification after `team_fanout` child results are merged so cross-team
+  contradictions are marked before aggregation.
+- Prepared local SQLite schemas during API startup, including repair for legacy `create_all`
+  databases missing the persisted evidence/semantic verification columns.
 - Required the single report-producing workflow role, including custom synthesize cards, to be the
   graph terminal in the editor, API, and runtime; partial graph updates are merged and revalidated,
   and runs without a report can no longer finish successfully.

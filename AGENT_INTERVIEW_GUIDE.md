@@ -67,7 +67,7 @@
 
 #### 简历精炼版
 
-- 实现“问题拆解—依赖检索—来源门禁—证据验证—反思补洞—引用综合”的闭环：对子问题进行 DAG 并行检索，在内容进入 LLM 前执行 URL/Prompt Injection 策略；要求 Finding 携带来源原文 quote，由程序验证匹配、语义支持和跨论断一致性，只有 `verified + supported` 论断可进入报告；通过 Reflector 有界补充证据，并以 LLM-as-judge 对比工作流质量/Token 成本。
+- 实现“问题拆解—依赖检索—来源门禁—证据验证—反思补洞—引用综合”的闭环：对子问题进行 DAG 并行检索，在内容进入 LLM 前执行 URL 与 Prompt Injection 策略（包括 URL path/query/fragment）；要求 Finding 携带来源原文 quote，由程序验证匹配、语义支持和跨论断一致性，只有 `verified + supported` 论断可进入报告；通过 Reflector 有界补充证据，并以 LLM-as-judge 对比工作流质量/Token 成本。
 
 #### 项目解决了什么问题
 
@@ -92,7 +92,7 @@
    - `Semaphore` 控制最大检索并发，避免打爆模型或搜索 API。
 
 3. **引用与来源约束**
-   - SourcePolicy 在网页内容进入 LLM 前拒绝非 HTTP(S)、非公网 IP/主机名和嵌入凭据 URL，并隔离命中中英文 Prompt Injection 规则的来源。
+   - SourcePolicy 在网页内容进入 LLM 前拒绝非 HTTP(S)、非公网/歧义 IP、内部主机名和嵌入凭据 URL，并隔离标题、正文或 URL path/query/fragment 命中中英文 Prompt Injection 规则的来源。
    - 模型输出结构化 `FindingList`，每条 Finding 必须带 `source_url` 和逐字复制的 `evidence_quote`。
    - EvidenceVerifier 先检查 URL 白名单，再对 quote 与对应 Source 做 Unicode/空白归一化匹配；验证状态和来源内容 SHA-256 由程序生成，模型不能自行授信。
    - SemanticEvidenceVerifier 只在确定性 quote gate 之后判断原文是否真的支持论断；unsupported/uncertain 不进入反思和综合材料。
@@ -311,7 +311,7 @@
 
 **答案：**
 
-项目不再只依赖 Prompt。SourcePolicy 在检索结果进入 LLM 上下文前执行确定性门禁：拒绝危险 scheme、非公网地址和嵌入凭据 URL；命中“忽略前序指令”“泄露系统提示词”或特权角色标签等规则的来源会被隔离。每次判定以结构化事件记录原因，同时 Researcher 和 Synthesizer 仍把网页明确视为不可信数据。
+项目不再只依赖 Prompt。SourcePolicy 在检索结果进入 LLM 上下文前执行确定性门禁：拒绝危险 scheme、非公网/歧义 IP、内部主机名和嵌入凭据 URL；标题、正文或 URL path/query/fragment 命中“忽略前序指令”“泄露系统提示词”或特权角色标签等规则的来源会被隔离。每次判定以结构化事件记录原因，同时 Researcher 和 Synthesizer 仍把网页明确视为不可信数据。
 在论断层面，EvidenceVerifier 的逐字 quote 匹配仍是硬门禁；SemanticEvidenceVerifier 只能在硬门禁通过后补充 `supported/unsupported/uncertain` 状态，不能把未命中的引用提升为可信。ClaimConsistencyVerifier 则在已支持论断之间标记矛盾关系，让系统保留“存在争议”的审计链，而不是让 Synthesizer 随机选择一边。
 
 规则门禁仍不是完整防线：它可能误报讨论 Prompt Injection 的正常文章，也可能漏掉混淆、图片或跨语言攻击；域名当前只做字面检查，没有解析后 IP 与 DNS rebinding 防护。生产强化应加入抓取层网络沙箱、DNS/IP 二次校验、内容分类器、工具最小权限和红队数据集。
