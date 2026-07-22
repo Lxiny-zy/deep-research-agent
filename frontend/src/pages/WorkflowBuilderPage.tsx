@@ -1,16 +1,25 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Skeleton from '../components/Skeleton'
 import WorkflowEditor from '../components/WorkflowEditor'
+import { ApiError } from '../api/client'
 import { useCustomWorkflows, useRoles, useWorkflowMutations } from '../hooks/useCatalog'
 import type { WorkflowDef, WorkflowDefInput } from '../types'
 
 function errMsg(e: unknown): string {
+  if (e instanceof ApiError && e.status === 409) {
+    return `保存冲突：${e.message}。当前草稿已保留。`
+  }
   return e instanceof Error ? e.message : '出错了'
 }
 
 function stepSummary(wf: WorkflowDef): string {
   return wf.steps.map((s) => (s.kind === 'reflect_loop' ? '反思循环' : (s.agent ?? '?'))).join(' → ')
+}
+
+type EditSession = {
+  key: number
+  workflow: WorkflowDef | null
 }
 
 /** 工作流构建器：可视化自由组合角色为有序流程，存库后可在「新建研究」中选用。 */
@@ -19,24 +28,56 @@ export default function WorkflowBuilderPage() {
   const workflows = useCustomWorkflows()
   const roles = useRoles()
   const m = useWorkflowMutations()
-  // undefined＝弹窗关闭；null＝新建；对象＝编辑
-  const [edit, setEdit] = useState<WorkflowDef | null | undefined>(undefined)
+  const sessionSequence = useRef(0)
+  const [editSession, setEditSession] = useState<EditSession | undefined>(undefined)
+  const [savingSessionKey, setSavingSessionKey] = useState<number | null>(null)
+  const [saveErrors, setSaveErrors] = useState<Record<number, string>>({})
+
+  function openEditor(workflow: WorkflowDef | null) {
+    const key = ++sessionSequence.current
+    setEditSession({ key, workflow })
+  }
 
   function save(body: WorkflowDefInput) {
-    const onDone = { onSuccess: () => setEdit(undefined) }
-    if (edit) m.update.mutate({ id: edit.id, body }, onDone)
-    else m.create.mutate(body, onDone)
+    const session = editSession
+    if (!session) return
+    const sessionKey = session.key
+    setSavingSessionKey(sessionKey)
+    setSaveErrors((current) => {
+      const next = { ...current }
+      delete next[sessionKey]
+      return next
+    })
+    const options = {
+      onSuccess: () => {
+        setSavingSessionKey((current) => (current === sessionKey ? null : current))
+        setEditSession((current) => (current?.key === sessionKey ? undefined : current))
+      },
+      onError: (error: unknown) => {
+        setSaveErrors((current) => ({ ...current, [sessionKey]: errMsg(error) }))
+        if (!(error instanceof ApiError) || error.status !== 409 || !session.workflow) return
+        // Refresh only the server version. The editor remains mounted, so its
+        // local draft stays intact and the next submit carries the new version.
+        void workflows.refetch().then((result) => {
+          const latest = result.data?.find((workflow) => workflow.id === session.workflow?.id)
+          if (!latest) return
+          setEditSession((current) => {
+            if (current?.key !== sessionKey || !current.workflow) return current
+            return { ...current, workflow: { ...current.workflow, version: latest.version } }
+          })
+        })
+      },
+      onSettled: () => {
+        setSavingSessionKey((current) => (current === sessionKey ? null : current))
+      },
+    }
+    if (session.workflow) m.update.mutate({ id: session.workflow.id, body }, options)
+    else m.create.mutate(body, options)
   }
 
   function remove(wf: WorkflowDef) {
     if (window.confirm(`删除工作流「${wf.display_name || wf.name}」？`)) m.remove.mutate(wf.id)
   }
-
-  const saveError = m.create.isError
-    ? errMsg(m.create.error)
-    : m.update.isError
-      ? errMsg(m.update.error)
-      : undefined
 
   return (
     <div className="stack">
@@ -52,7 +93,7 @@ export default function WorkflowBuilderPage() {
 
       <div className="row between">
         <span className="hint">自定义工作流：把角色拼成你自己的多智能体流程，存库复用。</span>
-        <button className="btn" onClick={() => setEdit(null)}>
+        <button className="btn" onClick={() => openEditor(null)}>
           + 新建工作流
         </button>
       </div>
@@ -80,7 +121,7 @@ export default function WorkflowBuilderPage() {
               >
                 去研究
               </button>
-              <button className="btn ghost small" onClick={() => setEdit(wf)}>
+              <button className="btn ghost small" onClick={() => openEditor(wf)}>
                 编辑
               </button>
               <button className="btn ghost small danger" onClick={() => remove(wf)}>
@@ -91,14 +132,17 @@ export default function WorkflowBuilderPage() {
         ))}
       </div>
 
-      {edit !== undefined && (
+      {editSession !== undefined && (
         <WorkflowEditor
-          initial={edit}
+          key={editSession.key}
+          initial={editSession.workflow}
           roles={roles.data ?? []}
           onSubmit={save}
-          onCancel={() => setEdit(undefined)}
-          pending={m.create.isPending || m.update.isPending}
-          error={saveError}
+          onCancel={() => {
+            setEditSession(undefined)
+          }}
+          pending={savingSessionKey === editSession.key}
+          error={saveErrors[editSession.key]}
         />
       )}
     </div>

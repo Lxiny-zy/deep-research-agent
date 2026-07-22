@@ -18,12 +18,15 @@ const navigation = [
 export default function App() {
   const navigationId = useId()
   const [showLogin, setShowLogin] = useState(false)
-  const [authStatus, setAuthStatus] = useState<'checking' | 'guest' | 'verified'>(getApiKey() ? 'checking' : 'guest')
+  const [authStatus, setAuthStatus] = useState<'checking' | 'guest' | 'verified' | 'error'>('checking')
+  const [authError, setAuthError] = useState('')
+  const [authAttempt, setAuthAttempt] = useState(0)
   const location = useLocation()
 
   useEffect(() => {
     const onUnauthorized = () => {
       clearApiKey()
+      setAuthError('')
       setAuthStatus('guest')
       setShowLogin(true)
     }
@@ -32,31 +35,59 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (authStatus !== 'checking') return
-    const key = getApiKey()
-    if (!key) {
-      setAuthStatus('guest')
-      return
-    }
     const controller = new AbortController()
+    const key = getApiKey()
+
+    setAuthStatus('checking')
     fetch('/api/config', {
-      headers: { 'X-API-Key': key },
+      ...(key ? { headers: { 'X-API-Key': key } } : {}),
       signal: controller.signal,
     })
       .then((response) => {
-        if (!response.ok) throw new Error(`auth failed: ${response.status}`)
-        setAuthStatus('verified')
+        if (response.ok) {
+          setAuthError('')
+          setAuthStatus('verified')
+          return
+        }
+        if (response.status === 401) {
+          clearApiKey()
+          setAuthError('')
+          setAuthStatus('guest')
+          setShowLogin(true)
+          return
+        }
+        throw new Error(`无法加载服务配置（HTTP ${response.status}）`)
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        clearApiKey()
-        setAuthStatus('guest')
-        setShowLogin(true)
+        setAuthError(error instanceof Error ? error.message : '无法连接服务端')
+        setAuthStatus('error')
       })
     return () => controller.abort()
-  }, [authStatus])
+  }, [authAttempt])
 
-  if (authStatus !== 'verified') {
+  const retryAuth = () => {
+    setAuthError('')
+    setAuthStatus('checking')
+    setAuthAttempt((attempt) => attempt + 1)
+  }
+
+  if (authStatus === 'checking') {
+    return <main className="visitor-welcome"><div className="panel">正在连接服务端…</div></main>
+  }
+
+  if (authStatus === 'error') {
+    return (
+      <main className="visitor-welcome">
+        <div className="panel" role="alert">
+          <p>{authError || '无法连接服务端'}</p>
+          <button className="btn btn-primary" onClick={retryAuth}>重试</button>
+        </div>
+      </main>
+    )
+  }
+
+  if (authStatus === 'guest') {
     return (
       <>
         <WelcomePage onEnter={() => setShowLogin(true)} />

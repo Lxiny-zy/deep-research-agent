@@ -1,9 +1,79 @@
 type CanvasPosition = { x: number; y: number }
 
+type WorkflowEdgeLike = {
+  id: string
+  source: string
+  target: string
+  condition?: string | null
+}
+
 const NODE_SPACING_X = 300
 const NODE_SPACING_Y = 150
 const NODE_COLLISION_X = 270
 const NODE_COLLISION_Y = 132
+
+function edgeIdBase(source: string, target: string): string {
+  const raw = `edge-${source}-${target}`
+  if (raw.length <= 90) return raw
+
+  let hash = 2166136261
+  for (let index = 0; index < raw.length; index += 1) {
+    hash ^= raw.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `edge-${(hash >>> 0).toString(36)}`
+}
+
+/** Allocate an edge id once without changing the ids of existing edges. */
+export function nextWorkflowEdgeId(
+  edges: ReadonlyArray<Pick<WorkflowEdgeLike, 'id'>>,
+  source: string,
+  target: string,
+): string {
+  const used = new Set(edges.map((edge) => edge.id))
+  const base = edgeIdBase(source, target)
+  if (!used.has(base)) return base
+
+  let suffix = 2
+  let candidate = `${base.slice(0, 98)}-${suffix}`
+  while (used.has(candidate)) {
+    suffix += 1
+    const suffixText = `-${suffix}`
+    candidate = `${base.slice(0, 100 - suffixText.length)}${suffixText}`
+  }
+  return candidate
+}
+
+/**
+ * Preserve persisted ids and conditions, repairing only missing or duplicate ids.
+ * Parallel edges must remain independent throughout an edit/save round trip.
+ */
+export function normalizeWorkflowEdges<T extends WorkflowEdgeLike>(
+  edges: ReadonlyArray<T>,
+): T[] {
+  const normalized: T[] = []
+  for (const edge of edges) {
+    const id = edge.id && !normalized.some((item) => item.id === edge.id)
+      ? edge.id
+      : nextWorkflowEdgeId(normalized, edge.source, edge.target)
+    normalized.push({ ...edge, id })
+  }
+  return normalized
+}
+
+export function dependenciesFromEdges(
+  nodeKeys: string[],
+  edges: ReadonlyArray<Pick<WorkflowEdgeLike, 'source' | 'target'>>,
+): Record<string, string[]> {
+  const validKeys = new Set(nodeKeys)
+  const dependencies = Object.fromEntries(nodeKeys.map((key) => [key, [] as string[]]))
+  for (const edge of edges) {
+    if (validKeys.has(edge.source) && validKeys.has(edge.target)) {
+      dependencies[edge.target].push(edge.source)
+    }
+  }
+  return dependencies
+}
 
 /** Return the nodes with no outgoing dependency (the graph's terminal nodes). */
 export function terminalNodeKeys(

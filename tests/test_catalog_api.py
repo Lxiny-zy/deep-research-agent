@@ -140,6 +140,33 @@ async def test_search_key_crud_and_mask(cat_app):
 
 
 @pytest.mark.asyncio
+async def test_updates_reject_null_for_non_nullable_catalog_fields(cat_app) -> None:
+    async with _client() as c:
+        profile = (
+            await c.post("/api/models", json={"name": "profile", "model": "model"})
+        ).json()
+        agent = (
+            await c.post(
+                "/api/agents",
+                json={"name": "reviewer", "behavior": "critique"},
+            )
+        ).json()
+        search_key = (
+            await c.post("/api/search-keys", json={"api_key": "tvly-test"})
+        ).json()
+
+        responses = [
+            await c.put(f"/api/models/{profile['id']}", json={"model": None}),
+            await c.put(f"/api/agents/{agent['id']}", json={"enabled": None}),
+            await c.put(
+                f"/api/search-keys/{search_key['id']}", json={"priority": None}
+            ),
+        ]
+
+    assert [response.status_code for response in responses] == [422, 422, 422]
+
+
+@pytest.mark.asyncio
 async def test_model_test_endpoint(cat_app, monkeypatch):
     from deep_research import catalog_api
 

@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import DagView from '../components/DagView'
@@ -18,29 +19,45 @@ export default function RunPage() {
   const stream = useResearchStream(id ?? null)
   // 详情（query / 已落库报告）：流式中轮询；流断开但未到终态时继续轮询兜底，
   // 直到 DB 状态本身到达终态才停止
-  const streamActive = stream.status === 'streaming' || stream.status === 'disconnected'
+  // Keep syncing until the persisted run reaches a terminal state. The stream can
+  // report an error before the orchestrator has written that state to the database.
+  const shouldSyncDetail = stream.status !== 'idle'
   const detail = useRunDetail(id, {
     refetchInterval: (q) => {
       const s = q.state.data?.status
       const finished = s === 'done' || s === 'error'
-      return streamActive && !finished ? 4000 : false
+      return shouldSyncDetail && !finished ? 4000 : false
     },
   })
 
   const dbStatus = detail.data?.status
   const dbFinished = dbStatus === 'done' || dbStatus === 'error'
+  const refetchDetail = detail.refetch
+
+  useEffect(() => {
+    if (stream.status !== 'done' && stream.status !== 'error') return
+    void refetchDetail()
+  }, [refetchDetail, stream.status])
 
   const query = detail.data?.query ?? ''
-  const status: RunStatus =
-    stream.status === 'done'
+  const status: RunStatus = dbFinished
+    ? (dbStatus as RunStatus)
+    : stream.status === 'done'
       ? 'done'
       : stream.status === 'error'
         ? 'error'
         : (detail.data?.status ?? 'running')
-  // 报告：优先流式累积；为空时回退到已落库报告（回放 / 断连兜底场景）
-  const markdown = stream.reportMarkdown || detail.data?.report?.markdown || ''
-  const streaming = stream.status === 'streaming'
-  const liveActive = streamActive && !dbFinished
+  // Once the stream has ended, any persisted report is the authoritative complete copy.
+  const persistedMarkdown = detail.data?.report?.markdown || ''
+  const preferPersistedReport =
+    Boolean(persistedMarkdown) &&
+    (dbFinished || stream.status === 'disconnected' || stream.status === 'done' || stream.status === 'error')
+  const markdown = preferPersistedReport
+    ? persistedMarkdown
+    : stream.reportMarkdown || persistedMarkdown
+  const streaming = stream.status === 'streaming' && !dbFinished
+  const liveActive =
+    (stream.status === 'streaming' || stream.status === 'disconnected') && !dbFinished
   const connectionStatus =
     status === 'done' ? 'done' : status === 'error' ? 'error' : stream.status
   const progress = deriveResearchProgress({

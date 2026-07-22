@@ -26,25 +26,140 @@ from ..models import (
 from ..observability import Event
 from ..orchestration import StepRun, WorkflowRun
 from . import orm
-from .repository import RunDetail, RunSummary, TagCount
+from .repository import LeaseLostError, RunDetail, RunSummary, TagCount
+
+
+def _sub_question_row(
+    run_id: str,
+    index: int,
+    sub_question: SubQuestion,
+    *,
+    origin: str,
+    round_: int,
+) -> orm.SubQuestionRow:
+    return orm.SubQuestionRow(
+        run_id=run_id,
+        idx=index,
+        question=sub_question.question,
+        rationale=sub_question.rationale,
+        depends_on=sub_question.depends_on,
+        origin=origin,
+        round=round_,
+    )
+
+
+def _research_result_row(run_id: str, result: ResearchResult) -> orm.ResearchResultRow:
+    row = orm.ResearchResultRow(run_id=run_id, sub_question=result.sub_question)
+    row.findings = [
+        orm.FindingRow(
+            statement=finding.statement,
+            source_url=finding.source_url,
+            evidence_quote=finding.evidence_quote,
+            confidence=finding.confidence,
+            verification_status=finding.verification.status,
+            verification_method=finding.verification.method,
+            source_content_hash=finding.verification.source_content_hash,
+            verification_reason=finding.verification.reason,
+            semantic_status=finding.verification.semantic_status,
+            semantic_confidence=finding.verification.semantic_confidence,
+            semantic_reason=finding.verification.semantic_reason,
+            claim_id=finding.verification.claim_id,
+            consistency_status=finding.verification.consistency_status,
+            contradicts_claim_ids=finding.verification.contradicts_claim_ids,
+            contradiction_reason=finding.verification.contradiction_reason,
+        )
+        for finding in result.findings
+    ]
+    return row
 
 
 class SqlRepository:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sm = sessionmaker
 
-    async def create_run(self, query: str) -> str:
+    async def create_run(
+        self,
+        query: str,
+        *,
+        execution: WorkflowRun | None = None,
+        lease_owner: str | None = None,
+    ) -> str:
         async with self._sm() as s, s.begin():
             run = orm.ResearchRun(query=query, status="pending")
             s.add(run)
             await s.flush()
+            if execution is not None:
+                s.add(
+                    orm.WorkflowRunRow(
+                        id=execution.id,
+                        research_run_id=run.id,
+                        workflow_name=execution.workflow_name,
+                        status=execution.status.value,
+                        input=execution.input,
+                        output=execution.output,
+                        definition=execution.definition,
+                        checkpoint=execution.checkpoint,
+                        lease_owner=lease_owner,
+                        lease_expires_at=(
+                            datetime.now(UTC) + timedelta(seconds=120)
+                            if lease_owner is not None
+                            else None
+                        ),
+                        started_at=execution.started_at,
+                        finished_at=execution.finished_at,
+                    )
+                )
             return run.id
 
-    async def set_status(self, run_id: str, status: str) -> None:
+    async def _owned_workflow_row(
+        self, s: AsyncSession, run_id: str, owner: str | None
+    ) -> orm.WorkflowRunRow | None:
+        """Lock and validate a worker lease before a fenced write.
+
+        The no-op UPDATE is intentional: PostgreSQL locks the matched row and
+        SQLite acquires its write lock before the protected mutation begins.
+        """
+        if owner is None:
+            return None
+        result = await s.execute(
+            update(orm.WorkflowRunRow)
+            .where(
+                orm.WorkflowRunRow.research_run_id == run_id,
+                orm.WorkflowRunRow.lease_owner == owner,
+                orm.WorkflowRunRow.lease_expires_at > datetime.now(UTC),
+            )
+            .values(lease_owner=owner)
+        )
+        if not cast("CursorResult[Any]", result).rowcount:
+            raise LeaseLostError(f"run {run_id} lease is no longer owned by this worker")
+        return await s.scalar(
+            select(orm.WorkflowRunRow).where(
+                orm.WorkflowRunRow.research_run_id == run_id
+            )
+        )
+
+    async def set_status(
+        self, run_id: str, status: str, *, lease_owner: str | None = None
+    ) -> None:
         async with self._sm() as s, s.begin():
+            await self._owned_workflow_row(s, run_id, lease_owner)
             run = await s.get(orm.ResearchRun, run_id)
             if run is not None:
                 run.status = status
+
+    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> None:
+        async with self._sm() as s, s.begin():
+            await self._owned_workflow_row(s, run_id, lease_owner)
+            run = await s.get(orm.ResearchRun, run_id)
+            if run is not None:
+                run.status = "running"
+            await s.execute(
+                sa_delete(orm.EventRow).where(
+                    orm.EventRow.run_id == run_id,
+                    orm.EventRow.stage == "ORCHESTRATOR",
+                    orm.EventRow.type.in_(("done", "error")),
+                )
+            )
 
     async def save_plan(self, run_id: str, plan: ResearchPlan) -> None:
         async with self._sm() as s, s.begin():
@@ -127,10 +242,71 @@ class SqlRepository:
                 orm.ReportRow(run_id=run_id, markdown=report.markdown, citations=report.citations)
             )
 
-    async def save_events(self, run_id: str, events: list[Event]) -> None:
+    async def replace_artifacts(
+        self,
+        run_id: str,
+        *,
+        plan: ResearchPlan | None,
+        reflection_rounds: list[tuple[int, list[SubQuestion]]],
+        results: list[ResearchResult],
+        report: Report,
+        lease_owner: str | None = None,
+    ) -> None:
+        """Replace plan/results/report in one transaction for resumable writes."""
+        async with self._sm() as s, s.begin():
+            await self._owned_workflow_row(s, run_id, lease_owner)
+            run = await s.get(orm.ResearchRun, run_id)
+            if run is None:
+                return
+            run.interpretation = plan.interpretation if plan is not None else ""
+            await s.execute(
+                sa_delete(orm.SubQuestionRow).where(orm.SubQuestionRow.run_id == run_id)
+            )
+            await s.execute(
+                sa_delete(orm.ResearchResultRow).where(
+                    orm.ResearchResultRow.run_id == run_id
+                )
+            )
+            await s.execute(sa_delete(orm.ReportRow).where(orm.ReportRow.run_id == run_id))
+
+            index = 0
+            if plan is not None:
+                for sub_question in plan.sub_questions:
+                    s.add(
+                        _sub_question_row(
+                            run_id,
+                            index,
+                            sub_question,
+                            origin="plan",
+                            round_=0,
+                        )
+                    )
+                    index += 1
+            for round_, sub_questions in reflection_rounds:
+                for sub_question in sub_questions:
+                    s.add(
+                        _sub_question_row(
+                            run_id,
+                            index,
+                            sub_question,
+                            origin="reflection",
+                            round_=round_,
+                        )
+                    )
+                    index += 1
+            for result in results:
+                s.add(_research_result_row(run_id, result))
+            s.add(
+                orm.ReportRow(run_id=run_id, markdown=report.markdown, citations=report.citations)
+            )
+
+    async def save_events(
+        self, run_id: str, events: list[Event], *, lease_owner: str | None = None
+    ) -> None:
         # 覆盖式写入（与 InMemoryRepository 对齐）：先清旧再写新，
         # 同一 run 第二次保存不会撞 (run_id, seq) 唯一约束
         async with self._sm() as s, s.begin():
+            await self._owned_workflow_row(s, run_id, lease_owner)
             await s.execute(sa_delete(orm.EventRow).where(orm.EventRow.run_id == run_id))
             for i, ev in enumerate(events):
                 s.add(
@@ -145,14 +321,25 @@ class SqlRepository:
                     )
                 )
 
-    async def save_orchestration(self, run_id: str, execution: WorkflowRun) -> None:
+    async def save_orchestration(
+        self,
+        run_id: str,
+        execution: WorkflowRun,
+        *,
+        lease_owner: str | None = None,
+    ) -> None:
         async with self._sm() as s, s.begin():
-            row = await s.scalar(
-                select(orm.WorkflowRunRow).where(orm.WorkflowRunRow.research_run_id == run_id)
-            )
+            row = await self._owned_workflow_row(s, run_id, lease_owner)
+            if row is None:
+                row = await s.scalar(
+                    select(orm.WorkflowRunRow)
+                    .where(orm.WorkflowRunRow.research_run_id == run_id)
+                    .with_for_update()
+                )
             if row is None:
                 row = orm.WorkflowRunRow(id=execution.id, research_run_id=run_id)
                 s.add(row)
+            workflow_run_id = row.id
             row.workflow_name = execution.workflow_name
             row.status = execution.status.value
             row.input = execution.input
@@ -162,13 +349,15 @@ class SqlRepository:
             row.started_at = execution.started_at
             row.finished_at = execution.finished_at
             await s.execute(
-                sa_delete(orm.StepRunRow).where(orm.StepRunRow.workflow_run_id == execution.id)
+                sa_delete(orm.StepRunRow).where(
+                    orm.StepRunRow.workflow_run_id == workflow_run_id
+                )
             )
             for idx, step in enumerate(execution.steps):
                 s.add(
                     orm.StepRunRow(
                         id=step.id,
-                        workflow_run_id=execution.id,
+                        workflow_run_id=workflow_run_id,
                         idx=idx,
                         node_id=step.node_id,
                         label=step.label,
@@ -192,11 +381,26 @@ class SqlRepository:
                     orm.WorkflowRunRow.research_run_id == run_id,
                     or_(
                         orm.WorkflowRunRow.lease_owner.is_(None),
-                        orm.WorkflowRunRow.lease_owner == owner,
-                        orm.WorkflowRunRow.lease_expires_at < now,
+                        orm.WorkflowRunRow.lease_expires_at.is_(None),
+                        orm.WorkflowRunRow.lease_expires_at <= now,
                     ),
                 )
                 .values(lease_owner=owner, lease_expires_at=expires)
+            )
+            return bool(cast("CursorResult[Any]", result).rowcount)
+
+    async def renew_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool:
+        now = datetime.now(UTC)
+        expires = now + timedelta(seconds=seconds)
+        async with self._sm() as s, s.begin():
+            result = await s.execute(
+                update(orm.WorkflowRunRow)
+                .where(
+                    orm.WorkflowRunRow.research_run_id == run_id,
+                    orm.WorkflowRunRow.lease_owner == owner,
+                    orm.WorkflowRunRow.lease_expires_at > now,
+                )
+                .values(lease_expires_at=expires)
             )
             return bool(cast("CursorResult[Any]", result).rowcount)
 
@@ -211,8 +415,16 @@ class SqlRepository:
                 .values(lease_owner=None, lease_expires_at=None)
             )
 
-    async def finalize(self, run_id: str, *, elapsed: float, total_tokens: int) -> None:
+    async def finalize(
+        self,
+        run_id: str,
+        *,
+        elapsed: float,
+        total_tokens: int,
+        lease_owner: str | None = None,
+    ) -> None:
         async with self._sm() as s, s.begin():
+            await self._owned_workflow_row(s, run_id, lease_owner)
             run = await s.get(orm.ResearchRun, run_id)
             if run is not None:
                 run.elapsed = elapsed
@@ -388,6 +600,12 @@ class SqlRepository:
                 created_at=run.created_at,
                 tags=[t.tag for t in run.tags],
                 orchestration=orchestration,
+            )
+
+    async def get_run_status(self, run_id: str) -> str | None:
+        async with self._sm() as s:
+            return await s.scalar(
+                select(orm.ResearchRun.status).where(orm.ResearchRun.id == run_id)
             )
 
     async def get_events(self, run_id: str, *, after_seq: int = 0) -> list[Event]:

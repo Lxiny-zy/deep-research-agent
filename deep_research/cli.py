@@ -41,14 +41,17 @@ async def _amain() -> None:
 
     print(f"\n🔍 {args.query}\n")
     agent = DeepResearchAgent(Settings(), workflow=args.workflow)
-    agent.tracer.subscribe(_print)  # 把事件实时打印到控制台
-    report = await agent.run(args.query)
+    try:
+        agent.tracer.subscribe(_print)  # 把事件实时打印到控制台
+        report = await agent.run(args.query)
 
-    print("\n" + "=" * 64)
-    print(report.markdown)
-    # 写文件是阻塞 IO，放到线程里执行，避免阻塞事件循环
-    await asyncio.to_thread(_write_report, args.output, args.query, report.markdown)
-    print(f"📄 已保存：{args.output}")
+        print("\n" + "=" * 64)
+        print(report.markdown)
+        # 写文件是阻塞 IO，放到线程里执行，避免阻塞事件循环
+        await asyncio.to_thread(_write_report, args.output, args.query, report.markdown)
+        print(f"📄 已保存：{args.output}")
+    finally:
+        await agent.aclose()
 
 
 def _write_report(path: str, query: str, markdown: str) -> None:

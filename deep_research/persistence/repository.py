@@ -21,6 +21,10 @@ from ..observability import Event
 from ..orchestration import WorkflowRun
 
 
+class LeaseLostError(RuntimeError):
+    """Raised when a worker tries to persist after losing its execution lease."""
+
+
 @dataclass
 class RunSummary:
     """历史列表行（轻量）。"""
@@ -63,9 +67,21 @@ class TagCount:
 class ResearchRepository(Protocol):
     """研究运行的持久化仓储。两个实现结构化满足本协议（无需显式继承）。"""
 
-    async def create_run(self, query: str) -> str: ...
+    async def create_run(
+        self,
+        query: str,
+        *,
+        execution: WorkflowRun | None = None,
+        lease_owner: str | None = None,
+    ) -> str: ...
 
-    async def set_status(self, run_id: str, status: str) -> None: ...
+    async def set_status(
+        self, run_id: str, status: str, *, lease_owner: str | None = None
+    ) -> None: ...
+
+    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> None:
+        """Atomically mark a new attempt active and remove old terminal events."""
+        ...
 
     async def save_plan(self, run_id: str, plan: ResearchPlan) -> None: ...
 
@@ -79,15 +95,45 @@ class ResearchRepository(Protocol):
 
     async def save_report(self, run_id: str, report: Report) -> None: ...
 
-    async def save_events(self, run_id: str, events: list[Event]) -> None: ...
+    async def replace_artifacts(
+        self,
+        run_id: str,
+        *,
+        plan: ResearchPlan | None,
+        reflection_rounds: list[tuple[int, list[SubQuestion]]],
+        results: list[ResearchResult],
+        report: Report,
+        lease_owner: str | None = None,
+    ) -> None:
+        """Atomically replace all derived research artifacts for a run."""
+        ...
 
-    async def save_orchestration(self, run_id: str, execution: WorkflowRun) -> None: ...
+    async def save_events(
+        self, run_id: str, events: list[Event], *, lease_owner: str | None = None
+    ) -> None: ...
+
+    async def save_orchestration(
+        self,
+        run_id: str,
+        execution: WorkflowRun,
+        *,
+        lease_owner: str | None = None,
+    ) -> None: ...
 
     async def acquire_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool: ...
 
+    async def renew_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool: ...
+
     async def release_lease(self, run_id: str, owner: str) -> None: ...
 
-    async def finalize(self, run_id: str, *, elapsed: float, total_tokens: int) -> None: ...
+    async def finalize(
+        self,
+        run_id: str,
+        *,
+        elapsed: float,
+        total_tokens: int,
+        lease_owner: str | None = None,
+    ) -> None: ...
 
     async def delete_run(self, run_id: str) -> bool: ...
 
@@ -106,5 +152,7 @@ class ResearchRepository(Protocol):
     ) -> list[RunSummary]: ...
 
     async def get_run(self, run_id: str) -> RunDetail | None: ...
+
+    async def get_run_status(self, run_id: str) -> str | None: ...
 
     async def get_events(self, run_id: str, *, after_seq: int = 0) -> list[Event]: ...

@@ -27,3 +27,6 @@ class TavilySearch(SearchTool):
                 )
             )
         return sources
+
+    async def aclose(self) -> None:
+        await self._client.close()

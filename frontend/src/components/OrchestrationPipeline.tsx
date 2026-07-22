@@ -27,11 +27,18 @@ const RUN_STATUS_LABEL = {
 }
 
 export default function OrchestrationPipeline({ execution, events = [], runStatus }: Props) {
-  const steps = mergeWorkflowSteps(execution, events)
+  const steps = mergeWorkflowSteps(execution, events, runStatus)
   const progress = deriveResearchProgress({ execution, events, runStatus })
   if (!steps.length && progress.total === 0) return null
 
-  const runtimeStatus = execution?.status ?? (runStatus === 'done' ? 'succeeded' : runStatus === 'error' ? 'failed' : runStatus)
+  const runtimeStatus =
+    runStatus === 'running'
+      ? 'running'
+      : runStatus === 'done'
+        ? 'succeeded'
+        : runStatus === 'error'
+          ? 'failed'
+          : execution?.status ?? runStatus
 
   return (
     <div className="orchestration-runtime">

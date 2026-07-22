@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .catalog.dto import (
     BEHAVIORS,
@@ -23,7 +23,7 @@ from .catalog.dto import (
     WorkflowDefUpdate,
     WorkflowDefView,
 )
-from .catalog.repository import CatalogRepository
+from .catalog.repository import CatalogRepository, WorkflowVersionConflictError
 from .config import Settings
 from .observability import Tracer
 
@@ -49,6 +49,21 @@ class ProfileUpdate(BaseModel):
     reasoning_effort: str | None = Field(None, pattern="^(low|medium|high)$")
     is_default: bool | None = None
 
+    @field_validator(
+        "name",
+        "model",
+        "temperature",
+        "parameter_mode",
+        "reasoning_effort",
+        "is_default",
+        mode="before",
+    )
+    @classmethod
+    def reject_null_non_nullable_fields(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("field cannot be null; omit it to keep the current value")
+        return value
+
 
 class KeyCreate(BaseModel):
     label: str = Field("", max_length=64)
@@ -62,6 +77,13 @@ class KeyUpdate(BaseModel):
     api_key: str | None = Field(None, max_length=500)
     priority: int | None = Field(None, ge=0, le=1000)
     enabled: bool | None = None
+
+    @field_validator("label", "priority", "enabled", mode="before")
+    @classmethod
+    def reject_null_non_nullable_fields(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("field cannot be null; omit it to keep the current value")
+        return value
 
 
 class TestResult(BaseModel):
@@ -99,6 +121,8 @@ async def _probe_llm(profile: ModelProfileFull, settings: Settings) -> None:
         timeout=settings.request_timeout,
         user_agent=settings.llm_user_agent,
         temperature=0.0,
+        parameter_mode=profile.parameter_mode,
+        reasoning_effort=profile.reasoning_effort,
     )
     try:
         await llm.complete("connectivity test", "ping", temperature=0.0)
@@ -111,7 +135,10 @@ async def _probe_search(api_key: str) -> None:
     from tavily import AsyncTavilyClient
 
     client = AsyncTavilyClient(api_key=api_key)
-    await client.search("ping", max_results=1)
+    try:
+        await client.search("ping", max_results=1)
+    finally:
+        await client.close()
 
 
 def _exception_detail(exc: BaseException) -> str:
@@ -455,6 +482,14 @@ async def update_custom_workflow(
     existing = await catalog.get_workflow_def_by_id(workflow_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="workflow not found")
+    if req.version is not None and req.version != existing.version:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"工作流已被其他会话更新（当前版本 {existing.version}，"
+                f"提交版本 {req.version}），请刷新后重试"
+            ),
+        )
     steps = _normalize_graph_payload(req, existing=existing)
     if steps is not None:
         await _validate_custom_steps(
@@ -464,7 +499,10 @@ async def update_custom_workflow(
             nodes=req.nodes,
             edges=req.edges,
         )
-    view = await catalog.update_workflow_def(workflow_id, req)
+    try:
+        view = await catalog.update_workflow_def(workflow_id, req)
+    except WorkflowVersionConflictError as exc:
+        raise HTTPException(status_code=409, detail="工作流已被其他会话更新，请刷新后重试") from exc
     if view is None:
         raise HTTPException(status_code=404, detail="workflow not found")
     return view

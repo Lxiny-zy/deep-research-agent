@@ -16,8 +16,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
+import logging
+from collections.abc import AsyncIterator, Callable
+from typing import TYPE_CHECKING, Any, TypeVar
+
+from pydantic import BaseModel
 
 from .agents import Planner, Reflector, Researcher, Synthesizer  # noqa: F401 触发角色注册
 from .agents.base import Blackboard, RunContext
@@ -25,8 +28,8 @@ from .config import Settings
 from .llm import LLM
 from .models import Finding, Report, ResearchResult, SubQuestion
 from .observability import Event, Tracer
-from .orchestration import WorkflowRun
-from .persistence.repository import ResearchRepository
+from .orchestration import OrchestrationRuntime, WorkflowRun
+from .persistence.repository import LeaseLostError, ResearchRepository
 from .scheduler import research_dag
 from .token_budget import TokenBudget
 from .tools.base import SearchTool
@@ -43,6 +46,162 @@ if TYPE_CHECKING:
     from .catalog.runtime import CatalogRuntime, CatalogSource
 
 
+logger = logging.getLogger(__name__)
+ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+RUN_SETTINGS_CHECKPOINT_KEY = "_run_settings"
+RUN_METRICS_CHECKPOINT_KEY = "_runtime_metrics"
+RUN_CATALOG_CHECKPOINT_KEY = "_catalog_runtime"
+_RUN_SETTING_FIELDS = (
+    "max_sub_questions",
+    "max_rounds",
+    "max_concurrency",
+    "results_per_search",
+    "max_tokens",
+    "max_replans",
+    "request_timeout",
+)
+
+
+def checkpoint_settings(settings: Settings) -> dict[str, int | float | None]:
+    """Serialize non-secret run behavior so recovery keeps the original limits."""
+    return {name: getattr(settings, name) for name in _RUN_SETTING_FIELDS}
+
+
+def workflow_catalog_roles(workflow: Workflow) -> set[str]:
+    """Return role names whose catalog semantics can affect this workflow."""
+    roles = {"evidence_verifier"}
+    steps = [*workflow.steps]
+    steps.extend(Step.model_validate(node["step"]) for node in workflow.nodes)
+    for step in steps:
+        if step.fallback_agent:
+            roles.add(step.fallback_agent)
+        if step.kind == "reflect_loop":
+            roles.update((step.reflector, step.researcher))
+        elif step.kind == "team_fanout":
+            roles.update((step.aggregator, "researcher"))
+        else:
+            if step.agent:
+                roles.add(step.agent)
+            if step.kind == "compose":
+                # Coordinator-generated workflows are restricted to these roles.
+                roles.update(
+                    ("planner", "researcher", "reflector", "synthesizer", "critic")
+                )
+    roles.discard("")
+    return roles
+
+
+async def snapshot_catalog_for_execution(
+    execution: WorkflowRun,
+    catalog_repo: CatalogSource | None,
+) -> None:
+    """Persist the non-secret role semantics needed to recover this execution."""
+    if catalog_repo is None or not execution.definition:
+        return
+    scratch = execution.checkpoint.setdefault("scratch", {})
+    if not isinstance(scratch, dict):
+        raise ValueError("execution checkpoint scratch must be an object")
+    if RUN_CATALOG_CHECKPOINT_KEY in scratch:
+        return
+
+    from .catalog.runtime import create_catalog_runtime_snapshot
+
+    workflow = Workflow.model_validate(execution.definition)
+    snapshot = await create_catalog_runtime_snapshot(
+        catalog_repo, workflow_catalog_roles(workflow)
+    )
+    scratch[RUN_CATALOG_CHECKPOINT_KEY] = snapshot.model_dump(mode="json")
+
+
+def create_initial_execution(
+    query: str, workflow_name: str | None, settings: Settings
+) -> WorkflowRun:
+    """Create the durable, leased checkpoint used before a background task starts."""
+    runtime = OrchestrationRuntime()
+    execution = runtime.start(workflow_name or "deep", {"query": query})
+    execution.checkpoint = Blackboard(
+        query=query,
+        scratch={RUN_SETTINGS_CHECKPOINT_KEY: checkpoint_settings(settings)},
+    ).model_dump(mode="json")
+    if workflow_name is None or workflow_name in WORKFLOWS:
+        execution.definition = get_workflow(workflow_name).model_dump(mode="json")
+    return execution
+
+
+class _LazyOwnedLLM(LLM):
+    """Delay opening the default LLM client until a fallback call needs it."""
+
+    def __init__(self, factory: Callable[[], LLM]) -> None:
+        self._factory = factory
+        self._value: LLM | None = None
+
+    def _get(self) -> LLM:
+        if self._value is None:
+            self._value = self._factory()
+        return self._value
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get(), name)
+
+    async def complete(self, system: str, user: str, *, temperature: float = 0.3) -> str:
+        return await self._get().complete(system, user, temperature=temperature)
+
+    async def parse(
+        self,
+        system: str,
+        user: str,
+        schema: type[ModelT],
+        *,
+        temperature: float = 0.2,
+        retries: int = 2,
+    ) -> ModelT:
+        return await self._get().parse(
+            system, user, schema, temperature=temperature, retries=retries
+        )
+
+    async def stream(
+        self, system: str, user: str, *, temperature: float = 0.4
+    ) -> AsyncIterator[str]:
+        async for chunk in self._get().stream(system, user, temperature=temperature):
+            yield chunk
+
+    async def aclose(self) -> None:
+        if self._value is None:
+            return
+        await self._value.aclose()
+        self._value = None
+
+
+class _LazyOwnedSearchTool(SearchTool):
+    """Delay opening the built-in search client while preserving ownership."""
+
+    def __init__(self, factory: Callable[[], SearchTool]) -> None:
+        self._factory = factory
+        self._value: SearchTool | None = None
+
+    def _get(self) -> SearchTool:
+        if self._value is None:
+            self._value = self._factory()
+        return self._value
+
+    async def search(self, query: str, *, max_results: int = 5):  # type: ignore[no-untyped-def]
+        return await self._get().search(query, max_results=max_results)
+
+    async def aclose(self) -> None:
+        if self._value is None:
+            return
+        await self._value.aclose()
+        self._value = None
+
+
+def _default_search_tool(settings: Settings) -> SearchTool:
+    from .tools.tavily_search import TavilySearch
+
+    return TavilySearch(settings.tavily_api_key)
+
+
 class DeepResearchAgent:
     def __init__(
         self,
@@ -55,6 +214,8 @@ class DeepResearchAgent:
         workflow: str | None = None,
         catalog_repo: CatalogSource | None = None,
         resume_execution: WorkflowRun | None = None,
+        initial_execution: WorkflowRun | None = None,
+        lease_owner: str | None = None,
     ) -> None:
         self.settings = settings
         self.tracer = Tracer()
@@ -63,19 +224,48 @@ class DeepResearchAgent:
         self._workflow_name = workflow
         self._catalog_repo = catalog_repo  # 数据驱动角色/模型档案来源（鸭子类型）
         self._resume_execution = resume_execution
+        self._initial_execution = initial_execution
+        self._lease_owner = lease_owner
+        existing_execution = resume_execution or initial_execution
+        if existing_execution is not None:
+            scratch = existing_execution.checkpoint.get("scratch", {})
+            metrics = (
+                scratch.get(RUN_METRICS_CHECKPOINT_KEY, {})
+                if isinstance(scratch, dict)
+                else {}
+            )
+            if isinstance(metrics, dict):
+                try:
+                    self.tracer.restore_metrics(
+                        total_tokens=int(metrics.get("total_tokens", 0) or 0),
+                        estimated_tokens=int(metrics.get("estimated_tokens", 0) or 0),
+                        elapsed=float(metrics.get("elapsed", 0.0) or 0.0),
+                    )
+                except (TypeError, ValueError):
+                    pass  # corrupted optional metrics must not block checkpoint recovery
         # 运行期延迟加载（需 await），收尾时关闭其 LLM 池
         self._catalog_runtime: CatalogRuntime | None = None
+        self._run_started = False
 
-        # 依赖注入：测试时传入假的 LLM / 检索工具，无需真实密钥与网络
-        if llm is None or search_tool is None:
-            settings.validate()
-        self._owns_llm = llm is None  # 自建的 client 由本实例负责关闭；注入的归调用方管
-        self.llm = llm or LLM(settings, self.tracer)
+        # Validate only dependencies constructed here. A catalog default model
+        # is loaded asynchronously, so its LLM validation is deferred to run().
         if search_tool is None:
-            from .tools.tavily_search import TavilySearch  # 延迟导入，避免无谓依赖
-
-            search_tool = TavilySearch(settings.tavily_api_key)
-        self.search_tool = search_tool
+            settings.validate_search()
+        if llm is None and catalog_repo is None:
+            settings.validate_llm()
+        self._owns_llm = llm is None  # 自建的 client 由本实例负责关闭；注入的归调用方管
+        tracer = self.tracer
+        self.llm = (
+            llm
+            if llm is not None
+            else _LazyOwnedLLM(lambda: LLM(settings, tracer))
+        )
+        self._owns_search_tool = search_tool is None
+        self.search_tool = (
+            search_tool
+            if search_tool is not None
+            else _LazyOwnedSearchTool(lambda: _default_search_tool(settings))
+        )
 
         # 仍构造具名角色实例：向后兼容（测试替换 self.researcher、直接调用各角色）
         self.planner = Planner(self.llm, self.tracer, settings)
@@ -86,10 +276,31 @@ class DeepResearchAgent:
 
     async def aclose(self) -> None:
         """释放自建 LLM client 的底层 HTTP 连接池。注入的 client 归调用方管。"""
+        errors: list[Exception] = []
         if self._catalog_runtime is not None:
-            await self._catalog_runtime.aclose()  # 关闭按档案新建的 LLM 池
+            try:
+                await self._catalog_runtime.aclose()  # 关闭按档案新建的 LLM 池
+            except Exception as exc:
+                errors.append(exc)
+            else:
+                self._catalog_runtime = None
         if self._owns_llm:
-            await self.llm.aclose()
+            try:
+                await self.llm.aclose()
+            except Exception as exc:
+                errors.append(exc)
+        if self._owns_search_tool:
+            try:
+                await self.search_tool.aclose()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
+
+    def _claim_run(self) -> None:
+        if self._run_started:
+            raise RuntimeError("DeepResearchAgent instances are single-use")
+        self._run_started = True
 
     async def _research_one(
         self, question: str, context_findings: list[Finding] | None = None
@@ -102,12 +313,18 @@ class DeepResearchAgent:
         return await research_dag(sub_questions, self._research_one, self.tracer)
 
     async def run(self, query: str) -> Report:
+        self._claim_run()
+        return await self._run_once(query)
+
+    async def _run_once(self, query: str) -> Report:
         run_id = self._run_id
         try:
             if self.repo is not None:
                 if run_id is None:
                     run_id = await self.repo.create_run(query)
-                await self.repo.set_status(run_id, "running")
+                await self.repo.set_status(
+                    run_id, "running", lease_owner=self._lease_owner
+                )
 
             self.tracer.emit("ORCHESTRATOR", "start", f"开始深度研究：{query}")
 
@@ -118,7 +335,10 @@ class DeepResearchAgent:
             # 先落库再发 done：客户端收到 done 后立刻读详情，必须能读到完整数据
             if self.repo is not None and run_id is not None:
                 await self.repo.finalize(
-                    run_id, elapsed=self.tracer.elapsed, total_tokens=self.tracer.total_tokens
+                    run_id,
+                    elapsed=self.tracer.elapsed,
+                    total_tokens=self.tracer.total_tokens,
+                    lease_owner=self._lease_owner,
                 )
             self.tracer.emit(
                 "ORCHESTRATOR",
@@ -135,12 +355,28 @@ class DeepResearchAgent:
         except Exception as e:
             self.tracer.emit("ORCHESTRATOR", "error", f"运行失败：{e}")
             if self.repo is not None and run_id is not None:
-                await self.repo.set_status(run_id, "error")
+                try:
+                    await self.repo.set_status(
+                        run_id, "error", lease_owner=self._lease_owner
+                    )
+                except LeaseLostError:
+                    # A successor owns the run now; never overwrite its state.
+                    pass
+                except Exception:
+                    logger.exception("failed to persist error status for run %s", run_id)
             raise
         finally:
             # run 结束（含异常）后一次性落库全部非 token 事件，seq 即顺序，保证回放有序
             if self.repo is not None and run_id is not None:
-                await self.repo.save_events(run_id, self.tracer.events)
+                try:
+                    await self.repo.save_events(
+                        run_id, self.tracer.events, lease_owner=self._lease_owner
+                    )
+                except LeaseLostError:
+                    # Do not mask the original failure/cancellation after fencing.
+                    pass
+                except Exception:
+                    logger.exception("failed to persist events for run %s", run_id)
 
     async def _resolve_workflow(self) -> Workflow:
         """解析本次要跑的工作流：内置预置优先 → 自定义（catalog 按名）→ 兜底默认。
@@ -174,8 +410,27 @@ class DeepResearchAgent:
         # 加载数据驱动角色/模型档案（无 catalog 或无自定义角色时为 None，走纯内置路径）
         from .catalog.runtime import load_catalog_runtime
 
-        cr = await load_catalog_runtime(self._catalog_repo, self.tracer, self.settings)
+        if self._catalog_runtime is not None:
+            raise RuntimeError("catalog runtime already initialized")
+        existing_execution = self._resume_execution or self._initial_execution
+        bb = (
+            Blackboard.model_validate(existing_execution.checkpoint)
+            if existing_execution is not None and existing_execution.checkpoint
+            else Blackboard(query=query)
+        )
+        bb.scratch.setdefault(RUN_SETTINGS_CHECKPOINT_KEY, checkpoint_settings(self.settings))
+        raw_catalog_snapshot = bb.scratch.get(RUN_CATALOG_CHECKPOINT_KEY)
+        if raw_catalog_snapshot is not None and not isinstance(raw_catalog_snapshot, dict):
+            raise ValueError("catalog checkpoint snapshot must be an object")
+        cr = await load_catalog_runtime(
+            self._catalog_repo,
+            self.tracer,
+            self.settings,
+            snapshot=raw_catalog_snapshot,
+        )
         self._catalog_runtime = cr
+        if self._owns_llm and (cr is None or not cr.has_default_profile):
+            self.settings.validate_llm()
 
         ctx = RunContext(
             llm=self.llm,
@@ -184,16 +439,22 @@ class DeepResearchAgent:
             settings=self.settings,
             llm_resolver=cr.resolve_llm if cr is not None else None,
         )
-        bb = (
-            Blackboard.model_validate(self._resume_execution.checkpoint)
-            if self._resume_execution is not None and self._resume_execution.checkpoint
-            else Blackboard(query=query)
-        )
         budget = TokenBudget(max_tokens=self.settings.max_tokens)
+
+        if existing_execution is not None and existing_execution.definition:
+            wf = Workflow.model_validate(existing_execution.definition)
+        else:
+            wf = await self._resolve_workflow()
+        if RUN_CATALOG_CHECKPOINT_KEY not in bb.scratch and cr is not None:
+            bb.scratch[RUN_CATALOG_CHECKPOINT_KEY] = cr.snapshot(
+                workflow_catalog_roles(wf)
+            ).model_dump(mode="json")
 
         async def save_checkpoint(execution):  # type: ignore[no-untyped-def]
             if self.repo is not None and run_id is not None:
-                await self.repo.save_orchestration(run_id, execution)
+                await self.repo.save_orchestration(
+                    run_id, execution, lease_owner=self._lease_owner
+                )
 
         engine = WorkflowEngine(
             ctx,
@@ -201,13 +462,10 @@ class DeepResearchAgent:
             budget=budget,
             checkpoint_sink=save_checkpoint,
             resume_run=self._resume_execution,
+            initial_run=self._initial_execution,
             require_report=True,
             terminal_roles=cr.terminal_roles if cr is not None else None,
         )
-        if self._resume_execution is not None and self._resume_execution.definition:
-            wf = Workflow.model_validate(self._resume_execution.definition)
-        else:
-            wf = await self._resolve_workflow()
         if wf.nodes:
             errors = validate_workflow_graph_terminal(
                 wf.nodes,
@@ -230,25 +488,37 @@ class DeepResearchAgent:
         report = bb.report
         if self.repo is not None and run_id is not None:
             if engine.runtime.run is not None:
-                await self.repo.save_orchestration(run_id, engine.runtime.run)
-            if bb.plan is not None:
-                await self.repo.save_plan(run_id, bb.plan)
-            # 回放反思补洞轮次（origin="reflection"），保留重构前的落库语义
-            for rnd in bb.scratch.get("reflection_rounds", []):
-                await self.repo.add_sub_questions(
-                    run_id, rnd["sub_questions"], origin="reflection", round=rnd["round"]
+                await self.repo.save_orchestration(
+                    run_id, engine.runtime.run, lease_owner=self._lease_owner
                 )
-            for r in bb.results:
-                await self.repo.save_result(run_id, r)
-            await self.repo.save_report(run_id, report)
+            reflection_rounds: list[tuple[int, list[SubQuestion]]] = []
+            for raw_round in bb.scratch.get("reflection_rounds", []):
+                if not isinstance(raw_round, dict):
+                    continue
+                sub_questions = [
+                    SubQuestion.model_validate(item)
+                    for item in raw_round.get("sub_questions", [])
+                ]
+                reflection_rounds.append((int(raw_round.get("round", 0)), sub_questions))
+            # The final derived artifacts are one unit. Replacing them in one
+            # transaction makes recovery safe after any earlier partial write.
+            await self.repo.replace_artifacts(
+                run_id,
+                plan=bb.plan,
+                reflection_rounds=reflection_rounds,
+                results=bb.results,
+                report=report,
+                lease_owner=self._lease_owner,
+            )
         return report
 
     async def run_stream(self, query: str) -> AsyncIterator[Event]:
         """以事件流方式运行，供 SSE 实时推送。"""
+        self._claim_run()
         queue: asyncio.Queue[Event] = asyncio.Queue()
         sink = queue.put_nowait  # 存引用，便于 finally 精确移除
         self.tracer.add_sink(sink)
-        task = asyncio.create_task(self.run(query))
+        task = asyncio.create_task(self._run_once(query))
         finished = False  # 是否走到 ORCHESTRATOR 终态（区别于客户端中途断连）
         try:
             while True:

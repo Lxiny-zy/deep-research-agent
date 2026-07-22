@@ -18,11 +18,13 @@ import {
   type Node,
   type NodeProps,
   type ReactFlowInstance,
+  type Viewport,
   type XYPosition,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import type { RoleInfo, WorkflowStep } from '../types'
+import type { RoleInfo, WorkflowEdge, WorkflowStep } from '../types'
 import {
+  allocateSemanticEdgeId,
   assignEdgeRouting,
   buildRoutedEdgePath,
   canConnectNodes,
@@ -42,7 +44,7 @@ type CanvasNodeData = {
 }
 
 type CanvasEdgeData = {
-  onDelete?: (source: string, target: string) => void
+  onDelete?: (edgeId: string) => void
   sourceOffset?: number
   targetOffset?: number
   laneOffset?: number
@@ -94,8 +96,6 @@ function AgentFlowNode({ data, selected }: NodeProps<Node<CanvasNodeData>>) {
 
 function EditableWorkflowEdge({
   id,
-  source,
-  target,
   sourceX,
   sourceY,
   targetX,
@@ -135,7 +135,7 @@ function EditableWorkflowEdge({
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
             onClick={(event) => {
               event.stopPropagation()
-              data.onDelete?.(source, target)
+              data.onDelete?.(id)
             }}
             title="删除这条依赖线"
             aria-label="删除这条依赖线"
@@ -156,13 +156,17 @@ interface Props {
   nodeKeys: string[]
   roles: RoleInfo[]
   dependencies: Record<string, string[]>
-  conditions: Record<string, string>
+  workflowEdges: WorkflowEdge[]
+  semanticNodeIds: { input: string; output: string }
   positions: Record<string, XYPosition>
+  viewport: Viewport
+  fitViewOnInit: boolean
   selectedNodeId: string | null
   onSelectNode: (nodeId: string | null) => void
-  onConnect: (source: string, target: string) => void
-  onDisconnect: (source: string, target: string) => void
+  onConnect: (source: string, target: string) => string | undefined
+  onDisconnect: (edgeId: string) => void
   onPositionsChange: (positions: Record<string, XYPosition>) => void
+  onViewportChange: (viewport: Viewport) => void
   onAddAgent: (agent: string, position?: XYPosition) => void
   onAddReflection: (position?: XYPosition) => void
 }
@@ -227,12 +231,12 @@ export default function WorkflowFlowCanvas(props: Props) {
 
     return [
       {
-        id: '__input__',
+        id: props.semanticNodeIds.input,
         type: 'agentNode',
         selectable: false,
         deletable: false,
         draggable: true,
-        position: props.positions.__input__ ?? {
+        position: props.positions[props.semanticNodeIds.input] ?? {
           x: centerX,
           y: (ys.length ? Math.min(...ys) : 80) - 155,
         },
@@ -248,12 +252,12 @@ export default function WorkflowFlowCanvas(props: Props) {
       },
       ...agentNodes,
       {
-        id: '__output__',
+        id: props.semanticNodeIds.output,
         type: 'agentNode',
         selectable: false,
         deletable: false,
         draggable: true,
-        position: props.positions.__output__ ?? {
+        position: props.positions[props.semanticNodeIds.output] ?? {
           x: centerX,
           y: (ys.length ? Math.max(...ys) : 80) + 175,
         },
@@ -274,6 +278,7 @@ export default function WorkflowFlowCanvas(props: Props) {
     props.nodeKeys,
     props.positions,
     props.selectedNodeId,
+    props.semanticNodeIds,
     props.steps,
     roleName,
   ])
@@ -320,44 +325,44 @@ export default function WorkflowFlowCanvas(props: Props) {
 
   const workflowEdges = useMemo<WorkflowCanvasEdge[]>(
     () =>
-      Object.entries(props.dependencies).flatMap(([target, sources]) =>
-        sources
-          .filter((source) => props.nodeKeys.includes(source) && props.nodeKeys.includes(target))
-          .map((source) => {
-            const related = relatedNodeKeys.has(source) && relatedNodeKeys.has(target)
-            return {
-              id: `${source}->${target}`,
-              source,
-              target,
-              type: 'workflowEdge' as const,
-              label: props.conditions[`${source}->${target}`] || undefined,
-              animated: !!props.conditions[`${source}->${target}`],
-              className: [
-                props.conditions[`${source}->${target}`] ? 'conditional-edge' : '',
-                props.selectedNodeId ? (related ? 'workflow-edge-related' : 'workflow-edge-muted') : '',
-              ].filter(Boolean).join(' '),
-              selected: selectedEdgeId === `${source}->${target}`,
-              selectable: true,
-              deletable: true,
-              focusable: true,
-              zIndex: selectedEdgeId === `${source}->${target}` ? 4 : related ? 2 : 1,
-              markerEnd: {
-                type: MarkerType.ArrowClosed,
-                width: 18,
-                height: 18,
-                color: props.conditions[`${source}->${target}`] ? '#d8ff4f' : '#f7f2e8',
-              },
-              data: { onDelete: props.onDisconnect },
-              ariaLabel: `依赖线：${source} 到 ${target}`,
-            }
-          }),
-      ),
+      props.workflowEdges
+        .filter(
+          (edge) =>
+            props.nodeKeys.includes(edge.source) && props.nodeKeys.includes(edge.target),
+        )
+        .map((edge) => {
+          const related = relatedNodeKeys.has(edge.source) && relatedNodeKeys.has(edge.target)
+          return {
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+            type: 'workflowEdge' as const,
+            label: edge.condition || undefined,
+            animated: !!edge.condition,
+            className: [
+              edge.condition ? 'conditional-edge' : '',
+              props.selectedNodeId ? (related ? 'workflow-edge-related' : 'workflow-edge-muted') : '',
+            ].filter(Boolean).join(' '),
+            selected: selectedEdgeId === edge.id,
+            selectable: true,
+            deletable: true,
+            focusable: true,
+            zIndex: selectedEdgeId === edge.id ? 4 : related ? 2 : 1,
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              width: 18,
+              height: 18,
+              color: edge.condition ? '#d8ff4f' : '#f7f2e8',
+            },
+            data: { onDelete: props.onDisconnect },
+            ariaLabel: `依赖线：${edge.source} 到 ${edge.target}`,
+          }
+        }),
     [
-      props.conditions,
-      props.dependencies,
       props.nodeKeys,
       props.onDisconnect,
       props.selectedNodeId,
+      props.workflowEdges,
       relatedNodeKeys,
       selectedEdgeId,
     ],
@@ -379,10 +384,11 @@ export default function WorkflowFlowCanvas(props: Props) {
   )
   const terminals = props.nodeKeys.filter((key) => primaryKeys.has(key) && !primaryParents.has(key))
 
+  const reservedEdgeIds = new Set(workflowEdges.map((edge) => edge.id))
   const semanticEdges: WorkflowCanvasEdge[] = [
     ...roots.map((target) => ({
-      id: `__input__->${target}`,
-      source: '__input__',
+      id: allocateSemanticEdgeId(reservedEdgeIds, 'input', target),
+      source: props.semanticNodeIds.input,
       target,
       type: 'workflowEdge' as const,
       className: 'semantic-edge',
@@ -395,9 +401,9 @@ export default function WorkflowFlowCanvas(props: Props) {
       ariaLabel: `自动入口：用户输入到 ${target}`,
     })),
     ...terminals.map((source) => ({
-      id: `${source}->__output__`,
+      id: allocateSemanticEdgeId(reservedEdgeIds, 'output', source),
       source,
-      target: '__output__',
+      target: props.semanticNodeIds.output,
       type: 'workflowEdge' as const,
       className: 'semantic-edge',
       selectable: false,
@@ -421,7 +427,7 @@ export default function WorkflowFlowCanvas(props: Props) {
     ...edge,
     data: {
       ...edge.data,
-      ...(routing[`${edge.source}->${edge.target}`] ?? {}),
+      ...(routing[edge.id] ?? {}),
     },
   }))
 
@@ -432,8 +438,8 @@ export default function WorkflowFlowCanvas(props: Props) {
         connection.target &&
         canConnectNodes(nodeKeys, dependencies, connection.source, connection.target)
       ) {
-        onConnect(connection.source, connection.target)
-        setSelectedEdgeId(`${connection.source}->${connection.target}`)
+        const edgeId = onConnect(connection.source, connection.target)
+        if (edgeId) setSelectedEdgeId(edgeId)
       }
     },
     [dependencies, nodeKeys, onConnect],
@@ -465,15 +471,15 @@ export default function WorkflowFlowCanvas(props: Props) {
     onPositionsChange({
       ...positions,
       ...arranged,
-      __input__: { x: centerX + 10, y: minimumY - 160 },
-      __output__: { x: centerX + 10, y: maximumY + 190 },
+      [props.semanticNodeIds.input]: { x: centerX + 10, y: minimumY - 160 },
+      [props.semanticNodeIds.output]: { x: centerX + 10, y: maximumY + 190 },
     })
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         void flowInstance?.fitView({ padding: 0.28, duration: 420 })
       })
     })
-  }, [dependencies, flowInstance, nodeKeys, onPositionsChange, positions])
+  }, [dependencies, flowInstance, nodeKeys, onPositionsChange, positions, props.semanticNodeIds])
 
   return (
     <ReactFlow<Node<CanvasNodeData>, Edge>
@@ -482,6 +488,8 @@ export default function WorkflowFlowCanvas(props: Props) {
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onInit={setFlowInstance}
+      viewport={props.viewport}
+      onViewportChange={props.onViewportChange}
       onNodesChange={onNodesChange}
       onNodeDragStop={(_, draggedNode) => {
         props.onPositionsChange({
@@ -500,8 +508,8 @@ export default function WorkflowFlowCanvas(props: Props) {
       }}
       onEdgesDelete={(deleted) =>
         deleted.forEach((edge) => {
-          if (!edge.source.startsWith('__') && !edge.target.startsWith('__')) {
-            props.onDisconnect(edge.source, edge.target)
+          if (workflowEdgeIds.has(edge.id)) {
+            props.onDisconnect(edge.id)
           }
         })
       }
@@ -512,7 +520,7 @@ export default function WorkflowFlowCanvas(props: Props) {
         }
       }}
       onEdgeDoubleClick={(_, edge) => {
-        if (workflowEdgeIds.has(edge.id)) props.onDisconnect(edge.source, edge.target)
+        if (workflowEdgeIds.has(edge.id)) props.onDisconnect(edge.id)
       }}
       onNodeClick={(_, node) => {
         if (props.nodeKeys.includes(node.id)) {
@@ -525,7 +533,7 @@ export default function WorkflowFlowCanvas(props: Props) {
         event.dataTransfer.dropEffect = 'copy'
       }}
       onDrop={handleDrop}
-      fitView
+      fitView={props.fitViewOnInit}
       fitViewOptions={{ padding: 0.28 }}
       minZoom={0.25}
       maxZoom={1.8}
@@ -560,7 +568,7 @@ export default function WorkflowFlowCanvas(props: Props) {
             className="delete-action"
             onClick={() => {
               const edge = workflowEdges.find((item) => item.id === selectedEdgeId)
-              if (edge) props.onDisconnect(edge.source, edge.target)
+              if (edge) props.onDisconnect(edge.id)
             }}
           >
             删除已选连线

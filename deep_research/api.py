@@ -38,12 +38,34 @@ from .catalog.repository import CatalogRepository
 from .config import Settings
 from .observability import Event, EventHub
 from .orchestration import WorkflowRun
-from .orchestrator import DeepResearchAgent
+from .orchestrator import (
+    RUN_SETTINGS_CHECKPOINT_KEY,
+    DeepResearchAgent,
+    create_initial_execution,
+    snapshot_catalog_for_execution,
+)
 from .persistence.db import make_engine, make_sessionmaker, prepare_sqlite_schema
 from .persistence.repository import ResearchRepository, RunDetail, RunSummary, TagCount
 from .persistence.sql_repository import SqlRepository
+from .tools.base import SearchTool
 
 logger = logging.getLogger(__name__)
+
+_LEASE_RENEW_INTERVAL_SECONDS = 60.0
+_RECOVERY_INTERVAL_SECONDS = 30.0
+_RECOVERY_PAGE_SIZE = 1000
+_REMOTE_STREAM_POLL_SECONDS = 0.5
+_REMOTE_STREAM_TERMINAL_GRACE_SECONDS = 2.0
+_SSE_HEARTBEAT_SECONDS = 15.0
+_CHECKPOINT_SETTING_FIELDS = {
+    "max_sub_questions",
+    "max_rounds",
+    "max_concurrency",
+    "results_per_search",
+    "max_tokens",
+    "max_replans",
+    "request_timeout",
+}
 
 
 # 优先用构建后的 SPA（frontend/dist/index.html）；否则回退到内置静态单页 Demo（frontend/index.html）
@@ -144,6 +166,22 @@ def _settings_for(base: Settings, params: ResearchParams | None) -> Settings:
     return replace(base, **overrides) if overrides else base
 
 
+def _settings_for_resume(base: Settings, execution: WorkflowRun) -> Settings:
+    """Restore the original non-secret run limits from a durable checkpoint."""
+    scratch = execution.checkpoint.get("scratch", {})
+    raw = scratch.get(RUN_SETTINGS_CHECKPOINT_KEY, {}) if isinstance(scratch, dict) else {}
+    if not isinstance(raw, dict):
+        return base
+    overrides = {name: raw[name] for name in _CHECKPOINT_SETTING_FIELDS if name in raw}
+    if not overrides:
+        return base
+    try:
+        return replace(base, **overrides)
+    except (TypeError, ValueError):
+        logger.warning("run checkpoint contains invalid settings; using current defaults")
+        return base
+
+
 def _mask_secret(secret: str) -> str:
     """密钥脱敏：只露尾 4 位（不足 4 位整体视为短密钥，仍只露尾部）。"""
     if not secret:
@@ -214,6 +252,105 @@ def _check_rate_limit(request: Request) -> None:
         raise HTTPException(status_code=429, detail="too many requests, slow down")
 
 
+async def _recover_orphaned_runs(app: FastAPI, settings: Settings) -> None:
+    """Start recoverable runs whose lease is absent or has expired.
+
+    The lease check remains the final cross-instance arbiter; the repeated scan
+    only closes the gap where a crashed worker's TTL expires after startup.
+    """
+    orphaned: list[RunSummary] = []
+    for status in ("pending", "running"):
+        offset = 0
+        while True:
+            page = await app.state.repo.list_runs(
+                status=status, limit=_RECOVERY_PAGE_SIZE, offset=offset
+            )
+            orphaned.extend(page)
+            if len(page) < _RECOVERY_PAGE_SIZE:
+                break
+            offset += len(page)
+    for summary in orphaned:
+        lease_owner: str | None = None
+        handed_off = False
+        live_created = False
+        try:
+            if summary.id in app.state.live:
+                continue
+            detail = await app.state.repo.get_run(summary.id)
+            execution = detail.orchestration if detail is not None else None
+            if detail is None or execution is None:
+                await app.state.repo.set_status(summary.id, "error")
+                continue
+            lease_owner = uuid4().hex
+            if not await app.state.repo.acquire_lease(summary.id, lease_owner):
+                lease_owner = None
+                continue
+
+            # The initial read only identifies a candidate. Always reload after
+            # fencing so a just-expired worker cannot be resumed from a stale
+            # checkpoint (or restart a run that completed in the meantime).
+            detail = await app.state.repo.get_run(summary.id)
+            execution = detail.orchestration if detail is not None else None
+            if detail is None or execution is None:
+                continue
+            if detail.status not in {"pending", "running"}:
+                continue
+            if not execution.checkpoint:
+                try:
+                    await app.state.repo.set_status(
+                        summary.id, "error", lease_owner=lease_owner
+                    )
+                finally:
+                    await app.state.repo.release_lease(summary.id, lease_owner)
+                    lease_owner = None
+                continue
+
+            await app.state.repo.prepare_resume(summary.id, lease_owner=lease_owner)
+            app.state.live[summary.id] = EventHub()
+            live_created = True
+            try:
+                resume_settings = _settings_for_resume(settings, execution)
+                task = asyncio.create_task(
+                    _execute(
+                        app,
+                        summary.id,
+                        detail.query,
+                        resume_settings,
+                        execution.workflow_name,
+                        execution,
+                        lease_owner,
+                    )
+                )
+            except BaseException:
+                raise
+            handed_off = True
+            app.state.tasks.add(task)
+            task.add_done_callback(app.state.tasks.discard)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("failed to recover orphaned run %s", summary.id)
+        finally:
+            if not handed_off and lease_owner is not None:
+                if live_created:
+                    app.state.live.pop(summary.id, None)
+                try:
+                    await app.state.repo.release_lease(summary.id, lease_owner)
+                except Exception:
+                    logger.exception("failed to release recovery lease for %s", summary.id)
+
+
+async def _recovery_loop(app: FastAPI) -> None:
+    while True:
+        await asyncio.sleep(_RECOVERY_INTERVAL_SECONDS)
+        try:
+            await _recover_orphaned_runs(app, app.state.settings)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("周期恢复未完成任务失败")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
@@ -225,51 +362,41 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("应用持久化配置失败，回退到环境变量配置")
     engine = make_engine(settings.database_url)
-    # SQLite 本地启动也准备 schema，避免旧 create_all 库升级后缺列；PostgreSQL 由 entrypoint 迁移。
-    if settings.database_url.startswith("sqlite"):
-        await prepare_sqlite_schema(engine, settings.database_url)
-    app.state.settings = settings
-    app.state.engine = engine
-    app.state.repo = SqlRepository(make_sessionmaker(engine))
-    app.state.catalog = CatalogRepository(make_sessionmaker(engine))  # 角色广场 catalog 仓储
-    app.state.live = {}  # run_id -> EventHub：进行中 run 的实时事件中枢（向多端 SSE 扇出）
-    app.state.tasks = set()  # 持有后台任务引用，避免被 GC 提前回收
-    app.state.instance_id = str(uuid4())
-    # 自动恢复上次进程中断且已有 checkpoint 的任务；无 checkpoint 的孤儿任务置 error。
+    recovery_task: asyncio.Task[None] | None = None
     try:
-        orphaned = [
-            *await app.state.repo.list_runs(status="pending", limit=1000),
-            *await app.state.repo.list_runs(status="running", limit=1000),
-        ]
-        for summary in orphaned:
-            detail = await app.state.repo.get_run(summary.id)
-            execution = detail.orchestration if detail is not None else None
-            if detail is None or execution is None or not execution.checkpoint:
-                await app.state.repo.set_status(summary.id, "error")
-                continue
-            if not await app.state.repo.acquire_lease(summary.id, app.state.instance_id):
-                continue
-            app.state.live[summary.id] = EventHub()
-            task = asyncio.create_task(
-                _execute(
-                    app,
-                    summary.id,
-                    detail.query,
-                    settings,
-                    execution.workflow_name,
-                    execution,
-                    app.state.instance_id,
-                )
-            )
-            app.state.tasks.add(task)
-            task.add_done_callback(app.state.tasks.discard)
-    except Exception:
-        logger.exception("启动恢复未完成任务失败（不阻塞启动）")
-    try:
+        # SQLite 本地启动也准备 schema，避免旧 create_all 库升级后缺列；
+        # PostgreSQL 由 entrypoint 迁移。
+        if settings.database_url.startswith("sqlite"):
+            await prepare_sqlite_schema(engine, settings.database_url)
+        app.state.settings = settings
+        app.state.engine = engine
+        app.state.repo = SqlRepository(make_sessionmaker(engine))
+        app.state.catalog = CatalogRepository(make_sessionmaker(engine))  # 角色广场 catalog 仓储
+        app.state.live = {}  # run_id -> EventHub：进行中 run 的实时事件中枢（向多端 SSE 扇出）
+        app.state.tasks = set()  # 持有后台任务引用，避免被 GC 提前回收
+        # 自动恢复上次进程中断且已有 checkpoint 的任务；无 checkpoint 的孤儿任务置 error。
+        try:
+            await _recover_orphaned_runs(app, settings)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("启动恢复未完成任务失败（不阻塞启动）")
+        recovery_task = asyncio.create_task(_recovery_loop(app))
+        app.state.tasks.add(recovery_task)
+        recovery_task.add_done_callback(app.state.tasks.discard)
         yield
     finally:
-        # 先取消并回收后台研究任务，再释放引擎——避免任务在 dispose 后继续发 SQL
-        tasks = list(app.state.tasks)
+        # Stop the producer of background work first. Otherwise a recovery
+        # scan can hand off a new execution after the task snapshot below.
+        if recovery_task is not None:
+            recovery_task.cancel()
+            await asyncio.gather(recovery_task, return_exceptions=True)
+        # 再取消并回收后台研究任务，最后释放引擎——避免任务在 dispose 后继续发 SQL
+        tasks = [
+            task
+            for task in getattr(app.state, "tasks", set())
+            if task is not recovery_task
+        ]
         for task in tasks:
             task.cancel()
         if tasks:
@@ -306,7 +433,91 @@ def _sse(event: Event) -> str:
     return f"data: {event.model_dump_json()}\n\n"
 
 
-async def _build_search_tool(app: FastAPI, settings: Settings):  # type: ignore[no-untyped-def]
+async def _stream_run_sse(app: FastAPI, run_id: str) -> AsyncIterator[str]:
+    """Stream locally when possible, otherwise follow shared durable state.
+
+    Event persistence currently replaces the complete event list when an
+    attempt finishes.  A non-owner instance therefore cannot provide live
+    token deltas, but it must keep the SSE request open and eventually replay
+    the durable terminal stream instead of returning an empty 200 response.
+    """
+    repo: ResearchRepository = app.state.repo
+    next_heartbeat = time.monotonic() + _SSE_HEARTBEAT_SECONDS
+
+    while True:
+        hub: EventHub | None = app.state.live.get(run_id)
+        if hub is not None:
+            async for event in hub.stream():
+                yield _sse(event)
+            return
+
+        status = await repo.get_run_status(run_id)
+        if status is None:
+            yield _sse(
+                Event(
+                    stage="ORCHESTRATOR",
+                    type="error",
+                    message="运行已被删除",
+                    data={"status": "missing"},
+                )
+            )
+            return
+
+        if status in {"pending", "running"}:
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                yield ": keep-alive\n\n"
+                next_heartbeat = now + _SSE_HEARTBEAT_SECONDS
+            await asyncio.sleep(_REMOTE_STREAM_POLL_SECONDS)
+            continue
+
+        expected_type = "done" if status == "done" else "error"
+        deadline = time.monotonic() + _REMOTE_STREAM_TERMINAL_GRACE_SECONDS
+        events: list[Event] = []
+        matching_terminal = False
+        status_changed = False
+        while True:
+            # A resume transaction can move a previously terminal run back to
+            # running while this subscriber is waiting. Never synthesize or
+            # replay a terminal event from the stale status snapshot.
+            if await repo.get_run_status(run_id) != status:
+                status_changed = True
+                break
+            events = await repo.get_events(run_id)
+            matching_terminal = any(
+                event.stage == "ORCHESTRATOR" and event.type == expected_type
+                for event in events
+            )
+            if matching_terminal or time.monotonic() >= deadline:
+                if await repo.get_run_status(run_id) != status:
+                    status_changed = True
+                break
+            await asyncio.sleep(_REMOTE_STREAM_POLL_SECONDS)
+
+        if status_changed:
+            continue
+        for event in events:
+            if (
+                event.stage == "ORCHESTRATOR"
+                and event.type in {"done", "error"}
+                and event.type != expected_type
+            ):
+                continue
+            yield _sse(event)
+        if not matching_terminal:
+            message = "运行已完成" if expected_type == "done" else "运行失败"
+            yield _sse(
+                Event(
+                    stage="ORCHESTRATOR",
+                    type=expected_type,
+                    message=message,
+                    data={"status": status},
+                )
+            )
+        return
+
+
+async def _build_search_tool(app: FastAPI, settings: Settings) -> SearchTool | None:
     """优先用搜索 key 池（主备故障转移）；池为空则回退到全局单 key TavilySearch。"""
     keys: list[str] = []
     try:
@@ -328,18 +539,44 @@ async def _execute(
     workflow: str | None = None,
     resume_execution: WorkflowRun | None = None,
     lease_owner: str | None = None,
+    initial_execution: WorkflowRun | None = None,
 ) -> None:
     """后台执行一次研究：事件经 EventHub 实时扇出给 SSE 订阅者，全程落库。"""
-    hub: EventHub = app.state.live[run_id]
+    hub: EventHub = app.state.live.get(run_id)
+    if hub is None:
+        # A task must still release its lease and close subscribers if setup
+        # raced with cancellation or a process-level state reset.
+        hub = EventHub()
+        app.state.live[run_id] = hub
     agent: DeepResearchAgent | None = None
     heartbeat: asyncio.Task[None] | None = None
+    search_tool: SearchTool | None = None
     try:
         if lease_owner is not None:
+            execution_task = asyncio.current_task()
 
             async def renew_lease() -> None:
                 while True:
-                    await asyncio.sleep(60)
-                    await app.state.repo.acquire_lease(run_id, lease_owner)
+                    await asyncio.sleep(_LEASE_RENEW_INTERVAL_SECONDS)
+                    try:
+                        renewed = await app.state.repo.renew_lease(run_id, lease_owner)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.exception("run %s lease renewal failed", run_id)
+                        renewed = False
+                    if renewed:
+                        continue
+                    hub.publish(
+                        Event(
+                            stage="ORCHESTRATOR",
+                            type="error",
+                            message="执行租约续期失败，任务已终止",
+                        )
+                    )
+                    if execution_task is not None:
+                        execution_task.cancel()
+                    return
 
             heartbeat = asyncio.create_task(renew_lease())
         # 构造必须在 try 内：缺 API key 等构造期异常同样要走 finally 收尾，
@@ -353,20 +590,29 @@ async def _execute(
             catalog_repo=app.state.catalog,
             search_tool=search_tool,
             resume_execution=resume_execution,
+            initial_execution=initial_execution,
+            lease_owner=lease_owner,
         )
         if resume_execution is not None:
             # Seed the new tracer because save_events uses replacement semantics.
-            agent.tracer.events = await app.state.repo.get_events(run_id)
+            historical_events = await app.state.repo.get_events(run_id)
+            # A resumed attempt must not replay the previous attempt's terminal
+            # marker: clients would abort the new stream before live events arrive.
+            agent.tracer.events = [
+                event
+                for event in historical_events
+                if not (
+                    event.stage == "ORCHESTRATOR" and event.type in {"done", "error"}
+                )
+            ]
             for historical_event in agent.tracer.events:
                 hub.publish(historical_event)
         agent.tracer.add_sink(hub.publish)
         await agent.run(query)
     except asyncio.CancelledError:
-        # 服务关停：尽力把状态落库后继续传播取消
-        try:
-            await app.state.repo.set_status(run_id, "error")
-        except Exception:
-            logger.exception("run %s 取消后落库状态失败", run_id)
+        # Cancellation also represents an orderly process shutdown or lease
+        # fencing.  Keep the durable run active so another instance can resume
+        # its checkpoint; orphan recovery will mark checkpoint-less runs error.
         raise
     except Exception:
         # run() 内部正常路径已 emit error 事件并置 status=error；
@@ -374,22 +620,56 @@ async def _execute(
         logger.exception("run %s 执行失败", run_id)
         hub.publish(Event(stage="ORCHESTRATOR", type="error", message="服务器内部错误，运行已终止"))
         try:
-            await app.state.repo.set_status(run_id, "error")
+            await app.state.repo.set_status(
+                run_id, "error", lease_owner=lease_owner
+            )
         except Exception:
             logger.exception("run %s 兜底置 error 状态失败", run_id)
     finally:
-        if heartbeat is not None:
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
-        if lease_owner is not None:
-            await app.state.repo.release_lease(run_id, lease_owner)
-        if agent is not None:
+        async def cleanup_resources() -> None:
+            if heartbeat is not None:
+                heartbeat.cancel()
+                try:
+                    await asyncio.gather(heartbeat, return_exceptions=True)
+                except BaseException:
+                    logger.exception("run %s lease heartbeat cleanup failed", run_id)
+            if lease_owner is not None:
+                try:
+                    await app.state.repo.release_lease(run_id, lease_owner)
+                except BaseException:
+                    logger.exception("run %s release lease failed", run_id)
+            if agent is not None:
+                try:
+                    await agent.aclose()
+                except BaseException:
+                    logger.exception("run %s 释放 LLM client 失败", run_id)
+            if search_tool is not None:
+                try:
+                    await search_tool.aclose()
+                except BaseException:
+                    logger.exception("run %s 释放搜索 client 失败", run_id)
+
+        # A second task.cancel() must not interrupt resource cleanup. Shielding
+        # an independent task lets this task retain cancellation semantics while
+        # cleanup runs to completion.
+        cleanup_task = asyncio.create_task(cleanup_resources())
+        cleanup_interrupted = False
+        try:
+            while not cleanup_task.done():
+                try:
+                    await asyncio.shield(cleanup_task)
+                except asyncio.CancelledError:
+                    cleanup_interrupted = True
+            cleanup_task.result()
+        except BaseException:
+            logger.exception("run %s resource cleanup failed", run_id)
+        finally:
             try:
-                await agent.aclose()
-            except Exception:
-                logger.exception("run %s 释放 LLM client 失败", run_id)
-        hub.close()  # 通知所有在线 SSE 订阅者收尾
-        app.state.live.pop(run_id, None)
+                hub.close()  # notify every online SSE subscriber
+            finally:
+                app.state.live.pop(run_id, None)
+        if cleanup_interrupted:
+            raise asyncio.CancelledError
 
 
 @lru_cache(maxsize=8)
@@ -418,10 +698,47 @@ async def healthz() -> dict[str, str]:
 async def create_run(req: CreateRunRequest, request: Request) -> CreateRunResponse:
     _check_rate_limit(request)
     repo: ResearchRepository = request.app.state.repo
-    run_id = await repo.create_run(req.query)
-    request.app.state.live[run_id] = EventHub()
     settings = _settings_for(request.app.state.settings, req.params)
-    task = asyncio.create_task(_execute(request.app, run_id, req.query, settings, req.workflow))
+    lease_owner = uuid4().hex
+    execution = create_initial_execution(req.query, req.workflow, settings)
+    catalog = getattr(request.app.state, "catalog", None)
+    if not execution.definition:
+        workflow_def = None
+        if catalog is not None:
+            try:
+                workflow_def = await catalog.get_workflow_def(req.workflow)
+            except Exception:
+                logger.exception("failed to snapshot custom workflow %s", req.workflow)
+        if workflow_def is not None and workflow_def.enabled:
+            execution.definition = {
+                "name": workflow_def.name,
+                "description": workflow_def.description,
+                "steps": workflow_def.steps,
+                "nodes": workflow_def.nodes,
+                "edges": workflow_def.edges,
+            }
+        else:
+            from .workflows import get_workflow
+
+            execution.definition = get_workflow(req.workflow).model_dump(mode="json")
+        execution.workflow_name = str(execution.definition["name"])
+    await snapshot_catalog_for_execution(execution, catalog)
+    run_id = await repo.create_run(
+        req.query, execution=execution, lease_owner=lease_owner
+    )
+    request.app.state.live[run_id] = EventHub()
+    task = asyncio.create_task(
+        _execute(
+            request.app,
+            run_id,
+            req.query,
+            settings,
+            req.workflow,
+            None,
+            lease_owner,
+            execution,
+        )
+    )
     request.app.state.tasks.add(task)
     task.add_done_callback(request.app.state.tasks.discard)
     return CreateRunResponse(run_id=run_id)
@@ -439,28 +756,58 @@ async def resume_run(run_id: str, request: Request) -> CreateRunResponse:
     if detail is None:
         raise HTTPException(status_code=404, detail="run not found")
     execution = detail.orchestration
-    if execution is None or not execution.checkpoint or not execution.definition:
+    if execution is None or not execution.checkpoint:
         raise HTTPException(status_code=409, detail="run has no recoverable checkpoint")
     if detail.status == "done":
         raise HTTPException(status_code=409, detail="completed run cannot be resumed")
-    owner = getattr(request.app.state, "instance_id", "test-instance")
+    # A fresh token identifies this execution attempt, so concurrent resume
+    # requests cannot renew and share the same lease.
+    owner = uuid4().hex
     if not await request.app.state.repo.acquire_lease(run_id, owner):
         raise HTTPException(status_code=409, detail="run is leased by another instance")
-    request.app.state.live[run_id] = EventHub()
-    task = asyncio.create_task(
-        _execute(
-            request.app,
-            run_id,
-            detail.query,
-            request.app.state.settings,
-            execution.workflow_name,
-            execution,
-            owner,
-        )
-    )
-    request.app.state.tasks.add(task)
-    task.add_done_callback(request.app.state.tasks.discard)
-    return CreateRunResponse(run_id=run_id)
+    handed_off = False
+    try:
+        # Re-read after acquiring the lease. The first snapshot may have been
+        # stale while the previous worker was finishing or writing a checkpoint.
+        detail = await request.app.state.repo.get_run(run_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        execution = detail.orchestration
+        if execution is None or not execution.checkpoint:
+            raise HTTPException(status_code=409, detail="run has no recoverable checkpoint")
+        if detail.status == "done":
+            raise HTTPException(status_code=409, detail="completed run cannot be resumed")
+        resume_settings = _settings_for_resume(request.app.state.settings, execution)
+        # Publish the new attempt before returning 202 so clients cannot keep
+        # treating the previous attempt's terminal status as authoritative.
+        await request.app.state.repo.prepare_resume(run_id, lease_owner=owner)
+        request.app.state.live[run_id] = EventHub()
+        try:
+            task = asyncio.create_task(
+                _execute(
+                    request.app,
+                    run_id,
+                    detail.query,
+                    resume_settings,
+                    execution.workflow_name,
+                    execution,
+                    owner,
+                )
+            )
+        except BaseException:
+            request.app.state.live.pop(run_id, None)
+            raise
+        handed_off = True
+        request.app.state.tasks.add(task)
+        task.add_done_callback(request.app.state.tasks.discard)
+        return CreateRunResponse(run_id=run_id)
+    finally:
+        if not handed_off:
+            request.app.state.live.pop(run_id, None)
+            try:
+                await request.app.state.repo.release_lease(run_id, owner)
+            except Exception:
+                logger.exception("failed to release resume lease for %s", run_id)
 
 
 @app.get("/api/workflows", dependencies=[Depends(require_api_key)])
@@ -578,13 +925,40 @@ async def list_tags(request: Request) -> list[TagCount]:
     return await repo.list_tags()
 
 
+async def _delete_run_if_idle(repo: ResearchRepository, run_id: str) -> str:
+    detail = await repo.get_run(run_id)
+    if detail is None:
+        return "missing"
+    if detail.orchestration is None:
+        if detail.status in {"pending", "running"}:
+            # Legacy workers created the workflow row after the research row,
+            # so these states can still represent active work without a lease.
+            return "leased"
+        return "deleted" if await repo.delete_run(run_id) else "missing"
+
+    owner = uuid4().hex
+    if not await repo.acquire_lease(run_id, owner):
+        return "leased"
+    try:
+        return "deleted" if await repo.delete_run(run_id) else "missing"
+    finally:
+        # Deletion cascades the lease row; release remains useful if a
+        # concurrent delete won after acquisition or deletion raised.
+        try:
+            await repo.release_lease(run_id, owner)
+        except Exception:
+            logger.exception("failed to release delete lease for %s", run_id)
+
+
 @app.delete("/api/runs/{run_id}", status_code=204, dependencies=[Depends(require_api_key)])
 async def delete_run(run_id: str, request: Request) -> Response:
     app_ = request.app
     if app_.state.live.get(run_id) is not None:
         raise HTTPException(status_code=409, detail="运行进行中，无法删除")
-    deleted = await app_.state.repo.delete_run(run_id)
-    if not deleted:
+    outcome = await _delete_run_if_idle(app_.state.repo, run_id)
+    if outcome == "leased":
+        raise HTTPException(status_code=409, detail="运行进行中，无法删除")
+    if outcome == "missing":
         raise HTTPException(status_code=404, detail="run not found")
     return Response(status_code=204)
 
@@ -597,7 +971,10 @@ async def batch_delete(req: BatchDeleteRequest, request: Request) -> BatchDelete
         if app_.state.live.get(run_id) is not None:
             skipped += 1  # 进行中：跳过而非报错，批量操作尽量推进
             continue
-        if await app_.state.repo.delete_run(run_id):
+        outcome = await _delete_run_if_idle(app_.state.repo, run_id)
+        if outcome == "leased":
+            skipped += 1
+        elif outcome == "deleted":
             deleted += 1
     return BatchDeleteResponse(deleted=deleted, skipped=skipped)
 
@@ -634,19 +1011,15 @@ async def get_events(run_id: str, request: Request, after_seq: int = Query(0, ge
 async def stream_run(run_id: str, request: Request) -> StreamingResponse:
     app_ = request.app
     # 未知 run 返回 404，而非 200 + 空流（让客户端能区分「不存在」与「无事件」）
-    if app_.state.live.get(run_id) is None and await app_.state.repo.get_run(run_id) is None:
+    if (
+        app_.state.live.get(run_id) is None
+        and await app_.state.repo.get_run_status(run_id) is None
+    ):
         raise HTTPException(status_code=404, detail="run not found")
 
     async def gen() -> AsyncIterator[str]:
-        hub: EventHub | None = app_.state.live.get(run_id)
-        if hub is not None:
-            # 进行中：从 EventHub 订阅（回放已发生事件 + 续收实时事件），支持多端同时观看
-            async for event in hub.stream():
-                yield _sse(event)
-        else:
-            # 已结束（或未知）：从 DB 按 seq 回放
-            for event in await app_.state.repo.get_events(run_id):
-                yield _sse(event)
+        async for chunk in _stream_run_sse(app_, run_id):
+            yield chunk
 
     return StreamingResponse(
         gen(),

@@ -12,3 +12,7 @@ class SearchTool(ABC):
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
         """检索并返回标准化的来源列表。"""
         raise NotImplementedError
+
+    async def aclose(self) -> None:
+        """Release client resources when a search backend owns a connection pool."""
+        return None

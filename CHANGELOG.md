@@ -43,6 +43,42 @@
 
 ### Fixed
 
+- Kept checkpointed runs recoverable across orderly shutdowns, stopped the
+  recovery producer before cancelling workers, and made resource/engine cleanup
+  resilient to repeated cancellation and startup interruption.
+- Recognized empty-database and URI-mode SQLite memory URLs so schema creation
+  stays on the application's live connection instead of a discarded Alembic
+  connection.
+- Froze non-secret Catalog role behavior, prompts, profile references, and
+  terminal-role semantics in each run checkpoint so Catalog edits or deletions
+  cannot invalidate recovery.
+- Kept cross-instance SSE subscriptions open until durable terminal state,
+  added bounded terminal replay fallbacks, and atomically removed prior-attempt
+  terminal events when resuming to prevent same-status ABA replays.
+- Fenced every background run write with a renewable lease token, prevented stale
+  workers from resurrecting expired leases, and made recovery re-read checkpoints
+  after acquisition, page through all orphaned runs, and survive per-run failures.
+- Preserved the initial workflow-run identity and definition across startup and
+  resume, synchronized resumed status before returning `202`, and blocked deletes
+  while another instance holds a run lease.
+- Merged completed parallel graph branches into failure checkpoints, retained
+  independent parallel scratch updates, and kept lease-loss cancellation from
+  masking the original cancellation or run error.
+- Allowed independent conditional parallel workflow edges, bounded long/Unicode
+  edge IDs, isolated semantic canvas node/edge IDs, and made conflict retries use
+  the server's current workflow version without discarding the draft.
+- Fixed Tavily key-pool failover ordering and added best-effort cleanup across all
+  LLM, catalog, search, and key-pool clients.
+- Isolated every retry and fallback attempt on a deep Blackboard snapshot so
+  failed attempts cannot leak partial mutations into later attempts or branches.
+- Reconciled legacy SQLite databases with a migration-local frozen schema,
+  rejected explicit `null` updates for required catalog fields, and rejected
+  duplicate workflow edge IDs before persistence.
+- Kept resumed runs visibly active over stale failed/cancelled snapshots and
+  collapsed superseded step records by semantic workflow node.
+- Made owned LLM and search clients lazy and exception-safe, honored falsey
+  injected dependencies, made agent instances single-use, and closed CLI-owned
+  resources on every exit path.
 - Scanned raw and decoded source URL path/query/fragment for prompt-injection signals before
   sources enter LLM context, and rejected multicast, non-public, and ambiguous numeric IP hosts.
 - Re-ran claim consistency verification after `team_fanout` child results are merged so cross-team

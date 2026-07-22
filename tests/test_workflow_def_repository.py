@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from deep_research.catalog.dto import WorkflowDefCreate, WorkflowDefUpdate
-from deep_research.catalog.repository import CatalogRepository
+from deep_research.catalog.repository import CatalogRepository, WorkflowVersionConflictError
 from deep_research.persistence.db import create_all
 
 
@@ -45,8 +45,15 @@ async def test_workflow_def_crud_roundtrip(cat):
     listed = await cat.list_workflow_defs()
     assert any(w.name == "my-deep" for w in listed)
 
-    upd = await cat.update_workflow_def(v.id, WorkflowDefUpdate(description="d2", enabled=False))
+    upd = await cat.update_workflow_def(
+        v.id, WorkflowDefUpdate(description="d2", enabled=False, version=v.version)
+    )
     assert upd is not None and upd.description == "d2" and not upd.enabled
+    assert upd.version == 2
+    with pytest.raises(WorkflowVersionConflictError):
+        await cat.update_workflow_def(
+            v.id, WorkflowDefUpdate(description="stale", version=v.version)
+        )
 
     assert await cat.delete_workflow_def(v.id) is True
     assert await cat.get_workflow_def("my-deep") is None

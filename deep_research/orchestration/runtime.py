@@ -21,11 +21,19 @@ class OrchestrationRuntime:
         self._sequence = 0
 
     def restore(self, run: WorkflowRun) -> None:
+        self._load(run)
+        self._publish("workflow.resumed", {"workflow": run.workflow_name})
+
+    def adopt(self, run: WorkflowRun) -> None:
+        """Continue a pre-persisted run without treating it as a recovery."""
+        self._load(run)
+        self._publish("workflow.started", {"workflow": run.workflow_name})
+
+    def _load(self, run: WorkflowRun) -> None:
         self.run = run.model_copy(deep=True)
         self.run.status = RunStatus.RUNNING
         self.run.finished_at = None
         self._sequence = len(self.run.steps)
-        self._publish("workflow.resumed", {"workflow": self.run.workflow_name})
 
     def start(self, workflow_name: str, input_: dict) -> WorkflowRun:
         if self.run is not None and self.run.status == RunStatus.RUNNING:

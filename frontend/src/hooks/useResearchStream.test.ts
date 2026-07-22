@@ -43,6 +43,19 @@ describe('reduceStream', () => {
     expect(s.stats).toEqual({ elapsed: 1.2, total_tokens: 99, sources: 3 })
   })
 
+  it('ignores trailing events after a terminal event', () => {
+    const done = reduceStream(
+      base,
+      ev({ type: 'done', data: { elapsed: 1.2, total_tokens: 99, sources: 3 } }),
+    )
+    const stale = reduceStream(
+      done,
+      ev({ stage: 'SYNTHESIZER', type: 'token', data: { delta: 'stale' } }),
+    )
+    expect(stale).toBe(done)
+    expect(stale.reportMarkdown).toBe('')
+  })
+
   it('ORCHESTRATOR error 事件标记终态错误', () => {
     const s = reduceStream(base, ev({ stage: 'ORCHESTRATOR', type: 'error', message: '失败' }))
     expect(s.status).toBe('error')

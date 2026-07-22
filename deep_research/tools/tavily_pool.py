@@ -4,7 +4,7 @@
 鉴权类错误则切换到下一个 key 并记住新位置（粘滞，避免每次都从头撞已耗尽的 key）。
 全部 key 都失败才向上抛出，由 Researcher 的单点错误隔离兜底。
 
-每个 key 创建独立 AsyncTavilyClient（client 与 key 绑定，不可中途换 key）。
+每个 key 按需创建并缓存独立 AsyncTavilyClient（client 与 key 绑定，不可中途换 key）。
 """
 
 from __future__ import annotations
@@ -29,22 +29,30 @@ class TavilyKeyPoolSearch(SearchTool):
         if not api_keys:
             raise ValueError("搜索 key 池为空：至少需要一个 Tavily key")
         self._keys = list(api_keys)
-        self._clients = [AsyncTavilyClient(api_key=k) for k in self._keys]
+        self._clients: list[AsyncTavilyClient | None] = [None] * len(self._keys)
         self._idx = 0  # 当前粘滞使用的 key 下标
         self._tracer = tracer
+
+    def _client_for(self, index: int) -> AsyncTavilyClient:
+        client = self._clients[index]
+        if client is None:
+            client = AsyncTavilyClient(api_key=self._keys[index])
+            self._clients[index] = client
+        return client
 
     def _emit(self, type_: EventType, message: str) -> None:
         if self._tracer is not None:
             self._tracer.emit("RESEARCHER", type_, message)
 
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
-        n = len(self._clients)
+        n = len(self._keys)
         last_exc: Exception | None = None
+        start = self._idx
         # 从当前粘滞下标起，最多把每个 key 试一遍
         for offset in range(n):
-            i = (self._idx + offset) % n
+            i = (start + offset) % n
             try:
-                resp = await self._clients[i].search(
+                resp = await self._client_for(i).search(
                     query, max_results=max_results, search_depth="advanced"
                 )
             except Exception as e:
@@ -55,9 +63,24 @@ class TavilyKeyPoolSearch(SearchTool):
                     self._emit("info", f"搜索 key #{i + 1} 不可用（{e}），切换到 #{nxt + 1}")
                     continue
                 raise  # 非配额类错误（如网络抖动）：交给上层重试/隔离，不浪费切换
+            self._idx = i
             return _to_sources(resp)
         # 所有 key 都失败
         raise RuntimeError(f"搜索 key 池全部失败（共 {n} 个）：{last_exc}")
+
+    async def aclose(self) -> None:
+        errors: list[Exception] = []
+        for client in self._clients:
+            if client is None:
+                continue
+            try:
+                await client.close()
+            except Exception as exc:
+                # Best-effort cleanup: a broken client must not leak the
+                # remaining key clients. Re-raise after all are attempted.
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
 
 def _to_sources(resp: dict) -> list[Source]:

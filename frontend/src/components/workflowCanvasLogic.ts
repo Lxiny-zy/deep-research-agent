@@ -33,7 +33,6 @@ export function canConnectNodes(
   target: string,
 ): boolean {
   if (source === target || !nodeKeys.includes(source) || !nodeKeys.includes(target)) return false
-  if ((dependencies[target] ?? []).includes(source)) return false
 
   const outgoing = new Map<string, string[]>()
   for (const [child, parents] of Object.entries(dependencies)) {
@@ -54,9 +53,47 @@ export function canConnectNodes(
   return true
 }
 
+export function allocateSemanticEdgeId(
+  usedIds: Set<string>,
+  endpoint: 'input' | 'output',
+  nodeId: string,
+): string {
+  const base = `__semantic__:${endpoint}:${nodeId}`
+  let candidate = base
+  let suffix = 2
+  while (usedIds.has(candidate)) {
+    candidate = `${base}:${suffix}`
+    suffix += 1
+  }
+  usedIds.add(candidate)
+  return candidate
+}
+
+export function allocateSemanticNodeIds(nodeIds: Iterable<string>): {
+  input: string
+  output: string
+} {
+  const used = new Set(nodeIds)
+  const allocate = (base: string) => {
+    let candidate = base
+    let suffix = 2
+    while (used.has(candidate)) {
+      candidate = `${base}:${suffix}`
+      suffix += 1
+    }
+    used.add(candidate)
+    return candidate
+  }
+  return {
+    input: allocate('__canvas_semantic__:input'),
+    output: allocate('__canvas_semantic__:output'),
+  }
+}
+
 export type CanvasPosition = { x: number; y: number }
 
 export type RoutableEdge = {
+  id: string
   source: string
   target: string
 }
@@ -91,7 +128,7 @@ export function assignEdgeRouting(
 ): Record<string, EdgeRouting> {
   const routing = Object.fromEntries(
     edges.map((edge) => [
-      `${edge.source}->${edge.target}`,
+      edge.id,
       { sourceOffset: 0, targetOffset: 0, laneOffset: 0 },
     ]),
   ) as Record<string, EdgeRouting>
@@ -110,7 +147,7 @@ export function assignEdgeRouting(
       return leftTarget.x - rightTarget.x || leftTarget.y - rightTarget.y
     })
     group.forEach((edge, index) => {
-      routing[`${edge.source}->${edge.target}`].sourceOffset = centeredOffset(index, group.length, 24)
+      routing[edge.id].sourceOffset = centeredOffset(index, group.length, 24)
     })
   }
 
@@ -121,7 +158,7 @@ export function assignEdgeRouting(
       return leftSource.x - rightSource.x || leftSource.y - rightSource.y
     })
     group.forEach((edge, index) => {
-      routing[`${edge.source}->${edge.target}`].targetOffset = centeredOffset(index, group.length, 24)
+      routing[edge.id].targetOffset = centeredOffset(index, group.length, 24)
     })
   }
 
@@ -142,7 +179,7 @@ export function assignEdgeRouting(
       return leftSource.x - rightSource.x || leftTarget.x - rightTarget.x
     })
     group.forEach((edge, index) => {
-      routing[`${edge.source}->${edge.target}`].laneOffset = centeredOffset(index, group.length, 20)
+      routing[edge.id].laneOffset = centeredOffset(index, group.length, 20)
     })
   }
 

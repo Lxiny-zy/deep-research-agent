@@ -9,7 +9,7 @@ from uuid import uuid4
 from ..models import Report, ResearchPlan, ResearchResult, Source, SubQuestion
 from ..observability import Event
 from ..orchestration import WorkflowRun
-from .repository import RunDetail, RunSummary, TagCount
+from .repository import LeaseLostError, RunDetail, RunSummary, TagCount
 
 
 @dataclass
@@ -38,14 +38,56 @@ class InMemoryRepository:
         self._runs: dict[str, _RunRecord] = {}
         self._order: list[str] = []
 
-    async def create_run(self, query: str) -> str:
+    async def create_run(
+        self,
+        query: str,
+        *,
+        execution: WorkflowRun | None = None,
+        lease_owner: str | None = None,
+    ) -> str:
         run_id = str(uuid4())
-        self._runs[run_id] = _RunRecord(id=run_id, query=query)
+        record = _RunRecord(id=run_id, query=query)
+        if execution is not None:
+            record.orchestration = execution.model_copy(deep=True)
+            record.lease_owner = lease_owner
+            record.lease_expires_at = (
+                datetime.now(UTC) + timedelta(seconds=120)
+                if lease_owner is not None
+                else None
+            )
+        self._runs[run_id] = record
         self._order.append(run_id)
         return run_id
 
-    async def set_status(self, run_id: str, status: str) -> None:
+    def _assert_lease(self, run_id: str, owner: str | None) -> None:
+        if owner is None:
+            return
+        rec = self._runs.get(run_id)
+        if (
+            rec is None
+            or rec.lease_owner != owner
+            or rec.lease_expires_at is None
+            or rec.lease_expires_at <= datetime.now(UTC)
+        ):
+            raise LeaseLostError(f"run {run_id} lease is no longer owned by this worker")
+
+    async def set_status(
+        self, run_id: str, status: str, *, lease_owner: str | None = None
+    ) -> None:
+        self._assert_lease(run_id, lease_owner)
         self._runs[run_id].status = status
+
+    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> None:
+        self._assert_lease(run_id, lease_owner)
+        rec = self._runs[run_id]
+        rec.status = "running"
+        rec.events = [
+            event
+            for event in rec.events
+            if not (
+                event.stage == "ORCHESTRATOR" and event.type in {"done", "error"}
+            )
+        ]
 
     async def save_plan(self, run_id: str, plan: ResearchPlan) -> None:
         rec = self._runs[run_id]
@@ -66,31 +108,85 @@ class InMemoryRepository:
     async def save_report(self, run_id: str, report: Report) -> None:
         self._runs[run_id].report = report
 
-    async def save_events(self, run_id: str, events: list[Event]) -> None:
+    async def replace_artifacts(
+        self,
+        run_id: str,
+        *,
+        plan: ResearchPlan | None,
+        reflection_rounds: list[tuple[int, list[SubQuestion]]],
+        results: list[ResearchResult],
+        report: Report,
+        lease_owner: str | None = None,
+    ) -> None:
+        self._assert_lease(run_id, lease_owner)
+        rec = self._runs[run_id]
+        rec.interpretation = plan.interpretation if plan is not None else ""
+        rec.sub_questions = list(plan.sub_questions) if plan is not None else []
+        for _, sub_questions in reflection_rounds:
+            rec.sub_questions.extend(sub_questions)
+        rec.results = list(results)
+        rec.report = report
+
+    async def save_events(
+        self, run_id: str, events: list[Event], *, lease_owner: str | None = None
+    ) -> None:
+        self._assert_lease(run_id, lease_owner)
         # 覆盖式：按产生顺序存全部非 token 事件（seq 即下标）
         self._runs[run_id].events = list(events)
 
-    async def save_orchestration(self, run_id: str, execution: WorkflowRun) -> None:
+    async def save_orchestration(
+        self,
+        run_id: str,
+        execution: WorkflowRun,
+        *,
+        lease_owner: str | None = None,
+    ) -> None:
+        self._assert_lease(run_id, lease_owner)
         self._runs[run_id].orchestration = execution.model_copy(deep=True)
 
     async def acquire_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool:
-        rec = self._runs[run_id]
+        rec = self._runs.get(run_id)
+        if rec is None:
+            return False
         now = datetime.now(UTC)
-        held_by_other = rec.lease_owner not in (None, owner)
         lease_active = rec.lease_expires_at is not None and rec.lease_expires_at > now
-        if held_by_other and lease_active:
+        if rec.lease_owner is not None and lease_active:
             return False
         rec.lease_owner = owner
         rec.lease_expires_at = now + timedelta(seconds=seconds)
         return True
 
+    async def renew_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool:
+        rec = self._runs.get(run_id)
+        if rec is None:
+            return False
+        now = datetime.now(UTC)
+        if (
+            rec.lease_owner != owner
+            or rec.lease_expires_at is None
+            or rec.lease_expires_at <= now
+        ):
+            return False
+        rec.lease_expires_at = now + timedelta(seconds=seconds)
+        return True
+
     async def release_lease(self, run_id: str, owner: str) -> None:
-        rec = self._runs[run_id]
+        rec = self._runs.get(run_id)
+        if rec is None:
+            return
         if rec.lease_owner == owner:
             rec.lease_owner = None
             rec.lease_expires_at = None
 
-    async def finalize(self, run_id: str, *, elapsed: float, total_tokens: int) -> None:
+    async def finalize(
+        self,
+        run_id: str,
+        *,
+        elapsed: float,
+        total_tokens: int,
+        lease_owner: str | None = None,
+    ) -> None:
+        self._assert_lease(run_id, lease_owner)
         rec = self._runs[run_id]
         rec.elapsed = elapsed
         rec.total_tokens = total_tokens
@@ -164,6 +260,10 @@ class InMemoryRepository:
             tags=list(rec.tags),
             orchestration=rec.orchestration.model_copy(deep=True) if rec.orchestration else None,
         )
+
+    async def get_run_status(self, run_id: str) -> str | None:
+        rec = self._runs.get(run_id)
+        return rec.status if rec is not None else None
 
     async def get_events(self, run_id: str, *, after_seq: int = 0) -> list[Event]:
         rec = self._runs.get(run_id)

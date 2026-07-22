@@ -94,3 +94,31 @@ async def test_catalog_runtime_resolves_card_and_falls_back():
     assert rt.resolve_llm("unknown") is None
     assert rt.terminal_roles == {"aggregator", "my-writer"}
     await rt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_catalog_runtime_close_attempts_all_cached_llms():
+    class Closable:
+        def __init__(self, error: Exception | None = None) -> None:
+            self.error = error
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+            if self.error is not None:
+                raise self.error
+
+    rt = CatalogRuntime(
+        cards=[],
+        profiles={},
+        default_profile=None,
+        tracer=Tracer(),
+        settings=Settings(),
+    )
+    first = Closable(RuntimeError("first close failed"))
+    second = Closable()
+    rt._llm_cache = {"first": first, "second": second}  # type: ignore[dict-item]
+
+    with pytest.raises(RuntimeError, match="first close failed"):
+        await rt.aclose()
+    assert first.closed and second.closed

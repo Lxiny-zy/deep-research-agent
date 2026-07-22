@@ -69,6 +69,23 @@ async def test_create_list_and_merge_into_workflows(cat_app):
 
 
 @pytest.mark.asyncio
+async def test_update_rejects_explicit_null_for_non_nullable_field(cat_app) -> None:
+    async with _client() as c:
+        created = await c.post(
+            "/api/workflows/custom", json={"name": "null-update", "steps": _VALID}
+        )
+        workflow = created.json()
+
+        response = await c.put(
+            f"/api/workflows/custom/{workflow['id']}",
+            json={"description": None, "version": workflow["version"]},
+        )
+
+    assert created.status_code == 201
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_create_rejects_invalid_steps(cat_app):
     async with _client() as c:
         no_synth = await c.post(
@@ -82,6 +99,30 @@ async def test_create_rejects_invalid_steps(cat_app):
             json={"name": "ghost", "steps": [{"kind": "agent", "agent": "不存在"}, *_VALID]},
         )
         assert ghost.status_code == 422  # 引用未注册角色
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_duplicate_edge_ids(cat_app) -> None:
+    nodes = [
+        {"id": "a", "step": _VALID[0]},
+        {"id": "b", "step": _VALID[1]},
+        {"id": "c", "step": _VALID[2]},
+    ]
+    async with _client() as c:
+        response = await c.post(
+            "/api/workflows/custom",
+            json={
+                "name": "duplicate-edge-ids",
+                "nodes": nodes,
+                "edges": [
+                    {"id": "duplicate", "source": "a", "target": "b"},
+                    {"id": "duplicate", "source": "b", "target": "c"},
+                ],
+            },
+        )
+
+    assert response.status_code == 422
+    assert "id" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -404,3 +445,29 @@ async def test_update_and_delete(cat_app):
         assert (
             await c.put(f"/api/workflows/custom/{wid}", json={"description": "x"})
         ).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_stale_workflow_version(cat_app):
+    async with _client() as c:
+        created = (
+            await c.post("/api/workflows/custom", json={"name": "cas", "steps": _VALID})
+        ).json()
+        first = await c.put(
+            f"/api/workflows/custom/{created['id']}",
+            json={"description": "first", "version": created["version"]},
+        )
+        stale = await c.put(
+            f"/api/workflows/custom/{created['id']}",
+            json={"description": "stale", "version": created["version"]},
+        )
+
+        assert first.status_code == 200
+        assert first.json()["version"] == created["version"] + 1
+        assert stale.status_code == 409
+        stored = next(
+            item
+            for item in (await c.get("/api/workflows/custom")).json()
+            if item["id"] == created["id"]
+        )
+        assert stored["description"] == "first"

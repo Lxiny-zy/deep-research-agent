@@ -82,14 +82,17 @@ class LLM:
         inst.reasoning_effort = reasoning_effort
         return inst
 
-    default_temperature: float = 0.3
+    # ``None`` keeps each agent operation's built-in sampling hint. Catalog
+    # profiles set an explicit value which must override those hints.
+    default_temperature: float | None = None
     parameter_mode: str = "temperature"
     reasoning_effort: str = "medium"
 
     def _generation_options(self, temperature: float) -> dict[str, Any]:
         if self.parameter_mode == "reasoning":
             return {"reasoning_effort": self.reasoning_effort}
-        return {"temperature": temperature}
+        configured = self.default_temperature
+        return {"temperature": temperature if configured is None else configured}
 
     async def aclose(self) -> None:
         """关闭底层 httpx 连接池（AsyncOpenAI 不关闭只能靠 GC 兜底，会泄漏 FD）。"""

@@ -27,6 +27,7 @@ import type {
   AgentCardInput,
   ModelProfileInput,
   SearchKeyInput,
+  WorkflowDef,
   WorkflowDefInput,
 } from '../types'
 
@@ -125,6 +126,12 @@ export function useWorkflowMutations() {
     qc.invalidateQueries({ queryKey: ['custom-workflows'] })
     qc.invalidateQueries({ queryKey: ['workflows'] }) // 新建研究的选择器列表也要刷新
   }
+  const updateWorkflowCache = (updated: WorkflowDef) => {
+    qc.setQueryData<WorkflowDef[]>(['custom-workflows'], (current) =>
+      current?.map((workflow) => (workflow.id === updated.id ? updated : workflow)),
+    )
+    invalidate()
+  }
   return {
     create: useMutation({
       mutationFn: (b: WorkflowDefInput) => createCustomWorkflow(b),
@@ -133,7 +140,7 @@ export function useWorkflowMutations() {
     update: useMutation({
       mutationFn: ({ id, body }: { id: string; body: WorkflowDefInput }) =>
         updateCustomWorkflow(id, body),
-      onSuccess: invalidate,
+      onSuccess: updateWorkflowCache,
     }),
     remove: useMutation({
       mutationFn: (id: string) => deleteCustomWorkflow(id),

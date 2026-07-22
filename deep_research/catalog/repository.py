@@ -23,6 +23,10 @@ from .dto import (
 )
 
 
+class WorkflowVersionConflictError(RuntimeError):
+    """Raised when a workflow update is based on a stale version."""
+
+
 def mask(secret: str) -> str:
     """密钥脱敏：只露尾 4 位（与 api.py 的 _mask_secret 同语义）。"""
     if not secret:
@@ -347,12 +351,28 @@ class CatalogRepository:
             row = await s.get(orm.WorkflowDefRow, workflow_id)
             if row is None:
                 return None
-            for k, v in fields.items():
-                if k == "enabled":
-                    row.enabled = bool(v)
-                else:
-                    setattr(row, k, v)
+            expected_version = fields.pop("version", None)
+            if expected_version is None:
+                expected_version = row.version
+            values = {
+                key: (bool(value) if key == "enabled" else value)
+                for key, value in fields.items()
+            }
+            values["version"] = expected_version + 1
+            result = await s.execute(
+                update(orm.WorkflowDefRow)
+                .where(
+                    orm.WorkflowDefRow.id == workflow_id,
+                    orm.WorkflowDefRow.version == expected_version,
+                )
+                .values(**values)
+            )
+            if not getattr(result, "rowcount", 0):
+                raise WorkflowVersionConflictError(
+                    f"workflow {workflow_id} changed since version {expected_version}"
+                )
             await s.flush()
+            await s.refresh(row)
             return _workflow_view(row)
 
     async def delete_workflow_def(self, workflow_id: str) -> bool:

@@ -14,6 +14,8 @@ from sqlalchemy.pool import StaticPool
 
 from deep_research.catalog.dto import AgentCardCreate
 from deep_research.catalog.repository import CatalogRepository
+from deep_research.catalog.runtime import load_catalog_runtime
+from deep_research.observability import Tracer
 from deep_research.orchestrator import DeepResearchAgent
 from deep_research.persistence.db import create_all
 from deep_research.persistence.memory_repository import InMemoryRepository
@@ -82,3 +84,25 @@ async def test_no_custom_cards_falls_back_to_builtin(settings, catalog):
     report = await agent.run("测试问题")
     assert "## 参考来源" in report.markdown
     await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_default_profile_applies_without_custom_cards(settings, catalog):
+    profile = await catalog.create_profile(
+        name="global-default",
+        base_url=None,
+        api_key="profile-key",
+        model="profile-model",
+        temperature=0.55,
+        is_default=True,
+    )
+
+    runtime = await load_catalog_runtime(catalog, Tracer(), settings)
+
+    assert runtime is not None
+    assert runtime.has_default_profile is True
+    llm = runtime.resolve_llm("planner")
+    assert llm is not None
+    assert llm.model == profile.model
+    assert llm.default_temperature == 0.55
+    await runtime.aclose()

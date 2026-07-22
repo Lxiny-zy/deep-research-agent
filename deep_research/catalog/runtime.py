@@ -18,7 +18,13 @@ from ..config import Settings
 from ..llm import LLM
 from ..observability import Tracer
 from ..registry import create as registry_create
-from .dto import AgentCardView, ModelProfileFull, WorkflowDefView
+from .dto import (
+    AgentCardSnapshot,
+    AgentCardView,
+    CatalogRuntimeSnapshot,
+    ModelProfileFull,
+    WorkflowDefView,
+)
 
 
 class CatalogSource(Protocol):
@@ -43,6 +49,35 @@ def terminal_roles_for_cards(cards: Iterable[AgentCardView]) -> set[str]:
     return terminals
 
 
+async def create_catalog_runtime_snapshot(
+    catalog_repo: CatalogSource,
+    required_roles: Iterable[str],
+) -> CatalogRuntimeSnapshot:
+    """Capture non-secret catalog semantics for the roles a workflow may use."""
+    required = set(required_roles)
+    cards = await catalog_repo.list_agents()
+    enabled = {card.name: card for card in cards if card.enabled}
+    default_profile = await catalog_repo.get_default_profile()
+    terminal_roles = terminal_roles_for_cards(cards)
+
+    return CatalogRuntimeSnapshot(
+        cards=[
+            AgentCardSnapshot(
+                name=card.name,
+                behavior=card.behavior,
+                system_prompt=card.system_prompt,
+                model_profile_id=card.model_profile_id,
+            )
+            for name, card in sorted(enabled.items())
+            if name in required
+        ],
+        default_profile_id=default_profile.id if default_profile is not None else None,
+        terminal_roles=sorted(
+            terminal_roles.intersection(required | _BUILTIN_TERMINAL_ROLES)
+        ),
+    )
+
+
 class CatalogRuntime:
     """一次运行的 catalog 解析上下文：持有 DB 快照（角色卡片 + 档案），按需建 LLM。"""
 
@@ -54,10 +89,16 @@ class CatalogRuntime:
         default_profile: ModelProfileFull | None,
         tracer: Tracer,
         settings: Settings,
+        terminal_roles: set[str] | None = None,
     ) -> None:
         self._cards = {c.name: c for c in cards if c.enabled}
         self._profiles = profiles  # profile_id -> full
         self._default_profile = default_profile
+        self._terminal_roles = (
+            set(terminal_roles)
+            if terminal_roles is not None
+            else terminal_roles_for_cards(self._cards.values())
+        )
         self._tracer = tracer
         self._settings = settings
         self._llm_cache: dict[str, LLM] = {}  # profile_id -> LLM（运行内复用）
@@ -73,7 +114,34 @@ class CatalogRuntime:
 
     @property
     def terminal_roles(self) -> set[str]:
-        return terminal_roles_for_cards(self._cards.values())
+        return set(self._terminal_roles)
+
+    def snapshot(self, required_roles: Iterable[str]) -> CatalogRuntimeSnapshot:
+        """Serialize this runtime's role semantics without profile credentials."""
+        required = set(required_roles)
+        return CatalogRuntimeSnapshot(
+            cards=[
+                AgentCardSnapshot(
+                    name=card.name,
+                    behavior=card.behavior,
+                    system_prompt=card.system_prompt,
+                    model_profile_id=card.model_profile_id,
+                )
+                for name, card in sorted(self._cards.items())
+                if name in required
+            ],
+            default_profile_id=(
+                self._default_profile.id if self._default_profile is not None else None
+            ),
+            terminal_roles=sorted(
+                self._terminal_roles.intersection(required | _BUILTIN_TERMINAL_ROLES)
+            ),
+        )
+
+    @property
+    def has_default_profile(self) -> bool:
+        """Whether this runtime can replace the process-wide LLM fallback."""
+        return self._default_profile is not None
 
     # ── 模型解析 ────────────────────────────────────────────────────────
     def resolve_llm(self, agent_name: str) -> LLM | None:
@@ -108,22 +176,69 @@ class CatalogRuntime:
 
     async def aclose(self) -> None:
         """释放本运行期新建的所有 LLM client 连接池。"""
+        errors: list[Exception] = []
         for llm in self._llm_cache.values():
             try:
                 await llm.aclose()
-            except Exception:
-                pass
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
 
 async def load_catalog_runtime(
-    catalog_repo: CatalogSource | None, tracer: Tracer, settings: Settings
+    catalog_repo: CatalogSource | None,
+    tracer: Tracer,
+    settings: Settings,
+    *,
+    snapshot: CatalogRuntimeSnapshot | dict[str, object] | None = None,
 ) -> CatalogRuntime | None:
     """从 CatalogRepository 拉取快照，构造 CatalogRuntime；repo 为空或无数据时返回 None。"""
+    if snapshot is not None:
+        if not isinstance(snapshot, CatalogRuntimeSnapshot):
+            snapshot = CatalogRuntimeSnapshot.model_validate(snapshot)
+        cards = [
+            AgentCardView(
+                id=f"snapshot:{card.name}",
+                name=card.name,
+                behavior=card.behavior,
+                system_prompt=card.system_prompt,
+                enabled=True,
+                model_profile_id=card.model_profile_id,
+            )
+            for card in snapshot.cards
+        ]
+        profile_ids = {
+            card.model_profile_id for card in snapshot.cards if card.model_profile_id
+        }
+        if snapshot.default_profile_id:
+            profile_ids.add(snapshot.default_profile_id)
+        snapshot_profiles: dict[str, ModelProfileFull] = {}
+        if catalog_repo is not None:
+            for profile_id in profile_ids:
+                profile = await catalog_repo.get_profile_full(profile_id)
+                if profile is not None:
+                    snapshot_profiles[profile.id] = profile
+        default_profile = (
+            snapshot_profiles.get(snapshot.default_profile_id)
+            if snapshot.default_profile_id is not None
+            else None
+        )
+        return CatalogRuntime(
+            cards=cards,
+            profiles=snapshot_profiles,
+            default_profile=default_profile,
+            tracer=tracer,
+            settings=settings,
+            terminal_roles=set(snapshot.terminal_roles),
+        )
+
     if catalog_repo is None:
         return None
     cards = await catalog_repo.list_agents()
-    if not cards:
-        return None  # 没有任何自定义角色：完全走内置路径，零开销
+    # A global default profile is useful even when no custom role cards exist:
+    # it supplies the model for built-in roles without requiring LLM_API_KEY.
+    default_profile = await catalog_repo.get_default_profile()
     # 收集所有被引用的档案 + 默认档案
     profiles: dict[str, ModelProfileFull] = {}
     for c in cards:
@@ -131,7 +246,6 @@ async def load_catalog_runtime(
             full = await catalog_repo.get_profile_full(c.model_profile_id)
             if full is not None:
                 profiles[full.id] = full
-    default_profile = await catalog_repo.get_default_profile()
     return CatalogRuntime(
         cards=cards,
         profiles=profiles,

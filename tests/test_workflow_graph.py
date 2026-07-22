@@ -41,6 +41,16 @@ def test_graph_rejects_disconnected_nodes() -> None:
         graph_topo_layers(nodes, edges)
 
 
+def test_graph_rejects_duplicate_edge_ids() -> None:
+    nodes, edges = steps_to_graph(STEPS)
+    edges[1] = edges[1].model_copy(update={"id": edges[0].id})
+
+    with pytest.raises(ValueError, match="边 id 重复"):
+        graph_topo_layers(nodes, edges)
+    with pytest.raises(ValueError, match="边 id 重复"):
+        graph_to_steps(nodes, edges)
+
+
 def test_graph_topology_supports_branch() -> None:
     nodes = [
         WorkflowNode(id="a", step=STEPS[0]),

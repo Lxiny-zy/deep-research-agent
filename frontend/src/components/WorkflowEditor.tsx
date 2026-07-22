@@ -1,11 +1,22 @@
 import { useMemo, useRef, useState } from 'react'
 import WorkflowFlowCanvas from './WorkflowFlowCanvas'
+import { allocateSemanticNodeIds } from './workflowCanvasLogic'
 import {
+  dependenciesFromEdges,
   findAvailableNodePosition,
   hasSingleTerminalAgent,
+  nextWorkflowEdgeId,
+  normalizeWorkflowEdges,
   reportAgentNames,
 } from './workflowEditorLogic'
-import type { RoleInfo, WorkflowDef, WorkflowDefInput, WorkflowStep } from '../types'
+import type {
+  RoleInfo,
+  WorkflowDef,
+  WorkflowDefInput,
+  WorkflowEdge,
+  WorkflowStep,
+  WorkflowViewport,
+} from '../types'
 
 interface Props {
   initial?: WorkflowDef | null
@@ -49,32 +60,27 @@ export default function WorkflowEditor({
     : initial?.steps?.length
       ? initial.steps
       : DEFAULT_STEPS
+  const initialNodeKeys = initial?.nodes?.length
+    ? initial.nodes.map((node) => node.id)
+    : initialSteps.map((_, index) => `node-${index + 1}`)
+  const semanticNodeIds = useRef(allocateSemanticNodeIds(initialNodeKeys)).current
   const [name, setName] = useState(initial?.name ?? '')
   const [displayName, setDisplayName] = useState(initial?.display_name ?? '')
   const [description, setDescription] = useState(initial?.description ?? '')
   const [steps, setSteps] = useState<WorkflowStep[]>(initialSteps)
-  const [nodeKeys, setNodeKeys] = useState<string[]>(() =>
-    initial?.nodes?.length
-      ? initial.nodes.map((node) => node.id)
-      : initialSteps.map((_, index) => `node-${index + 1}`),
-  )
-  const [dependencies, setDependencies] = useState<Record<string, string[]>>(() => {
-    if (initial?.nodes?.length) {
-      const incoming: Record<string, string[]> = Object.fromEntries(
-        initial.nodes.map((node) => [node.id, []]),
-      )
-      for (const edge of initial.edges ?? []) incoming[edge.target]?.push(edge.source)
-      return incoming
-    }
-    const keys = initialSteps.map((_, index) => `node-${index + 1}`)
-    return Object.fromEntries(keys.map((key, index) => [key, index ? [keys[index - 1]] : []]))
+  const [nodeKeys, setNodeKeys] = useState<string[]>(initialNodeKeys)
+  const [workflowEdges, setWorkflowEdges] = useState<WorkflowEdge[]>(() => {
+    if (initial?.nodes?.length) return normalizeWorkflowEdges(initial.edges ?? [])
+    return initialNodeKeys.slice(1).map((target, index) => ({
+      id: `edge-${initialNodeKeys[index]}-${target}`,
+      source: initialNodeKeys[index],
+      target,
+      condition: null,
+    }))
   })
-  const [edgeConditions, setEdgeConditions] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      (initial?.edges ?? [])
-        .filter((edge) => edge.condition)
-        .map((edge) => [`${edge.source}->${edge.target}`, edge.condition ?? '']),
-    ),
+  const dependencies = useMemo(
+    () => dependenciesFromEdges(nodeKeys, workflowEdges),
+    [nodeKeys, workflowEdges],
   )
   const [joinModes, setJoinModes] = useState<Record<string, 'any' | 'all' | 'success_all'>>(
     () => Object.fromEntries((initial?.nodes ?? []).map((node) => [node.id, node.join_mode ?? 'any'])),
@@ -86,10 +92,25 @@ export default function WorkflowEditor({
           ? initial.nodes.map((node) => [node.id, node.position])
           : initialSteps.map((_, index) => [`node-${index + 1}`, { x: 220, y: 70 + index * 150 }]),
       ),
-      ...(initial?.viewport?.input_position ? { __input__: initial.viewport.input_position } : {}),
-      ...(initial?.viewport?.output_position ? { __output__: initial.viewport.output_position } : {}),
+      ...(initial?.viewport?.input_position
+        ? { [semanticNodeIds.input]: initial.viewport.input_position }
+        : {}),
+      ...(initial?.viewport?.output_position
+        ? { [semanticNodeIds.output]: initial.viewport.output_position }
+        : {}),
     }),
   )
+  const [viewport, setViewport] = useState<WorkflowViewport>(() => ({
+    x: initial?.viewport?.x ?? 0,
+    y: initial?.viewport?.y ?? 0,
+    zoom: initial?.viewport?.zoom ?? 1,
+    input_position: initial?.viewport?.input_position,
+    output_position: initial?.viewport?.output_position,
+  }))
+  const fitViewOnInit =
+    initial?.viewport?.x == null ||
+    initial.viewport.y == null ||
+    initial.viewport.zoom == null
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(() =>
     initial?.nodes?.[0]?.id ?? (initialSteps.length ? 'node-1' : null),
   )
@@ -154,7 +175,6 @@ export default function WorkflowEditor({
     setSteps((prev) => [...prev, step])
     setNodeKeys((prev) => [...prev, key])
     setPositions((prev) => ({ ...prev, [key]: position }))
-    setDependencies((prev) => ({ ...prev, [key]: [] }))
     setSelectedNodeId(key)
     setGraphError('')
     setMobilePane('canvas')
@@ -188,7 +208,7 @@ export default function WorkflowEditor({
     return null
   }
 
-  function connectNodes(source: string, target: string) {
+  function connectNodes(source: string, target: string): string | undefined {
     if (!nodeKeys.includes(source) || !nodeKeys.includes(target) || source === target) return
     const cycle = cyclePath(source, target)
     if (cycle) {
@@ -200,23 +220,14 @@ export default function WorkflowEditor({
       return
     }
     setGraphError('')
-    setDependencies((prev) => ({
-      ...prev,
-      [target]: [...new Set([...(prev[target] ?? []), source])],
-    }))
+    const id = nextWorkflowEdgeId(workflowEdges, source, target)
+    setWorkflowEdges((prev) => [...prev, { id, source, target, condition: null }])
+    return id
   }
 
-  function disconnectNodes(source: string, target: string) {
+  function disconnectNodes(edgeId: string) {
     setGraphError('')
-    setDependencies((prev) => ({
-      ...prev,
-      [target]: (prev[target] ?? []).filter((item) => item !== source),
-    }))
-    setEdgeConditions((prev) => {
-      const next = { ...prev }
-      delete next[`${source}->${target}`]
-      return next
-    })
+    setWorkflowEdges((prev) => prev.filter((edge) => edge.id !== edgeId))
   }
 
   function removeSelected() {
@@ -226,20 +237,8 @@ export default function WorkflowEditor({
     const nextSelection = remainingKeys[Math.min(selected, remainingKeys.length - 1)] ?? null
     setSteps((prev) => prev.filter((_, i) => i !== selected))
     setNodeKeys(remainingKeys)
-    setDependencies((prev) => {
-      const next: Record<string, string[]> = {}
-      for (const [key, parents] of Object.entries(prev)) {
-        if (key !== removedKey) next[key] = parents.filter((parent) => parent !== removedKey)
-      }
-      return next
-    })
-    setEdgeConditions((prev) =>
-      Object.fromEntries(
-        Object.entries(prev).filter(([edgeKey]) => {
-          const [source, target] = edgeKey.split('->')
-          return source !== removedKey && target !== removedKey
-        }),
-      ),
+    setWorkflowEdges((prev) =>
+      prev.filter((edge) => edge.source !== removedKey && edge.target !== removedKey),
     )
     setJoinModes((prev) => {
       const next = { ...prev }
@@ -263,14 +262,13 @@ export default function WorkflowEditor({
       step,
       join_mode: joinModes[nodeKeys[index]] ?? 'any',
     }))
-    const edges = nodes.flatMap((node) =>
-      (dependencies[node.id] ?? []).map((source, index) => ({
-        id: `edge-${source}-${node.id}-${index}`,
-        source,
-        target: node.id,
-        condition: edgeConditions[`${source}->${node.id}`] || null,
-      })),
-    )
+    const nodeSet = new Set(nodes.map((node) => node.id))
+    const edges = workflowEdges
+      .filter((edge) => nodeSet.has(edge.source) && nodeSet.has(edge.target))
+      .map((edge) => ({
+        ...edge,
+        condition: edge.condition?.trim() || null,
+      }))
     const body: WorkflowDefInput = {
       display_name: displayName.trim(),
       description: description.trim(),
@@ -278,11 +276,11 @@ export default function WorkflowEditor({
       nodes,
       edges,
       viewport: {
-        x: initial?.viewport?.x ?? 0,
-        y: initial?.viewport?.y ?? 0,
-        zoom: initial?.viewport?.zoom ?? 1,
-        input_position: positions.__input__,
-        output_position: positions.__output__,
+        x: viewport.x,
+        y: viewport.y,
+        zoom: viewport.zoom,
+        input_position: positions[semanticNodeIds.input],
+        output_position: positions[semanticNodeIds.output],
       },
       version: initial?.version ?? 1,
       enabled: initial?.enabled ?? true,
@@ -385,11 +383,17 @@ export default function WorkflowEditor({
                 nodeKeys={nodeKeys}
                 roles={roles}
                 dependencies={dependencies}
-                conditions={edgeConditions}
+                workflowEdges={workflowEdges}
+                semanticNodeIds={semanticNodeIds}
                 positions={positions}
+                viewport={{ x: viewport.x, y: viewport.y, zoom: viewport.zoom }}
+                fitViewOnInit={fitViewOnInit}
                 selectedNodeId={selectedNodeId}
                 onSelectNode={setSelectedNodeId}
                 onPositionsChange={setPositions}
+                onViewportChange={(nextViewport) =>
+                  setViewport((currentViewport) => ({ ...currentViewport, ...nextViewport }))
+                }
                 onConnect={connectNodes}
                 onDisconnect={disconnectNodes}
                 onAddAgent={appendAgent}
@@ -444,7 +448,11 @@ export default function WorkflowEditor({
                     {steps.map((step, index) => {
                       if (index === selected) return null
                       const key = nodeKeys[index]
-                      const checked = (dependencies[nodeKeys[selected]] ?? []).includes(key)
+                      const target = nodeKeys[selected]
+                      const matchingEdges = workflowEdges.filter(
+                        (edge) => edge.source === key && edge.target === target,
+                      )
+                      const checked = matchingEdges.length > 0
                       return (
                         <div className="dependency-option" key={key}>
                           <label>
@@ -452,29 +460,34 @@ export default function WorkflowEditor({
                               type="checkbox"
                               checked={checked}
                               onChange={(event) => {
-                                const target = nodeKeys[selected]
                                 if (event.target.checked) {
                                   connectNodes(key, target)
                                 } else {
-                                  disconnectNodes(key, target)
+                                  const edge = matchingEdges[matchingEdges.length - 1]
+                                  if (edge) disconnectNodes(edge.id)
                                 }
                               }}
                             />
                             <span>{index + 1}. {nodeTitle(step, roles)}</span>
                           </label>
-                          {checked && (
+                          {matchingEdges.map((edge) => (
                             <input
+                              key={edge.id}
                               className="dependency-condition"
-                              value={edgeConditions[`${key}->${nodeKeys[selected]}`] ?? ''}
+                              value={edge.condition ?? ''}
                               onChange={(event) =>
-                                setEdgeConditions((prev) => ({
-                                  ...prev,
-                                  [`${key}->${nodeKeys[selected]}`]: event.target.value,
-                                }))
+                                setWorkflowEdges((prev) =>
+                                  prev.map((item) =>
+                                    item.id === edge.id
+                                      ? { ...item, condition: event.target.value }
+                                      : item,
+                                  ),
+                                )
                               }
+                              aria-label={`依赖条件 ${edge.id}`}
                               placeholder="可选条件，如 state.reflections.last.is_sufficient == true"
                             />
-                          )}
+                          ))}
                         </div>
                       )
                     })}

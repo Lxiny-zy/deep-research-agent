@@ -1,4 +1,6 @@
 import {
+  allocateSemanticEdgeId,
+  allocateSemanticNodeIds,
   assignEdgeRouting,
   buildRoutedEdgePath,
   canConnectNodes,
@@ -7,12 +9,44 @@ import {
   workflowPathKeys,
 } from './workflowCanvasLogic'
 import {
+  dependenciesFromEdges,
   findAvailableNodePosition,
   hasSingleTerminalAgent,
+  nextWorkflowEdgeId,
+  normalizeWorkflowEdges,
   reportAgentNames,
 } from './workflowEditorLogic'
 
 describe('workflow canvas interaction logic', () => {
+  it('preserves parallel edge ids and independent conditions', () => {
+    const edges = normalizeWorkflowEdges([
+      { id: 'first', source: 'a', target: 'b', condition: 'state.first' },
+      { id: 'second', source: 'a', target: 'b', condition: 'state.second' },
+    ])
+
+    expect(edges.map((edge) => [edge.id, edge.condition])).toEqual([
+      ['first', 'state.first'],
+      ['second', 'state.second'],
+    ])
+    expect(dependenciesFromEdges(['a', 'b'], edges)).toEqual({ a: [], b: ['a', 'a'] })
+    expect(nextWorkflowEdgeId(edges, 'a', 'b')).toBe('edge-a-b')
+  })
+
+  it('repairs duplicate edge ids without rewriting the first persisted id', () => {
+    const edges = normalizeWorkflowEdges([
+      { id: 'persisted', source: 'a', target: 'b', condition: null },
+      { id: 'persisted', source: 'a', target: 'b', condition: 'state.ready' },
+    ])
+
+    expect(edges[0].id).toBe('persisted')
+    expect(edges[1]).toMatchObject({
+      id: 'edge-a-b',
+      source: 'a',
+      target: 'b',
+      condition: 'state.ready',
+    })
+  })
+
   it('places an added node beside the selected node without overlapping existing cards', () => {
     const position = findAvailableNodePosition(
       [
@@ -133,13 +167,56 @@ describe('workflow canvas interaction logic', () => {
     ).toEqual(new Set())
   })
 
-  it('rejects duplicate and cyclic connections', () => {
+  it('allows parallel connections while still rejecting cycles', () => {
     const nodeKeys = ['a', 'b', 'c']
     const dependencies = { a: [], b: ['a'], c: ['b'] }
 
-    expect(canConnectNodes(nodeKeys, dependencies, 'a', 'b')).toBe(false)
+    expect(canConnectNodes(nodeKeys, dependencies, 'a', 'b')).toBe(true)
     expect(canConnectNodes(nodeKeys, dependencies, 'c', 'a')).toBe(false)
     expect(canConnectNodes(nodeKeys, dependencies, 'a', 'c')).toBe(true)
+  })
+
+  it('allocates semantic edge ids outside persisted edge id collisions', () => {
+    const used = new Set([
+      '__semantic__:input:a',
+      '__semantic__:input:a:2',
+      '__semantic__:output:b',
+    ])
+
+    expect(allocateSemanticEdgeId(used, 'input', 'a')).toBe('__semantic__:input:a:3')
+    expect(allocateSemanticEdgeId(used, 'output', 'b')).toBe('__semantic__:output:b:2')
+    expect(used.size).toBe(5)
+  })
+
+  it('allocates semantic node ids outside workflow node collisions', () => {
+    expect(
+      allocateSemanticNodeIds([
+        '__canvas_semantic__:input',
+        '__canvas_semantic__:input:2',
+        '__canvas_semantic__:output',
+      ]),
+    ).toEqual({
+      input: '__canvas_semantic__:input:3',
+      output: '__canvas_semantic__:output:2',
+    })
+  })
+
+  it('keeps generated edge ids within the API length limit', () => {
+    const source = 's'.repeat(100)
+    const target = 't'.repeat(100)
+    const first = nextWorkflowEdgeId([], source, target)
+    const second = nextWorkflowEdgeId([{ id: first }], source, target)
+
+    expect(first.length).toBeLessThanOrEqual(100)
+    expect(second.length).toBeLessThanOrEqual(100)
+    expect(second).not.toBe(first)
+  })
+
+  it('uses an ASCII edge id for long Unicode node ids', () => {
+    const id = nextWorkflowEdgeId([], `a${'😀'.repeat(99)}`, '终'.repeat(100))
+
+    expect(id).toMatch(/^edge-[a-z0-9]+$/)
+    expect(id.length).toBeLessThanOrEqual(100)
   })
 
   it('finds the main component and leaves newly added orphan nodes outside it', () => {
@@ -154,10 +231,10 @@ describe('workflow canvas interaction logic', () => {
   it('fans branch and merge edges into separate visual lanes', () => {
     const routing = assignEdgeRouting(
       [
-        { source: 'a', target: 'b' },
-        { source: 'a', target: 'c' },
-        { source: 'b', target: 'd' },
-        { source: 'c', target: 'd' },
+        { id: 'a-b', source: 'a', target: 'b' },
+        { id: 'a-c', source: 'a', target: 'c' },
+        { id: 'b-d', source: 'b', target: 'd' },
+        { id: 'c-d', source: 'c', target: 'd' },
       ],
       {
         a: { x: 300, y: 0 },
@@ -167,9 +244,24 @@ describe('workflow canvas interaction logic', () => {
       },
     )
 
-    expect(routing['a->b'].sourceOffset).not.toBe(routing['a->c'].sourceOffset)
-    expect(routing['b->d'].targetOffset).not.toBe(routing['c->d'].targetOffset)
-    expect(routing['a->b'].laneOffset).not.toBe(routing['a->c'].laneOffset)
+    expect(routing['a-b'].sourceOffset).not.toBe(routing['a-c'].sourceOffset)
+    expect(routing['b-d'].targetOffset).not.toBe(routing['c-d'].targetOffset)
+    expect(routing['a-b'].laneOffset).not.toBe(routing['a-c'].laneOffset)
+  })
+
+  it('keeps parallel edge routing and conditions addressable by stable ids', () => {
+    const routing = assignEdgeRouting(
+      [
+        { id: 'edge-a-b-1', source: 'a', target: 'b' },
+        { id: 'edge-a-b-2', source: 'a', target: 'b' },
+      ],
+      { a: { x: 100, y: 0 }, b: { x: 100, y: 190 } },
+    )
+
+    expect(routing['edge-a-b-1']).toBeDefined()
+    expect(routing['edge-a-b-2']).toBeDefined()
+    expect(routing['edge-a-b-1'].sourceOffset).not.toBe(routing['edge-a-b-2'].sourceOffset)
+    expect(routing['edge-a-b-1'].targetOffset).not.toBe(routing['edge-a-b-2'].targetOffset)
   })
 
   it('builds distinct rounded orthogonal paths for neighboring route lanes', () => {

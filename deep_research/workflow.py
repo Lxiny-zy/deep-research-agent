@@ -13,8 +13,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Literal
+from collections.abc import Awaitable, Callable, Sequence
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any, Literal, cast
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -29,6 +31,7 @@ from .orchestration import (
     WorkflowNode,
     WorkflowRun,
 )
+from .persistence.repository import LeaseLostError
 from .registry import available, create
 
 if TYPE_CHECKING:
@@ -74,6 +77,107 @@ MAX_GENERATED_STEPS = 8
 _TERMINAL_ROLES = {"synthesizer", "aggregator"}
 # 子团队默认内部流程：在隔离子黑板上对其 focus 做一次检索（可被 SubTask.steps 覆盖）。
 _DEFAULT_TEAM_STEPS = [Step(kind="agent", agent="researcher")]
+_INCOMING_CONDITIONS_SKIP_REASON = "incoming conditions not matched"
+_MISSING = object()
+
+
+def _merge_parallel_value(base: Any, current: Any, branch: Any) -> Any:
+    """Apply one branch's change relative to a shared layer snapshot."""
+    if branch is _MISSING:
+        return _MISSING
+    if base is not _MISSING and branch == base:
+        return current
+
+    if isinstance(branch, dict) and (
+        base is _MISSING or isinstance(base, dict)
+    ) and (current is _MISSING or isinstance(current, dict)):
+        base_dict: dict[Any, Any] = (
+            {} if base is _MISSING else cast("dict[Any, Any]", base)
+        )
+        merged: dict[Any, Any] = (
+            {}
+            if current is _MISSING
+            else deepcopy(cast("dict[Any, Any]", current))
+        )
+        keys = dict.fromkeys([*base_dict.keys(), *branch.keys()])
+        for key in keys:
+            merged_value = _merge_parallel_value(
+                base_dict.get(key, _MISSING),
+                merged.get(key, _MISSING),
+                branch.get(key, _MISSING),
+            )
+            if merged_value is _MISSING:
+                merged.pop(key, None)
+            else:
+                merged[key] = merged_value
+        return merged
+
+    if isinstance(branch, list) and (base is _MISSING or isinstance(base, list)):
+        base_list: list[Any] = (
+            [] if base is _MISSING else cast("list[Any]", base)
+        )
+        if len(branch) >= len(base_list) and branch[: len(base_list)] == base_list:
+            additions = branch[len(base_list) :]
+            if current is _MISSING:
+                return deepcopy(branch)
+            if isinstance(current, list):
+                return [*deepcopy(current), *deepcopy(additions)]
+        if (
+            isinstance(current, list)
+            and len(current) >= len(base_list)
+            and current[: len(base_list)] == base_list
+        ):
+            # A destructive edit wins for the baseline portion, but it must
+            # not erase another branch's independent append-only delta.
+            return [*deepcopy(branch), *deepcopy(current[len(base_list) :])]
+
+    return deepcopy(branch)
+
+
+def _merge_parallel_sequence(base: list[Any], current: list[Any], branch: list[Any]) -> list[Any]:
+    if branch == base:
+        return current
+    if len(branch) < len(base):
+        additions = current[len(base) :] if current[: len(base)] == base else []
+        return [*deepcopy(branch), *deepcopy(additions)]
+
+    if branch[: len(base)] != base:
+        additions = current[len(base) :] if current[: len(base)] == base else []
+        return [*deepcopy(branch), *deepcopy(additions)]
+
+    merged = deepcopy(current)
+    for index, base_item in enumerate(base):
+        if branch[index] != base_item:
+            if index < len(merged):
+                merged[index] = deepcopy(branch[index])
+            else:
+                merged.append(deepcopy(branch[index]))
+    merged.extend(deepcopy(branch[len(base) :]))
+    return merged
+
+
+def _merge_parallel_blackboard(
+    base: Blackboard, current: Blackboard, branch: Blackboard
+) -> None:
+    if branch.query != base.query:
+        current.query = branch.query
+    if branch.plan != base.plan:
+        current.plan = deepcopy(branch.plan)
+    if branch.report != base.report:
+        current.report = deepcopy(branch.report)
+    current.results = _merge_parallel_sequence(base.results, current.results, branch.results)
+    current.reflections = _merge_parallel_sequence(
+        base.reflections, current.reflections, branch.reflections
+    )
+    merged_scratch = _merge_parallel_value(base.scratch, current.scratch, branch.scratch)
+    current.scratch = {} if merged_scratch is _MISSING else merged_scratch
+
+
+def _commit_blackboard(target: Blackboard, source: Blackboard) -> Blackboard:
+    """Commit a successful isolated attempt while preserving target identity."""
+    for field_name in target.__class__.model_fields:
+        setattr(target, field_name, getattr(source, field_name))
+    return target
 
 
 class GeneratedWorkflow(BaseModel):
@@ -193,6 +297,7 @@ class WorkflowEngine:
         budget: TokenBudget | None = None,
         checkpoint_sink: Callable[[WorkflowRun], Awaitable[None]] | None = None,
         resume_run: WorkflowRun | None = None,
+        initial_run: WorkflowRun | None = None,
         require_report: bool = False,
         terminal_roles: set[str] | None = None,
     ) -> None:
@@ -205,13 +310,26 @@ class WorkflowEngine:
         self.runtime = OrchestrationRuntime(self._emit_runtime_event)
         self._run_depth = 0
         self._checkpoint_sink = checkpoint_sink
+        if resume_run is not None and initial_run is not None:
+            raise ValueError("resume_run and initial_run are mutually exclusive")
         self._resuming = resume_run is not None
         self._require_report = require_report
         self._terminal_roles = terminal_roles if terminal_roles is not None else _TERMINAL_ROLES
         if resume_run is not None:
             self.runtime.restore(resume_run)
+        elif initial_run is not None:
+            self.runtime.adopt(initial_run)
 
-    async def _checkpoint(self, wf: Workflow, bb: Blackboard) -> None:
+    async def _checkpoint(
+        self, wf: Workflow, bb: Blackboard, *, publish_event: bool = True
+    ) -> None:
+        # Keep cumulative observability counters with the durable root state so
+        # a resumed agent does not reset its budget or elapsed-time accounting.
+        bb.scratch["_runtime_metrics"] = {
+            "total_tokens": self.ctx.tracer.total_tokens,
+            "estimated_tokens": self.ctx.tracer.estimated_tokens,
+            "elapsed": self.ctx.tracer.elapsed,
+        }
         definition = {
             "name": wf.name,
             "description": wf.description,
@@ -219,7 +337,15 @@ class WorkflowEngine:
             "nodes": wf.nodes,
             "edges": wf.edges,
         }
-        run = self.runtime.save_checkpoint(bb.model_dump(mode="json"), definition)
+        checkpoint = bb.model_dump(mode="json")
+        if publish_event:
+            run = self.runtime.save_checkpoint(checkpoint, definition)
+        else:
+            current_run = self.runtime.run
+            assert current_run is not None
+            current_run.checkpoint = checkpoint
+            current_run.definition = definition
+            run = current_run
         if self._checkpoint_sink is not None:
             await self._checkpoint_sink(run)
 
@@ -260,41 +386,60 @@ class WorkflowEngine:
             bb = await self._resolve(step.agent).step(bb, self.ctx)
         return bb
 
+    async def _invoke_with_timeout(
+        self, step: Step, bb: Blackboard, *, agent_override: str | None = None
+    ) -> Blackboard:
+        if step.timeout_seconds is None:
+            return await self._invoke_step(step, bb, agent_override=agent_override)
+        async with asyncio.timeout(step.timeout_seconds):
+            return await self._invoke_step(step, bb, agent_override=agent_override)
+
     async def _execute_with_policy(
         self, step: Step, bb: Blackboard, step_run: StepRun
     ) -> Blackboard:
-        last_error: Exception | None = None
-        for attempt in range(step.max_attempts):
-            self.runtime.start_step(step_run)
-            try:
-                if step.timeout_seconds is None:
-                    bb = await self._invoke_step(step, bb)
+        try:
+            last_error: Exception | None = None
+            for attempt in range(step.max_attempts):
+                self.runtime.start_step(step_run)
+                candidate = bb.model_copy(deep=True)
+                try:
+                    candidate = await self._invoke_with_timeout(step, candidate)
+                except Exception as exc:
+                    last_error = exc
+                    if attempt + 1 < step.max_attempts:
+                        delay = step.retry_backoff * (2**attempt)
+                        self.runtime.retry_step(step_run, exc, delay)
+                        if delay:
+                            await asyncio.sleep(delay)
+                        continue
+                    break
                 else:
-                    async with asyncio.timeout(step.timeout_seconds):
-                        bb = await self._invoke_step(step, bb)
-            except Exception as exc:
-                last_error = exc
-                if attempt + 1 < step.max_attempts:
-                    delay = step.retry_backoff * (2**attempt)
-                    self.runtime.retry_step(step_run, exc, delay)
-                    if delay:
-                        await asyncio.sleep(delay)
-                    continue
-                break
-            else:
-                self.runtime.complete_step(step_run)
-                return bb
+                    bb = _commit_blackboard(bb, candidate)
+                    self.runtime.complete_step(step_run)
+                    return bb
 
-        if step.fallback_agent:
-            try:
-                bb = await self._invoke_step(step, bb, agent_override=step.fallback_agent)
-            except Exception as exc:
-                last_error = exc
-            else:
-                self.runtime.complete_step(step_run)
-                return bb
-        assert last_error is not None
-        raise last_error
+            if step.fallback_agent:
+                candidate = bb.model_copy(deep=True)
+                try:
+                    candidate = await self._invoke_with_timeout(
+                        step, candidate, agent_override=step.fallback_agent
+                    )
+                except Exception as exc:
+                    last_error = exc
+                else:
+                    bb = _commit_blackboard(bb, candidate)
+                    self.runtime.complete_step(step_run)
+                    return bb
+            assert last_error is not None
+            raise last_error
+        except asyncio.CancelledError:
+            if step_run.status in {
+                StepStatus.READY,
+                StepStatus.RUNNING,
+                StepStatus.RETRYING,
+            }:
+                self.runtime.cancel_step(step_run)
+            raise
 
     def _exhausted(self) -> bool:
         if self.budget is None:
@@ -338,25 +483,31 @@ class WorkflowEngine:
     async def _run_steps(self, wf: Workflow, bb: Blackboard) -> Blackboard:
         is_root = self._run_depth == 0
         if is_root:
-            if self.runtime.run is None:
-                self.runtime.start(wf.name, {"query": bb.query})
+            self.runtime.start(wf.name, {"query": bb.query})
             self._emit_workflow_plan(wf)
         self._run_depth += 1
-        restored_steps = (
-            list(self.runtime.run.steps)
-            if is_root and self._resuming and self.runtime.run is not None
-            else []
-        )
+        restored_steps = {
+            step.node_id: step
+            for step in (
+                self.runtime.run.steps
+                if is_root and self._resuming and self.runtime.run is not None
+                else []
+            )
+        }
         try:
             for index, step in enumerate(wf.steps):
-                if index < len(restored_steps) and restored_steps[index].status in {
+                node_id = f"step-{index + 1}"
+                previous = restored_steps.get(node_id)
+                if previous is not None and previous.status in {
                     StepStatus.SUCCEEDED,
-                    StepStatus.FAILED,
                     StepStatus.SKIPPED,
                 }:
                     continue
                 step_run = self.runtime.create_step(
-                    label=self._step_label(step), kind=step.kind, agent=step.agent
+                    node_id=node_id if is_root else f"nested-{uuid4()}",
+                    label=self._step_label(step),
+                    kind=step.kind,
+                    agent=step.agent,
                 )
                 # 预算耗尽：显式记录 skipped，而不是让步骤从运行历史中消失。
                 if self._exhausted() and not self._is_terminal(step):
@@ -376,14 +527,18 @@ class WorkflowEngine:
                     )
                     if step.failure_policy == "fail_fast":
                         raise
-                await self._checkpoint(wf, bb)
+                if is_root:
+                    await self._checkpoint(wf, bb)
             if is_root and self._require_report and bb.report is None:
                 raise RuntimeError("工作流结束但未生成报告")
             return bb
         except asyncio.CancelledError:
             if is_root and self.runtime.run is not None:
                 self.runtime.finish(RunStatus.CANCELLED)
-                await self._checkpoint(wf, bb)
+                try:
+                    await self._checkpoint(wf, bb)
+                except LeaseLostError:
+                    pass
             raise
         except Exception:
             if is_root and self.runtime.run is not None:
@@ -392,6 +547,8 @@ class WorkflowEngine:
             raise
         finally:
             self._run_depth -= 1
+            if is_root:
+                self._resuming = False
             if (
                 is_root
                 and self.runtime.run is not None
@@ -401,7 +558,10 @@ class WorkflowEngine:
                     RunStatus.SUCCEEDED,
                     output={"has_report": bb.report is not None, "result_count": len(bb.results)},
                 )
-                bb.scratch["_orchestration_run"] = run.model_dump(mode="json")
+                bb.scratch["_orchestration_run"] = run.model_dump(
+                    mode="json", exclude={"checkpoint", "definition", "steps"}
+                )
+                await self._checkpoint(wf, bb, publish_event=False)
 
     async def _run_graph(self, wf: Workflow, bb: Blackboard) -> Blackboard:
         """Execute a DAG layer by layer; nodes in the same layer run concurrently."""
@@ -432,7 +592,7 @@ class WorkflowEngine:
         active_nodes.update(
             node_id
             for node_id, step in restored.items()
-            if step.status in {StepStatus.SUCCEEDED, StepStatus.FAILED}
+            if step.status == StepStatus.SUCCEEDED
         )
         successful_nodes.update(
             node_id for node_id, step in restored.items() if step.status == StepStatus.SUCCEEDED
@@ -449,24 +609,33 @@ class WorkflowEngine:
                     f"执行图层 {layer_index + 1}，并行节点 {len(layer)} 个",
                     data={"graph_layer": layer_index, "nodes": [node.id for node in layer]},
                 )
-                base_results = len(bb.results)
-                base_reflections = len(bb.reflections)
+                layer_base = bb.model_copy(deep=True)
+                layer_nodes = tuple(layer)
 
-                async def execute_node(node: WorkflowNode) -> tuple[Blackboard, bool]:
-                    child = bb.model_copy(deep=True)
+                async def execute_node(
+                    node: WorkflowNode,
+                    layer_snapshot: Blackboard = layer_base,
+                ) -> tuple[Blackboard, bool, bool]:
+                    child = layer_snapshot.model_copy(deep=True)
                     step = Step.model_validate(node.step)
                     previous = restored.get(node.id)
-                    if previous is not None and previous.status in {
-                        StepStatus.SUCCEEDED,
-                        StepStatus.FAILED,
-                        StepStatus.SKIPPED,
-                    }:
-                        return child, previous.status in {
-                            StepStatus.SUCCEEDED,
-                            StepStatus.FAILED,
-                        }
+                    # A condition-derived skip is provisional: a failed
+                    # predecessor may succeed during recovery, changing this
+                    # node's eligibility. Budget skips remain terminal because
+                    # resumed runs restore the original budget and counters.
+                    previous_is_terminal = previous is not None and (
+                        previous.status == StepStatus.SUCCEEDED
+                        or (
+                            previous.status == StepStatus.SKIPPED
+                            and previous.error != _INCOMING_CONDITIONS_SKIP_REASON
+                        )
+                    )
+                    if previous_is_terminal:
+                        assert previous is not None
+                        active = previous.status == StepStatus.SUCCEEDED
+                        return child, active, previous.status == StepStatus.SUCCEEDED
                     step_run = self.runtime.create_step(
-                        node_id=node.id,
+                        node_id=node.id if is_root else f"nested-{uuid4()}",
                         label=self._step_label(step),
                         kind=step.kind,
                         agent=step.agent,
@@ -487,11 +656,11 @@ class WorkflowEngine:
                     else:
                         should_run = any(active_inputs)
                     if not should_run:
-                        self.runtime.skip_step(step_run, "incoming conditions not matched")
-                        return child, False
+                        self.runtime.skip_step(step_run, _INCOMING_CONDITIONS_SKIP_REASON)
+                        return child, False, False
                     if self._exhausted() and not self._is_terminal(step):
                         self.runtime.skip_step(step_run, "token budget exhausted")
-                        return child, False
+                        return child, False, False
                     try:
                         child = await self._execute_with_policy(step, child, step_run)
                     except Exception as exc:
@@ -503,37 +672,53 @@ class WorkflowEngine:
                         )
                         if step.failure_policy == "fail_fast":
                             raise
-                    return child, True
+                    return child, True, step_run.status == StepStatus.SUCCEEDED
 
-                outcomes = await asyncio.gather(*(execute_node(node) for node in layer))
-                # Merge in declaration order; append-only collections avoid concurrent writes.
-                for node, (child, active) in zip(layer, outcomes, strict=True):
-                    if active:
-                        active_nodes.add(node.id)
-                        runtime_run = self.runtime.run
-                        assert runtime_run is not None
-                        current_step = next(
-                            step for step in runtime_run.steps if step.node_id == node.id
-                        )
-                        if current_step.status == StepStatus.SUCCEEDED:
-                            successful_nodes.add(node.id)
-                    else:
-                        continue
-                    if child.plan is not None:
-                        bb.plan = child.plan
-                    bb.results.extend(child.results[base_results:])
-                    bb.reflections.extend(child.reflections[base_reflections:])
-                    if child.report is not None:
-                        bb.report = child.report
-                    bb.scratch.update(child.scratch)
-                await self._checkpoint(wf, bb)
+                tasks = [asyncio.create_task(execute_node(node)) for node in layer]
+
+                def merge_outcomes(
+                    outcomes: Sequence[object],
+                    nodes_in_layer: tuple[WorkflowNode, ...] = layer_nodes,
+                    layer_snapshot: Blackboard = layer_base,
+                ) -> None:
+                    for node, outcome in zip(nodes_in_layer, outcomes, strict=True):
+                        if isinstance(outcome, BaseException):
+                            continue
+                        assert isinstance(outcome, tuple) and len(outcome) == 3
+                        child, active, succeeded = outcome
+                        if active:
+                            active_nodes.add(node.id)
+                            if succeeded:
+                                successful_nodes.add(node.id)
+                        else:
+                            continue
+                        _merge_parallel_blackboard(layer_snapshot, bb, child)
+
+                try:
+                    outcomes = await asyncio.gather(*tasks)
+                except (Exception, asyncio.CancelledError):
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    settled = await asyncio.gather(*tasks, return_exceptions=True)
+                    # A successful sibling is already durable runtime state. Its
+                    # output must enter the failure checkpoint or resume would
+                    # skip the node and lose that output permanently.
+                    merge_outcomes(settled)
+                    raise
+                merge_outcomes(list(outcomes))
+                if is_root:
+                    await self._checkpoint(wf, bb)
             if is_root and self._require_report and bb.report is None:
                 raise RuntimeError("工作流结束但未生成报告")
             return bb
         except asyncio.CancelledError:
             if is_root and self.runtime.run is not None:
                 self.runtime.finish(RunStatus.CANCELLED)
-                await self._checkpoint(wf, bb)
+                try:
+                    await self._checkpoint(wf, bb)
+                except LeaseLostError:
+                    pass
             raise
         except Exception:
             if is_root and self.runtime.run is not None:
@@ -542,6 +727,8 @@ class WorkflowEngine:
             raise
         finally:
             self._run_depth -= 1
+            if is_root:
+                self._resuming = False
             if (
                 is_root
                 and self.runtime.run is not None
@@ -551,7 +738,10 @@ class WorkflowEngine:
                     RunStatus.SUCCEEDED,
                     output={"has_report": bb.report is not None, "result_count": len(bb.results)},
                 )
-                bb.scratch["_orchestration_run"] = run.model_dump(mode="json")
+                bb.scratch["_orchestration_run"] = run.model_dump(
+                    mode="json", exclude={"checkpoint", "definition", "steps"}
+                )
+                await self._checkpoint(wf, bb, publish_event=False)
 
     async def _compose(self, step: Step, bb: Blackboard) -> None:
         """L3 运行时自组合：Coordinator 生成一份流程，校验后在同一黑板上递归执行。

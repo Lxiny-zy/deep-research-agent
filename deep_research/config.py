@@ -99,9 +99,22 @@ class Settings:
         if self.request_timeout <= 0:
             raise ValueError("request_timeout 必须 > 0")
 
+    def validate_llm(self) -> None:
+        """Validate only the credentials needed to construct the default LLM."""
+        if not self.llm_api_key:
+            raise RuntimeError("缺少环境变量：LLM_API_KEY（可复制 .env.example 配置）")
+
+    def validate_search(self) -> None:
+        """Validate only the credentials needed by the built-in Tavily client."""
+        if not self.tavily_api_key:
+            raise RuntimeError("缺少环境变量：TAVILY_API_KEY（可复制 .env.example 配置）")
+
     def validate(self) -> None:
-        """构建真实 LLM / 检索后端前调用；测试注入假依赖时可跳过。"""
-        pairs = (("LLM_API_KEY", self.llm_api_key), ("TAVILY_API_KEY", self.tavily_api_key))
-        missing = [name for name, value in pairs if not value]
+        """Validate both built-in integrations for backwards compatibility."""
+        missing = []
+        if not self.llm_api_key:
+            missing.append("LLM_API_KEY")
+        if not self.tavily_api_key:
+            missing.append("TAVILY_API_KEY")
         if missing:
             raise RuntimeError(f"缺少环境变量：{', '.join(missing)}（可复制 .env.example 配置）")

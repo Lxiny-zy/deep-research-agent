@@ -40,6 +40,11 @@ export function reduceStream(
   prev: ResearchStreamState,
   ev: ResearchEvent,
 ): ResearchStreamState {
+  // A replay buffer can contain events after the orchestrator terminal event.
+  // Once terminal, never let stale trailing events overwrite the final state.
+  if (prev.status === 'done' || prev.status === 'error') {
+    return prev
+  }
   // 直播统计：耗时取已见最大值（单调），token 取事件携带的累计值（缺省沿用旧值）。
   // 含 token 事件——合成阶段 token 增量持续到达，可让耗时平滑推进。
   const base: ResearchStreamState = {
@@ -108,6 +113,10 @@ export function useResearchStream(runId: string | null): ResearchStreamState {
     let terminal = false
 
     const onMessage = (data: string) => {
+      // streamRun may dispatch several already-buffered SSE events
+      // synchronously. Abort stops future reads, but not callbacks already
+      // queued in the current buffer.
+      if (disposed || terminal) return
       let ev: ResearchEvent
       try {
         ev = JSON.parse(data) as ResearchEvent

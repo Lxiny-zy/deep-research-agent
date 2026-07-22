@@ -9,6 +9,12 @@ const TERMINAL_STEP_STATUSES = new Set<StepRunStatus>([
 
 const ACTIVE_STEP_STATUSES = new Set<StepRunStatus>(['running', 'retrying'])
 
+const TERMINAL_WORKFLOW_STATUSES = new Set<WorkflowRun['status']>([
+  'succeeded',
+  'failed',
+  'cancelled',
+])
+
 const VALID_STEP_STATUSES = new Set<StepRunStatus>([
   'pending',
   'ready',
@@ -20,6 +26,17 @@ const VALID_STEP_STATUSES = new Set<StepRunStatus>([
   'cancelled',
 ])
 
+const STEP_STATUS_ORDER: Record<StepRunStatus, number> = {
+  pending: 0,
+  ready: 1,
+  running: 2,
+  retrying: 3,
+  succeeded: 4,
+  failed: 4,
+  skipped: 4,
+  cancelled: 4,
+}
+
 export interface ResearchProgress {
   percent: number
   completed: number
@@ -28,6 +45,11 @@ export interface ResearchProgress {
   currentLabel: string
   terminal: boolean
   estimated: boolean
+}
+
+function isNewerStepState(current: StepRun, candidate: StepRun): boolean {
+  if (candidate.attempt !== current.attempt) return candidate.attempt > current.attempt
+  return STEP_STATUS_ORDER[candidate.status] > STEP_STATUS_ORDER[current.status]
 }
 
 function eventSteps(events: ResearchEvent[]): StepRun[] {
@@ -40,8 +62,7 @@ function eventSteps(events: ResearchEvent[]): StepRun[] {
     if (!VALID_STEP_STATUSES.has(data.status as StepRunStatus)) continue
 
     const id = data.step_run_id
-    if (!byId.has(id)) order.push(id)
-    byId.set(id, {
+    const candidate: StepRun = {
       id,
       node_id: String(data.node_id ?? id),
       label: String(data.label ?? 'Agent'),
@@ -52,7 +73,14 @@ function eventSteps(events: ResearchEvent[]): StepRun[] {
       error: typeof data.error === 'string' ? data.error : null,
       started_at: null,
       finished_at: null,
-    })
+    }
+    const current = byId.get(id)
+    if (!current) {
+      order.push(id)
+      byId.set(id, candidate)
+    } else if (isNewerStepState(current, candidate)) {
+      byId.set(id, candidate)
+    }
   }
 
   return order.map((id) => byId.get(id)!).filter(Boolean)
@@ -61,18 +89,47 @@ function eventSteps(events: ResearchEvent[]): StepRun[] {
 export function mergeWorkflowSteps(
   execution: WorkflowRun | null | undefined,
   events: ResearchEvent[],
+  runStatus?: RunStatus,
 ): StepRun[] {
   const base = execution?.steps ?? []
+  const collapseByNode = (steps: StepRun[]): StepRun[] => {
+    const order: string[] = []
+    const latest = new Map<string, StepRun>()
+
+    for (const step of steps) {
+      const key = step.node_id || step.id
+      if (!latest.has(key)) order.push(key)
+      // A resumed node gets a new step-run id and its attempt counter starts
+      // over. Execution order, rather than the per-record attempt number,
+      // identifies which record is the current semantic stage.
+      latest.set(key, step)
+    }
+
+    return order.map((key) => latest.get(key)!).filter(Boolean)
+  }
+
+  const workflowIsTerminal =
+    execution != null && TERMINAL_WORKFLOW_STATUSES.has(execution.status)
+  if (workflowIsTerminal && runStatus !== 'running') return collapseByNode([...base])
+
   const live = eventSteps(events)
   const order = base.map((step) => step.id)
   const merged = new Map(base.map((step) => [step.id, step]))
 
   for (const step of live) {
-    if (!merged.has(step.id)) order.push(step.id)
-    merged.set(step.id, { ...merged.get(step.id), ...step })
+    const persisted = merged.get(step.id)
+    if (persisted && TERMINAL_STEP_STATUSES.has(persisted.status)) continue
+    if (persisted && !isNewerStepState(persisted, step)) continue
+    if (!persisted) order.push(step.id)
+    merged.set(step.id, {
+      ...persisted,
+      ...step,
+      started_at: step.started_at ?? persisted?.started_at ?? null,
+      finished_at: step.finished_at ?? persisted?.finished_at ?? null,
+    })
   }
 
-  return order.map((id) => merged.get(id)!).filter(Boolean)
+  return collapseByNode(order.map((id) => merged.get(id)!).filter(Boolean))
 }
 
 function plannedStepCount(
@@ -111,22 +168,25 @@ export function deriveResearchProgress({
   events: ResearchEvent[]
   runStatus: RunStatus
 }): ResearchProgress {
-  const steps = mergeWorkflowSteps(execution, events)
+  const steps = mergeWorkflowSteps(execution, events, runStatus)
   const planned = plannedStepCount(execution, events)
   const total = Math.max(planned, steps.length)
   const completed = steps.filter((step) => TERMINAL_STEP_STATUSES.has(step.status)).length
   const activeStep =
     [...steps].reverse().find((step) => ACTIVE_STEP_STATUSES.has(step.status)) ?? null
   const readyStep = [...steps].reverse().find((step) => step.status === 'ready') ?? null
-  const terminal =
-    runStatus === 'done' ||
-    runStatus === 'error' ||
-    execution?.status === 'succeeded' ||
-    execution?.status === 'failed' ||
-    execution?.status === 'cancelled'
+  const persistedWorkflowTerminal =
+    runStatus !== 'running' &&
+    (execution?.status === 'succeeded' ||
+      execution?.status === 'failed' ||
+      execution?.status === 'cancelled')
+  const terminal = runStatus === 'done' || runStatus === 'error' || persistedWorkflowTerminal
 
   let percent = 0
-  if (runStatus === 'done' || execution?.status === 'succeeded') {
+  if (
+    runStatus === 'done' ||
+    (runStatus !== 'running' && execution?.status === 'succeeded')
+  ) {
     percent = 100
   } else if (total > 0) {
     const activeWeight = activeStep

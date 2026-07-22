@@ -7,13 +7,25 @@ from __future__ import annotations
 
 import pytest
 
+from deep_research.agents.base import Blackboard, RunContext
 from deep_research.guardrails import (
     ClaimConsistencyReport,
     SemanticEvidenceDecisionList,
 )
 from deep_research.models import Finding, FindingList, Report, ResearchPlan, Source, SubQuestion
+from deep_research.observability import Tracer
 from deep_research.orchestrator import DeepResearchAgent
+from deep_research.workflow import Step, Workflow, WorkflowEngine
 from tests.fakes import FakeLLM, FakeSearch
+
+
+class _CheckpointTeamAgent:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
+        bb.scratch[self.name] = True
+        return bb
 
 
 @pytest.mark.asyncio
@@ -165,3 +177,82 @@ async def test_team_fanout_checks_consistency_after_merging_children(settings) -
     assert consistency_events
     assert consistency_events[-1].data is not None
     assert consistency_events[-1].data["counts"] == {"conflicted": 2}
+
+
+@pytest.mark.asyncio
+async def test_team_children_do_not_write_root_checkpoints(settings) -> None:
+    checkpoints = []
+
+    async def save_checkpoint(run):  # type: ignore[no-untyped-def]
+        checkpoints.append(run.model_copy(deep=True))
+
+    agents = {
+        "researcher": _CheckpointTeamAgent("researcher"),
+        "aggregator": _CheckpointTeamAgent("aggregator"),
+    }
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
+    engine = WorkflowEngine(
+        ctx,
+        resolver=agents.__getitem__,
+        checkpoint_sink=save_checkpoint,
+    )
+    workflow = Workflow(
+        name="root-teams",
+        steps=[Step(kind="team_fanout", aggregator="aggregator")],
+    )
+    bb = Blackboard(
+        query="Q",
+        scratch={"subtasks": [{"focus": "left"}, {"focus": "right"}]},
+    )
+
+    await engine.run(workflow, bb)
+
+    assert checkpoints
+    assert {run.definition["name"] for run in checkpoints} == {"root-teams"}
+
+
+@pytest.mark.asyncio
+async def test_nested_step_ids_do_not_hide_future_root_steps_on_resume(settings) -> None:
+    checkpoints = []
+
+    async def save_checkpoint(run):  # type: ignore[no-untyped-def]
+        checkpoints.append(run.model_copy(deep=True))
+
+    agents = {
+        name: _CheckpointTeamAgent(name)
+        for name in ("researcher", "aggregator", "final")
+    }
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
+    workflow = Workflow(
+        name="root-after-team",
+        steps=[
+            Step(kind="team_fanout", aggregator="aggregator"),
+            Step(agent="final"),
+        ],
+    )
+    first_engine = WorkflowEngine(
+        ctx,
+        resolver=agents.__getitem__,
+        checkpoint_sink=save_checkpoint,
+    )
+    initial = Blackboard(query="Q", scratch={"subtasks": [{"focus": "left"}]})
+
+    await first_engine.run(workflow, initial)
+
+    after_fanout = checkpoints[0]
+    assert "final" not in after_fanout.checkpoint["scratch"]
+    assert any(step.node_id.startswith("nested-") for step in after_fanout.steps)
+
+    resumed_ctx = RunContext(
+        llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings
+    )
+    resumed_engine = WorkflowEngine(
+        resumed_ctx,
+        resolver=agents.__getitem__,
+        resume_run=after_fanout,
+    )
+    resumed = Blackboard.model_validate(after_fanout.checkpoint)
+
+    await resumed_engine.run(workflow, resumed)
+
+    assert resumed.scratch["final"] is True

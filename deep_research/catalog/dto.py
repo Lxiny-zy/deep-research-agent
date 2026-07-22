@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 # 内置行为模板：角色卡片只能选其一（决定该角色在引擎里的执行逻辑）。
 BEHAVIORS = ("plan", "research", "reflect", "synthesize", "critique")
@@ -54,6 +56,29 @@ class AgentCardView(BaseModel):
     model_profile_name: str | None = None  # 便于前端卡片直接显示绑定模型名
 
 
+
+class AgentCardSnapshot(BaseModel):
+    """Non-secret role semantics persisted with a recoverable run."""
+
+    name: str
+    behavior: str
+    system_prompt: str = ""
+    model_profile_id: str | None = None
+
+
+class CatalogRuntimeSnapshot(BaseModel):
+    """Catalog inputs needed to replay a run without live role-card state.
+
+    Profile IDs are references only.  Secrets remain in the catalog repository
+    and are deliberately not serialized into the checkpoint.
+    """
+
+    version: Literal[1] = 1
+    cards: list[AgentCardSnapshot] = Field(default_factory=list)
+    default_profile_id: str | None = None
+    terminal_roles: list[str] = Field(default_factory=list)
+
+
 class SearchKeyView(BaseModel):
     """搜索 key 对外视图：api_key 脱敏。"""
 
@@ -83,6 +108,22 @@ class AgentCardUpdate(BaseModel):
     icon: str | None = Field(None, max_length=16)
     enabled: bool | None = None
     model_profile_id: str | None = None  # 显式传 None 不区分清空——用 set_unset 语义处理
+
+
+    @field_validator(
+        "display_name",
+        "description",
+        "behavior",
+        "system_prompt",
+        "icon",
+        "enabled",
+        mode="before",
+    )
+    @classmethod
+    def reject_null_non_nullable_fields(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("field cannot be null; omit it to keep the current value")
+        return value
 
 
 class WorkflowDefView(BaseModel):
@@ -121,3 +162,20 @@ class WorkflowDefUpdate(BaseModel):
     viewport: dict | None = None
     version: int | None = Field(None, ge=1)
     enabled: bool | None = None
+
+    @field_validator(
+        "display_name",
+        "description",
+        "steps",
+        "nodes",
+        "edges",
+        "viewport",
+        "version",
+        "enabled",
+        mode="before",
+    )
+    @classmethod
+    def reject_null_fields(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("field cannot be null; omit it to keep the current value")
+        return value

@@ -39,6 +39,7 @@ class Tracer:
 
     def __init__(self) -> None:
         self._t0 = time.perf_counter()
+        self._elapsed_offset = 0.0
         self.total_tokens = 0
         self.estimated_tokens = 0
         self.events: list[Event] = []
@@ -48,7 +49,16 @@ class Tracer:
 
     @property
     def elapsed(self) -> float:
-        return time.perf_counter() - self._t0
+        return self._elapsed_offset + time.perf_counter() - self._t0
+
+    def restore_metrics(
+        self, *, total_tokens: int = 0, estimated_tokens: int = 0, elapsed: float = 0.0
+    ) -> None:
+        """Restore cumulative counters from a durable workflow checkpoint."""
+        self.total_tokens = max(0, total_tokens)
+        self.estimated_tokens = min(self.total_tokens, max(0, estimated_tokens))
+        self._elapsed_offset = max(0.0, elapsed)
+        self._t0 = time.perf_counter()
 
     def subscribe(self, callback: Callable[[Event], None]) -> None:
         """注册同步订阅者（如 CLI 打印函数、持久化落库回调）。只收非 token 事件。"""

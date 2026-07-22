@@ -58,6 +58,8 @@ def graph_to_steps(nodes: list[WorkflowNode], edges: list[WorkflowEdge]) -> list
     by_id = {node.id: node for node in nodes}
     if len(by_id) != len(nodes):
         raise ValueError("节点 id 重复")
+    if len({edge.id for edge in edges}) != len(edges):
+        raise ValueError("边 id 重复")
     outgoing: dict[str, list[str]] = {node_id: [] for node_id in by_id}
     incoming: dict[str, int] = {node_id: 0 for node_id in by_id}
     for edge in edges:
@@ -96,6 +98,9 @@ def graph_topo_layers(
     by_id = {node.id: node for node in nodes}
     if len(by_id) != len(nodes):
         raise ValueError("节点 id 重复")
+    edge_ids = {edge.id for edge in edges}
+    if len(edge_ids) != len(edges):
+        raise ValueError("边 id 重复")
     order = {node.id: index for index, node in enumerate(nodes)}
     outgoing: dict[str, list[str]] = {node_id: [] for node_id in by_id}
     incoming: dict[str, int] = {node_id: 0 for node_id in by_id}
