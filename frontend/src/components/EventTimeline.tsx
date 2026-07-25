@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { AppIcon } from './AppIcon'
 import { getStageMeta } from '../lib/stageMeta'
 import type { ResearchEvent } from '../types'
 
@@ -10,9 +11,11 @@ export default function EventTimeline({
   events: ResearchEvent[]
   streaming?: boolean
 }) {
-  const endRef = useRef<HTMLDivElement>(null)
+  const timelineRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    const node = timelineRef.current
+    if (!node) return
+    node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
   }, [events.length])
 
   if (events.length === 0) {
@@ -20,7 +23,7 @@ export default function EventTimeline({
   }
 
   return (
-    <div className="timeline">
+    <div className="timeline" ref={timelineRef}>
       {events.map((ev, i) => {
         const meta = getStageMeta(ev.stage)
         const live = streaming && i === events.length - 1
@@ -33,14 +36,14 @@ export default function EventTimeline({
             <span className="event-time">{ev.elapsed.toFixed(1)}s</span>
             <div className="event-main">
               <span className="event-stage" style={{ color: meta.color }}>
-                {meta.icon} {meta.label} · {ev.stage}
+                <AppIcon name={meta.icon} size={14} aria-hidden="true" />
+                {meta.label} · {ev.stage}
               </span>
               <div className="event-msg">{ev.message}</div>
             </div>
           </div>
         )
       })}
-      <div ref={endRef} />
     </div>
   )
 }

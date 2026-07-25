@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Skeleton from '../components/Skeleton'
 import WorkflowEditor from '../components/WorkflowEditor'
+import { AppIcon } from '../components/AppIcon'
 import { ApiError } from '../api/client'
 import { useCustomWorkflows, useRoles, useWorkflowMutations } from '../hooks/useCatalog'
 import type { WorkflowDef, WorkflowDefInput } from '../types'
@@ -14,7 +15,7 @@ function errMsg(e: unknown): string {
 }
 
 function stepSummary(wf: WorkflowDef): string {
-  return wf.steps.map((s) => (s.kind === 'reflect_loop' ? '反思循环' : (s.agent ?? '?'))).join(' → ')
+  return wf.steps.map((s) => (s.kind === 'reflect_loop' ? '反思循环' : (s.agent ?? '?'))).join(' · ')
 }
 
 type EditSession = {
@@ -81,25 +82,27 @@ export default function WorkflowBuilderPage() {
 
   return (
     <div className="stack">
-      <section className="hero">
-        <span className="eyebrow">✦ Workflow Builder</span>
-        <h2>
-          可视化<span className="accent">自由编排</span>研究团队
-        </h2>
-        <p className="sub">
+      <section className="page-intro workflow-intro">
+        <div>
+          <span className="eyebrow"><AppIcon name="workflow" size={14} aria-hidden="true" /> WORKFLOW / BUILDER</span>
+          <h1>可视化<span className="accent">自由编排</span>研究团队</h1>
+          <p className="sub">
           从可用角色里挑选、排成一条有序流程（可插入反思循环），保存后即可在「新建研究」中选用并运行。
-        </p>
+          </p>
+        </div>
+        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="waypoints" size={58} strokeWidth={1.2} /></div>
       </section>
 
       <div className="row between">
         <span className="hint">自定义工作流：把角色拼成你自己的多智能体流程，存库复用。</span>
-        <button className="btn" onClick={() => openEditor(null)}>
-          + 新建工作流
+        <button className="btn btn-primary" onClick={() => openEditor(null)} type="button">
+          <AppIcon name="plus" size={15} aria-hidden="true" />
+          新建工作流
         </button>
       </div>
 
       {workflows.isLoading && <Skeleton rows={3} />}
-      {workflows.isError && <p className="error-text">✗ {errMsg(workflows.error)}</p>}
+      {workflows.isError && <p className="error-text"><AppIcon name="circle-x" size={14} aria-hidden="true" />{errMsg(workflows.error)}</p>}
       {workflows.data?.length === 0 && (
         <p className="muted">还没有自定义工作流。点「新建工作流」开始拼装你的研究团队。</p>
       )}
@@ -119,13 +122,13 @@ export default function WorkflowBuilderPage() {
                 className="btn ghost small"
                 onClick={() => navigate(`/?workflow=${encodeURIComponent(wf.name)}`)}
               >
-                去研究
+                <AppIcon name="play" size={13} aria-hidden="true" /> 去研究
               </button>
               <button className="btn ghost small" onClick={() => openEditor(wf)}>
-                编辑
+                <AppIcon name="edit" size={13} aria-hidden="true" /> 编辑
               </button>
               <button className="btn ghost small danger" onClick={() => remove(wf)}>
-                删除
+                <AppIcon name="trash" size={13} aria-hidden="true" /> 删除
               </button>
             </div>
           </div>

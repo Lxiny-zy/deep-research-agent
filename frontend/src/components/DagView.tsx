@@ -1,4 +1,5 @@
 import type { DagData } from '../types'
+import { AppIcon } from './AppIcon'
 
 // 把后端的拓扑分层（layers + deps）渲染成「逐层、带前驱标注」的视图。
 export default function DagView({ dag }: { dag: DagData }) {
@@ -14,7 +15,7 @@ export default function DagView({ dag }: { dag: DagData }) {
                 <span className="dag-node" key={n}>
                   #{n}
                   {deps.length > 0 && (
-                    <span className="dag-dep">← {deps.map((d) => `#${d}`).join(', ')}</span>
+                    <span className="dag-dep"><AppIcon name="arrow-left" size={12} aria-hidden="true" /> {deps.map((d) => `#${d}`).join(', ')}</span>
                   )}
                 </span>
               )

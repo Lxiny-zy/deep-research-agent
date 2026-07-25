@@ -9,6 +9,7 @@ import ReportView from '../components/ReportView'
 import StatsBar from '../components/StatsBar'
 import StatusBadge from '../components/StatusBadge'
 import TagEditor from '../components/TagEditor'
+import { AppIcon } from '../components/AppIcon'
 import { useResearchStream } from '../hooks/useResearchStream'
 import { useRunDetail } from '../hooks/useRuns'
 import { deriveResearchProgress } from '../lib/runProgress'
@@ -72,7 +73,7 @@ export default function RunPage() {
       <div className="stack">
         <div className="panel">
           <div className="empty">
-            <div className="ico">✗</div>
+            <div className="ico"><AppIcon name="circle-x" size={24} aria-hidden="true" /></div>
             {notFound
               ? '运行不存在或已被删除，请回历史页确认。'
               : `加载运行详情失败：${detail.error instanceof Error ? detail.error.message : '未知错误'}`}

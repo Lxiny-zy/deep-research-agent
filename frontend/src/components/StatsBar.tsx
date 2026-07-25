@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ResearchProgress } from '../lib/runProgress'
 import type { RunDetail, RunStats } from '../types'
+import { AppIcon } from './AppIcon'
 
 interface LiveStats {
   elapsed: number
@@ -63,32 +64,6 @@ function formatElapsed(value: number): string {
 }
 
 const numberFormat = new Intl.NumberFormat('zh-CN')
-
-function ClockIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M12 7v5l3.5 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-function TokenIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path d="M7 4 3.5 12 7 20M17 4l3.5 8-3.5 8M10 8h4M9 12h6M10 16h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
-function FindingIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" strokeWidth="1.6" />
-      <path d="m15.5 15.5 4 4M8 10.5l1.6 1.6L13.5 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
 
 function LiveMetric({ icon, label, value, note, pulsing }: {
   icon: React.ReactNode
@@ -209,21 +184,21 @@ export default function StatsBar({
 
       <div className="live-metrics">
         <LiveMetric
-          icon={<ClockIcon />}
+          icon={<AppIcon name="clock" size={19} aria-hidden="true" />}
           label="已耗时"
           value={formatElapsed(elapsed)}
           note={liveActive ? '持续计时中' : '本次运行总耗时'}
           pulsing={liveActive}
         />
         <LiveMetric
-          icon={<TokenIcon />}
+          icon={<AppIcon name="braces" size={19} aria-hidden="true" />}
           label="Token 消耗"
           value={`${isEstimate ? '≈ ' : ''}${numberFormat.format(Math.round(tokens))}`}
           note={isEstimate ? '流式阶段含估算值' : liveActive ? '随模型调用累计' : '最终累计用量'}
           pulsing={tokenPulse}
         />
         <LiveMetric
-          icon={<FindingIcon />}
+          icon={<AppIcon name="scan-search" size={19} aria-hidden="true" />}
           label={sources != null ? '引用来源' : '研究发现'}
           value={numberFormat.format(Math.round(findings))}
           note={sources != null ? '报告引用的有效来源' : '随检索结果动态增加'}

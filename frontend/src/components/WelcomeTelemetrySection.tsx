@@ -1,6 +1,7 @@
 import { useLiveTelemetryDemo } from '../hooks/useLiveTelemetryDemo'
 import OrchestrationPipeline from './OrchestrationPipeline'
 import StatsBar from './StatsBar'
+import { AppIcon } from './AppIcon'
 
 export default function WelcomeTelemetrySection() {
   const demo = useLiveTelemetryDemo(true)
@@ -32,9 +33,9 @@ export default function WelcomeTelemetrySection() {
       </div>
 
       <footer className="welcome-telemetry-caption">
-        <span><i /> 实时阶段进度</span>
-        <span><i /> Token 用量校准</span>
-        <span><i /> 断线轮询兜底</span>
+        <span><AppIcon name="activity" size={13} aria-hidden="true" /> 实时阶段进度</span>
+        <span><AppIcon name="braces" size={13} aria-hidden="true" /> Token 用量校准</span>
+        <span><AppIcon name="refresh" size={13} aria-hidden="true" /> 断线轮询兜底</span>
       </footer>
     </section>
   )

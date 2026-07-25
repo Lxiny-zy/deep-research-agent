@@ -1,5 +1,6 @@
 import { useTestModel } from '../hooks/useCatalog'
 import type { ModelProfile } from '../types'
+import { AppIcon } from './AppIcon'
 
 interface Props {
   profile: ModelProfile
@@ -15,7 +16,7 @@ export default function ModelProfileCard({ profile: p, onEdit, onDelete }: Props
   return (
     <div className="role-card">
       <div className="role-card-head">
-        <span className="role-icon">🧠</span>
+        <span className="role-icon"><AppIcon name="brain" size={20} aria-hidden="true" /></span>
         <div className="role-meta">
           <strong>{p.name}</strong>
           <span className="muted small">{p.model}</span>
@@ -45,8 +46,8 @@ export default function ModelProfileCard({ profile: p, onEdit, onDelete }: Props
           {test.isPending
             ? '测试中…'
             : r?.ok
-              ? `✓ 可用 · ${r.latency_ms}ms`
-              : `✗ ${r?.detail || '请求失败'}`}
+              ? `可用 · ${r.latency_ms}ms`
+              : r?.detail || '请求失败'}
         </p>
       )}
 
@@ -56,13 +57,16 @@ export default function ModelProfileCard({ profile: p, onEdit, onDelete }: Props
           onClick={() => test.mutate(p.id)}
           disabled={test.isPending}
         >
+          <AppIcon name={test.isPending ? 'loader' : 'activity'} size={13} aria-hidden="true" className={test.isPending ? 'spin' : ''} />
           测试连接
         </button>
         <div className="row gap-sm">
           <button className="btn ghost small" onClick={onEdit}>
+            <AppIcon name="edit" size={13} aria-hidden="true" />
             编辑
           </button>
           <button className="btn ghost small danger" onClick={onDelete}>
+            <AppIcon name="trash" size={13} aria-hidden="true" />
             删除
           </button>
         </div>

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useSetTags } from '../hooks/useRuns'
+import { AppIcon } from './AppIcon'
 
 // 运行详情页的标签编辑：现有标签可删，输入回车新增；每次提交完整列表（替换语义）。
 export default function TagEditor({ runId, tags }: { runId: string; tags: string[] }) {
@@ -29,7 +30,7 @@ export default function TagEditor({ runId, tags }: { runId: string; tags: string
             onClick={() => remove(t)}
             disabled={setTags.isPending}
           >
-            ✕
+            <AppIcon name="x" size={12} aria-hidden="true" />
           </button>
         </span>
       ))}

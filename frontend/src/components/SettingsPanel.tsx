@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { ResearchParams } from '../types'
+import { AppIcon } from './AppIcon'
 
 interface Field {
   key: keyof ResearchParams
@@ -43,7 +44,8 @@ export default function SettingsPanel({
   return (
     <div className="settings">
       <button type="button" className="settings-toggle" onClick={() => setOpen((o) => !o)}>
-        {open ? '▾' : '▸'} 高级设置（留空＝用服务端默认）
+        <AppIcon name={open ? 'chevron-down' : 'chevron-right'} size={15} aria-hidden="true" />
+        高级设置（留空＝用服务端默认）
       </button>
       {open && (
         <div className="settings-grid">

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { downloadText, slugify } from '../lib/download'
+import { AppIcon } from './AppIcon'
 
 // 报告操作：复制到剪贴板 + 下载 .md。markdown 为空时禁用。
 export default function ReportActions({
@@ -32,9 +33,11 @@ export default function ReportActions({
   return (
     <div className="report-actions">
       <button type="button" className="btn ghost sm" onClick={copy} disabled={disabled}>
-        {copied ? '✓ 已复制' : '复制'}
+        <AppIcon name={copied ? 'check' : 'copy'} size={14} aria-hidden="true" />
+        {copied ? '已复制' : '复制'}
       </button>
       <button type="button" className="btn ghost sm" onClick={download} disabled={disabled}>
+        <AppIcon name="download" size={14} aria-hidden="true" />
         下载 .md
       </button>
     </div>

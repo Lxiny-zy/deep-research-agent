@@ -1,5 +1,6 @@
 import { deriveResearchProgress, mergeWorkflowSteps } from '../lib/runProgress'
 import type { ResearchEvent, RunStatus, StepRunStatus, WorkflowRun } from '../types'
+import { AppIcon } from './AppIcon'
 
 interface Props {
   execution: WorkflowRun | null | undefined
@@ -56,10 +57,10 @@ export default function OrchestrationPipeline({ execution, events = [], runStatu
         <span style={{ transform: `scaleX(${progress.percent / 100})` }} />
       </div>
       <div className="runtime-pipeline-scroll">
-        <div className="runtime-terminal">INPUT</div>
+        <div className="runtime-terminal"><AppIcon name="play" size={13} aria-hidden="true" /> INPUT</div>
         {steps.map((step, index) => (
           <div className="runtime-step-wrap" key={step.id}>
-            <span className="runtime-edge">→</span>
+            <span className="runtime-edge" aria-hidden="true"><AppIcon name="arrow-right" size={16} /></span>
             <div className={`runtime-step ${step.status}`} title={step.error ?? undefined}>
               <span>{index + 1}</span>
               <div><strong>{step.label}</strong><small>{step.agent || step.kind}</small></div>
@@ -67,8 +68,8 @@ export default function OrchestrationPipeline({ execution, events = [], runStatu
             </div>
           </div>
         ))}
-        <span className="runtime-edge">→</span>
-        <div className={`runtime-terminal output${runStatus === 'done' ? ' completed' : ''}`}>OUTPUT</div>
+        <span className="runtime-edge" aria-hidden="true"><AppIcon name="arrow-right" size={16} /></span>
+        <div className={`runtime-terminal output${runStatus === 'done' ? ' completed' : ''}`}><AppIcon name="check-circle" size={13} aria-hidden="true" /> OUTPUT</div>
       </div>
     </div>
   )

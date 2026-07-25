@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Skeleton from '../components/Skeleton'
+import { AppIcon } from '../components/AppIcon'
 import { useModels, useSearchKeys } from '../hooks/useCatalog'
 import { useConfig, useUpdateConfig } from '../hooks/useConfig'
 import type { ConfigUpdate, ConfigView } from '../types'
@@ -66,8 +67,8 @@ function EffectiveConfig({ config }: { config: ConfigView }) {
     <div className="panel">
       <div className="row between">
         <h3 className="panel-title">当前生效配置</h3>
-        <Link to="/agents" className="nav-link">
-          去角色广场管理 →
+        <Link to="/agents" className="nav-link inline-link">
+          去角色广场管理 <AppIcon name="arrow-up-right" size={14} aria-hidden="true" />
         </Link>
       </div>
       <p className="hint" style={{ marginBottom: 14 }}>
@@ -128,7 +129,15 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="stack">
+    <div className="stack page-stack">
+      <header className="page-intro settings-intro">
+        <div>
+          <span className="eyebrow"><AppIcon name="settings" size={14} aria-hidden="true" /> SYSTEM / SETTINGS</span>
+          <h1>让研究按照<em>你的规则</em>运行。</h1>
+          <p>管理默认模型、并行策略与反思预算。全局设置是长期偏好，单次研究仍可在新建页覆盖。</p>
+        </div>
+        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="sliders" size={54} strokeWidth={1.2} /></div>
+      </header>
       {data && <EffectiveConfig config={data} />}
 
       <div className="panel">
@@ -138,9 +147,7 @@ export default function SettingsPage() {
         </p>
 
         {isLoading && <Skeleton rows={6} />}
-        {isError && (
-          <p className="error-text">✗ {error instanceof Error ? error.message : '加载失败'}</p>
-        )}
+        {isError && <p className="error-text"><AppIcon name="circle-x" size={14} aria-hidden="true" />{error instanceof Error ? error.message : '加载失败'}</p>}
 
         {form && data && (
           <div className="stack">
@@ -205,11 +212,12 @@ export default function SettingsPage() {
 
             <div className="row between" style={{ marginTop: 18 }}>
               <span className="hint">
-                {update.isSuccess && !update.isPending ? '✓ 已保存' : ''}
+                {update.isSuccess && !update.isPending && <><AppIcon name="check-circle" size={14} aria-hidden="true" />已保存</>}
                 {update.isError &&
-                  `✗ ${update.error instanceof Error ? update.error.message : '保存失败'}`}
+                  <><AppIcon name="circle-x" size={14} aria-hidden="true" />{update.error instanceof Error ? update.error.message : '保存失败'}</>}
               </span>
-              <button className="btn" onClick={save} disabled={update.isPending}>
+              <button className="btn btn-primary" onClick={save} disabled={update.isPending} type="button">
+                <AppIcon name={update.isPending ? 'loader' : 'save'} size={15} aria-hidden="true" className={update.isPending ? 'spin' : ''} />
                 {update.isPending ? '保存中…' : '保存设置'}
               </button>
             </div>

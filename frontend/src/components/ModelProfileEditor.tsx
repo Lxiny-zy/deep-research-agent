@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useModelProbe } from '../hooks/useCatalog'
 import type { ModelProfile, ModelProfileInput } from '../types'
+import { AppIcon } from './AppIcon'
 
 interface Props {
   initial?: ModelProfile | null
@@ -68,8 +69,14 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3 className="panel-title">{editing ? '编辑模型档案' : '新建模型档案'}</h3>
+      <div className="modal editor-modal" role="dialog" aria-modal="true" aria-labelledby="model-editor-title" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header-row">
+          <div>
+            <span className="eyebrow">MODEL / PROFILE</span>
+            <h3 className="panel-title" id="model-editor-title">{editing ? '编辑模型档案' : '新建模型档案'}</h3>
+          </div>
+          <button className="btn btn-ghost btn-sm icon-button" onClick={onCancel} type="button" aria-label="关闭"><AppIcon name="x" size={15} aria-hidden="true" /></button>
+        </div>
         <div className="stack">
           <label className="field-label">
             档案名
@@ -97,9 +104,11 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
               </div>
               <div className="row gap-sm">
                 <button type="button" className="btn ghost small" onClick={() => setManualModelEntry((value) => !value)}>
+                  <AppIcon name={manualModelEntry ? 'filter' : 'edit'} size={13} aria-hidden="true" />
                   {manualModelEntry ? '使用模型列表' : '手动填写 ID'}
                 </button>
                 <button className="btn ghost small" onClick={discover} disabled={probe.discover.isPending}>
+                  <AppIcon name={probe.discover.isPending ? 'loader' : 'download'} size={13} aria-hidden="true" className={probe.discover.isPending ? 'spin' : ''} />
                   {probe.discover.isPending ? '拉取中…' : '拉取模型列表'}
                 </button>
               </div>
@@ -123,8 +132,8 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
                 {filteredModels.map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
             )}
-            {probe.discover.data && <span className="test-result test-ok">已发现 {probe.discover.data.models.length} 个模型 · {probe.discover.data.latency_ms}ms</span>}
-            {probe.discover.isError && <span className="test-result test-fail">{probe.discover.error.message}</span>}
+            {probe.discover.data && <span className="test-result test-ok"><AppIcon name="check-circle" size={14} aria-hidden="true" />已发现 {probe.discover.data.models.length} 个模型 · {probe.discover.data.latency_ms}ms</span>}
+            {probe.discover.isError && <span className="test-result test-fail"><AppIcon name="circle-x" size={14} aria-hidden="true" />{probe.discover.error.message}</span>}
           </div>
           <div className="field-label api-key-field">
             <span>API Key</span>
@@ -205,7 +214,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
             </label>
           </div>
 
-          {error && <p className="error-text">✗ {error}</p>}
+          {error && <p className="error-text"><AppIcon name="circle-x" size={14} aria-hidden="true" />{error}</p>}
 
           {(probe.test.data || probe.test.isPending || probe.test.isError) && (
             <p className={`test-result ${probe.test.isPending ? 'test-pending' : probe.test.data?.ok ? 'test-ok' : 'test-fail'}`}>
@@ -215,10 +224,11 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
 
           <div className="row between" style={{ marginTop: 8 }}>
             <div className="row gap-sm">
-              <button className="btn ghost" onClick={onCancel}>取消</button>
-              <button className="btn ghost" onClick={() => probe.test.mutate(probeBody)} disabled={probe.test.isPending || !model}>测试当前配置</button>
+              <button className="btn ghost" onClick={onCancel} type="button">取消</button>
+              <button className="btn ghost" onClick={() => probe.test.mutate(probeBody)} disabled={probe.test.isPending || !model} type="button"><AppIcon name={probe.test.isPending ? 'loader' : 'activity'} size={13} aria-hidden="true" className={probe.test.isPending ? 'spin' : ''} />测试当前配置</button>
             </div>
-            <button className="btn" onClick={submit} disabled={pending || !name.trim()}>
+            <button className="btn btn-primary" onClick={submit} disabled={pending || !name.trim()} type="button">
+              <AppIcon name={pending ? 'loader' : 'save'} size={15} aria-hidden="true" className={pending ? 'spin' : ''} />
               {pending ? '保存中…' : '保存'}
             </button>
           </div>

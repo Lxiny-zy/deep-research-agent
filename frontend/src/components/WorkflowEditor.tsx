@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import WorkflowFlowCanvas from './WorkflowFlowCanvas'
+import { AgentGlyph, AppIcon } from './AppIcon'
 import { allocateSemanticNodeIds } from './workflowCanvasLogic'
 import {
   dependenciesFromEdges,
@@ -216,7 +217,7 @@ export default function WorkflowEditor({
         const index = nodeKeys.indexOf(key)
         return index >= 0 ? nodeTitle(steps[index], roles) : key
       })
-      setGraphError(`无法连接：该依赖会形成循环 ${labels.join(' → ')}`)
+      setGraphError(`无法连接：该依赖会形成循环 ${labels.join(' · ')}`)
       return
     }
     setGraphError('')
@@ -302,12 +303,13 @@ export default function WorkflowEditor({
             <span className={`pipeline-health ${validation ? 'warning' : 'ready'}`}>
               {validation ?? '管线可运行'}
             </span>
-            <button className="btn ghost" onClick={onCancel}>关闭</button>
+            <button className="btn ghost" onClick={onCancel} type="button"><AppIcon name="x" size={14} aria-hidden="true" />关闭</button>
             <button
               className="btn btn-primary"
               onClick={submit}
               disabled={pending || !!validation || (!editing && !name.trim())}
             >
+              <AppIcon name={pending ? 'loader' : 'save'} size={15} aria-hidden="true" className={pending ? 'spin' : ''} />
               {pending ? '保存中…' : '保存编排'}
             </button>
           </div>
@@ -344,12 +346,12 @@ export default function WorkflowEditor({
                   }}
                   onClick={() => appendAgent(role.name)}
                 >
-                  <span className="role-monogram">{role.label.slice(0, 1)}</span>
+                   <span className="role-monogram"><AgentGlyph icon={role.icon} size={18} /></span>
                   <span>
                     <strong>{role.label}</strong>
                     <small>{role.name}{role.builtin ? ' · 内置' : ' · 自定义'}</small>
                   </span>
-                  <span className="role-add">＋</span>
+                   <span className="role-add"><AppIcon name="plus" size={15} aria-hidden="true" /></span>
                 </button>
               ))}
             </div>
@@ -363,9 +365,9 @@ export default function WorkflowEditor({
               }}
               onClick={() => appendReflection()}
             >
-              <span className="role-monogram">↻</span>
+               <span className="role-monogram"><AppIcon name="refresh" size={18} aria-hidden="true" /></span>
               <span><strong>反思循环</strong><small>评估证据并补充研究</small></span>
-              <span className="role-add">＋</span>
+               <span className="role-add"><AppIcon name="plus" size={15} aria-hidden="true" /></span>
             </button>
           </aside>
 
@@ -576,7 +578,7 @@ export default function WorkflowEditor({
                 <button className="btn ghost danger" onClick={removeSelected}>删除此节点</button>
               </div>
             ) : <p className="muted">选择画布中的节点进行配置。</p>}
-            {error && <p className="error-text">✗ {error}</p>}
+            {error && <p className="error-text"><AppIcon name="circle-x" size={14} aria-hidden="true" />{error}</p>}
           </aside>
         </div>
       </div>
