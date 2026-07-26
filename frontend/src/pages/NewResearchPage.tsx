@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import SettingsPanel from '../components/SettingsPanel'
+import { BUILTIN_TEMPLATE_META } from '../components/BuiltinTemplateGallery'
 import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { createRun, listWorkflows } from '../api/client'
 import type { ResearchParams, WorkflowInfo } from '../types'
@@ -109,7 +110,11 @@ export default function NewResearchPage() {
               <span className="select-with-icon">
                 <AppIcon name="workflow" size={15} aria-hidden="true" />
                 <select id="workflow" className="input" value={workflow} onChange={(event) => setWorkflow(event.target.value)}>
-                  {workflows.map((item) => <option key={item.name} value={item.name}>{item.name}{item.default === 'True' ? '（默认）' : ''}</option>)}
+                  {workflows.map((item) => {
+                    const title = BUILTIN_TEMPLATE_META[item.name]?.title
+                    const label = title ? `${title} · ${item.name}` : item.name
+                    return <option key={item.name} value={item.name}>{label}{item.default === 'True' ? '（默认）' : ''}</option>
+                  })}
                 </select>
               </span>
               {activeWorkflow && <span className="hint">{activeWorkflow.description}</span>}

@@ -1005,6 +1005,17 @@ select option { background: #151914; color: var(--text-primary); }
 .flow-agent-node { border-radius: 0 !important; background: #181d17 !important; border-color: rgba(244, 239, 225, 0.2) !important; box-shadow: 8px 8px 0 rgba(89, 123, 255, 0.18) !important; }
 .flow-agent-node.selected { border-color: var(--signal-lime) !important; box-shadow: 8px 8px 0 rgba(216, 255, 79, 0.28) !important; }
 .flow-agent-node .flow-node-kind { color: var(--signal-lime); }
+/* 语义端点卡（用户输入/结论输出）：design-system 的亮底深字被上面的深底覆盖后失去对比度，此处按深色主题重设。 */
+.flow-agent-node.input, .flow-agent-node.output {
+  color: var(--signal-cream);
+  background: #10140f !important;
+  border: 1px dashed rgba(216, 255, 79, 0.5) !important;
+  box-shadow: 8px 8px 0 rgba(216, 255, 79, 0.12) !important;
+}
+.flow-agent-node.output { border-color: rgba(255, 107, 69, 0.55) !important; box-shadow: 8px 8px 0 rgba(255, 107, 69, 0.14) !important; }
+.flow-agent-node.input .flow-node-kind { color: var(--signal-lime); }
+.flow-agent-node.output .flow-node-kind { color: var(--signal-coral); }
+.flow-agent-node.input small, .flow-agent-node.output small { color: var(--text-tertiary); }
 .react-flow__controls { border: 1px solid var(--border-primary); border-radius: 0 !important; overflow: hidden; }
 .react-flow__controls-button { color: var(--text-secondary); background: #111511; border-bottom-color: var(--border-secondary); }
 .react-flow__controls-button:hover { background: var(--surface-3); }

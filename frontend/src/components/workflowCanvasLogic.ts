@@ -261,15 +261,20 @@ export function buildRoutedEdgePath(input: RoutedPathInput): {
   labelY: number
 } {
   const { sourceX, sourceY, targetX, targetY, sourceOffset, targetOffset, laneOffset } = input
-  const sourceStubY = sourceY + 24
-  const targetStubY = targetY - 24
+  const verticalGap = targetY - sourceY
   const sourceLaneX = sourceX + sourceOffset
   const targetLaneX = targetX + targetOffset
-  const hasVerticalRoom = targetY - sourceY >= 128
+  // 桩长与安全边距随垂直间距收缩：正常层距（~55-100px）也能垂直直连，
+  // 只有几乎重叠或反向的连接才走侧向绕行。
+  const hasVerticalRoom = verticalGap >= 48
 
   if (hasVerticalRoom) {
-    const minimumLane = sourceStubY + 16
-    const maximumLane = targetStubY - 16
+    const stub = Math.min(24, verticalGap / 3)
+    const sourceStubY = sourceY + stub
+    const targetStubY = targetY - stub
+    const margin = Math.min(16, verticalGap / 6)
+    const minimumLane = sourceStubY + margin
+    const maximumLane = targetStubY - margin
     const laneY = Math.max(
       minimumLane,
       Math.min(maximumLane, (sourceY + targetY) / 2 + laneOffset),
@@ -290,6 +295,9 @@ export function buildRoutedEdgePath(input: RoutedPathInput): {
       labelY: laneY,
     }
   }
+
+  const sourceStubY = sourceY + 24
+  const targetStubY = targetY - 24
 
   const side = sourceX <= targetX ? 1 : -1
   const routeX =
