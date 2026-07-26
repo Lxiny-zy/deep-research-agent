@@ -9,6 +9,9 @@
 ## ✨ 亮点（面试可讲的点）
 
 - **多 Agent 协作**：Planner / Researcher / Reflector / Synthesizer 各司其职，职责清晰。
+- **Workflow-as-Data 编排引擎**：工作流以带版本的图数据（节点 / 边 / 条件 / Join 模式）落库执行，内置 deep / quick / reviewed / auto / teams 五种模板，也可在前端画布自组工作流。
+- **可靠性设计**：节点级超时 / 重试 / 退避 / fallback、token 预算、Blackboard checkpoint、崩溃后启动自动恢复，多实例场景用可续期租约 fencing 防止旧实例写脏数据。
+- **角色广场与多模型档案**：Agent 角色卡片与模型档案数据驱动可编辑，检索 key 支持主备池自动切换。
 - **并行 fan-out**：子问题用 `asyncio` 并发检索，墙钟时间 ≈ 最慢的一条链，而非求和。
 - **反思循环**：Reflector 自评证据是否充分，不足则自动补洞（loop-until-sufficient）。
 - **来源策略门禁**：检索内容进入 LLM 前检查 URL scheme、非公网/歧义 IP、嵌入凭据，以及网页标题/正文/URL path/query/fragment 中的中英文 Prompt Injection 信号；隔离/拒绝决策进入结构化事件审计。
@@ -55,17 +58,27 @@ Markdown 报告（含参考来源）
 deep-research-agent/
 ├── deep_research/
 │   ├── config.py            # 配置（环境变量 + 行为参数）
+│   ├── runtime_config.py    # 前端设置中心的持久化覆盖层（runtime_config.json）
 │   ├── models.py            # Pydantic 数据模型（各 Agent 的 schema）
 │   ├── observability.py     # Event + Tracer（控制台订阅 / SSE 队列）
 │   ├── llm.py               # LLM 封装（complete + 流式 + 结构化 parse，provider 无关）
-│   ├── guardrails.py        # 来源安全策略 + 原文证据确定性验证
+│   ├── guardrails.py        # 来源安全策略 + 证据验证 + 论断一致性门禁
 │   ├── dag.py               # 子问题依赖图：构建 / 环检测 / 拓扑分层
-│   ├── tools/               # 检索后端抽象 + Tavily 实现
-│   ├── agents/              # Planner / Researcher / Reflector / Synthesizer
+│   ├── registry.py          # Agent 角色注册表
+│   ├── scheduler.py         # DAG 分层调度器
+│   ├── token_budget.py      # token 预算跟踪与软限制
+│   ├── tools/               # 检索后端抽象 + Tavily 实现（含 key 主备池）
+│   ├── agents/              # Planner / Researcher / Reflector / Synthesizer / Critic / Coordinator …
+│   ├── orchestration/       # 工作流图模型：节点 / 边 / 条件解释器 / 图运行时
+│   ├── workflow.py          # 工作流执行引擎（checkpoint / 重试 / fallback / 预算）
+│   ├── workflows.py         # 内置工作流模板（deep / quick / reviewed / auto / teams）
+│   ├── catalog/             # 角色广场：角色卡 / 模型档案 / 检索 key 的仓储与运行时
 │   ├── persistence/         # 仓储层：接口 + InMemory / SQL(async SQLAlchemy) 双实现
 │   ├── orchestrator.py      # 编排：DAG 调度 + 反思循环 + run_stream + 落库
 │   ├── cli.py               # 命令行入口
-│   └── api.py               # FastAPI + SSE（含历史 / 回放端点）
+│   ├── desktop.py           # 桌面版（PyInstaller）启动入口
+│   ├── api.py               # FastAPI + SSE（含历史 / 回放 / 恢复端点）
+│   └── catalog_api.py       # 角色广场 / 模型档案 / 自定义工作流 API
 ├── alembic/                 # 数据库迁移（env.py + versions/）
 ├── alembic.ini
 ├── Dockerfile               # 生产镜像（启动时迁移 + uvicorn）
@@ -109,7 +122,7 @@ cd frontend && npm install && npm run build  # 产出 frontend/dist
 uvicorn deep_research.api:app                # 访问 http://127.0.0.1:8000（加载构建版 SPA）
 ```
 
-页面提供：新建研究（可调研究参数）、实时观看（Agent 时间线 / DAG 分层调度 / 流式报告 / **实时统计**：耗时秒级跳动、token 随阶段累加）、**报告导出**（复制 / 下载 `.md`）、历史列表与回放、**历史管理**（删除单条·批量 / 状态·关键词·标签筛选 / 打标签分类）、**全局设置**（前端改模型 / 端点 / 密钥 / 检索参数并持久化）。后端 `GET /` 优先加载 `frontend/dist/index.html`，未构建时回退到占位页。
+页面提供：新建研究（可选工作流模板、可调研究参数）、实时观看（Agent 时间线 / DAG 分层调度 / 流式报告 / **实时统计**：耗时秒级跳动、token 随阶段累加）、**报告导出**（复制 / 下载 `.md`）、历史列表与回放、**历史管理**（删除单条·批量 / 状态·关键词·标签筛选 / 打标签分类）、**工作流构建器**（自由画布拖排角色、连线加条件、存库后可直接运行）、**角色广场**（角色卡 / 模型档案 / 检索 key 在线编辑）、**全局设置**（前端改模型 / 端点 / 密钥 / 检索参数并持久化）。未认证访客会先看到欢迎页并可弹出密钥登录。后端 `GET /` 优先加载 `frontend/dist/index.html`，未构建时回退到占位页。
 
 ## Docker 一键启动（含 PostgreSQL）
 
@@ -123,7 +136,7 @@ docker compose down -v # 停止并清库（含数据卷）
 
 `docker-compose.yml` 起两个服务：`db`（postgres:16-alpine，带健康检查）与 `api`（构建本仓库镜像，待数据库就绪后启动）。`DATABASE_URL` 已在 compose 中指向内部 `db` 服务，LLM / 检索密钥从根目录 `.env` 注入。数据库使用 `pgdata` 卷，前端设置中心的运行时配置使用 `appdata` 卷，容器重建后仍会保留。
 
-安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问请经反向代理（TLS/限流）。生产建议在 `.env` 中设置 `API_KEY` —— 设置后所有 `/api` 端点要求 `X-API-Key` 请求头（或 `?api_key=` 参数，供 EventSource 使用）。前端无需手改：首次遇到 401 会自动弹出**密钥登录**，输入后密钥存于浏览器 `localStorage`；也可点导航栏「🔑 密钥」随时设置 / 更换 / 清除。
+安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问请经反向代理（TLS/限流）。生产建议在 `.env` 中设置 `API_KEY` —— 设置后所有 `/api` 端点要求 `X-API-Key` 请求头（后端同时兼容 `?api_key=` 查询参数；前端 SSE 走 fetch 流 + 请求头，密钥不会出现在 URL 中）。前端无需手改：启动时探测 `/api/config`，401 时展示访客欢迎页并弹出**密钥登录**，输入后密钥存于浏览器 `localStorage`；也可随时在 header 的密钥入口更换 / 清除。
 
 Nginx 反向代理可从 `docker/nginx.conf.example` 起步。SSE 实时进度要求关闭 `proxy_buffering`，并把读写超时提高到覆盖最长研究任务；若不用反向代理、明确要直接暴露端口，可在 `.env` 设置 `APP_BIND=0.0.0.0`，但仍应在安全组中限制来源并配置 HTTPS。
 
@@ -179,9 +192,14 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 | `GET`  | `/api/tags` | 全部标签 + 引用计数 |
 | `GET`  | `/api/runs/{id}/events` | 事件回放（支持 `after_seq` 增量） |
 | `GET`  | `/api/runs/{id}/stream` | SSE：进行中实时推送，已结束则从库回放 |
+| `POST` | `/api/runs/{id}/resume` | 从最近 checkpoint 手动恢复中断的 run |
+| `GET`  | `/api/workflows` | 可用工作流列表（内置模板 + 自定义） |
+| `GET`  | `/api/roles` | 可用 Agent 角色列表 |
 | `GET`  | `/api/config` | 当前全局配置（密钥脱敏） |
 | `PUT`  | `/api/config` | 更新并持久化全局配置（对后续 run 生效） |
 | `GET`  | `/api/research?q=` | 无持久化的即跑即看快路径（向后兼容） |
+
+角色广场 / 自定义工作流另有一组 Catalog API（`catalog_api.py`）：`/api/behaviors`、`/api/models*`、`/api/agents*`、`/api/search-keys*`、`/api/workflows/custom*`，覆盖角色卡、模型档案、检索 key 池与画布工作流的增删改查。
 
 ## 全局配置 · 前端设置中心
 

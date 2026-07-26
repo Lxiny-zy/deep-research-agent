@@ -14,8 +14,6 @@
   reasons with an Alembic migration and API schema support.
 - Persisted semantic support status, claim IDs, consistency status, contradiction links, and
   verification rationales with an Alembic migration and API schema support.
-- Added a Docker-deployment-specific feature, implementation-path, configuration, and full code-review reference for interview and production-readiness analysis.
-- Added a Docker-runtime-scoped Agent project interview guide focused on system capabilities, workflow principles, end-to-end implementation paths, reliability design, limitations, and interview answers rather than deployment mechanics.
 - Added a public Lxiny project welcome experience with verified administrator entry, startup credential validation, and visitor-facing capability highlights.
 - Added semantic workflow input/output nodes, immediate cycle prevention, editable global fallback model settings, and dimensional card interactions.
 - Added a versioned multi-agent workflow graph model with nodes, edges, viewport state, DAG
@@ -35,11 +33,31 @@
 
 ### Changed
 
+- Redesigned the frontend research experience: top-navigation layout with ambient signal theme,
+  reworked new-research / run / history / settings pages, live telemetry preview, and a refreshed
+  design-system stylesheet split (`design-system.css`, `experience.css`, `run-page-styles.css`).
+- Fixed follow-up frontend layout regressions from the redesign (grid alignment, overflow, and
+  responsive breakpoints).
 - Preserved the original deep-research workflow as a workflow template running on the shared
   orchestration engine; Planner, Researcher, Reflector, Synthesizer, source citations, and report
   generation remain available.
 - Extended workflow catalog and persistence schemas while retaining backward compatibility with
   legacy ordered `steps` definitions.
+
+### Removed
+
+- Removed one-off process documents that had gone stale (a local audit fix log, a superseded
+  frontend redesign report, and two Docker-era review/interview snapshots); durable content lives
+  in this changelog, `README.md`, and the maintained interview guides.
+
+### Known limitations
+
+- `docker-compose.yml` does not pass through `MAX_*`, `REQUEST_TIMEOUT`, or `LLM_USER_AGENT`
+  environment variables to the API container.
+- `/healthz` returns `ok` unconditionally without checking database connectivity.
+- API rate limiting is per-process and keyed on `client.host`, so it is ineffective behind a
+  proxy without forwarded-for handling and does not aggregate across instances.
+- `save_sources` exists on the repository but has no caller yet.
 
 ### Fixed
 

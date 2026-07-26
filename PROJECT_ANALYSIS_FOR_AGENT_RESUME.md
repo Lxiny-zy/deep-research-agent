@@ -502,7 +502,7 @@ Planner、Researcher、Reflector、Coordinator 和 Judge 等需要机器可读�
 
 服务启动时扫描遗留的 `pending/running` 任务：存在 Checkpoint 的任务尝试获取数据库租约后恢复，没有 Checkpoint 的孤儿任务标记为错误。正常新版本 Checkpoint 会同时保存 Definition；对于缺少 Definition 的旧记录，启动恢复会按工作流名重新解析当前定义。优雅关停会取消活动任务并尽力把外层状态置为 `error`，因此这类任务不会进入下一次启动的自动扫描。手动 resume 要求 Checkpoint 和 Definition 同时存在，并拒绝活动中、已完成或租约冲突的请求。
 
-只有启动恢复或手动恢复创建的执行实例持有带过期时间的 lease，并周期续约，以降低多个 API 实例同时恢复同一 run 的概率。首次新建的 run 不持有这类 lease，因此当前设计没有在“原始执行与恢复执行”之间建立完整 fencing。
+所有后台执行实例（包括首次新建的 run：`create_run` 会为其生成 `lease_owner` 并传入执行器）都持有带过期时间的 lease 并周期续约。受保护的后台写入在同一事务内先校验 `lease_owner`（不匹配抛 `LeaseLostError`），续租失败会取消执行任务，因此"原始执行与恢复执行"之间已有基于 owner 条件写的 fencing。尚未实现的是单调递增的 fencing token，owner 字符串比较在极端的同 owner 复用场景下弱于版本号方案。
 
 ### 11.5 一致性语义
 
@@ -659,8 +659,8 @@ LLM、SearchTool、Repository 和运行配置都通过协议或上下文注入�
 
 当前工作树已有以下验证记录：
 
-- 后端：`175 passed, 1 skipped`；
-- 前端：`27 passed`；
+- 后端：`271 passed, 1 skipped`；
+- 前端：`58 passed`（10 个测试文件）；
 - Ruff、mypy、ESLint、TypeScript/Vite production build 通过；
 - SQLite `upgrade head + alembic check` 通过；
 - 历史 NULL 数据升级和 PostgreSQL offline DDL 已验证。
@@ -751,7 +751,7 @@ Judge 使用独立 Tracer，避免污染被评估 Agent 的 Token 统计。它�
 ### 17.6 空间允许时可追加的两条
 
 - 建设数据驱动 Agent Catalog，通过 `behavior + system_prompt + model_profile` 配置角色，同一流程内按角色路由不同 OpenAI-compatible 模型；React Flow 画布支持 DAG、条件边、Join 和节点可靠性参数。
-- 通过依赖注入和 Fake LLM/Search 建立离线回归体系，当前验证后端 175 项、前端 27 项测试，并通过 Ruff、mypy、ESLint、生产构建及 Alembic schema 一致性检查。
+- 通过依赖注入和 Fake LLM/Search 建立离线回归体系，当前验证后端 271 项、前端 58 项测试，并通过 Ruff、mypy、ESLint、生产构建及 Alembic schema 一致性检查。
 
 ### 17.7 个人项目与团队项目措辞
 
@@ -931,5 +931,4 @@ Judge 使用独立 Tracer，避免污染被评估 Agent 的 Token 统计。它�
 
 如需准备更深的技术追问，可继续阅读：
 
-- [AGENT_INTERVIEW_GUIDE.md](AGENT_INTERVIEW_GUIDE.md)：围绕三大亮点的 44 个面试问题；
-- [DOCKER_VERSION_AGENT_PROJECT_INTERVIEW_GUIDE.md](DOCKER_VERSION_AGENT_PROJECT_INTERVIEW_GUIDE.md)：当前 Docker 运行版本的逐模块实现说明。
+- [AGENT_INTERVIEW_GUIDE.md](AGENT_INTERVIEW_GUIDE.md)：围绕三大亮点的 44 个面试问题。

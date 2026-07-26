@@ -547,9 +547,9 @@ Function Calling 由 provider 提供工具/参数协议，通常可靠性更好�
 
 **答案：**
 
-可能，因此心跳周期必须明显小于租约 TTL，并监控续租失败。更严格的方案使用 fencing token：每次获取租约生成单调递增版本，所有 Checkpoint 写入必须携带当前版本；旧实例即使恢复运行，也无法提交状态。
+可能，因此心跳周期必须明显小于租约 TTL，并监控续租失败。
 
-当前项目实现了 owner、过期时间和续租，适合单数据库的基础防重；fencing token 是生产规模扩大后的增强点。
+当前项目在 owner、过期时间和续租之外，已经实现了基于 owner 校验的写入 fencing：所有受保护的后台写入在同一事务内先以空操作 UPDATE 锁定 workflow_run 行并校验 `lease_owner`，不匹配则抛 `LeaseLostError`；续租失败时执行任务会被直接取消。因此旧实例即使还在运行，也无法把状态提交回数据库。剩余的增强点是把 owner 比较升级为单调递增的 fencing token（可避免同 owner 重启后的 ABA 边界情形），适合在生产规模扩大后引入。
 
 ### 35. `dict.update` 合并 scratch 会不会覆盖其他节点结果？
 
