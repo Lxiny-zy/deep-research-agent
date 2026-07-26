@@ -1,4 +1,4 @@
-.PHONY: install lint fmt test test-pg up down migrate revision run-api run-cli fe-install fe-dev fe-build fe-lint fe-test help
+.PHONY: install lint fmt test test-pg chaos-demo up down migrate revision run-api run-cli fe-install fe-dev fe-build fe-lint fe-test help
 
 PYTHON ?= python
 
@@ -22,6 +22,9 @@ test:  ## 运行离线单元测试（跳过需要 PostgreSQL 的）
 
 test-pg:  ## 运行需要 PostgreSQL 的集成测试
 	$(PYTHON) -m pytest -m pg
+
+chaos-demo:  ## kill -9 故障恢复演示（离线假后端，全程约 3 分钟）
+	$(PYTHON) scripts/chaos_demo.py
 
 up:  ## docker compose 起全栈（构建并启动）
 	docker compose up --build

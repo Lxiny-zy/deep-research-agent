@@ -62,11 +62,24 @@ $pyInstallerArgs = @(
     "--onedir",
     "--name", "DeepResearchAgent",
     "--add-data", "frontend\dist;frontend\dist",
+    "--add-data", "alembic.ini;.",
+    "--add-data", "alembic\env.py;alembic",
     "--hidden-import", "aiosqlite",
     "--hidden-import", "asyncpg",
     "--collect-submodules", "uvicorn",
     "--collect-submodules", "sqlalchemy.dialects.sqlite"
 )
+
+# Bundle migration scripts one by one (*.py only) so __pycache__ never ships.
+# Runtime layout: _internal\alembic.ini + _internal\alembic\{env.py,versions\*.py},
+# matching db.py's Path(__file__).resolve().parents[2] lookup in frozen mode.
+$MigrationFiles = Get-ChildItem -Path (Join-Path $Root "alembic\versions") -Filter "*.py" -File | Sort-Object Name
+if ($MigrationFiles.Count -eq 0) {
+    throw "No migration scripts found under alembic\versions."
+}
+foreach ($Migration in $MigrationFiles) {
+    $pyInstallerArgs += @("--add-data", "alembic\versions\$($Migration.Name);alembic\versions")
+}
 
 if ($Windowed) {
     $pyInstallerArgs += @("--windowed", "--collect-submodules", "webview")

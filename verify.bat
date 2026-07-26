@@ -1,6 +1,6 @@
 @echo off
 setlocal
-cd /d "D:\Cursor-edit\Project_test\deep-research-agent" || exit /b 1
+cd /d "%~dp0" || exit /b 1
 
 echo === [0/4] Ensure a modern alembic ^(^>=1.13, provides the check subcommand^) ===
 python -m pip install -q "alembic>=1.13" || (echo [X] alembic install failed - need network to fetch alembic 1.13+ & exit /b 1)
