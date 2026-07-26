@@ -377,6 +377,38 @@ async def test_lease_loss_during_cancel_does_not_mask_cancellation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("graph", [False, True], ids=["linear", "graph"])
+async def test_lease_loss_during_failure_does_not_mask_original_error(
+    settings, graph: bool
+) -> None:
+    """失败终态 checkpoint 遇租约丢失：吞掉 LeaseLostError，保留原始异常向上传播。"""
+    broken = PolicyAgent("broken", failures=10)
+
+    async def rejected_checkpoint(run):  # type: ignore[no-untyped-def]
+        raise LeaseLostError("lease moved to successor")
+
+    engine = WorkflowEngine(
+        context(settings),
+        resolver={"broken": broken}.__getitem__,
+        checkpoint_sink=rejected_checkpoint,
+    )
+    workflow = (
+        Workflow(
+            name="failed",
+            nodes=[{"id": "a", "step": {"agent": "broken", "failure_policy": "fail_fast"}}],
+        )
+        if graph
+        else Workflow(name="failed", steps=[Step(agent="broken", failure_policy="fail_fast")])
+    )
+
+    with pytest.raises(RuntimeError, match="broken failure"):
+        await engine.run(workflow, Blackboard(query="Q"))
+
+    assert engine.runtime.run is not None
+    assert engine.runtime.run.status == RunStatus.FAILED
+
+
+@pytest.mark.asyncio
 async def test_fail_fast_marks_workflow_failed(settings) -> None:
     broken = PolicyAgent("broken", failures=10)
     checkpoints = []

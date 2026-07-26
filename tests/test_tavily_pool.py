@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from deep_research.tools.tavily_pool import TavilyKeyPoolSearch
@@ -24,6 +26,24 @@ class _FakeClient:
 
     async def close(self):
         self.closed = True
+
+
+class _BlockingQuotaClient:
+    """假 client：调用挂起直到放行，然后抛配额错误——模拟 failover 期间的在途请求。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.entered = asyncio.Event()  # 请求已进入（在途）
+        self.release = asyncio.Event()  # 放行：让在途请求以配额错误结束
+
+    async def search(self, query, *, max_results=5, search_depth="advanced"):
+        self.calls += 1
+        self.entered.set()
+        await self.release.wait()
+        raise Exception("quota exceeded")
+
+    async def close(self):
+        return None
 
 
 class _CloseFakeClient:
@@ -173,3 +193,41 @@ async def test_later_client_construction_failure_does_not_leak_created_client(
 
     await pool.aclose()
     assert first.closed
+
+
+@pytest.mark.asyncio
+async def test_inflight_request_follows_live_failover_index():
+    # 竞态回归：请求在 _idx=0 时进入并阻塞在 key#1 的在途调用上；期间其他协程
+    # 已把池粘滞切换到 key#3。key#1 失败后应基于实时 _idx 直接改打 key#3，
+    # 而不是按入口快照顺延撞已耗尽的 key#2。
+    pool = TavilyKeyPoolSearch(["k1", "k2", "k3"])
+    blocking = _BlockingQuotaClient()
+    exhausted = _FakeClient([Exception("quota exceeded")])
+    healthy = _FakeClient([_OK])
+    pool._clients = [blocking, exhausted, healthy]
+
+    task = asyncio.create_task(pool.search("q"))
+    await blocking.entered.wait()  # 等 task 真正阻塞在 key#1 上
+    pool._idx = 2  # 模拟并发协程已完成到 key#3 的粘滞切换
+    blocking.release.set()
+
+    out = await task
+    assert out[0].url == "https://a.com"
+    assert exhausted.calls == 0  # 没有按入口快照回撞 key#2
+    assert healthy.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_requests_after_failover_skip_exhausted_key():
+    # key#1 配额耗尽触发切换后，后续并发请求应全部落在 key#2，不再回撞 key#1
+    pool = TavilyKeyPoolSearch(["k1", "k2"])
+    dead = _FakeClient([Exception("quota exceeded")])
+    ok = _FakeClient([_OK])
+    pool._clients = [dead, ok]
+
+    await pool.search("warmup")  # 触发粘滞切换
+    assert pool._idx == 1
+
+    results = await asyncio.gather(*(pool.search(f"q{i}") for i in range(8)))
+    assert all(r[0].url == "https://a.com" for r in results)
+    assert dead.calls == 1  # 切换完成后的新请求不再打 key#1

@@ -37,11 +37,23 @@ class SourcePolicy:
 
     _NON_PUBLIC_SUFFIXES = (".internal", ".local", ".localhost", ".home", ".lan")
     _IPV4_NUMERIC_LABEL = re.compile(r"(?:0[xX][0-9a-fA-F]+|[0-9]+)")
+    # 零宽字符/软连字符常被塞进规则词中间拆词绕过（如 ig​nore）。
+    # 检测前统一剥离；集合覆盖 U+200B/200C/200D（零宽空格/连接符）、
+    # U+2060（词连接符）、U+FEFF（BOM/零宽不换行空格）、U+00AD（软连字符）。
+    _ZERO_WIDTH_TRANSLATION = dict.fromkeys(
+        map(ord, "​‌‍⁠﻿­")
+    )
     _INJECTION_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         (
             "ignore_previous_instructions",
             re.compile(
-                r"ignore\s+(?:all\s+)?(?:previous|prior|above)\s+"
+                # 绕过场景 1（同义词）：disregard/forget/skip/discard/overlook 与
+                # ignore 语义等价，同样构成"推翻先前指令"的注入。为控制误报面，
+                # 动词只在与 previous/prior/above/earlier 或 "all instructions"
+                # 类宾语组合时命中——"skip the introduction"、"forget about it"
+                # 这类正常表达不会匹配。
+                r"(?:ignore|disregard|forget|skip|discard|overlook)\s+"
+                r"(?:(?:all\s+)?(?:previous|prior|above|earlier)\s+|all\s+)"
                 r"(?:instructions?|prompts?|messages?)",
                 re.IGNORECASE,
             ),
@@ -64,7 +76,17 @@ class SourcePolicy:
         ),
         (
             "cn_reveal_prompt",
-            re.compile(r"(?:输出|泄露|展示|返回).{0,20}(?:系统|开发者).{0,12}(?:提示词|指令|消息)"),
+            re.compile(
+                # 绕过场景 3（中文语序）：原规则只认"动词在前"（输出系统提示词），
+                # "把/将"字句会把宾语提前、动词后置（把系统提示词返回给我）。
+                # 追加处置式分支：把/将 + 系统/开发者 + 提示词/指令/消息 + 泄露类动词。
+                # 动词表刻意不含裸"给"字，"本文把系统提示词的概念讲给读者"这类
+                # 正常科普表述不会命中；"系统提示词是什么"无把字引导也不受影响。
+                r"(?:输出|泄露|展示|返回|告诉|打印|发送|公开).{0,20}"
+                r"(?:系统|开发者).{0,12}(?:提示词|指令|消息)"
+                r"|[把将].{0,12}(?:系统|开发者).{0,12}(?:提示词|指令|消息)"
+                r"[^。！？\n]{0,16}?(?:返回|告诉|发给|发送|输出|泄露|展示|打印|透露|公开)"
+            ),
         ),
     )
 
@@ -77,12 +99,17 @@ class SourcePolicy:
                 reason_codes=url_reasons,
             )
 
-        untrusted_text = "\n".join(
-            [
-                source.title,
-                source.content,
-                self._url_untrusted_text(source.url),
-            ]
+        # 绕过场景 2（零宽拆词/全角变体）：信号检测前对全部不可信文本做
+        # SourcePolicy 自己的归一化（剥零宽 + NFKC），确保 ig​nore、全角字母
+        # 等变体还原成规则词表可命中的形态。
+        untrusted_text = self._normalize_untrusted(
+            "\n".join(
+                [
+                    source.title,
+                    source.content,
+                    self._url_untrusted_text(source.url),
+                ]
+            )
         )
         matched = [
             code for code, pattern in self._INJECTION_RULES if pattern.search(untrusted_text)
@@ -121,6 +148,16 @@ class SourcePolicy:
             return [] if _is_valid_public_hostname(hostname) else ["invalid_hostname"]
         return [] if _is_public_web_ip(address) else ["non_public_ip"]
 
+    def _normalize_untrusted(self, text: str) -> str:
+        """SourcePolicy 专用归一化：剥离零宽字符后做 NFKC 折叠。
+
+        针对绕过场景 2：``ig​nore``（零宽字符拆词）与全角字母变体。
+        与 EvidenceVerifier 的 ``_normalize_text`` 语义不同——这里不折叠空白、
+        不 casefold（规则统一用 re.IGNORECASE），避免破坏规则中 ``\\s+`` 的含义。
+        """
+        stripped = text.translate(self._ZERO_WIDTH_TRANSLATION)
+        return unicodedata.normalize("NFKC", stripped)
+
     def _url_untrusted_text(self, url: str) -> str:
         """Return raw and decoded URL text that will cross into model context."""
         try:
@@ -130,7 +167,7 @@ class SourcePolicy:
 
         parts = [url, parsed.path, parsed.query, parsed.fragment]
         decoded_parts: list[str] = []
-        for part in parts:
+        for index, part in enumerate(parts):
             queue = [part, part.replace("+", " ")]
             for decoder in (unquote, unquote_plus):
                 current = part
@@ -140,6 +177,15 @@ class SourcePolicy:
                         break
                     queue.append(decoded)
                     current = decoded
+            if index > 0:
+                # 绕过场景 4（URL 连字符路径）：path/query/fragment 里惯用
+                # 连字符/下划线代替空格（/ignore-previous-instructions-guide），
+                # 英文规则词间只认 \s+ 会漏检。仅对 URL 通道追加把 -/_ 视作
+                # 词分隔的变体文本；正文规则不变，正文中的连字符复合词
+                # （如 state-of-the-art）不受影响。
+                queue.extend(
+                    text.replace("-", " ").replace("_", " ") for text in list(queue)
+                )
             decoded_parts.extend(queue)
         return "\n".join(dict.fromkeys([*parts, *decoded_parts]))
 

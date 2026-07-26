@@ -242,7 +242,12 @@ async def test_roles_endpoint_lists_composable_builtins(cat_app):
     async with _client() as c:
         writer = await c.post(
             "/api/agents",
-            json={"name": "my-writer", "behavior": "synthesize", "display_name": "Writer"},
+            json={
+                "name": "my-writer",
+                "behavior": "synthesize",
+                "display_name": "Writer",
+                "description": "把发现写成终稿报告",
+            },
         )
         critic = await c.post(
             "/api/agents", json={"name": "my-critic", "behavior": "critique"}
@@ -262,6 +267,12 @@ async def test_roles_endpoint_lists_composable_builtins(cat_app):
         assert by_name["my-writer"]["produces_report"] is True
         assert by_name["my-critic"]["produces_report"] is False
         assert "disabled-writer" not in names
+        # 构建器角色选择器的展示文案：内置角色须有中文 label 与职责描述,
+        # 自定义卡片的 description 必须透传(而非被丢弃)
+        assert by_name["planner"]["label"] == "规划师"
+        for builtin_name in ("planner", "researcher", "reflector", "synthesizer", "critic"):
+            assert by_name[builtin_name]["description"]
+        assert by_name["my-writer"]["description"] == "把发现写成终稿报告"
 
         custom_terminal = await c.post(
             "/api/workflows/custom",
@@ -471,3 +482,16 @@ async def test_update_rejects_stale_workflow_version(cat_app):
             if item["id"] == created["id"]
         )
         assert stored["description"] == "first"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_workflow_name_returns_409(cat_app):
+    """重名自定义工作流：唯一约束冲突应翻译为 409 而非 500。"""
+    async with _client() as c:
+        first = await c.post("/api/workflows/custom", json={"name": "dup-flow", "steps": _VALID})
+        assert first.status_code == 201, first.text
+        conflict = await c.post(
+            "/api/workflows/custom", json={"name": "dup-flow", "steps": _VALID}
+        )
+        assert conflict.status_code == 409
+        assert "已存在" in conflict.json()["detail"]

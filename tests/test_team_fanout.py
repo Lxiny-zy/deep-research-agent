@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from deep_research.agents.base import Blackboard, RunContext
@@ -177,6 +179,48 @@ async def test_team_fanout_checks_consistency_after_merging_children(settings) -
     assert consistency_events
     assert consistency_events[-1].data is not None
     assert consistency_events[-1].data["counts"] == {"conflicted": 2}
+
+
+class _ManyTeamsLLM(FakeLLM):
+    """planner 切出 5 个子主题，制造超过 max_concurrency 的团队数。"""
+
+    async def parse(self, system, user, schema, *, temperature=0.2, retries=2):
+        if schema is ResearchPlan:
+            return ResearchPlan(
+                interpretation="t",
+                sub_questions=[SubQuestion(question=f"子主题{i}") for i in range(5)],
+            )
+        return await super().parse(system, user, schema, temperature=temperature, retries=retries)
+
+
+class _ConcurrencyProbeSearch(FakeSearch):
+    def __init__(self) -> None:
+        self.active = 0
+        self.peak = 0
+
+    async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        try:
+            await asyncio.sleep(0.02)
+            return await super().search(query, max_results=max_results)
+        finally:
+            self.active -= 1
+
+
+@pytest.mark.asyncio
+async def test_team_fanout_reuses_run_level_concurrency_limit(settings) -> None:
+    """5 个子团队并行：各团队内的检索共用 run 级信号量，总并发不超 max_concurrency。"""
+    settings.max_concurrency = 2
+    probe = _ConcurrencyProbeSearch()
+    agent = DeepResearchAgent(
+        settings, llm=_ManyTeamsLLM(), search_tool=probe, workflow="teams"
+    )
+
+    report = await agent.run("测试问题")
+
+    assert isinstance(report, Report)  # 限流不改变产出（无死锁、报告照常生成）
+    assert probe.peak <= settings.max_concurrency
 
 
 @pytest.mark.asyncio

@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import time
+from typing import NoReturn
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.exc import IntegrityError
 
 from .catalog.dto import (
     BEHAVIORS,
@@ -186,6 +188,37 @@ def _catalog(request: Request) -> CatalogRepository:
     return request.app.state.catalog
 
 
+def _raise_for_integrity(
+    exc: IntegrityError, *, duplicate_detail: str, fk_detail: str
+) -> NoReturn:
+    """把数据库完整性错误翻译为语义化 HTTP 状态：唯一约束 → 409，外键缺失 → 422。
+
+    仓储写方法的 ``async with s.begin()`` 在异常时已回滚并关闭会话，
+    此处只做错误翻译，无残留事务状态需要处理。无法识别的完整性错误原样上抛。
+    """
+    message = str(getattr(exc, "orig", None) or exc).lower()
+    if "unique" in message or "duplicate" in message:
+        raise HTTPException(status_code=409, detail=duplicate_detail) from exc
+    if "foreign key" in message:
+        raise HTTPException(status_code=422, detail=fk_detail) from exc
+    raise exc
+
+
+_PROFILE_DUPLICATE = "同名模型档案已存在，请改名"
+_AGENT_DUPLICATE = "同名角色卡片已存在，请改名"
+_AGENT_BAD_PROFILE = "绑定的模型档案不存在（model_profile_id 无效）"
+_WORKFLOW_DUPLICATE = "同名自定义工作流已存在，请改名"
+
+
+def _reject_reserved_agent_name(name: str) -> None:
+    """角色名 "orchestrator"（大小写不敏感）为系统保留：与运行终态事件的保留 Stage 冲突。"""
+    if name.strip().lower() == "orchestrator":
+        raise HTTPException(
+            status_code=422,
+            detail=f"名称「{name}」为系统保留（与运行终态事件的 ORCHESTRATOR Stage 冲突），请改名",
+        )
+
+
 def _reject_builtin_name(name: str) -> None:
     """自定义流程名不得与内置流程同名（否则运行解析时被内置优先级永久屏蔽）。"""
     from .workflows import WORKFLOWS
@@ -313,21 +346,33 @@ async def list_models(request: Request) -> list[ModelProfileView]:
 
 @router.post("/models", status_code=201)
 async def create_model(req: ProfileCreate, request: Request) -> ModelProfileView:
-    return await _catalog(request).create_profile(
-        name=req.name,
-        base_url=req.base_url,
-        api_key=req.api_key,
-        model=req.model,
-        temperature=req.temperature,
-        parameter_mode=req.parameter_mode,
-        reasoning_effort=req.reasoning_effort,
-        is_default=req.is_default,
-    )
+    try:
+        return await _catalog(request).create_profile(
+            name=req.name,
+            base_url=req.base_url,
+            api_key=req.api_key,
+            model=req.model,
+            temperature=req.temperature,
+            parameter_mode=req.parameter_mode,
+            reasoning_effort=req.reasoning_effort,
+            is_default=req.is_default,
+        )
+    except IntegrityError as exc:
+        _raise_for_integrity(
+            exc, duplicate_detail=_PROFILE_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE
+        )
 
 
 @router.put("/models/{profile_id}")
 async def update_model(profile_id: str, req: ProfileUpdate, request: Request) -> ModelProfileView:
-    view = await _catalog(request).update_profile(profile_id, req.model_dump(exclude_unset=True))
+    try:
+        view = await _catalog(request).update_profile(
+            profile_id, req.model_dump(exclude_unset=True)
+        )
+    except IntegrityError as exc:
+        _raise_for_integrity(
+            exc, duplicate_detail=_PROFILE_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE
+        )
     if view is None:
         raise HTTPException(status_code=404, detail="model profile not found")
     return view
@@ -397,14 +442,21 @@ async def list_agents(request: Request) -> list[AgentCardView]:
 async def create_agent(req: AgentCardCreate, request: Request) -> AgentCardView:
     if req.behavior not in BEHAVIORS:
         raise HTTPException(status_code=422, detail=f"behavior 必须是 {list(BEHAVIORS)} 之一")
-    return await _catalog(request).create_agent(req)
+    _reject_reserved_agent_name(req.name)
+    try:
+        return await _catalog(request).create_agent(req)
+    except IntegrityError as exc:
+        _raise_for_integrity(exc, duplicate_detail=_AGENT_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE)
 
 
 @router.put("/agents/{agent_id}")
 async def update_agent(agent_id: str, req: AgentCardUpdate, request: Request) -> AgentCardView:
     if req.behavior is not None and req.behavior not in BEHAVIORS:
         raise HTTPException(status_code=422, detail=f"behavior 必须是 {list(BEHAVIORS)} 之一")
-    view = await _catalog(request).update_agent(agent_id, req)
+    try:
+        view = await _catalog(request).update_agent(agent_id, req)
+    except IntegrityError as exc:
+        _raise_for_integrity(exc, duplicate_detail=_AGENT_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE)
     if view is None:
         raise HTTPException(status_code=404, detail="agent card not found")
     return view
@@ -471,7 +523,12 @@ async def create_custom_workflow(req: WorkflowDefCreate, request: Request) -> Wo
         nodes=req.nodes,
         edges=req.edges,
     )
-    return await _catalog(request).create_workflow_def(req)
+    try:
+        return await _catalog(request).create_workflow_def(req)
+    except IntegrityError as exc:
+        _raise_for_integrity(
+            exc, duplicate_detail=_WORKFLOW_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE
+        )
 
 
 @router.put("/workflows/custom/{workflow_id}")

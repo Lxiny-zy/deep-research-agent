@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 from httpx import ASGITransport
+from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -63,6 +64,28 @@ async def cat_app():
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
+    await create_all(engine)
+    api.app.state.settings = Settings()
+    api.app.state.catalog = CatalogRepository(async_sessionmaker(engine, expire_on_commit=False))
+    yield
+    await engine.dispose()
+
+
+@pytest.fixture
+async def cat_app_fk():
+    """与 cat_app 相同，但开启 SQLite 外键强制（与生产 make_engine 的 PRAGMA 一致）。"""
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+
+    @sa_event.listens_for(engine.sync_engine, "connect")
+    def _fk_on(dbapi_conn, _record):  # type: ignore[no-untyped-def]
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     await create_all(engine)
     api.app.state.settings = Settings()
     api.app.state.catalog = CatalogRepository(async_sessionmaker(engine, expire_on_commit=False))
@@ -225,3 +248,58 @@ async def test_search_key_test_endpoint(cat_app, monkeypatch):
         assert body["ok"] is False and "quota" in body["detail"]
 
         assert (await c.post("/api/search-keys/nope/test")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_duplicate_names_return_409(cat_app):
+    """重名模型档案 / 角色卡片：唯一约束冲突应翻译为 409 而非 500。"""
+    async with _client() as c:
+        assert (await c.post("/api/models", json={"name": "dup", "model": "m"})).status_code == 201
+        conflict = await c.post("/api/models", json={"name": "dup", "model": "m"})
+        assert conflict.status_code == 409
+        assert "已存在" in conflict.json()["detail"]
+
+        ok = await c.post("/api/agents", json={"name": "dup-agent", "behavior": "critique"})
+        assert ok.status_code == 201
+        conflict = await c.post("/api/agents", json={"name": "dup-agent", "behavior": "critique"})
+        assert conflict.status_code == 409
+        assert "已存在" in conflict.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_update_model_to_duplicate_name_returns_409(cat_app):
+    async with _client() as c:
+        await c.post("/api/models", json={"name": "a", "model": "m"})
+        pid = (await c.post("/api/models", json={"name": "b", "model": "m"})).json()["id"]
+        conflict = await c.put(f"/api/models/{pid}", json={"name": "a"})
+        assert conflict.status_code == 409
+        assert "已存在" in conflict.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_agent_with_invalid_model_profile_returns_422(cat_app_fk):
+    """创建 / 更新角色卡片引用不存在的模型档案：外键冲突应翻译为 422 而非 500。"""
+    async with _client() as c:
+        bad = await c.post(
+            "/api/agents",
+            json={"name": "fk-a", "behavior": "critique", "model_profile_id": "nope"},
+        )
+        assert bad.status_code == 422
+        assert "模型档案" in bad.json()["detail"]
+
+        aid = (
+            await c.post("/api/agents", json={"name": "fk-b", "behavior": "critique"})
+        ).json()["id"]
+        bad = await c.put(f"/api/agents/{aid}", json={"model_profile_id": "nope"})
+        assert bad.status_code == 422
+        assert "模型档案" in bad.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_reserved_agent_name_orchestrator_rejected(cat_app):
+    """角色名 "orchestrator"（大小写不敏感）为运行终态事件保留 Stage，创建时应拒绝。"""
+    async with _client() as c:
+        for name in ("orchestrator", "Orchestrator", "  ORCHESTRATOR "):
+            r = await c.post("/api/agents", json={"name": name, "behavior": "critique"})
+            assert r.status_code == 422
+            assert "保留" in r.json()["detail"]

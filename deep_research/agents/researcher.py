@@ -74,7 +74,12 @@ class Researcher:
         pending = bb.scratch.pop("pending_sub_questions", None)
         if pending is None:  # 未指定则取整份计划（首轮）
             pending = bb.plan.sub_questions if bb.plan else []
-        sem = asyncio.Semaphore(ctx.settings.max_concurrency)
+        # 优先复用引擎挂在 ctx 上的 run 级共享信号量：并行图里 K 个 researcher 节点
+        # 若各自建 Semaphore(max_concurrency)，总并发会放大为 K×max_concurrency。
+        # 未被注入（如单测直接调 step）时才自建，保持向后兼容。
+        sem = getattr(ctx, "run_semaphore", None)
+        if sem is None:
+            sem = asyncio.Semaphore(ctx.settings.max_concurrency)
 
         async def _one(
             question: str, context_findings: list[Finding] | None

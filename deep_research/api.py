@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import secrets
 import sys
 import time
@@ -26,12 +27,13 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from . import runtime_config
 from .catalog.repository import CatalogRepository
@@ -157,6 +159,22 @@ class ConfigUpdate(BaseModel):
     results_per_search: int | None = Field(default=None, ge=1, le=15)
     request_timeout: float | None = Field(default=None, gt=0, le=600)
 
+    @field_validator(
+        "llm_model",
+        "max_sub_questions",
+        "max_rounds",
+        "max_concurrency",
+        "results_per_search",
+        "request_timeout",
+        mode="before",
+    )
+    @classmethod
+    def reject_null_non_nullable_fields(cls, value: object) -> object:
+        # 显式 null 非法：这些字段没有「清空」语义，None 一旦进 overrides 会污染持久化配置
+        if value is None:
+            raise ValueError("field cannot be null; omit it to keep the current value")
+        return value
+
 
 def _settings_for(base: Settings, params: ResearchParams | None) -> Settings:
     """把 per-run 覆盖合并进基础 Settings（仅覆盖显式提供的字段）。"""
@@ -188,6 +206,14 @@ def _mask_secret(secret: str) -> str:
         return ""
     tail = secret[-4:] if len(secret) >= 4 else secret
     return f"…{tail}"
+
+
+def _sanitized_overrides(overrides: dict) -> dict:
+    """丢弃 overrides 中非法的 None 值（llm_base_url 除外：None＝清空回默认端点）。
+
+    兜底旧版本可能写坏的持久化文件：None 覆盖到 Settings 会让 ConfigView 构造失败。
+    """
+    return {k: v for k, v in overrides.items() if v is not None or k == "llm_base_url"}
 
 
 def _config_view(s: Settings) -> ConfigView:
@@ -227,6 +253,9 @@ async def require_api_key(
 class _RateLimiter:
     """每 IP 滑动窗口限流（进程内）。只挡「触发 LLM 调用」的昂贵端点。"""
 
+    # key 总量上限：超过即全量清理过期条目，防止海量来源 IP 让 _hits 无界增长
+    _MAX_KEYS = 10_000
+
     def __init__(self, max_calls: int, window_seconds: float) -> None:
         self.max_calls = max_calls
         self.window = window_seconds
@@ -240,15 +269,39 @@ class _RateLimiter:
             return False
         hits.append(now)
         self._hits[key] = hits
+        if len(self._hits) > self._MAX_KEYS:
+            self._prune(now)
         return True
+
+    def _prune(self, now: float) -> None:
+        """删除窗口内已无命中的 key（含清理后变空的条目），回收内存。"""
+        for stale_key in list(self._hits):
+            live = [t for t in self._hits[stale_key] if now - t < self.window]
+            if live:
+                self._hits[stale_key] = live
+            else:
+                del self._hits[stale_key]
 
 
 _run_limiter = _RateLimiter(max_calls=10, window_seconds=60.0)
 
 
+def _rate_limit_key(request: Request) -> str:
+    """限流 key：默认直连对端 IP；APP_TRUST_PROXY=1 时取 X-Forwarded-For 第一跳。
+
+    开关直读环境变量（部署拓扑属性，不进 config.Settings 的研究行为配置）。
+    默认关闭：直连部署下该头可被客户端伪造，信任它等于放开限流。
+    """
+    if os.environ.get("APP_TRUST_PROXY", "").strip().lower() in {"1", "true", "yes"}:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        first_hop = forwarded.split(",")[0].strip() if forwarded else ""
+        if first_hop:
+            return first_hop
+    return request.client.host if request.client else "unknown"
+
+
 def _check_rate_limit(request: Request) -> None:
-    client_ip = request.client.host if request.client else "unknown"
-    if not _run_limiter.check(client_ip):
+    if not _run_limiter.check(_rate_limit_key(request)):
         raise HTTPException(status_code=429, detail="too many requests, slow down")
 
 
@@ -355,7 +408,7 @@ async def _recovery_loop(app: FastAPI) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     # 叠加前端持久化的全局配置（runtime_config.json）；损坏/非法不阻塞启动
-    overrides = runtime_config.load_overrides()
+    overrides = _sanitized_overrides(runtime_config.load_overrides())
     if overrides:
         try:
             settings = runtime_config.apply_overrides(settings, overrides)
@@ -447,9 +500,33 @@ async def _stream_run_sse(app: FastAPI, run_id: str) -> AsyncIterator[str]:
     while True:
         hub: EventHub | None = app.state.live.get(run_id)
         if hub is not None:
-            async for event in hub.stream():
-                yield _sse(event)
-            return
+            # 长静默步骤（LLM 超时可配到 600s）会被反代的空闲超时掐断连接；
+            # 经中转队列带超时读取，静默期间持续发 SSE 注释行保活（客户端会忽略注释行）
+            relay: asyncio.Queue[Event | None] = asyncio.Queue()
+
+            async def _pump(source: EventHub, sink: asyncio.Queue[Event | None]) -> None:
+                try:
+                    async for event in source.stream():
+                        sink.put_nowait(event)
+                finally:
+                    sink.put_nowait(None)  # None 哨兵＝hub 已关闭（run 结束）
+
+            pump_task = asyncio.create_task(_pump(hub, relay))
+            try:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(
+                            relay.get(), timeout=_SSE_HEARTBEAT_SECONDS
+                        )
+                    except asyncio.TimeoutError:
+                        yield ": keep-alive\n\n"
+                        continue
+                    if event is None:
+                        return
+                    yield _sse(event)
+            finally:
+                pump_task.cancel()
+                await asyncio.gather(pump_task, return_exceptions=True)
 
         status = await repo.get_run_status(run_id)
         if status is None:
@@ -531,6 +608,106 @@ async def _build_search_tool(app: FastAPI, settings: Settings) -> SearchTool | N
     return None  # None＝交给 DeepResearchAgent 用 settings.tavily_api_key 自建
 
 
+# --- Chaos 演示注入钩子（仅供演示/测试，见 scripts/chaos_demo.py） -----------------
+# 设 DR_DEMO_FAKE_BACKENDS=1 后，_build_agent 改用仓库内 tests/fakes 的假 LLM/检索：
+# 完全离线运行，并按 DR_DEMO_STEP_DELAY 秒放慢每次后端调用（让 kill -9 能精确落在
+# 中间步骤）、按 DR_DEMO_TOKENS_PER_CALL 计入模拟 token（度量断点续跑节省占比）。
+# 未设置该环境变量时本钩子完全不生效，生产/默认行为零变化。
+
+
+def _demo_fake_backends_enabled() -> bool:
+    return os.environ.get("DR_DEMO_FAKE_BACKENDS", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _build_demo_backends() -> tuple[Any, SearchTool]:
+    """构造「放慢 + 计量」的离线假后端；仅在 DR_DEMO_FAKE_BACKENDS=1 时被调用。"""
+    import importlib
+
+    fakes = importlib.import_module("tests.fakes")  # 演示需从仓库根目录启动服务
+    delay = float(os.environ.get("DR_DEMO_STEP_DELAY", "2.0") or 0.0)
+    tokens_per_call = int(os.environ.get("DR_DEMO_TOKENS_PER_CALL", "1000") or 0)
+
+    class _PacedFakeLLM:
+        """包装 FakeLLM：每次调用先 sleep 模拟真实延迟，并向 tracer 计入模拟 token。"""
+
+        def __init__(self) -> None:
+            self._inner = fakes.FakeLLM()
+            self.tracer: Any = None  # 由 _build_agent 在 agent 构造后回填
+
+        async def _pace(self) -> None:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            if self.tracer is not None and tokens_per_call > 0:
+                self.tracer.add_tokens(tokens_per_call)
+
+        async def complete(self, system: str, user: str, *, temperature: float = 0.3) -> str:
+            await self._pace()
+            return await self._inner.complete(system, user, temperature=temperature)
+
+        async def parse(
+            self, system: str, user: str, schema: Any, *, temperature: float = 0.2, retries: int = 2
+        ) -> Any:
+            await self._pace()
+            return await self._inner.parse(
+                system, user, schema, temperature=temperature, retries=retries
+            )
+
+        async def stream(
+            self, system: str, user: str, *, temperature: float = 0.4
+        ) -> AsyncIterator[str]:
+            await self._pace()
+            async for piece in self._inner.stream(system, user, temperature=temperature):
+                yield piece
+
+        async def aclose(self) -> None:
+            return None
+
+    class _PacedFakeSearch(SearchTool):
+        def __init__(self) -> None:
+            self._inner = fakes.FakeSearch()
+
+        async def search(self, query: str, *, max_results: int = 5) -> list[Any]:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            return await self._inner.search(query, max_results=max_results)
+
+    return _PacedFakeLLM(), _PacedFakeSearch()
+
+
+async def _build_agent(
+    app: FastAPI, settings: Settings, **agent_kwargs: object
+) -> tuple[DeepResearchAgent, SearchTool | None]:
+    """统一 agent 构造：/api/runs 与 /api/research 共用，注入搜索 key 池与 catalog。
+
+    注入的 search_tool 不归 agent 所有（aclose 不会关它），调用方须负责关闭。
+    """
+    if _demo_fake_backends_enabled():  # 仅供演示/测试：见上方钩子注释
+        demo_llm, demo_search = _build_demo_backends()
+        agent = DeepResearchAgent(
+            settings,
+            catalog_repo=getattr(app.state, "catalog", None),
+            llm=demo_llm,
+            search_tool=demo_search,
+            **agent_kwargs,  # type: ignore[arg-type]  # 与下方既有 **agent_kwargs 模式一致
+        )
+        demo_llm.tracer = agent.tracer
+        return agent, demo_search
+    search_tool = await _build_search_tool(app, settings)
+    try:
+        agent = DeepResearchAgent(
+            settings,
+            catalog_repo=getattr(app.state, "catalog", None),
+            search_tool=search_tool,
+            **agent_kwargs,
+        )
+    except BaseException:
+        # 构造期异常（缺 key 等）时归还 search client，避免连接池泄漏
+        if search_tool is not None:
+            await search_tool.aclose()
+        raise
+    return agent, search_tool
+
+
 async def _execute(
     app: FastAPI,
     run_id: str,
@@ -581,14 +758,12 @@ async def _execute(
             heartbeat = asyncio.create_task(renew_lease())
         # 构造必须在 try 内：缺 API key 等构造期异常同样要走 finally 收尾，
         # 否则 EventHub 泄漏、SSE 订阅者永久挂起、run 卡死在 pending
-        search_tool = await _build_search_tool(app, settings)
-        agent = DeepResearchAgent(
+        agent, search_tool = await _build_agent(
+            app,
             settings,
             repo=app.state.repo,
             run_id=run_id,
             workflow=workflow,
-            catalog_repo=app.state.catalog,
-            search_tool=search_tool,
             resume_execution=resume_execution,
             initial_execution=initial_execution,
             lease_owner=lease_owner,
@@ -840,8 +1015,31 @@ async def list_workflows(request: Request) -> list[dict[str, str]]:
     return out
 
 
-# 可编排进自定义工作流的内置角色（排除 coordinator/aggregator——它们是 compose/fanout 专用原语）
-_COMPOSABLE_BUILTINS = {"planner", "researcher", "reflector", "synthesizer", "critic"}
+# 可编排进自定义工作流的内置角色（排除 coordinator/aggregator——它们是 compose/fanout 专用原语）。
+# label/description 供构建器角色选择器展示——裸英文标识符对不熟悉本系统术语的用户过于晦涩。
+# 声明顺序即管线执行序（规划→研究→反思→综合→评审），角色列表按此展示而非字母序。
+_COMPOSABLE_BUILTINS: dict[str, tuple[str, str]] = {
+    "planner": (
+        "规划师",
+        "把研究问题拆解为若干可独立检索的子问题，并标注子问题间的依赖关系。",
+    ),
+    "researcher": (
+        "研究员",
+        "对子问题并行检索网络，只保留带逐字证据、通过程序验证的发现。",
+    ),
+    "reflector": (
+        "反思者",
+        "评估现有证据是否充分，不足时提出补洞子问题（通常配合反思循环使用）。",
+    ),
+    "synthesizer": (
+        "综合者",
+        "把已验证的发现综合成带 [n] 引用的最终报告；必须是工作流的唯一终端节点。",
+    ),
+    "critic": (
+        "评审员",
+        "对综合后的报告做批判性复核，指出遗漏、矛盾与修订建议。",
+    ),
+}
 
 
 @app.get("/api/roles", dependencies=[Depends(require_api_key)])
@@ -854,12 +1052,14 @@ async def list_roles(request: Request) -> list[dict[str, object]]:
     roles: dict[str, dict[str, object]] = {
         name: {
             "name": name,
-            "label": name,
+            "label": _COMPOSABLE_BUILTINS[name][0],
+            "description": _COMPOSABLE_BUILTINS[name][1],
             "icon": "◆",
             "builtin": True,
             "produces_report": name == "synthesizer",
         }
-        for name in sorted(builtin)
+        for name in _COMPOSABLE_BUILTINS
+        if name in builtin
     }
     try:
         cards = [card for card in await request.app.state.catalog.list_agents() if card.enabled]
@@ -868,6 +1068,7 @@ async def list_roles(request: Request) -> list[dict[str, object]]:
             roles[card.name] = {
                 "name": card.name,
                 "label": card.display_name or card.name,
+                "description": card.description,
                 "icon": card.icon,
                 "builtin": False,
                 "produces_report": card.name in terminal_roles,
@@ -880,13 +1081,25 @@ async def list_roles(request: Request) -> list[dict[str, object]]:
 @app.get("/api/config", dependencies=[Depends(require_api_key)])
 async def get_config(request: Request) -> ConfigView:
     """当前全局配置（密钥脱敏）。"""
-    return _config_view(request.app.state.settings)
+    try:
+        return _config_view(request.app.state.settings)
+    except ValidationError:
+        # 自愈：内存里的 Settings 被历史污染的 overrides（如 llm_model=null）弄脏时，
+        # 以「环境变量 + 清洗后覆盖」重建并回写文件，端点恢复可用而非永久 500
+        overrides = _sanitized_overrides(runtime_config.load_overrides())
+        settings = runtime_config.apply_overrides(Settings(), overrides)
+        request.app.state.settings = settings
+        try:
+            runtime_config.save_overrides(overrides)
+        except OSError:
+            logger.exception("回写清洗后的持久化配置失败")
+        return _config_view(settings)
 
 
 @app.put("/api/config", dependencies=[Depends(require_api_key)])
 async def update_config(req: ConfigUpdate, request: Request) -> ConfigView:
     """更新并持久化全局配置；对后续创建的 run 生效。"""
-    overrides = runtime_config.load_overrides()
+    overrides = _sanitized_overrides(runtime_config.load_overrides())
     payload = req.model_dump(exclude_unset=True)
     for key, value in payload.items():
         if key in runtime_config.SECRET_FIELDS:
@@ -896,14 +1109,16 @@ async def update_config(req: ConfigUpdate, request: Request) -> ConfigView:
             overrides[key] = value or None  # 显式空串＝清空回默认端点
         else:
             overrides[key] = value
-    # 以「环境变量 + 新覆盖」重建，复用 Settings.__post_init__ 范围校验
+    # 以「环境变量 + 新覆盖」重建，复用 Settings.__post_init__ 范围校验；
+    # 响应视图也必须先构造成功——全部校验通过后才允许提交内存状态与落盘
     try:
         new_settings = runtime_config.apply_overrides(Settings(), overrides)
+        view = _config_view(new_settings)
     except (ValueError, TypeError) as e:
         raise HTTPException(status_code=422, detail=f"配置非法：{e}") from e
     request.app.state.settings = new_settings
     runtime_config.save_overrides(overrides)
-    return _config_view(new_settings)
+    return view
 
 
 @app.get("/api/runs", dependencies=[Depends(require_api_key)])
@@ -1004,6 +1219,12 @@ async def get_run(run_id: str, request: Request) -> RunDetail:
 async def get_events(run_id: str, request: Request, after_seq: int = Query(0, ge=0)) -> list[Event]:
     """事件回放。after_seq 为「跳过前 N 条」的偏移语义（客户端传已收到的条数）。"""
     repo: ResearchRepository = request.app.state.repo
+    # 与 /stream 一致：未知 run 返回 404，而非 200 + 空列表（区分「不存在」与「无事件」）
+    if (
+        request.app.state.live.get(run_id) is None
+        and await repo.get_run_status(run_id) is None
+    ):
+        raise HTTPException(status_code=404, detail="run not found")
     return await repo.get_events(run_id, after_seq=after_seq)
 
 
@@ -1035,7 +1256,8 @@ async def research(
 ) -> StreamingResponse:
     """无持久化的即跑即看快路径（向后兼容旧前端）。"""
     _check_rate_limit(request)
-    agent = DeepResearchAgent(request.app.state.settings)
+    # 与 /api/runs 同一构造路径：搜索 key 池 / catalog 注入行为保持一致
+    agent, search_tool = await _build_agent(request.app, request.app.state.settings)
 
     async def event_stream() -> AsyncIterator[str]:
         try:
@@ -1046,7 +1268,11 @@ async def research(
             payload = {"stage": "ORCHESTRATOR", "type": "error", "message": "服务器内部错误"}
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         finally:
-            await agent.aclose()
+            try:
+                await agent.aclose()
+            finally:
+                if search_tool is not None:  # 注入的 search client 归本端点关闭
+                    await search_tool.aclose()
 
     return StreamingResponse(
         event_stream(),

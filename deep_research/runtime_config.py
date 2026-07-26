@@ -11,8 +11,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -55,9 +57,26 @@ def load_overrides() -> dict:
 
 
 def save_overrides(overrides: dict) -> None:
-    """把覆盖项写回文件（只保留白名单键）。"""
+    """把覆盖项写回文件（只保留白名单键）。
+
+    原子写：先写同目录临时文件，再 os.replace 替换目标（Windows / POSIX 均为
+    原子重命名）。进程中途被杀不会留下半截 JSON——load_overrides 读到损坏文件
+    会静默回退为空，配置将凭空丢失，故写入必须全有或全无。
+    """
     clean = {k: v for k, v in overrides.items() if k in EDITABLE_FIELDS}
-    config_path().write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = json.dumps(clean, ensure_ascii=False, indent=2)
+    path = config_path()
+    fd, tmp = tempfile.mkstemp(
+        prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent or Path("."))
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def apply_overrides(settings: Settings, overrides: dict) -> Settings:

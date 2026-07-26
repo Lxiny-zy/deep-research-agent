@@ -36,6 +36,10 @@ class Judge:
         # judge 用独立 Tracer，不污染被评估 agent 的统计
         self.llm = LLM(settings, Tracer())
 
+    async def aclose(self) -> None:
+        """关闭底层 LLM 的连接池（与 agent 同生命周期语义，避免泄漏 FD）。"""
+        await self.llm.aclose()
+
     async def score(self, query: str, report_markdown: str, notes: str = "") -> EvalScore:
         user = (
             f"研究问题：{query}\n\n参考要点：{notes or '（无）'}\n\n待评报告：\n{report_markdown}"

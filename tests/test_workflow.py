@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import pytest
 
+from deep_research.agents.base import Blackboard, RunContext
 from deep_research.agents.critic import Critique
 from deep_research.models import Report
+from deep_research.observability import Tracer
 from deep_research.orchestrator import DeepResearchAgent
 from deep_research.registry import available, create
-from deep_research.workflow import Step, validate_workflow
+from deep_research.workflow import Step, Workflow, WorkflowEngine, validate_workflow
 from tests.fakes import FakeLLM, FakeSearch
 
 
@@ -109,3 +111,56 @@ def test_validate_workflow_rules_and_custom_terminal():
     custom = [Step(kind="agent", agent="researcher"), Step(kind="agent", agent="my_writer")]
     assert validate_workflow(custom, avail, max_rounds_cap=2) != []  # 默认不认 my_writer
     assert validate_workflow(custom, avail, max_rounds_cap=2, terminal_roles={"my_writer"}) == []
+
+
+def test_validate_workflow_caps_retry_budget():
+    """字段级合法（max_attempts≤10、retry_backoff≤60）也不许组合出小时级最坏退避。"""
+    avail = {"researcher", "synthesizer"}
+
+    # 单步重试次数超上限
+    too_many = [
+        Step(agent="researcher", max_attempts=10, retry_backoff=0),
+        Step(agent="synthesizer"),
+    ]
+    assert any("重试次数" in e for e in validate_workflow(too_many, avail, max_rounds_cap=2))
+
+    # 全流程最坏退避总时长超上限：30 * (2^4 - 1) = 450s > 120s
+    too_long = [
+        Step(agent="researcher", max_attempts=5, retry_backoff=30),
+        Step(agent="synthesizer"),
+    ]
+    assert any("退避总时长" in e for e in validate_workflow(too_long, avail, max_rounds_cap=2))
+
+    # 合理的重试配置照常通过：5 * (2^2 - 1) = 15s ≤ 120s
+    ok = [
+        Step(agent="researcher", max_attempts=3, retry_backoff=5),
+        Step(agent="synthesizer"),
+    ]
+    assert validate_workflow(ok, avail, max_rounds_cap=2) == []
+
+
+@pytest.mark.asyncio
+async def test_step_named_orchestrator_error_does_not_use_reserved_stage(settings):
+    """用户角色卡可叫 "orchestrator"：其失败事件不得占用保留 Stage（运行终态判定）。"""
+
+    class BrokenOrchestratorCard:
+        name = "orchestrator"
+
+        async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
+            raise RuntimeError("card failure")
+
+    tracer = Tracer()
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings)
+    engine = WorkflowEngine(
+        ctx, resolver={"orchestrator": BrokenOrchestratorCard()}.__getitem__
+    )
+
+    await engine.run(
+        Workflow(name="user-card", steps=[Step(agent="orchestrator")]),
+        Blackboard(query="Q"),
+    )
+
+    errors = [e for e in tracer.events if e.type == "error"]
+    assert errors  # 单步失败被隔离并记录……
+    assert all(e.stage != "ORCHESTRATOR" for e in errors)  # ……但不冒充运行终态 Stage
+    assert any(e.stage == "STEP_ORCHESTRATOR" for e in errors)

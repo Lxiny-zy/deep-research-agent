@@ -136,14 +136,9 @@ async def _run_alembic_upgrade(database_url: str) -> None:
         project_root = Path(__file__).resolve().parents[2]
         config = Config(str(project_root / "alembic.ini"))
         config.set_main_option("script_location", str(project_root / "alembic"))
-        previous_url = os.environ.get("DATABASE_URL")
-        os.environ["DATABASE_URL"] = database_url
-        try:
-            command.upgrade(config, "head")
-        finally:
-            if previous_url is None:
-                os.environ.pop("DATABASE_URL", None)
-            else:
-                os.environ["DATABASE_URL"] = previous_url
+        # 经 Config.attributes 显式传连接串给 env.py，不临时改写进程级
+        # DATABASE_URL（那会与并发读 os.environ 的代码产生隐式全局耦合）
+        config.attributes["database_url"] = database_url
+        command.upgrade(config, "head")
 
     await asyncio.to_thread(_upgrade)

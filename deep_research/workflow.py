@@ -73,6 +73,10 @@ class Workflow(BaseModel):
 
 # 自组合流程的硬上限：防止 LLM 生成超长流程烧 token，并与「可证终止」挂钩。
 MAX_GENERATED_STEPS = 8
+# 重试预算的硬上限：Step 字段本身允许 max_attempts≤10、retry_backoff≤60，
+# 若不在校验期约束，生成/自建流程可合法产出单步小时级的最坏指数退避。
+MAX_STEP_ATTEMPTS = 5
+MAX_TOTAL_BACKOFF_SECONDS = 120.0
 # 能产出报告的终端角色：预算耗尽时仍会执行这些步骤，保证尽力而为的报告。
 _TERMINAL_ROLES = {"synthesizer", "aggregator"}
 # 子团队默认内部流程：在隔离子黑板上对其 focus 做一次检索（可被 SubTask.steps 覆盖）。
@@ -142,8 +146,22 @@ def _merge_parallel_sequence(base: list[Any], current: list[Any], branch: list[A
         return [*deepcopy(branch), *deepcopy(additions)]
 
     if branch[: len(base)] != base:
-        additions = current[len(base) :] if current[: len(base)] == base else []
-        return [*deepcopy(branch), *deepcopy(additions)]
+        if current[: len(base)] == base:
+            # current 未动基线：branch 的改写整体生效，仅需保留 current 的追加段。
+            return [*deepcopy(branch), *deepcopy(current[len(base) :])]
+        # 双方都改写了基线前缀（如各分支的 claim consistency 均原地替换基线 Finding）：
+        # 基线段以 branch 相对 base 的逐元素差异覆盖到 current 之上，再同时保留双方
+        # 各自超出基线长度的追加段——破坏性改写不得抹掉兄弟分支的追加增量。
+        merged = deepcopy(current[: len(base)])
+        for index, base_item in enumerate(base):
+            if branch[index] != base_item:
+                if index < len(merged):
+                    merged[index] = deepcopy(branch[index])
+                else:
+                    merged.append(deepcopy(branch[index]))
+        merged.extend(deepcopy(current[len(base) :]))
+        merged.extend(deepcopy(branch[len(base) :]))
+        return merged
 
     merged = deepcopy(current)
     for index, base_item in enumerate(base):
@@ -251,6 +269,8 @@ def validate_workflow(
       - 只引用已注册角色（白名单 available_roles）；
       - 禁止 compose / team_fanout（顶层编排原语，不允许出现在生成/自建流程里，杜绝无限递归）；
       - reflect_loop 轮数 ≤ max_rounds_cap；
+      - 单步重试次数 ≤ MAX_STEP_ATTEMPTS，且全流程最坏重试退避总时长
+        ≤ MAX_TOTAL_BACKOFF_SECONDS（防止合法字段组合出小时级的空转等待）；
       - 必须由终端角色收尾（默认 synthesizer/aggregator；自定义可经 terminal_roles 扩展，
         如把 behavior=synthesize 的自定义卡片计为终端），否则产不出报告。
     """
@@ -261,9 +281,17 @@ def validate_workflow(
     if len(steps) > max_steps:
         errors.append(f"步骤数 {len(steps)} 超过上限 {max_steps}")
     has_terminal = False
+    worst_backoff = 0.0
     for i, step in enumerate(steps):
         if step.fallback_agent and step.fallback_agent not in available_roles:
             errors.append(f"第 {i} 步引用未注册 fallback 角色：{step.fallback_agent}")
+        if step.max_attempts > MAX_STEP_ATTEMPTS:
+            errors.append(
+                f"第 {i} 步重试次数 {step.max_attempts} 超上限 {MAX_STEP_ATTEMPTS}"
+            )
+        # 单步最坏退避：retry_backoff * (2^0 + 2^1 + … + 2^(max_attempts-2))，
+        # 与引擎的指数退避实现（retry_backoff * 2**attempt）一致。
+        worst_backoff += step.retry_backoff * (2 ** (step.max_attempts - 1) - 1)
         if step.kind in ("compose", "team_fanout"):
             errors.append(f"第 {i} 步禁止在生成流程中使用顶层编排原语 {step.kind}")
         elif step.kind == "reflect_loop":
@@ -279,6 +307,11 @@ def validate_workflow(
                 has_terminal = True
         else:
             errors.append(f"第 {i} 步未知步骤类型：{step.kind}")
+    if worst_backoff > MAX_TOTAL_BACKOFF_SECONDS:
+        errors.append(
+            f"全流程最坏重试退避总时长 {worst_backoff:.1f}s "
+            f"超上限 {MAX_TOTAL_BACKOFF_SECONDS:.0f}s，请调低 max_attempts 或 retry_backoff"
+        )
     if not has_terminal:
         errors.append("流程缺少终端角色（如 synthesizer），无法产出报告")
     elif require_terminal_last:
@@ -466,7 +499,13 @@ class WorkflowEngine:
         """步骤失败时归属的事件 Stage（刻意避开 ORCHESTRATOR——它的 error 是运行终态，
         会让 run_stream 提前断流；单步失败是被隔离的，应挂在各自的非终态 Stage 上）。"""
         if step.kind == "agent" and step.agent:
-            return step.agent.upper()
+            stage = step.agent.upper()
+            # 用户可自建名为 "orchestrator" 的角色卡：派生 Stage 一旦命中保留值
+            # ORCHESTRATOR，其 error 会被 run_stream 误判为运行终态而提前断流，
+            # 必须降级为非保留 Stage（catalog 侧另有名称保留校验，这里是运行时兜底）。
+            if stage == "ORCHESTRATOR":
+                return "STEP_ORCHESTRATOR"
+            return stage
         if step.kind == "compose":
             return "COORDINATOR"
         if step.kind == "team_fanout":
@@ -476,6 +515,14 @@ class WorkflowEngine:
         return "ENGINE"
 
     async def run(self, wf: Workflow, bb: Blackboard) -> Blackboard:
+        # run 级共享限流：并行图的 K 个检索型节点 / 多团队并行若各自建
+        # Semaphore(max_concurrency)，总并发会被放大为 K×max_concurrency。
+        # 引擎在 run 入口把信号量挂到 ctx 上（已存在则沿用，嵌套子流程共用同一把），
+        # 角色未被注入时才自建，保证单测可脱离引擎独立运行。
+        if getattr(self.ctx, "run_semaphore", None) is None:
+            self.ctx.run_semaphore = asyncio.Semaphore(  # type: ignore[attr-defined]
+                self.ctx.settings.max_concurrency
+            )
         if wf.nodes:
             return await self._run_graph(wf, bb)
         return await self._run_steps(wf, bb)
@@ -543,7 +590,12 @@ class WorkflowEngine:
         except Exception:
             if is_root and self.runtime.run is not None:
                 self.runtime.finish(RunStatus.FAILED)
-                await self._checkpoint(wf, bb)
+                try:
+                    await self._checkpoint(wf, bb)
+                except LeaseLostError:
+                    # 租约已被继任者接管：终态 checkpoint 写不进去是预期情况，
+                    # 不得让它掩盖原始失败异常（与上方取消路径的处理一致）。
+                    pass
             raise
         finally:
             self._run_depth -= 1
@@ -641,10 +693,29 @@ class WorkflowEngine:
                         agent=step.agent,
                     )
                     node_edges = incoming[node.id]
-                    active_inputs = [
-                        edge.source in active_nodes and evaluate_condition(edge.condition, bb)
-                        for edge in node_edges
-                    ]
+
+                    def edge_active(edge: WorkflowEdge) -> bool:
+                        if edge.source not in active_nodes:
+                            return False
+                        # 条件求值兜底：单条坏边（如运行期才暴露的非法字面量）按
+                        # 「不激活」处理并发警告事件，不得经 asyncio.gather 炸穿整个 run。
+                        try:
+                            return evaluate_condition(edge.condition, bb)
+                        except Exception as exc:
+                            self.ctx.tracer.emit(
+                                "ORCHESTRATOR",
+                                "info",
+                                f"边 {edge.id} 条件求值失败，按不激活处理：{exc}",
+                                data={
+                                    "event_name": "edge.condition_error",
+                                    "edge": edge.id,
+                                    "condition": edge.condition,
+                                    "error": str(exc),
+                                },
+                            )
+                            return False
+
+                    active_inputs = [edge_active(edge) for edge in node_edges]
                     if not node_edges:
                         should_run = True
                     elif node.join_mode == "all":
@@ -723,7 +794,12 @@ class WorkflowEngine:
         except Exception:
             if is_root and self.runtime.run is not None:
                 self.runtime.finish(RunStatus.FAILED)
-                await self._checkpoint(wf, bb)
+                try:
+                    await self._checkpoint(wf, bb)
+                except LeaseLostError:
+                    # 租约已被继任者接管：终态 checkpoint 写不进去是预期情况，
+                    # 不得让它掩盖原始失败异常（与上方取消路径的处理一致）。
+                    pass
             raise
         finally:
             self._run_depth -= 1
@@ -824,19 +900,20 @@ class WorkflowEngine:
             f"分派 {len(subtasks)} 个子团队并行研究",
             data={"teams": [t.focus for t in subtasks]},
         )
-        sem = asyncio.Semaphore(self.ctx.settings.max_concurrency)
-
+        # 团队级不再自建独立信号量：昂贵操作（检索/LLM）在各团队内部的 researcher
+        # 处经 ctx.run_semaphore（run 级共享）统一限流，总并发不随团队数放大。
+        # 也不得在此持共享信号量跨整个子流程——子流程内 researcher 会再取同一把锁，
+        # 团队数 ≥ max_concurrency 时将互相等待形成死锁。
         async def _run_team(idx: int, task: SubTask) -> Blackboard | None:
-            async with sem:
-                child = BB(query=task.focus)
-                child.scratch["pending_sub_questions"] = [SubQuestion(question=task.focus)]
-                team_steps = task.steps or _DEFAULT_TEAM_STEPS
-                try:
-                    await self.run(Workflow(name=f"team-{idx}", steps=list(team_steps)), child)
-                    return child
-                except Exception as e:  # 单团队失败隔离：记一条 error，返回 None 不拖垮其余团队
-                    self.ctx.tracer.emit("AGGREGATOR", "error", f"子团队 {idx} 失败，已隔离：{e}")
-                    return None
+            child = BB(query=task.focus)
+            child.scratch["pending_sub_questions"] = [SubQuestion(question=task.focus)]
+            team_steps = task.steps or _DEFAULT_TEAM_STEPS
+            try:
+                await self.run(Workflow(name=f"team-{idx}", steps=list(team_steps)), child)
+                return child
+            except Exception as e:  # 单团队失败隔离：记一条 error，返回 None 不拖垮其余团队
+                self.ctx.tracer.emit("AGGREGATOR", "error", f"子团队 {idx} 失败，已隔离：{e}")
+                return None
 
         children = await asyncio.gather(*[_run_team(i, t) for i, t in enumerate(subtasks)])
         for child in children:  # 串行合并，避免并发写父黑板的竞态

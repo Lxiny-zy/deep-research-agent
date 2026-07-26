@@ -10,13 +10,19 @@ _EXPR = re.compile(r"^\s*([a-zA-Z_][\w.]*)\s*(?:(==|!=|>=|<=|>|<)\s*(.+))?\s*$")
 
 
 def _read(value: Any, segment: str) -> Any:
-    if segment == "length":
-        return len(value) if value is not None else 0
-    if segment == "last":
-        return value[-1] if value else None
-    if isinstance(value, dict):
-        return value.get(segment)
-    return getattr(value, segment, None)
+    # 路径解析必须是全函数：黑板形态由各角色运行时决定（对 dict 取 last、对无 len
+    # 的对象取 length 都可能出现），解析失败按 None 处理（求值结果 falsy），
+    # 不得抛异常——异常会经引擎的 asyncio.gather 炸穿整个 run。
+    try:
+        if segment == "length":
+            return len(value) if value is not None else 0
+        if segment == "last":
+            return value[-1] if value else None
+        if isinstance(value, dict):
+            return value.get(segment)
+        return getattr(value, segment, None)
+    except (KeyError, TypeError, IndexError):
+        return None
 
 
 def resolve_path(state: Any, path: str) -> Any:

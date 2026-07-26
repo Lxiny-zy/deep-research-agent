@@ -1,7 +1,9 @@
 """Alembic 运行环境（async）。
 
 要点：
-  - 连接串从 deep_research.config.Settings 读取（与应用同源，单一事实来源）。
+  - 连接串优先取 config.attributes["database_url"]（应用启动时经
+    persistence/db.py 程序内调用显式注入），无则回退
+    deep_research.config.Settings（保持 CLI `alembic upgrade head` 可用）。
   - target_metadata 指向 ORM 的 Base.metadata，使 --autogenerate 可对比模型与库。
   - 用 async 引擎驱动（sqlite+aiosqlite / postgresql+asyncpg 都走这条路径）。
 """
@@ -21,8 +23,10 @@ from deep_research.persistence import orm
 
 config = context.config
 
-# 用应用配置覆盖连接串；% 转义 %% 以免 ConfigParser 插值在含特殊字符的密码上报错
-config.set_main_option("sqlalchemy.url", Settings().database_url.replace("%", "%%"))
+# 连接串：程序内注入的 attributes 优先，回退应用配置；
+# % 转义 %% 以免 ConfigParser 插值在含特殊字符的密码上报错
+_database_url = config.attributes.get("database_url") or Settings().database_url
+config.set_main_option("sqlalchemy.url", _database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

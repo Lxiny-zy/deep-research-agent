@@ -45,21 +45,32 @@ class TavilyKeyPoolSearch(SearchTool):
             self._tracer.emit("RESEARCHER", type_, message)
 
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
+        # 竞态说明：search 会被多协程并发调用，await 期间其他协程可能已把 _idx
+        # 粘滞切换到新 key。若按「入口快照 + 固定偏移」遍历，failover 瞬间的在途
+        # 协程会继续按旧起点撞刚被判定耗尽的 key。因此每轮迭代都基于实时 self._idx
+        # 选下一个本协程未试过的 key，让在途协程立即跟随已完成的切换；不加锁，
+        # 正常并发搜索不被串行化（最坏情况只是切换瞬间少量残余请求打到旧 key）。
         n = len(self._keys)
         last_exc: Exception | None = None
-        start = self._idx
-        # 从当前粘滞下标起，最多把每个 key 试一遍
-        for offset in range(n):
-            i = (start + offset) % n
+        tried: set[int] = set()  # 本协程已试过的 key（防重复撞、保证终止）
+        while len(tried) < n:
+            i = self._idx
+            if i in tried:
+                # 实时下标本协程已失败过：从它顺延取第一个未试的 key
+                i = next(j for off in range(1, n) if (j := (self._idx + off) % n) not in tried)
             try:
                 resp = await self._client_for(i).search(
                     query, max_results=max_results, search_depth="advanced"
                 )
             except Exception as e:
                 last_exc = e
+                tried.add(i)
                 if _should_failover(e) and n > 1:
                     nxt = (i + 1) % n
-                    self._idx = nxt  # 粘滞切换：后续请求从新 key 开始
+                    if self._idx == i:
+                        # 粘滞切换：后续请求从新 key 开始。仅当全局下标仍指向失败
+                        # key 时才推进，避免并发协程把别人已完成的切换又拨回去。
+                        self._idx = nxt
                     self._emit("info", f"搜索 key #{i + 1} 不可用（{e}），切换到 #{nxt + 1}")
                     continue
                 raise  # 非配额类错误（如网络抖动）：交给上层重试/隔离，不浪费切换

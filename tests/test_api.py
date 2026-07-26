@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import httpx
@@ -229,7 +230,7 @@ async def test_legacy_research_uses_runtime_settings(repo, monkeypatch):
     captured = {}
 
     class FakeAgent:
-        def __init__(self, settings):
+        def __init__(self, settings, **kwargs):
             captured['settings'] = settings
 
         async def run_stream(self, query):
@@ -247,6 +248,39 @@ async def test_legacy_research_uses_runtime_settings(repo, monkeypatch):
 
     assert resp.status_code == 200
     assert captured['settings'] is runtime_settings
+
+
+@pytest.mark.asyncio
+async def test_legacy_research_uses_search_key_pool(repo, monkeypatch):
+    """快路径与 /api/runs 同一构造路径：key 池非空时注入 TavilyKeyPoolSearch。"""
+    from deep_research.tools.tavily_pool import TavilyKeyPoolSearch
+
+    class FakeCatalog:
+        async def active_keys(self):
+            return ["tvly-primary", "tvly-backup"]
+
+    monkeypatch.setattr(api.app.state, "catalog", FakeCatalog(), raising=False)
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, settings, **kwargs):
+            captured.update(kwargs)
+
+        async def run_stream(self, query):
+            yield Event(stage="ORCHESTRATOR", type="done")
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(api, "DeepResearchAgent", FakeAgent)
+    monkeypatch.setattr(api, "_check_rate_limit", lambda request: None)
+
+    async with _client() as c:
+        resp = await c.get("/api/research", params={"q": "Q"})
+
+    assert resp.status_code == 200
+    assert isinstance(captured["search_tool"], TavilyKeyPoolSearch)
+    assert captured["catalog_repo"] is api.app.state.catalog
 
 
 @pytest.mark.asyncio
@@ -400,6 +434,117 @@ async def test_config_put_validates_range(repo, tmp_path, monkeypatch):
     async with _client() as c:
         resp = await c.put("/api/config", json={"max_concurrency": 0})
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_config_put_rejects_explicit_null(repo, tmp_path, monkeypatch):
+    """显式 null 直接 422，且不得写入持久化文件、不得改内存 Settings。"""
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(cfg))
+    before = api.app.state.settings
+    async with _client() as c:
+        model_null = await c.put("/api/config", json={"llm_model": None})
+        rounds_null = await c.put("/api/config", json={"max_rounds": None})
+    assert model_null.status_code == 422
+    assert rounds_null.status_code == 422
+    assert not cfg.exists()  # 校验失败不落盘
+    assert api.app.state.settings is before  # 内存状态未被提交
+
+
+@pytest.mark.asyncio
+async def test_config_get_self_heals_polluted_overrides(repo, tmp_path, monkeypatch):
+    """旧版本污染（overrides 含 llm_model: null）下 GET 仍返回 200 并清洗文件。"""
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(
+        json.dumps({"llm_model": None, "max_rounds": 3}), encoding="utf-8"
+    )
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(cfg))
+    api.app.state.settings = replace(Settings(), llm_model=None)  # 内存已被污染
+    async with _client() as c:
+        resp = await c.get("/api/config")
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["llm_model"]  # 自愈回默认模型
+    assert body["max_rounds"] == 3  # 合法覆盖保留
+    assert api.app.state.settings.llm_model  # 内存状态已恢复
+    assert "llm_model" not in json.loads(cfg.read_text(encoding="utf-8"))  # 文件已清洗
+
+
+@pytest.mark.asyncio
+async def test_config_put_cleans_polluted_overrides(repo, tmp_path, monkeypatch):
+    """PUT 合法字段时顺带清掉旧污染文件里的 None 值，之后不再 500。"""
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"llm_model": None}), encoding="utf-8")
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(cfg))
+    async with _client() as c:
+        resp = await c.put("/api/config", json={"max_rounds": 2})
+    assert resp.status_code == 200
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert saved == {"max_rounds": 2}  # None 污染键已被丢弃
+    assert api.app.state.settings.llm_model  # 未被 None 覆盖
+
+
+@pytest.mark.asyncio
+async def test_events_unknown_run_returns_404(repo):
+    """与 /stream 语义一致：未知 run 404，而非 200 + 空列表。"""
+    async with _client() as c:
+        resp = await c.get("/api/runs/does-not-exist/events")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_live_stream_emits_heartbeat_during_silence(monkeypatch) -> None:
+    """live 分支长静默时定期发 SSE 注释行保活，事件到达后正常透传。"""
+    run_id = "live-heartbeat"
+    hub = EventHub()
+    app = SimpleNamespace(
+        state=SimpleNamespace(repo=InMemoryRepository(), live={run_id: hub})
+    )
+    monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 0.01)
+    chunks: list[str] = []
+
+    async def consume() -> None:
+        async for chunk in api._stream_run_sse(app, run_id):
+            chunks.append(chunk)
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0.1)  # 无事件间隙：应已发出至少一条心跳
+    assert any(chunk.startswith(": keep-alive") for chunk in chunks)
+    hub.publish(Event(stage="ORCHESTRATOR", type="done", message="ok"))
+    hub.close()
+    await asyncio.wait_for(task, timeout=1.0)
+    assert any('"type":"done"' in chunk for chunk in chunks)
+
+
+def test_rate_limiter_prunes_stale_entries(monkeypatch) -> None:
+    """key 总量超上限时清理窗口外条目（含空条目），内存不无界增长。"""
+    limiter = api._RateLimiter(max_calls=2, window_seconds=10.0)
+    monkeypatch.setattr(limiter, "_MAX_KEYS", 3)
+    now = [0.0]
+    monkeypatch.setattr(api.time, "monotonic", lambda: now[0])
+
+    for i in range(3):
+        assert limiter.check(f"ip-{i}") is True
+    now[0] = 100.0  # 全部命中已出窗口
+    assert limiter.check("fresh-ip") is True  # 超上限触发清理
+    assert set(limiter._hits) == {"fresh-ip"}
+
+
+def _fake_request(headers: dict[str, str] | None = None, host: str = "10.0.0.9"):
+    return SimpleNamespace(headers=headers or {}, client=SimpleNamespace(host=host))
+
+
+def test_rate_limit_key_ignores_forwarded_header_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("APP_TRUST_PROXY", raising=False)
+    req = _fake_request({"x-forwarded-for": "1.2.3.4"})
+    assert api._rate_limit_key(req) == "10.0.0.9"  # 默认不信任可伪造的头
+
+
+def test_rate_limit_key_uses_first_forwarded_hop_when_trusted(monkeypatch) -> None:
+    monkeypatch.setenv("APP_TRUST_PROXY", "1")
+    req = _fake_request({"x-forwarded-for": "1.2.3.4, 10.0.0.1"})
+    assert api._rate_limit_key(req) == "1.2.3.4"  # 第一跳＝真实客户端
+    assert api._rate_limit_key(_fake_request({})) == "10.0.0.9"  # 无头回退直连 IP
 
 
 def _recoverable_execution(

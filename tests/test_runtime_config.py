@@ -54,3 +54,30 @@ def test_config_view_masks_keys():
     assert view.tavily_api_key_set is True
     # 明文绝不出现在脱敏视图
     assert "sk-secret-key-9999" not in view.model_dump_json()
+
+
+def test_save_overrides_atomic_no_temp_leftover(tmp_path, monkeypatch):
+    p = tmp_path / "cfg.json"
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(p))
+    runtime_config.save_overrides({"llm_model": "a"})
+    runtime_config.save_overrides({"llm_model": "b"})  # 覆盖已存在文件同样原子
+    assert runtime_config.load_overrides() == {"llm_model": "b"}
+    assert [f.name for f in tmp_path.iterdir()] == ["cfg.json"]  # 无残留临时文件
+
+
+def test_save_overrides_failure_keeps_previous_content(tmp_path, monkeypatch):
+    import json as json_mod
+
+    p = tmp_path / "cfg.json"
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(p))
+    runtime_config.save_overrides({"llm_model": "old"})
+
+    def broken_replace(src, dst):
+        raise OSError("simulated replace failure")
+
+    # 替换环节失败：旧文件必须完好（全有或全无），临时文件被清理
+    monkeypatch.setattr(runtime_config.os, "replace", broken_replace)
+    with pytest.raises(OSError, match="simulated"):
+        runtime_config.save_overrides({"llm_model": "new"})
+    assert json_mod.loads(p.read_text(encoding="utf-8")) == {"llm_model": "old"}
+    assert [f.name for f in tmp_path.iterdir()] == ["cfg.json"]
