@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import AgentCardEditor from '../components/AgentCardEditor'
+import BuiltinRoleGallery from '../components/BuiltinRoleGallery'
 import ModelProfileCard from '../components/ModelProfileCard'
 import ModelProfileEditor from '../components/ModelProfileEditor'
 import SearchKeyCard from '../components/SearchKeyCard'
@@ -10,6 +11,7 @@ import {
   useAgents,
   useModelMutations,
   useModels,
+  useRoles,
   useSearchKeyMutations,
   useSearchKeys,
 } from '../hooks/useCatalog'
@@ -22,6 +24,13 @@ function errMsg(e: unknown): string {
 
 type Tab = 'agents' | 'models' | 'keys'
 
+// 每次打开弹窗都是一个独立的编辑会话（同 WorkflowBuilderPage）：
+// 错误与保存中状态按会话 key 隔离，避免上一次失败的提示残留到新弹窗。
+type EditSession<T> = {
+  key: number
+  item: T | null // null＝新建
+}
+
 const TABS: { key: Tab; label: string; icon: AppIconName }[] = [
   { key: 'agents', label: '角色', icon: 'users' },
   { key: 'models', label: '模型档案', icon: 'server' },
@@ -32,27 +41,65 @@ export default function AgentSquarePage() {
   const agents = useAgents()
   const models = useModels()
   const keys = useSearchKeys()
+  const roles = useRoles()
   const agentM = useAgentMutations()
   const modelM = useModelMutations()
   const keyM = useSearchKeyMutations()
 
   const [tab, setTab] = useState<Tab>('agents')
-  const [editAgent, setEditAgent] = useState<AgentCard | null | undefined>(undefined) // undefined=关闭
-  const [editModel, setEditModel] = useState<ModelProfile | null | undefined>(undefined)
+  const sessionSequence = useRef(0)
+  const [agentSession, setAgentSession] = useState<EditSession<AgentCard> | undefined>(undefined) // undefined=关闭
+  const [modelSession, setModelSession] = useState<EditSession<ModelProfile> | undefined>(undefined)
+  const [savingSessionKey, setSavingSessionKey] = useState<number | null>(null)
+  const [saveErrors, setSaveErrors] = useState<Record<number, string>>({})
   const [newKey, setNewKey] = useState({ label: '', api_key: '', priority: 0 })
 
   const profiles = models.data ?? []
 
+  function openAgentEditor(agent: AgentCard | null) {
+    setAgentSession({ key: ++sessionSequence.current, item: agent })
+  }
+
+  function openModelEditor(model: ModelProfile | null) {
+    setModelSession({ key: ++sessionSequence.current, item: model })
+  }
+
+  function sessionOptions(sessionKey: number, close: () => void) {
+    setSavingSessionKey(sessionKey)
+    setSaveErrors((current) => {
+      const next = { ...current }
+      delete next[sessionKey]
+      return next
+    })
+    return {
+      onSuccess: () => close(),
+      onError: (error: unknown) => {
+        setSaveErrors((current) => ({ ...current, [sessionKey]: errMsg(error) }))
+      },
+      onSettled: () => {
+        setSavingSessionKey((current) => (current === sessionKey ? null : current))
+      },
+    }
+  }
+
   function saveAgent(body: AgentCardInput) {
-    const onDone = { onSuccess: () => setEditAgent(undefined) }
-    if (editAgent) agentM.update.mutate({ id: editAgent.id, body }, onDone)
-    else agentM.create.mutate(body, onDone)
+    const session = agentSession
+    if (!session) return
+    const options = sessionOptions(session.key, () =>
+      setAgentSession((current) => (current?.key === session.key ? undefined : current)),
+    )
+    if (session.item) agentM.update.mutate({ id: session.item.id, body }, options)
+    else agentM.create.mutate(body, options)
   }
 
   function saveModel(body: ModelProfileInput) {
-    const onDone = { onSuccess: () => setEditModel(undefined) }
-    if (editModel) modelM.update.mutate({ id: editModel.id, body }, onDone)
-    else modelM.create.mutate(body, onDone)
+    const session = modelSession
+    if (!session) return
+    const options = sessionOptions(session.key, () =>
+      setModelSession((current) => (current?.key === session.key ? undefined : current)),
+    )
+    if (session.item) modelM.update.mutate({ id: session.item.id, body }, options)
+    else modelM.create.mutate(body, options)
   }
 
   function addKey() {
@@ -65,13 +112,13 @@ export default function AgentSquarePage() {
 
   return (
     <div className="stack page-stack">
-      <header className="page-intro agents-intro">
+      <header className="page-intro agents-intro page-intro-compact">
         <div>
           <span className="eyebrow"><AppIcon name="users" size={14} aria-hidden="true" /> PERSONAS / CAPABILITY LAYER</span>
           <h1>把专业角色，<em>装配成研究团队。</em></h1>
           <p>管理 Agent 行为模板、模型档案与检索 Key 池，让每条工作流都能调用清晰、稳定、可复用的能力单元。</p>
         </div>
-        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="brain" size={54} strokeWidth={1.2} /></div>
+        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="brain" size={40} strokeWidth={1.2} /></div>
       </header>
 
       <div className="tabs agent-tabs" role="tablist" aria-label="角色广场分类">
@@ -98,21 +145,27 @@ export default function AgentSquarePage() {
               <span className="panel-kicker">AGENTS / 01</span>
               <h2 className="panel-title">角色</h2>
             </div>
-            <button className="btn btn-primary" onClick={() => setEditAgent(null)}>
+            <button className="btn btn-primary" onClick={() => openAgentEditor(null)}>
               <AppIcon name="plus" size={15} aria-hidden="true" />
               新建角色
             </button>
           </div>
           <div className="panel-body">
+            {roles.isLoading && <Skeleton rows={2} />}
+            <BuiltinRoleGallery roles={roles.data ?? []} />
+
+            <div className="builtin-rail-head custom-follow">
+              <div>
+                <span className="panel-kicker"><AppIcon name="user-cog" size={12} aria-hidden="true" /> CUSTOM / AGENTS</span>
+                <h3 className="builtin-rail-title">自定义角色</h3>
+              </div>
+            </div>
             <p className="hint catalog-description">
               数据驱动的角色：选一种行为模板，自定义提示词与绑定模型。启用的角色可被工作流按标识引用。
             </p>
 
             {agents.isLoading && <Skeleton rows={4} />}
             {agents.isError && <p className="error-text"><AppIcon name="circle-x" size={14} aria-hidden="true" />{errMsg(agents.error)}</p>}
-            {agents.data && agents.data.length === 0 && (
-              <p className="muted">还没有自定义角色。新建一个，或继续使用内置角色（planner / researcher 等）。</p>
-            )}
 
             <div className="card-grid">
               {agents.data?.map((a) => (
@@ -136,7 +189,7 @@ export default function AgentSquarePage() {
                         <AppIcon name={a.enabled ? 'eye-off' : 'eye'} size={13} aria-hidden="true" />
                         {a.enabled ? '停用' : '启用'}
                       </button>
-                      <button className="btn ghost small" onClick={() => setEditAgent(a)}>
+                      <button className="btn ghost small" onClick={() => openAgentEditor(a)}>
                         <AppIcon name="edit" size={13} aria-hidden="true" /> 编辑
                       </button>
                       <button
@@ -166,7 +219,7 @@ export default function AgentSquarePage() {
               <span className="panel-kicker">MODELS / 02</span>
               <h2 className="panel-title">模型档案</h2>
             </div>
-            <button className="btn btn-primary" onClick={() => setEditModel(null)}>
+            <button className="btn btn-primary" onClick={() => openModelEditor(null)}>
               <AppIcon name="plus" size={15} aria-hidden="true" />
               新建档案
             </button>
@@ -184,7 +237,7 @@ export default function AgentSquarePage() {
                 <ModelProfileCard
                   key={p.id}
                   profile={p}
-                  onEdit={() => setEditModel(p)}
+                  onEdit={() => openModelEditor(p)}
                   onDelete={() => {
                     if (confirm(`删除模型档案「${p.name}」？绑定它的角色将回退默认档案。`)) {
                       modelM.remove.mutate(p.id)
@@ -267,35 +320,25 @@ export default function AgentSquarePage() {
         </section>
       )}
 
-      {editAgent !== undefined && (
+      {agentSession !== undefined && (
         <AgentCardEditor
-          initial={editAgent}
+          key={agentSession.key}
+          initial={agentSession.item}
           profiles={profiles}
           onSubmit={saveAgent}
-          onCancel={() => setEditAgent(undefined)}
-          pending={agentM.create.isPending || agentM.update.isPending}
-          error={
-            agentM.create.isError
-              ? errMsg(agentM.create.error)
-              : agentM.update.isError
-                ? errMsg(agentM.update.error)
-                : undefined
-          }
+          onCancel={() => setAgentSession(undefined)}
+          pending={savingSessionKey === agentSession.key}
+          error={saveErrors[agentSession.key]}
         />
       )}
-      {editModel !== undefined && (
+      {modelSession !== undefined && (
         <ModelProfileEditor
-          initial={editModel}
+          key={modelSession.key}
+          initial={modelSession.item}
           onSubmit={saveModel}
-          onCancel={() => setEditModel(undefined)}
-          pending={modelM.create.isPending || modelM.update.isPending}
-          error={
-            modelM.create.isError
-              ? errMsg(modelM.create.error)
-              : modelM.update.isError
-                ? errMsg(modelM.update.error)
-                : undefined
-          }
+          onCancel={() => setModelSession(undefined)}
+          pending={savingSessionKey === modelSession.key}
+          error={saveErrors[modelSession.key]}
         />
       )}
     </div>

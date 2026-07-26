@@ -29,6 +29,7 @@ import {
   buildRoutedEdgePath,
   canConnectNodes,
   layoutWorkflowNodes,
+  mergeDraggedNodePositions,
   primaryComponentKeys,
   workflowPathKeys,
 } from './workflowCanvasLogic'
@@ -491,11 +492,14 @@ export default function WorkflowFlowCanvas(props: Props) {
       viewport={props.viewport}
       onViewportChange={props.onViewportChange}
       onNodesChange={onNodesChange}
-      onNodeDragStop={(_, draggedNode) => {
-        props.onPositionsChange({
-          ...props.positions,
-          [draggedNode.id]: draggedNode.position,
-        })
+      onNodeDragStop={(_, draggedNode, draggedNodes) => {
+        // 多选整体拖动时第三参数才包含全部被拖节点，只存锚点会让其余节点被同步 effect 弹回旧坐标。
+        props.onPositionsChange(
+          mergeDraggedNodePositions(
+            props.positions,
+            draggedNodes.length ? draggedNodes : [draggedNode],
+          ),
+        )
       }}
       onConnect={connect}
       isValidConnection={(connection) =>

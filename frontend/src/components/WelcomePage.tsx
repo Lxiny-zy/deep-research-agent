@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { AppIcon } from './AppIcon'
 import WelcomeTelemetrySection from './WelcomeTelemetrySection'
+import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 
 interface Props {
   onEnter: () => void
@@ -8,6 +9,7 @@ interface Props {
 
 export default function WelcomePage({ onEnter }: Props) {
   const stageRef = useRef<HTMLElement>(null)
+  useRevealOnScroll(stageRef)
 
   useEffect(() => {
     const stage = stageRef.current
@@ -76,7 +78,10 @@ export default function WelcomePage({ onEnter }: Props) {
         </div>
         <div className="welcome-copy">
           <span className="welcome-kicker"><AppIcon name="sparkles" size={14} aria-hidden="true" /> 欢迎来到 Lxiny 的项目空间</span>
-          <h1><span>让多个 Agent</span><span className="headline-accent">像团队一样研究。</span></h1>
+          <h1>
+            <span className="headline-line"><span className="headline-line-inner">让多个 Agent</span></span>
+            <span className="headline-line"><span className="headline-line-inner headline-accent">像团队一样研究。</span></span>
+          </h1>
           <p>
             一个面向复杂任务的深度研究系统：支持规划、并行检索、反思补充、证据汇总，
             并提供可视化工作流画布来自由编排角色、分支与汇聚关系。
@@ -117,9 +122,9 @@ export default function WelcomePage({ onEnter }: Props) {
       </section>
 
       <section className="welcome-capabilities" id="capabilities">
-        <article><b>01</b><strong>复杂任务研究</strong><p>从问题拆解到带引用报告，保留完整研究链路。</p><AppIcon name="file-search" size={21} aria-hidden="true" /></article>
-        <article><b>02</b><strong>多 Agent 编排</strong><p>可视化配置串行、并行、条件、汇聚与反思控制。</p><AppIcon name="waypoints" size={21} aria-hidden="true" /></article>
-        <article><b>03</b><strong>模型与角色治理</strong><p>模型档案、角色模板、连接测试和故障转移统一管理。</p><AppIcon name="users" size={21} aria-hidden="true" /></article>
+        <article data-reveal="1"><b>01</b><strong>复杂任务研究</strong><p>从问题拆解到带引用报告，保留完整研究链路。</p><AppIcon name="file-search" size={21} aria-hidden="true" /></article>
+        <article data-reveal="2"><b>02</b><strong>多 Agent 编排</strong><p>可视化配置串行、并行、条件、汇聚与反思控制。</p><AppIcon name="waypoints" size={21} aria-hidden="true" /></article>
+        <article data-reveal="3"><b>03</b><strong>模型与角色治理</strong><p>模型档案、角色模板、连接测试和故障转移统一管理。</p><AppIcon name="users" size={21} aria-hidden="true" /></article>
       </section>
       <WelcomeTelemetrySection />
     </main>

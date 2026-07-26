@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Skeleton from '../components/Skeleton'
 import { AppIcon } from '../components/AppIcon'
+import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { useModels, useSearchKeys } from '../hooks/useCatalog'
 import { useConfig, useUpdateConfig } from '../hooks/useConfig'
 import type { ConfigUpdate, ConfigView } from '../types'
@@ -64,7 +65,7 @@ function EffectiveConfig({ config }: { config: ConfigView }) {
         : '未配置'
 
   return (
-    <div className="panel">
+    <div className="panel" data-reveal="1">
       <div className="row between">
         <h3 className="panel-title">当前生效配置</h3>
         <Link to="/agents" className="nav-link inline-link">
@@ -91,7 +92,9 @@ function EffectiveConfig({ config }: { config: ConfigView }) {
 }
 
 export default function SettingsPage() {
+  const pageRef = useRef<HTMLDivElement>(null)
   const { data, isLoading, isError, error } = useConfig()
+  useRevealOnScroll(pageRef, [data])
   const update = useUpdateConfig()
   const [form, setForm] = useState<FormState | null>(null)
   const [editingGlobalKey, setEditingGlobalKey] = useState(false)
@@ -129,18 +132,18 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="stack page-stack">
-      <header className="page-intro settings-intro">
+    <div className="stack page-stack" ref={pageRef}>
+      <header className="page-intro settings-intro page-intro-compact intro-unveil">
         <div>
           <span className="eyebrow"><AppIcon name="settings" size={14} aria-hidden="true" /> SYSTEM / SETTINGS</span>
           <h1>让研究按照<em>你的规则</em>运行。</h1>
           <p>管理默认模型、并行策略与反思预算。全局设置是长期偏好，单次研究仍可在新建页覆盖。</p>
         </div>
-        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="sliders" size={54} strokeWidth={1.2} /></div>
+        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="sliders" size={40} strokeWidth={1.2} /></div>
       </header>
       {data && <EffectiveConfig config={data} />}
 
-      <div className="panel">
+      <div className="panel" data-reveal="2">
         <h3 className="panel-title">研究行为默认值</h3>
         <p className="hint" style={{ marginBottom: 18 }}>
           修改后持久化到服务端,对此后创建的研究生效（单次研究亦可在新建页临时覆盖）。

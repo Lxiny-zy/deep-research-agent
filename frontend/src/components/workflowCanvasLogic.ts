@@ -92,6 +92,21 @@ export function allocateSemanticNodeIds(nodeIds: Iterable<string>): {
 
 export type CanvasPosition = { x: number; y: number }
 
+/**
+ * Merge the final position of every dragged node into the persisted map.
+ * Multi-selection drags (Shift 框选 / Ctrl 加选) move several nodes at once,
+ * so persisting only the anchor node would snap the others back on sync.
+ */
+export function mergeDraggedNodePositions(
+  positions: Record<string, CanvasPosition>,
+  draggedNodes: { id: string; position: CanvasPosition }[],
+): Record<string, CanvasPosition> {
+  return {
+    ...positions,
+    ...Object.fromEntries(draggedNodes.map((node) => [node.id, node.position])),
+  }
+}
+
 export type RoutableEdge = {
   id: string
   source: string

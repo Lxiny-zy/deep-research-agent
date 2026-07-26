@@ -5,6 +5,7 @@ import {
   buildRoutedEdgePath,
   canConnectNodes,
   layoutWorkflowNodes,
+  mergeDraggedNodePositions,
   primaryComponentKeys,
   workflowPathKeys,
 } from './workflowCanvasLogic'
@@ -321,6 +322,32 @@ describe('workflow canvas interaction logic', () => {
     )
 
     expect([...related].sort()).toEqual(['a', 'b', 'd'])
+  })
+
+  it('persists every node of a multi-selection drag, not just the anchor', () => {
+    const merged = mergeDraggedNodePositions(
+      { a: { x: 0, y: 0 }, b: { x: 300, y: 0 }, c: { x: 600, y: 0 } },
+      [
+        { id: 'a', position: { x: 40, y: 160 } },
+        { id: 'b', position: { x: 340, y: 160 } },
+      ],
+    )
+
+    expect(merged).toEqual({
+      a: { x: 40, y: 160 },
+      b: { x: 340, y: 160 },
+      c: { x: 600, y: 0 },
+    })
+  })
+
+  it('merges a single-node drag without touching other persisted positions', () => {
+    const positions = { a: { x: 0, y: 0 }, b: { x: 300, y: 0 } }
+    const merged = mergeDraggedNodePositions(positions, [
+      { id: 'b', position: { x: 320, y: 90 } },
+    ])
+
+    expect(merged).toEqual({ a: { x: 0, y: 0 }, b: { x: 320, y: 90 } })
+    expect(positions.b).toEqual({ x: 300, y: 0 })
   })
 
   it('lays a DAG out by execution depth and separates parallel nodes', () => {

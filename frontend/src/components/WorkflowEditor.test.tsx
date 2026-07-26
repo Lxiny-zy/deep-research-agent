@@ -123,4 +123,31 @@ describe('WorkflowEditor persistence', () => {
 
     expect(onSubmit.mock.calls[0][0].edges).toEqual([initial.edges[0]])
   })
+
+  it('shows role duty descriptions in the library and tolerates roles without one', () => {
+    const describedRoles = [
+      {
+        name: 'researcher',
+        label: '研究员',
+        description: '对子问题并行检索网络，只保留通过程序验证的发现。',
+        icon: '',
+        builtin: true,
+      },
+      { name: 'synthesizer', label: 'Synthesizer', icon: '', builtin: true, produces_report: true },
+    ]
+    const { container, getByText } = render(
+      <WorkflowEditor
+        initial={initial}
+        roles={describedRoles}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+
+    expect(getByText('对子问题并行检索网络，只保留通过程序验证的发现。')).toBeInTheDocument()
+    // 无描述的角色不渲染空描述行；有描述的按钮带完整 title 提示
+    expect(container.querySelectorAll('.role-item-desc')).toHaveLength(1)
+    const described = container.querySelector<HTMLButtonElement>('button[title]')
+    expect(described?.title).toBe('对子问题并行检索网络，只保留通过程序验证的发现。')
+  })
 })

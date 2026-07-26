@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { useResearchStream, type ResearchStreamState } from '../hooks/useResearchStream'
 import { useRunDetail } from '../hooks/useRuns'
@@ -121,5 +121,31 @@ describe('RunPage database synchronization', () => {
     renderRunPage()
 
     expect(screen.getByTestId('status')).toHaveTextContent('done')
+  })
+
+  it('toggles the report between the weighted two-column and full-width layout', () => {
+    useResearchStreamMock.mockReturnValue(makeStream('idle'))
+    useRunDetailMock.mockReturnValue({
+      data: makeDetail('done', 'complete'),
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+
+    const { container } = renderRunPage()
+
+    const grid = container.querySelector('.grid-2')
+    expect(grid).not.toBeNull()
+    expect(grid).not.toHaveClass('report-expanded')
+
+    const toggle = screen.getByRole('button', { name: '全宽阅读' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toggle)
+
+    expect(grid).toHaveClass('report-expanded')
+    expect(screen.getByRole('button', { name: '双栏视图' })).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: '双栏视图' }))
+    expect(grid).not.toHaveClass('report-expanded')
   })
 })

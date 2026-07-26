@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import StatusBadge from '../components/StatusBadge'
+import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { useBatchDeleteRuns, useDeleteRun, useRunsList, useTags } from '../hooks/useRuns'
 import type { RunStatus } from '../types'
 
@@ -16,6 +17,8 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
 ]
 
 export default function HistoryPage() {
+  const pageRef = useRef<HTMLDivElement>(null)
+  useRevealOnScroll(pageRef)
   const [offset, setOffset] = useState(0)
   const [status, setStatus] = useState('')
   const [qInput, setQInput] = useState('')
@@ -81,17 +84,17 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="stack page-stack">
-      <header className="page-intro history-intro">
+    <div className="stack page-stack" ref={pageRef}>
+      <header className="page-intro history-intro page-intro-compact intro-unveil">
         <div>
           <span className="eyebrow"><AppIcon name="history" size={14} aria-hidden="true" /> ARCHIVE / RUN LOG</span>
           <h1>研究记录，<em>保持可回放。</em></h1>
           <p>按问题、状态或标签检索每一次运行。完整链路、引用与产出都在这里留下痕迹。</p>
         </div>
-        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="orbit" size={54} strokeWidth={1.2} /></div>
+        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="orbit" size={40} strokeWidth={1.2} /></div>
       </header>
 
-      <section className="panel filter-panel">
+      <section className="panel filter-panel" data-reveal="1">
         <div className="panel-header">
           <div>
             <span className="panel-kicker">FILTER / 01</span>
@@ -138,7 +141,7 @@ export default function HistoryPage() {
         </div>
       </section>
 
-      <section className="panel history-list-panel">
+      <section className="panel history-list-panel" data-reveal="2">
         <div className="panel-header history-list-header">
           <div>
             <span className="panel-kicker">RUNS / {String(rows.length).padStart(2, '0')}</span>

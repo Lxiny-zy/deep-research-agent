@@ -748,15 +748,17 @@ input[type="radio"]:checked {
   border-color: var(--accent-primary) !important;
 }
 
+/* 勾选标记：纯 CSS 绘制（两段边框旋转 45 度），不依赖字符/表情符号 */
 input[type="checkbox"]:checked::after {
-  content: '✓';
+  content: '';
   position: absolute;
-  top: 50%;
+  top: 45%;
   left: 50%;
-  transform: translate(-50%, -50%);
-  color: #09090b;
-  font-size: 12px;
-  font-weight: bold;
+  width: 8px;
+  height: 4px;
+  border-left: 2px solid #09090b;
+  border-bottom: 2px solid #09090b;
+  transform: translate(-50%, -50%) rotate(-45deg);
 }
 
 input[type="radio"] {

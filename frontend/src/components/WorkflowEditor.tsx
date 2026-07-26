@@ -340,6 +340,7 @@ export default function WorkflowEditor({
                   key={role.name}
                   className="workflow-role-item"
                   draggable
+                  title={role.description || undefined}
                   onDragStart={(event) => {
                     event.dataTransfer.effectAllowed = 'copy'
                     event.dataTransfer.setData('agent-role', role.name)
@@ -350,6 +351,7 @@ export default function WorkflowEditor({
                   <span>
                     <strong>{role.label}</strong>
                     <small>{role.name}{role.builtin ? ' · 内置' : ' · 自定义'}</small>
+                    {role.description && <small className="role-item-desc">{role.description}</small>}
                   </span>
                    <span className="role-add"><AppIcon name="plus" size={15} aria-hidden="true" /></span>
                 </button>

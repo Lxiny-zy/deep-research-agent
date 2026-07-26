@@ -207,6 +207,7 @@ export interface WorkflowDefInput {
 export interface RoleInfo {
   name: string
   label: string
+  description?: string
   icon: string
   builtin: boolean
   produces_report?: boolean

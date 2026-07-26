@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import SettingsPanel from '../components/SettingsPanel'
+import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { createRun, listWorkflows } from '../api/client'
 import type { ResearchParams, WorkflowInfo } from '../types'
 
@@ -14,6 +15,8 @@ const SAMPLES = [
 
 export default function NewResearchPage() {
   const navigate = useNavigate()
+  const pageRef = useRef<HTMLDivElement>(null)
+  useRevealOnScroll(pageRef)
   const [searchParams] = useSearchParams()
   const [query, setQuery] = useState(DEFAULT_QUERY)
   const [params, setParams] = useState<ResearchParams>({})
@@ -23,15 +26,21 @@ export default function NewResearchPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // stale 标记：连续导航或组件卸载后，旧请求的迟到响应不得覆盖新选择。
+    let stale = false
     const preferred = searchParams.get('workflow')
     listWorkflows()
       .then((items) => {
+        if (stale) return
         setWorkflows(items)
         const match = preferred ? items.find((item) => item.name === preferred) : undefined
         const defaultWorkflow = match ?? items.find((item) => item.default === 'True') ?? items[0]
         if (defaultWorkflow) setWorkflow(defaultWorkflow.name)
       })
       .catch(() => {})
+    return () => {
+      stale = true
+    }
   }, [searchParams])
 
   async function start() {
@@ -52,8 +61,8 @@ export default function NewResearchPage() {
   const activeWorkflow = workflows.find((item) => item.name === workflow)
 
   return (
-    <div className="stack page-stack">
-      <header className="page-intro composer-intro">
+    <div className="stack page-stack" ref={pageRef}>
+      <header className="page-intro composer-intro page-intro-compact intro-unveil">
         <div>
           <span className="eyebrow"><AppIcon name="sparkles" size={14} aria-hidden="true" /> STUDIO / NEW RESEARCH</span>
           <h1>把一个问题，<em>研究透彻。</em></h1>
@@ -62,11 +71,11 @@ export default function NewResearchPage() {
         <div className="intro-orbit" aria-hidden="true">
           <span className="intro-orbit-ring ring-one" />
           <span className="intro-orbit-ring ring-two" />
-          <span className="intro-orbit-core"><AppIcon name="network" size={28} /></span>
+          <span className="intro-orbit-core"><AppIcon name="network" size={20} /></span>
         </div>
       </header>
 
-      <section className="panel research-composer">
+      <section className="panel research-composer" data-reveal="1">
         <div className="panel-header">
           <div>
             <span className="panel-kicker">PROMPT / 01</span>
