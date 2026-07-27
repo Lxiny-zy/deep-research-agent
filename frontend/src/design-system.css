@@ -2453,7 +2453,10 @@ button.cite-ref:hover {
   cursor: default;
 }
 
-/* 证据侧栏：贴在报告面板右缘的抽屉（面板本身 overflow:hidden，天然裁切） */
+/* 证据侧栏：贴在报告面板右缘的抽屉（面板本身 overflow:hidden，天然裁切）。
+   .evidence-drawer 是撑满面板高度的 rail；.evidence-drawer-inner 承接实际的
+   flex 布局。双栏模式下面板定高，inner 自然填满 rail；全宽阅读模式下面板高度
+   随长报告增长，inner 改 sticky 吸附视口，避免滚动时侧栏被推出视野。 */
 .evidence-drawer {
   position: absolute;
   top: 0;
@@ -2461,12 +2464,16 @@ button.cite-ref:hover {
   bottom: 0;
   z-index: 6;
   width: min(400px, 94%);
+  animation: evidence-slide-in 0.18s ease;
+}
+
+.evidence-drawer-inner {
   display: flex;
   flex-direction: column;
+  height: 100%;
   border-left: 1px solid var(--border-primary);
   background: rgba(16, 20, 29, 0.98);
   box-shadow: -18px 0 44px rgba(0, 0, 0, 0.35);
-  animation: evidence-slide-in 0.18s ease;
 }
 
 @keyframes evidence-slide-in {

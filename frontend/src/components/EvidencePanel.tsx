@@ -144,36 +144,40 @@ export default function EvidencePanel({
 
   return (
     <aside className="evidence-drawer" role="dialog" aria-label={`引用 ${citation} 的证据`}>
-      <div className="evidence-drawer-head">
-        <div className="evidence-drawer-title">
-          <span className="cite-ref inert">[{citation}]</span>
-          <a
-            className="evidence-source"
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            title={url}
-          >
-            {hostOf(url)}
-            <AppIcon name="external" size={12} aria-hidden="true" />
-          </a>
+      {/* 外层 aside 作为撑满报告面板高度的 rail；inner 在全宽阅读模式下 sticky
+          吸附视口，避免长报告滚动时侧栏被推出视野（双栏模式 inner 自然填满 rail）。 */}
+      <div className="evidence-drawer-inner">
+        <div className="evidence-drawer-head">
+          <div className="evidence-drawer-title">
+            <span className="cite-ref inert">[{citation}]</span>
+            <a
+              className="evidence-source"
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              title={url}
+            >
+              {hostOf(url)}
+              <AppIcon name="external" size={12} aria-hidden="true" />
+            </a>
+          </div>
+          <button type="button" className="btn ghost sm" onClick={onClose} aria-label="关闭证据侧栏">
+            <AppIcon name="x" size={14} aria-hidden="true" />
+          </button>
         </div>
-        <button type="button" className="btn ghost sm" onClick={onClose} aria-label="关闭证据侧栏">
-          <AppIcon name="x" size={14} aria-hidden="true" />
-        </button>
-      </div>
-      <div className="evidence-drawer-body">
-        {findings.length === 0 ? (
-          <p className="muted small">该来源暂无结构化证据记录。</p>
-        ) : (
-          findings.map((f, i) => (
-            <EvidenceCard
-              key={f.verification.claim_id || `${f.source_url}-${i}`}
-              finding={f}
-              allFindings={allFindings}
-            />
-          ))
-        )}
+        <div className="evidence-drawer-body">
+          {findings.length === 0 ? (
+            <p className="muted small">该来源暂无结构化证据记录。</p>
+          ) : (
+            findings.map((f, i) => (
+              <EvidenceCard
+                key={f.verification.claim_id || `${f.source_url}-${i}`}
+                finding={f}
+                allFindings={allFindings}
+              />
+            ))
+          )}
+        </div>
       </div>
     </aside>
   )

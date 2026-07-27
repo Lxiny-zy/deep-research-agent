@@ -944,6 +944,14 @@ select option { background: #151914; color: var(--text-primary); }
   .grid-2.report-expanded > .stack { display: none; }
   .grid-2.report-expanded > .report-panel { position: relative; top: 0; height: auto; max-height: none; }
   .grid-2.report-expanded > .report-panel.is-streaming { height: min(78vh, 900px); }
+  /* 全宽阅读模式下面板随长报告增高、整页滚动；把侧栏 inner 从 height:100%
+     改为 sticky 吸附视口，内部自行滚动，避免侧栏跟着长面板滚出视野。 */
+  .grid-2.report-expanded .evidence-drawer-inner {
+    position: sticky;
+    top: calc(var(--header-height) + 18px);
+    height: auto;
+    max-height: calc(100vh - var(--header-height) - 48px);
+  }
 }
 
 @media (max-width: 1024px) {
