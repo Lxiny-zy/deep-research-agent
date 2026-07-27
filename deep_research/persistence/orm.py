@@ -121,6 +121,8 @@ class FindingRow(Base):
     verification_status: Mapped[str] = mapped_column(String(16), default="unverified")
     verification_method: Mapped[str] = mapped_column(String(32), default="none")
     source_content_hash: Mapped[str] = mapped_column(String(64), default="")
+    source_title: Mapped[str] = mapped_column(Text, default="")
+    evidence_context: Mapped[str] = mapped_column(Text, default="")
     verification_reason: Mapped[str] = mapped_column(Text, default="")
     semantic_status: Mapped[str] = mapped_column(String(16), default="not_checked")
     semantic_confidence: Mapped[float] = mapped_column(Float, default=0.0)
@@ -200,9 +202,7 @@ class WorkflowRunRow(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    research_run_id: Mapped[str] = mapped_column(
-        ForeignKey("research_run.id", ondelete="CASCADE")
-    )
+    research_run_id: Mapped[str] = mapped_column(ForeignKey("research_run.id", ondelete="CASCADE"))
     workflow_name: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(20))
     input: Mapped[dict] = mapped_column(JSON, default=dict)

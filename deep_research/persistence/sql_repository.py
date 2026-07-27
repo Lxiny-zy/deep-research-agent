@@ -59,6 +59,8 @@ def _research_result_row(run_id: str, result: ResearchResult) -> orm.ResearchRes
             verification_status=finding.verification.status,
             verification_method=finding.verification.method,
             source_content_hash=finding.verification.source_content_hash,
+            source_title=finding.verification.source_title,
+            evidence_context=finding.verification.evidence_context,
             verification_reason=finding.verification.reason,
             semantic_status=finding.verification.semantic_status,
             semantic_confidence=finding.verification.semantic_confidence,
@@ -133,14 +135,10 @@ class SqlRepository:
         if not cast("CursorResult[Any]", result).rowcount:
             raise LeaseLostError(f"run {run_id} lease is no longer owned by this worker")
         return await s.scalar(
-            select(orm.WorkflowRunRow).where(
-                orm.WorkflowRunRow.research_run_id == run_id
-            )
+            select(orm.WorkflowRunRow).where(orm.WorkflowRunRow.research_run_id == run_id)
         )
 
-    async def set_status(
-        self, run_id: str, status: str, *, lease_owner: str | None = None
-    ) -> None:
+    async def set_status(self, run_id: str, status: str, *, lease_owner: str | None = None) -> None:
         async with self._sm() as s, s.begin():
             await self._owned_workflow_row(s, run_id, lease_owner)
             run = await s.get(orm.ResearchRun, run_id)
@@ -218,6 +216,8 @@ class SqlRepository:
                         verification_status=f.verification.status,
                         verification_method=f.verification.method,
                         source_content_hash=f.verification.source_content_hash,
+                        source_title=f.verification.source_title,
+                        evidence_context=f.verification.evidence_context,
                         verification_reason=f.verification.reason,
                         semantic_status=f.verification.semantic_status,
                         semantic_confidence=f.verification.semantic_confidence,
@@ -263,9 +263,7 @@ class SqlRepository:
                 sa_delete(orm.SubQuestionRow).where(orm.SubQuestionRow.run_id == run_id)
             )
             await s.execute(
-                sa_delete(orm.ResearchResultRow).where(
-                    orm.ResearchResultRow.run_id == run_id
-                )
+                sa_delete(orm.ResearchResultRow).where(orm.ResearchResultRow.run_id == run_id)
             )
             await s.execute(sa_delete(orm.ReportRow).where(orm.ReportRow.run_id == run_id))
 
@@ -349,9 +347,7 @@ class SqlRepository:
             row.started_at = execution.started_at
             row.finished_at = execution.finished_at
             await s.execute(
-                sa_delete(orm.StepRunRow).where(
-                    orm.StepRunRow.workflow_run_id == workflow_run_id
-                )
+                sa_delete(orm.StepRunRow).where(orm.StepRunRow.workflow_run_id == workflow_run_id)
             )
             for idx, step in enumerate(execution.steps):
                 s.add(
@@ -535,6 +531,8 @@ class SqlRepository:
                                 status=f.verification_status,
                                 method=f.verification_method,
                                 source_content_hash=f.source_content_hash,
+                                source_title=f.source_title,
+                                evidence_context=f.evidence_context,
                                 reason=f.verification_reason,
                                 semantic_status=f.semantic_status,
                                 semantic_confidence=f.semantic_confidence,

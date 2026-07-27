@@ -16,6 +16,8 @@ function makeFinding(over: {
   contradicts_claim_ids?: string[]
   contradiction_reason?: string
   source_content_hash?: string
+  source_title?: string
+  evidence_context?: string
 }): Finding {
   return {
     statement: over.statement,
@@ -26,6 +28,8 @@ function makeFinding(over: {
       status: over.status ?? 'verified',
       method: 'normalized_quote',
       source_content_hash: over.source_content_hash ?? 'deadbeefcafebabe0123456789',
+      source_title: over.source_title,
+      evidence_context: over.evidence_context,
       reason: '',
       semantic_status: 'supported',
       semantic_confidence: 0.9,
@@ -58,6 +62,9 @@ const FINDINGS: Finding[] = [
     evidence_quote: 'GPU shipments hit a record high in Q4',
     claim_id: 'claim-1',
     source_content_hash: 'abcdef1234567890fedcba',
+    source_title: 'GPU Market Quarterly',
+    evidence_context:
+      'After several flat quarters, GPU shipments hit a record high in Q4 as demand recovered.',
   }),
   makeFinding({
     statement: '整机功耗持续上升',
@@ -78,7 +85,7 @@ const FINDINGS: Finding[] = [
 ]
 
 describe('ReportView 可审计证据链', () => {
-  it('点击 [1] 打开证据侧栏并显示对应逐字 quote、验证徽章与哈希缩写', async () => {
+  it('点击 [1] 打开证据侧栏并显示检索上下文、原文匹配状态与哈希缩写', async () => {
     const user = userEvent.setup()
     render(
       <ReportView
@@ -94,10 +101,88 @@ describe('ReportView 可审计证据链', () => {
     await user.click(cite1)
 
     const drawer = within(screen.getByRole('dialog', { name: '引用 1 的证据' }))
-    expect(drawer.getByText('GPU shipments hit a record high in Q4')).toBeInTheDocument()
+    expect(drawer.getByText(/After several flat quarters/)).toBeInTheDocument()
+    expect(drawer.getByText('GPU shipments hit a record high in Q4')).toHaveProperty(
+      'tagName',
+      'MARK',
+    )
     expect(drawer.getByText('GPU 出货量创下历史新高')).toBeInTheDocument()
-    expect(drawer.getByText('verified')).toBeInTheDocument()
+    expect(drawer.getByText('GPU Market Quarterly')).toBeInTheDocument()
+    expect(drawer.getByText('原文匹配')).toBeInTheDocument()
+    expect(drawer.getByText('语义支持 · 模型判定')).toBeInTheDocument()
+    expect(drawer.getByText('未检测到冲突')).toBeInTheDocument()
     expect(drawer.getByText(/hash abcdef1234/)).toBeInTheDocument()
+  })
+
+  it('切换引用时保持侧栏打开、更新来源并把证据列表滚动位置复位', async () => {
+    const user = userEvent.setup()
+    render(
+      <ReportView
+        markdown={MARKDOWN}
+        streaming={false}
+        findings={FINDINGS}
+        citations={CITATIONS}
+      />,
+    )
+
+    const [cite1] = screen.getAllByRole('button', { name: '查看引用 1 的证据' })
+    await user.click(cite1)
+    expect(cite1).toHaveAttribute('aria-expanded', 'true')
+
+    const body = screen.getByRole('dialog').querySelector('.evidence-drawer-body')
+    expect(body).not.toBeNull()
+    if (body) body.scrollTop = 200
+
+    const [cite2] = screen.getAllByRole('button', { name: '查看引用 2 的证据' })
+    await user.click(cite2)
+
+    expect(screen.getByRole('dialog', { name: '引用 2 的证据' })).toBeInTheDocument()
+    expect(screen.getByText('整机功耗持续上升')).toBeInTheDocument()
+    expect(body).toHaveProperty('scrollTop', 0)
+    expect(screen.getAllByRole('button', { name: '查看引用 2 的证据' })[0]).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+  })
+
+  it('Escape 关闭证据栏并把焦点还给触发引用', async () => {
+    const user = userEvent.setup()
+    render(
+      <ReportView
+        markdown={MARKDOWN}
+        streaming={false}
+        findings={FINDINGS}
+        citations={CITATIONS}
+      />,
+    )
+
+    const [cite1] = screen.getAllByRole('button', { name: '查看引用 1 的证据' })
+    await user.click(cite1)
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(cite1).toHaveFocus()
+  })
+
+  it('旧运行没有上下文时明确降级为已验证摘录', async () => {
+    const user = userEvent.setup()
+    render(
+      <ReportView
+        markdown={MARKDOWN}
+        streaming={false}
+        findings={FINDINGS.map((finding) => ({
+          ...finding,
+          verification: { ...finding.verification, evidence_context: undefined },
+        }))}
+        citations={CITATIONS}
+      />,
+    )
+
+    const [cite1] = screen.getAllByRole('button', { name: '查看引用 1 的证据' })
+    await user.click(cite1)
+
+    expect(screen.getByText('旧记录未保存上下文')).toBeInTheDocument()
+    expect(screen.getByText('GPU shipments hit a record high in Q4')).toBeInTheDocument()
   })
 
   it('conflicted 论断在侧栏中渲染矛盾徽章与反向 claim 链接', async () => {
@@ -125,7 +210,7 @@ describe('ReportView 可审计证据链', () => {
     )
   })
 
-  it('概览条统计正确：论断 / verified / conflicted / 来源拦截数', () => {
+  it('概览条分开展示论断、原文匹配、语义支持、冲突与来源拦截数', () => {
     render(
       <ReportView
         markdown={MARKDOWN}
@@ -136,9 +221,10 @@ describe('ReportView 可审计证据链', () => {
       />,
     )
 
-    expect(screen.getByTestId('evidence-claims')).toHaveTextContent('3 论断')
-    expect(screen.getByTestId('evidence-verified')).toHaveTextContent('2 verified')
-    expect(screen.getByTestId('evidence-conflicted')).toHaveTextContent('1 conflicted')
+    expect(screen.getByTestId('evidence-records')).toHaveTextContent('3 证据记录')
+    expect(screen.getByTestId('evidence-verbatim')).toHaveTextContent('2 原文匹配')
+    expect(screen.getByTestId('evidence-supported')).toHaveTextContent('2 语义支持')
+    expect(screen.getByTestId('evidence-conflicted')).toHaveTextContent('1 存在冲突')
     expect(screen.getByTestId('evidence-blocked')).toHaveTextContent('4 来源被拦截')
   })
 

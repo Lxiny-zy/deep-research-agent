@@ -171,9 +171,7 @@ def test_source_policy_treats_url_separators_as_word_breaks(url: str) -> None:
         ),
     ],
 )
-def test_source_policy_allows_benign_lookalike_content(
-    title: str, url: str, content: str
-) -> None:
+def test_source_policy_allows_benign_lookalike_content(title: str, url: str, content: str) -> None:
     """每类修复对应的正常内容反例：不得因规则扩展而被误拦。"""
     decision = SourcePolicy().evaluate(Source(title=title, url=url, content=content))
     assert decision.verdict == "allow"
@@ -182,6 +180,7 @@ def test_source_policy_allows_benign_lookalike_content(
 
 def test_evidence_verifier_promotes_only_verbatim_quote() -> None:
     source = Source(
+        title="Annual report",
         url="https://example.com",
         content="Revenue increased by 25 percent in 2025 according to the annual report.",
     )
@@ -198,7 +197,29 @@ def test_evidence_verifier_promotes_only_verbatim_quote() -> None:
     assert check.finding is not None
     assert check.finding.verification.status == "verified"
     assert check.finding.verification.source_content_hash
+    assert check.finding.verification.source_title == "Annual report"
+    assert check.finding.evidence_quote in check.finding.verification.evidence_context
     assert check.finding.verification.reason == "quote_found_in_source"
+
+
+def test_evidence_verifier_context_uses_original_text_after_normalized_match() -> None:
+    source = Source(
+        title="Full-width typography",
+        url="https://example.com/normalized",
+        content="背景说明。Ｒｅｖｅｎｕｅ   increased by 25 percent。后续说明。",
+    )
+    candidate = Finding(
+        statement="Revenue increased.",
+        source_url=source.url,
+        evidence_quote="revenue increased by 25 percent",
+    )
+
+    check = EvidenceVerifier().verify(candidate, source)
+
+    assert check.accepted is True
+    assert check.finding is not None
+    assert check.finding.evidence_quote == "Ｒｅｖｅｎｕｅ   increased by 25 percent"
+    assert "后续说明" in check.finding.verification.evidence_context
 
 
 def test_evidence_verifier_rejects_model_paraphrase() -> None:

@@ -1,4 +1,4 @@
-import { useMemo, useState, type AnchorHTMLAttributes } from 'react'
+import { useCallback, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -14,7 +14,7 @@ import EvidencePanel from './EvidencePanel'
 
 // 可审计报告视图：
 // - [n] 引用渲染为可点击角标（有匹配 findings 时），点击打开证据侧栏；
-// - 报告头部证据链概览条：N 论断 / M verified / K conflicted / 来源拦截数；
+// - 报告头部证据链概览条分开展示原文匹配、语义支持、冲突与来源拦截；
 //   拦截数来自事件流 source_policy 审计事件，拿不到时降级只显示前三项并注明。
 // 流式阶段 findings/citations 可能为空——引用降级为不可点击的普通角标，不显示概览条。
 export default function ReportView({
@@ -31,11 +31,15 @@ export default function ReportView({
   blockedSources?: number | null
 }) {
   const [activeCitation, setActiveCitation] = useState<number | null>(null)
-  const targets = useMemo(
-    () => resolveCitationTargets(markdown, citations),
-    [markdown, citations],
-  )
+  const activeCitationRef = useRef(activeCitation)
+  activeCitationRef.current = activeCitation
+  const citationTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const targets = useMemo(() => resolveCitationTargets(markdown, citations), [markdown, citations])
   const overview = useMemo(() => summarizeEvidence(findings), [findings])
+  const closeEvidence = useCallback(() => {
+    setActiveCitation(null)
+    citationTriggerRef.current?.focus()
+  }, [])
 
   const components = useMemo<Components>(
     () => ({
@@ -58,10 +62,16 @@ export default function ReportView({
         return (
           <button
             type="button"
-            className="cite-ref"
+            className={`cite-ref${activeCitationRef.current === n ? ' active' : ''}`}
             title={url}
             aria-label={`查看引用 ${n} 的证据`}
-            onClick={() => setActiveCitation((prev) => (prev === n ? null : n))}
+            aria-controls="evidence-panel"
+            aria-expanded={activeCitationRef.current === n}
+            aria-pressed={activeCitationRef.current === n}
+            onClick={(event) => {
+              citationTriggerRef.current = event.currentTarget
+              setActiveCitation(n)
+            }}
           >
             {children}
           </button>
@@ -83,20 +93,24 @@ export default function ReportView({
   const activeFindings = findingsForUrl(findings, activeUrl)
 
   return (
-    <>
+    <div className={`report-view${activeCitation != null ? ' has-evidence' : ''}`}>
       {findings.length > 0 && (
         <div className="evidence-overview" data-testid="evidence-overview">
-          <span className="evidence-stat" data-testid="evidence-claims">
+          <span className="evidence-stat" data-testid="evidence-records">
             <AppIcon name="file-search" size={13} aria-hidden="true" />
-            <b>{overview.claims}</b> 论断
+            <b>{overview.records}</b> 证据记录
           </span>
-          <span className="evidence-stat verified" data-testid="evidence-verified">
+          <span className="evidence-stat verified" data-testid="evidence-verbatim">
             <AppIcon name="shield" size={13} aria-hidden="true" />
-            <b>{overview.verified}</b> verified
+            <b>{overview.verbatimMatched}</b> 原文匹配
+          </span>
+          <span className="evidence-stat supported" data-testid="evidence-supported">
+            <AppIcon name="check-circle" size={13} aria-hidden="true" />
+            <b>{overview.semanticallySupported}</b> 语义支持
           </span>
           <span className="evidence-stat conflicted" data-testid="evidence-conflicted">
             <AppIcon name="alert" size={13} aria-hidden="true" />
-            <b>{overview.conflicted}</b> conflicted
+            <b>{overview.conflicted}</b> 存在冲突
           </span>
           {blockedSources != null ? (
             <span className="evidence-stat blocked" data-testid="evidence-blocked">
@@ -110,21 +124,24 @@ export default function ReportView({
           )}
         </div>
       )}
-      <div className="report markdown-content">
-        <Markdown remarkPlugins={[remarkGfm, remarkCitations]} components={components}>
-          {markdown}
-        </Markdown>
-        {streaming && <span className="cursor">▍</span>}
+      <div className="report-view-body">
+        <div className="report markdown-content">
+          <Markdown remarkPlugins={[remarkGfm, remarkCitations]} components={components}>
+            {markdown}
+          </Markdown>
+          {streaming && <span className="cursor">▍</span>}
+        </div>
+        {activeCitation != null && activeUrl && (
+          <EvidencePanel
+            id="evidence-panel"
+            citation={activeCitation}
+            url={activeUrl}
+            findings={activeFindings}
+            allFindings={findings}
+            onClose={closeEvidence}
+          />
+        )}
       </div>
-      {activeCitation != null && activeUrl && (
-        <EvidencePanel
-          citation={activeCitation}
-          url={activeUrl}
-          findings={activeFindings}
-          allFindings={findings}
-          onClose={() => setActiveCitation(null)}
-        />
-      )}
-    </>
+    </div>
   )
 }

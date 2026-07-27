@@ -935,27 +935,47 @@ select option { background: #151914; color: var(--text-primary); }
 .grid-2 { display: grid; grid-template-columns: minmax(330px, 0.8fr) minmax(0, 1.2fr); gap: 18px; align-items: start; }
 .grid-2 > .stack { min-width: 0; }
 .report-panel-tools { flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
-.report-view { scrollbar-gutter: stable; }
+.report-view-body > .report, .evidence-drawer-body { scrollbar-gutter: stable; }
 /* 流式输出时容器保持固定高度，内部滚动，避免报告增长导致布局跳动 */
 .grid-2 > .report-panel.is-streaming { height: min(68vh, 680px); max-height: none; }
 
 @media (min-width: 1025px) {
   .grid-2.report-expanded { grid-template-columns: minmax(0, 1fr); }
   .grid-2.report-expanded > .stack { display: none; }
-  .grid-2.report-expanded > .report-panel { position: relative; top: 0; height: auto; max-height: none; }
+  .grid-2.report-expanded > .report-panel { position: relative; top: 0; height: auto; max-height: none; overflow: visible; }
   .grid-2.report-expanded > .report-panel.is-streaming { height: min(78vh, 900px); }
-  /* 全宽阅读模式下面板随长报告增高、整页滚动；把侧栏 inner 从 height:100%
-     改为 sticky 吸附视口，内部自行滚动，避免侧栏跟着长面板滚出视野。 */
-  .grid-2.report-expanded .evidence-drawer-inner {
+  .grid-2.report-expanded .report-view,
+  .grid-2.report-expanded .report-view-body { overflow: visible; }
+  .grid-2.report-expanded .report-view.has-evidence .report-view-body {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
+    gap: 18px;
+    align-items: start;
+  }
+  .grid-2.report-expanded .report-view-body > .report { overflow: visible; padding-right: 12px; }
+  .grid-2.report-expanded .evidence-drawer {
     position: sticky;
     top: calc(var(--header-height) + 18px);
-    height: auto;
+    right: auto;
+    bottom: auto;
+    width: auto;
+    height: calc(100vh - var(--header-height) - 48px);
     max-height: calc(100vh - var(--header-height) - 48px);
+    align-self: start;
+  }
+  .grid-2.report-expanded .evidence-drawer-inner {
+    height: 100%;
+    border: 1px solid var(--border-primary);
   }
 }
 
 @media (max-width: 1024px) {
   .report-expand-toggle { display: none; }
+}
+
+@media (min-width: 761px) and (max-width: 1180px) {
+  .run-columns { grid-template-columns: minmax(0, 1fr); }
+  .run-columns > .stack { max-height: none; overflow: visible; }
+  .run-columns > .report-panel { position: relative; top: 0; height: min(78vh, 900px); max-height: none; }
 }
 .timeline { position: relative; max-height: 430px; overflow: auto; padding: 0 8px 0 0; }
 .timeline::before { display: none; }

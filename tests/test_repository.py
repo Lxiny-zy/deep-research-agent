@@ -85,6 +85,8 @@ async def test_crud_roundtrip(repo):
                         status="verified",
                         method="normalized_quote",
                         source_content_hash="abc123",
+                        source_title="Annual report",
+                        evidence_context="Context before verbatim source evidence and after.",
                         reason="quote_found_in_source",
                         semantic_status="supported",
                         semantic_confidence=0.87,
@@ -124,6 +126,11 @@ async def test_crud_roundtrip(repo):
     assert detail.results[0].findings[0].evidence_quote == "verbatim source evidence"
     assert detail.results[0].findings[0].verification.status == "verified"
     assert detail.results[0].findings[0].verification.source_content_hash == "abc123"
+    assert detail.results[0].findings[0].verification.source_title == "Annual report"
+    assert (
+        detail.results[0].findings[0].verification.evidence_context
+        == "Context before verbatim source evidence and after."
+    )
     assert detail.results[0].findings[0].verification.semantic_status == "supported"
     assert detail.results[0].findings[0].verification.semantic_confidence == 0.87
     assert detail.results[0].findings[0].verification.claim_id == "claim-a"
@@ -185,9 +192,7 @@ async def test_lease_fences_writes_after_ownership_changes(repo):
         {"query": "lease fencing", "scratch": {}},
         {"name": "deep", "steps": []},
     )
-    run_id = await repo.create_run(
-        "lease fencing", execution=execution, lease_owner="worker-a"
-    )
+    run_id = await repo.create_run("lease fencing", execution=execution, lease_owner="worker-a")
 
     await repo.set_status(run_id, "running", lease_owner="worker-a")
     assert await repo.acquire_lease(run_id, "worker-b") is False
@@ -367,6 +372,58 @@ async def test_prepare_sqlite_schema_creates_tables_for_memory_urls(database_url
 
 
 @pytest.mark.asyncio
+async def test_prepare_sqlite_schema_accepts_current_create_all_database(tmp_path):
+    db_path = tmp_path / "current-create-all.db"
+    database_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
+    engine = make_engine(database_url)
+    await create_all(engine)
+    repo = SqlRepository(make_sessionmaker(engine))
+    run_id = await repo.create_run("current create_all data")
+    await repo.save_result(
+        run_id,
+        ResearchResult(
+            sub_question="preserve evidence",
+            findings=[
+                Finding(
+                    statement="Existing evidence survives schema preparation.",
+                    source_url="https://example.com/existing",
+                    evidence_quote="existing quote",
+                    verification=EvidenceVerification(
+                        status="verified",
+                        method="normalized_quote",
+                        source_content_hash="existing-hash",
+                        source_title="Existing source",
+                        evidence_context="Context around the existing quote.",
+                        reason="quote_found_in_source",
+                    ),
+                )
+            ],
+        ),
+    )
+
+    await prepare_sqlite_schema(engine, database_url)
+
+    verification_engine = make_engine(database_url)
+    try:
+        async with verification_engine.begin() as conn:
+            columns = await conn.run_sync(
+                lambda sync_conn: {
+                    column["name"] for column in inspect(sync_conn).get_columns("finding")
+                }
+            )
+            version = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+        detail = await SqlRepository(make_sessionmaker(verification_engine)).get_run(run_id)
+        assert {"source_title", "evidence_context"} <= columns
+        assert version == "0015"
+        assert detail is not None
+        verification = detail.results[0].findings[0].verification
+        assert verification.source_title == "Existing source"
+        assert verification.evidence_context == "Context around the existing quote."
+    finally:
+        await verification_engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_does_not_create_future_orm_tables(tmp_path):
     future_table = sa.Table(
         "future_table_after_0014",
@@ -462,6 +519,8 @@ async def test_prepare_sqlite_schema_repairs_legacy_finding_columns(tmp_path):
                         status="verified",
                         method="normalized_quote",
                         source_content_hash="hash",
+                        source_title="Legacy source",
+                        evidence_context="Legacy context around legacy quote.",
                         reason="ok",
                         semantic_status="supported",
                         semantic_confidence=0.9,
@@ -477,10 +536,15 @@ async def test_prepare_sqlite_schema_repairs_legacy_finding_columns(tmp_path):
     assert detail is not None
     assert detail.results[0].findings[0].evidence_quote == "legacy quote"
     assert detail.results[0].findings[0].verification.claim_id == "c1"
+    assert detail.results[0].findings[0].verification.source_title == "Legacy source"
+    assert (
+        detail.results[0].findings[0].verification.evidence_context
+        == "Legacy context around legacy quote."
+    )
 
     async with engine.begin() as conn:
         version = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-    assert version == "0014"
+    assert version == "0015"
     await engine.dispose()
 
 
@@ -578,14 +642,9 @@ async def test_prepare_sqlite_schema_reconciles_falsely_stamped_head(tmp_path):
             )
         )
         await conn.execute(
-            text(
-                "CREATE TABLE alembic_version "
-                "(version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
-            )
+            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
         )
-        await conn.execute(
-            text("INSERT INTO alembic_version (version_num) VALUES ('0013')")
-        )
+        await conn.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0013')"))
 
     await prepare_sqlite_schema(engine, database_url)
 
@@ -593,9 +652,7 @@ async def test_prepare_sqlite_schema_reconciles_falsely_stamped_head(tmp_path):
         schema = await conn.run_sync(
             lambda sync_conn: {
                 "model": {c["name"] for c in inspect(sync_conn).get_columns("model_profile")},
-                "workflow": {
-                    c["name"] for c in inspect(sync_conn).get_columns("workflow_def")
-                },
+                "workflow": {c["name"] for c in inspect(sync_conn).get_columns("workflow_def")},
                 "unique": inspect(sync_conn).get_unique_constraints("sub_question"),
             }
         )
@@ -603,10 +660,7 @@ async def test_prepare_sqlite_schema_reconciles_falsely_stamped_head(tmp_path):
         repaired_indexes = list(
             (
                 await conn.execute(
-                    text(
-                        "SELECT idx FROM sub_question "
-                        "WHERE run_id = 'run-1' ORDER BY idx"
-                    )
+                    text("SELECT idx FROM sub_question WHERE run_id = 'run-1' ORDER BY idx")
                 )
             ).scalars()
         )
@@ -617,7 +671,7 @@ async def test_prepare_sqlite_schema_reconciles_falsely_stamped_head(tmp_path):
         set(constraint.get("column_names") or []) == {"run_id", "idx"}
         for constraint in schema["unique"]
     )
-    assert version == "0014"
+    assert version == "0015"
     assert repaired_indexes == [0, 1]
     await engine.dispose()
 

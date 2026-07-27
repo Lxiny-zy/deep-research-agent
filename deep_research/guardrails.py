@@ -40,9 +40,7 @@ class SourcePolicy:
     # 零宽字符/软连字符常被塞进规则词中间拆词绕过（如 ig​nore）。
     # 检测前统一剥离；集合覆盖 U+200B/200C/200D（零宽空格/连接符）、
     # U+2060（词连接符）、U+FEFF（BOM/零宽不换行空格）、U+00AD（软连字符）。
-    _ZERO_WIDTH_TRANSLATION = dict.fromkeys(
-        map(ord, "​‌‍⁠﻿­")
-    )
+    _ZERO_WIDTH_TRANSLATION = dict.fromkeys(map(ord, "​‌‍⁠﻿­"))
     _INJECTION_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         (
             "ignore_previous_instructions",
@@ -183,9 +181,7 @@ class SourcePolicy:
                 # 英文规则词间只认 \s+ 会漏检。仅对 URL 通道追加把 -/_ 视作
                 # 词分隔的变体文本；正文规则不变，正文中的连字符复合词
                 # （如 state-of-the-art）不受影响。
-                queue.extend(
-                    text.replace("-", " ").replace("_", " ") for text in list(queue)
-                )
+                queue.extend(text.replace("-", " ").replace("_", " ") for text in list(queue))
             decoded_parts.extend(queue)
         return "\n".join(dict.fromkeys([*parts, *decoded_parts]))
 
@@ -218,22 +214,26 @@ class EvidenceVerifier:
         if len(normalized_quote) < self.min_quote_chars:
             return EvidenceCheck(False, "evidence_quote_too_short")
 
-        normalized_content = _normalize_text(source.content)
-        if normalized_quote not in normalized_content:
+        quote_span = _normalized_span(source.content, quote)
+        if quote_span is None:
             return EvidenceCheck(False, "evidence_quote_not_found")
 
+        quote_start, quote_end = quote_span
+        matched_quote = source.content[quote_start:quote_end].strip()
         content_hash = hashlib.sha256(source.content.encode("utf-8")).hexdigest()
         verification = EvidenceVerification(
             status="verified",
             method="normalized_quote",
             source_content_hash=content_hash,
+            source_title=source.title,
+            evidence_context=_evidence_context(source.content, quote_start, quote_end),
             reason="quote_found_in_source",
         )
         return EvidenceCheck(
             True,
             "verified",
             finding.model_copy(
-                update={"evidence_quote": quote, "verification": verification}, deep=True
+                update={"evidence_quote": matched_quote, "verification": verification}, deep=True
             ),
         )
 
@@ -469,6 +469,73 @@ async def verify_claim_consistency(
 def _normalize_text(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return " ".join(normalized.split())
+
+
+def _normalized_span(content: str, quote: str) -> tuple[int, int] | None:
+    """Locate a normalized quote while retaining offsets into the original content."""
+    exact_start = content.find(quote)
+    if exact_start >= 0:
+        return exact_start, exact_start + len(quote)
+
+    normalized_content, offsets = _normalize_with_offsets(content)
+    normalized_quote = _normalize_text(quote)
+    normalized_start = normalized_content.find(normalized_quote)
+    if normalized_start < 0 or not normalized_quote:
+        return None
+    normalized_end = normalized_start + len(normalized_quote) - 1
+    return offsets[normalized_start], offsets[normalized_end] + 1
+
+
+def _normalize_with_offsets(value: str) -> tuple[str, list[int]]:
+    chars: list[str] = []
+    offsets: list[int] = []
+    for raw_index, raw_char in enumerate(value):
+        normalized_char = unicodedata.normalize("NFKC", raw_char).casefold()
+        for char in normalized_char:
+            if char.isspace():
+                if chars and chars[-1] != " ":
+                    chars.append(" ")
+                    offsets.append(raw_index)
+                continue
+            chars.append(char)
+            offsets.append(raw_index)
+    if chars and chars[-1] == " ":
+        chars.pop()
+        offsets.pop()
+    return "".join(chars), offsets
+
+
+def _evidence_context(content: str, quote_start: int, quote_end: int) -> str:
+    """Return a bounded source window around the verified quote."""
+    max_chars = 900
+    padding = 320
+    start = max(0, quote_start - padding)
+    end = min(len(content), quote_end + padding)
+
+    before = content[start:quote_start]
+    boundary = before.rfind("\n")
+    if boundary >= 0:
+        start += boundary + 1
+
+    after = content[quote_end:end]
+    boundary = after.find("\n")
+    if boundary >= 0:
+        end = quote_end + boundary
+
+    if end - start > max_chars:
+        quote_length = quote_end - quote_start
+        remaining = max(0, max_chars - quote_length)
+        left = min(quote_start - start, remaining // 2)
+        right = min(end - quote_end, remaining - left)
+        start = quote_start - left
+        end = quote_end + right
+
+    context = content[start:end].strip()
+    if start > 0:
+        context = f"...{context}"
+    if end < len(content):
+        context = f"{context}..."
+    return context
 
 
 def _is_valid_public_hostname(hostname: str) -> bool:

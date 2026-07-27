@@ -41,10 +41,14 @@ class EvidenceVerification(BaseModel):
     status: Literal["unverified", "verified"] = "unverified"
     method: Literal["none", "normalized_quote"] = "none"
     source_content_hash: str = ""
-    reason: str = ""
-    semantic_status: Literal["not_checked", "supported", "unsupported", "uncertain"] = (
-        "not_checked"
+    source_title: str = ""
+    evidence_context: str = Field(
+        "",
+        max_length=1200,
+        description="程序从检索快照中截取的证据上下文，不由模型生成",
     )
+    reason: str = ""
+    semantic_status: Literal["not_checked", "supported", "unsupported", "uncertain"] = "not_checked"
     semantic_confidence: float = Field(0.0, ge=0.0, le=1.0)
     semantic_reason: str = ""
     claim_id: str = ""

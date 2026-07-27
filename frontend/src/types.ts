@@ -50,6 +50,8 @@ export interface Finding {
     status: 'unverified' | 'verified'
     method: 'none' | 'normalized_quote'
     source_content_hash: string
+    source_title?: string
+    evidence_context?: string
     reason: string
     semantic_status: 'not_checked' | 'supported' | 'unsupported' | 'uncertain'
     semantic_confidence: number

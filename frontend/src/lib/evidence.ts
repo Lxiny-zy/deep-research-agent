@@ -1,6 +1,6 @@
 // 证据链前端逻辑（可审计报告）：
 // - remarkCitations：把报告正文里的 [n] 引用文本转成可拦截的 link 节点（#cite-n）；
-// - 概览统计：N 论断 / M verified / K conflicted；
+// - 概览统计：N 论断 / M 原文匹配 / S 语义支持 / K 冲突；
 // - 来源拦截数：解析事件流中 RESEARCHER 发出的 source_policy 审计事件
 //   （与 EventTimeline 相同的事件消费方式，直播与历史回放均可用）；
 // - 引用序号 → 来源 URL：优先 report.citations，缺失时从「## 参考来源」回退解析。
@@ -77,19 +77,24 @@ export function flattenFindings(results: ResearchResult[] | null | undefined): F
 }
 
 export interface EvidenceOverview {
-  claims: number
-  verified: number
+  records: number
+  verbatimMatched: number
+  semanticallySupported: number
   conflicted: number
 }
 
 export function summarizeEvidence(findings: Finding[]): EvidenceOverview {
-  let verified = 0
+  let verbatimMatched = 0
+  let semanticallySupported = 0
   let conflicted = 0
   for (const f of findings) {
-    if (f.verification.status === 'verified') verified += 1
+    if (f.verification.status === 'verified') verbatimMatched += 1
+    if (f.verification.status === 'verified' && f.verification.semantic_status === 'supported') {
+      semanticallySupported += 1
+    }
     if (f.verification.consistency_status === 'conflicted') conflicted += 1
   }
-  return { claims: findings.length, verified, conflicted }
+  return { records: findings.length, verbatimMatched, semanticallySupported, conflicted }
 }
 
 /**
@@ -114,10 +119,7 @@ export function countBlockedSources(events: ResearchEvent[]): number | null {
  * 优先使用已落库的 report.citations；流式阶段没有时从 markdown 尾部的
  * 「## 参考来源」列表回退解析（格式：`[n] url`）。
  */
-export function resolveCitationTargets(
-  markdown: string,
-  citations?: string[] | null,
-): string[] {
+export function resolveCitationTargets(markdown: string, citations?: string[] | null): string[] {
   if (citations && citations.length > 0) return [...citations]
   const targets: string[] = []
   for (const match of markdown.matchAll(/^\[(\d{1,3})\]\s+(\S+)\s*$/gm)) {
