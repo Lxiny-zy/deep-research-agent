@@ -30,6 +30,7 @@ interface FormState {
   max_concurrency: number
   results_per_search: number
   request_timeout: number
+  require_corroboration: boolean
 }
 
 function toForm(c: ConfigView): FormState {
@@ -42,6 +43,7 @@ function toForm(c: ConfigView): FormState {
     max_concurrency: c.max_concurrency,
     results_per_search: c.results_per_search,
     request_timeout: c.request_timeout,
+    require_corroboration: c.require_corroboration ?? false,
   }
 }
 
@@ -121,6 +123,7 @@ export default function SettingsPage() {
       max_concurrency: form.max_concurrency,
       results_per_search: form.results_per_search,
       request_timeout: form.request_timeout,
+      require_corroboration: form.require_corroboration,
     }
     if (editingGlobalKey && form.llm_api_key.trim()) body.llm_api_key = form.llm_api_key.trim()
     update.mutate(body, {
@@ -210,6 +213,30 @@ export default function SettingsPage() {
                   value={form.request_timeout}
                   onChange={(e) => setNum('request_timeout', e.target.value)}
                 />
+              </label>
+              <label className="safety-gate-setting global-gate">
+                <span className="safety-gate-heading">
+                  <AppIcon name="shield" size={18} aria-hidden="true" />
+                  <span className="safety-gate-copy">
+                    <strong>严格双源门禁</strong>
+                    <small id="global-corroboration-help">
+                      开启后，仅允许至少两个独立来源交叉印证且无冲突的论断进入报告。
+                    </small>
+                  </span>
+                </span>
+                <span className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-label="严格双源门禁"
+                    aria-describedby="global-corroboration-help"
+                    checked={form.require_corroboration}
+                    onChange={(event) =>
+                      setForm({ ...form, require_corroboration: event.target.checked })
+                    }
+                  />
+                  <span className="toggle-track" aria-hidden="true" />
+                </span>
               </label>
             </div>
 

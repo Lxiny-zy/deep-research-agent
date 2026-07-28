@@ -4,6 +4,7 @@ import { AppIcon } from '../components/AppIcon'
 import SettingsPanel from '../components/SettingsPanel'
 import { BUILTIN_TEMPLATE_META } from '../components/BuiltinTemplateGallery'
 import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
+import { useConfig } from '../hooks/useConfig'
 import { createRun, listWorkflows } from '../api/client'
 import type { ResearchParams, WorkflowInfo } from '../types'
 
@@ -16,6 +17,7 @@ const SAMPLES = [
 
 export default function NewResearchPage() {
   const navigate = useNavigate()
+  const { data: config } = useConfig()
   const pageRef = useRef<HTMLDivElement>(null)
   useRevealOnScroll(pageRef)
   const [searchParams] = useSearchParams()
@@ -121,7 +123,11 @@ export default function NewResearchPage() {
             </label>
           )}
 
-          <SettingsPanel value={params} onChange={setParams} />
+          <SettingsPanel
+            value={params}
+            onChange={setParams}
+            globalRequireCorroboration={config?.require_corroboration ?? false}
+          />
 
           <div className="submit-panel research-submit-panel">
             <div className="submit-context">

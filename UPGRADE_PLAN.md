@@ -50,6 +50,11 @@ SourcePolicy → EvidenceVerifier → ClaimConsistencyVerifier 链可脱离 orch
 中文把字句语序、URL 连字符路径),随后在 SourcePolicy 中以归一化 + 规则扩展修复并配防误报
 反例测试——"用对抗评测发现并修复绕过"本身即是面试叙事。
 
+**V2 已完成(2026-07-28)**：增加多来源交叉印证门禁与 4 组关系对抗场景。关系模型只提出候选，
+程序按 registrable domain 去重独立发布方并让矛盾优先；有效佐证传播 **3/3 = 100%**，同发布方
+子域/IDN 别名与直接/关联冲突绕过拦截 **4/4 = 100%**。前端支持全局及 per-run 严格双源开关，
+证据侧栏展示 `single_source / corroborated / disputed` 状态和反向来源链接。
+
 ## 升级项 3:Chaos 恢复演示——kill -9 后死而复生(约 1 天)
 
 **一句话卖点**:研究跑一半强杀进程,重启后 X 秒内自动接管续跑,断点续跑节省 Y% token。

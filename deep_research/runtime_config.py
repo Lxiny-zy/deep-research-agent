@@ -30,6 +30,7 @@ EDITABLE_FIELDS: tuple[str, ...] = (
     "max_rounds",
     "max_concurrency",
     "results_per_search",
+    "require_corroboration",
     "request_timeout",
 )
 

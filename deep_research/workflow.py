@@ -92,16 +92,14 @@ def _merge_parallel_value(base: Any, current: Any, branch: Any) -> Any:
     if base is not _MISSING and branch == base:
         return current
 
-    if isinstance(branch, dict) and (
-        base is _MISSING or isinstance(base, dict)
-    ) and (current is _MISSING or isinstance(current, dict)):
-        base_dict: dict[Any, Any] = (
-            {} if base is _MISSING else cast("dict[Any, Any]", base)
-        )
+    if (
+        isinstance(branch, dict)
+        and (base is _MISSING or isinstance(base, dict))
+        and (current is _MISSING or isinstance(current, dict))
+    ):
+        base_dict: dict[Any, Any] = {} if base is _MISSING else cast("dict[Any, Any]", base)
         merged: dict[Any, Any] = (
-            {}
-            if current is _MISSING
-            else deepcopy(cast("dict[Any, Any]", current))
+            {} if current is _MISSING else deepcopy(cast("dict[Any, Any]", current))
         )
         keys = dict.fromkeys([*base_dict.keys(), *branch.keys()])
         for key in keys:
@@ -117,9 +115,7 @@ def _merge_parallel_value(base: Any, current: Any, branch: Any) -> Any:
         return merged
 
     if isinstance(branch, list) and (base is _MISSING or isinstance(base, list)):
-        base_list: list[Any] = (
-            [] if base is _MISSING else cast("list[Any]", base)
-        )
+        base_list: list[Any] = [] if base is _MISSING else cast("list[Any]", base)
         if len(branch) >= len(base_list) and branch[: len(base_list)] == base_list:
             additions = branch[len(base_list) :]
             if current is _MISSING:
@@ -174,9 +170,7 @@ def _merge_parallel_sequence(base: list[Any], current: list[Any], branch: list[A
     return merged
 
 
-def _merge_parallel_blackboard(
-    base: Blackboard, current: Blackboard, branch: Blackboard
-) -> None:
+def _merge_parallel_blackboard(base: Blackboard, current: Blackboard, branch: Blackboard) -> None:
     if branch.query != base.query:
         current.query = branch.query
     if branch.plan != base.plan:
@@ -286,9 +280,7 @@ def validate_workflow(
         if step.fallback_agent and step.fallback_agent not in available_roles:
             errors.append(f"第 {i} 步引用未注册 fallback 角色：{step.fallback_agent}")
         if step.max_attempts > MAX_STEP_ATTEMPTS:
-            errors.append(
-                f"第 {i} 步重试次数 {step.max_attempts} 超上限 {MAX_STEP_ATTEMPTS}"
-            )
+            errors.append(f"第 {i} 步重试次数 {step.max_attempts} 超上限 {MAX_STEP_ATTEMPTS}")
         # 单步最坏退避：retry_backoff * (2^0 + 2^1 + … + 2^(max_attempts-2))，
         # 与引擎的指数退避实现（retry_backoff * 2**attempt）一致。
         worst_backoff += step.retry_backoff * (2 ** (step.max_attempts - 1) - 1)
@@ -642,9 +634,7 @@ class WorkflowEngine:
             )
         }
         active_nodes.update(
-            node_id
-            for node_id, step in restored.items()
-            if step.status == StepStatus.SUCCEEDED
+            node_id for node_id, step in restored.items() if step.status == StepStatus.SUCCEEDED
         )
         successful_nodes.update(
             node_id for node_id, step in restored.items() if step.status == StepStatus.SUCCEEDED
@@ -777,7 +767,18 @@ class WorkflowEngine:
                     # skip the node and lose that output permanently.
                     merge_outcomes(settled)
                     raise
+                changed_result_branches = sum(
+                    active and child.results != layer_base.results for child, active, _ in outcomes
+                )
                 merge_outcomes(list(outcomes))
+                if changed_result_branches > 1:
+                    await verify_claim_consistency(
+                        bb.results,
+                        ClaimConsistencyVerifier(),
+                        self.ctx.llm_for("evidence_verifier"),
+                        self.ctx.tracer,
+                        stage="ORCHESTRATOR",
+                    )
                 if is_root:
                     await self._checkpoint(wf, bb)
             if is_root and self._require_report and bb.report is None:
@@ -900,6 +901,7 @@ class WorkflowEngine:
             f"分派 {len(subtasks)} 个子团队并行研究",
             data={"teams": [t.focus for t in subtasks]},
         )
+
         # 团队级不再自建独立信号量：昂贵操作（检索/LLM）在各团队内部的 researcher
         # 处经 ctx.run_semaphore（run 级共享）统一限流，总并发不随团队数放大。
         # 也不得在此持共享信号量跨整个子流程——子流程内 researcher 会再取同一把锁，

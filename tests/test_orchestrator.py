@@ -7,7 +7,11 @@ from deep_research.catalog.dto import ModelProfileFull
 from deep_research.config import Settings
 from deep_research.llm import LLM
 from deep_research.models import Report, Source
-from deep_research.orchestrator import DeepResearchAgent
+from deep_research.orchestrator import (
+    RUN_SETTINGS_CHECKPOINT_KEY,
+    DeepResearchAgent,
+    create_initial_execution,
+)
 from tests.fakes import FakeLLM, FakeSearch
 
 
@@ -28,6 +32,17 @@ class _DefaultProfileCatalog:
 
     async def get_workflow_def(self, name):  # type: ignore[no-untyped-def]
         return None
+
+
+def test_initial_execution_snapshots_corroboration_policy() -> None:
+    execution = create_initial_execution(
+        "Q",
+        "quick",
+        Settings(require_corroboration=True),
+    )
+
+    snapshot = execution.checkpoint["scratch"][RUN_SETTINGS_CHECKPOINT_KEY]
+    assert snapshot["require_corroboration"] is True
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,18 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if not raw or not raw.strip():
+        return default
+    normalized = raw.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 # 部分中转/网关前置 Cloudflare 等 WAF，会按 User-Agent 拦截 openai SDK 默认的
 # "OpenAI/Python ..."（Bot Fight Mode）。默认伪装成常见浏览器 UA 以放行，可经
 # LLM_USER_AGENT 覆盖（若上游无此限制可设任意值，不影响功能）。
@@ -72,6 +84,10 @@ class Settings:
     max_rounds: int = field(default_factory=lambda: _int_env("MAX_ROUNDS", 2))
     max_concurrency: int = field(default_factory=lambda: _int_env("MAX_CONCURRENCY", 4))
     results_per_search: int = field(default_factory=lambda: _int_env("RESULTS_PER_SEARCH", 5))
+    # 开启后，仅允许至少两个独立发布方交叉印证且无冲突的论断进入反思与最终报告。
+    require_corroboration: bool = field(
+        default_factory=lambda: _bool_env("REQUIRE_CORROBORATION", False)
+    )
 
     # 单次研究累计 token 预算上限（防反思/补洞无限烧）；None＝不限。引擎以 Tracer 累计为准，
     # 耗尽则跳过后续研究/反思但仍综合，产出尽力而为的部分报告而非报错。
@@ -92,6 +108,8 @@ class Settings:
             raise ValueError("max_concurrency 必须 >= 1")
         if self.results_per_search < 1:
             raise ValueError("results_per_search 必须 >= 1")
+        if not isinstance(self.require_corroboration, bool):
+            raise ValueError("require_corroboration must be a boolean")
         if self.max_tokens is not None and self.max_tokens < 1:
             raise ValueError("max_tokens 必须 >= 1 或为 None（不限）")
         if self.max_replans < 0:

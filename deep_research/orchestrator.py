@@ -58,13 +58,14 @@ _RUN_SETTING_FIELDS = (
     "max_rounds",
     "max_concurrency",
     "results_per_search",
+    "require_corroboration",
     "max_tokens",
     "max_replans",
     "request_timeout",
 )
 
 
-def checkpoint_settings(settings: Settings) -> dict[str, int | float | None]:
+def checkpoint_settings(settings: Settings) -> dict[str, bool | int | float | None]:
     """Serialize non-secret run behavior so recovery keeps the original limits."""
     return {name: getattr(settings, name) for name in _RUN_SETTING_FIELDS}
 
@@ -86,9 +87,7 @@ def workflow_catalog_roles(workflow: Workflow) -> set[str]:
                 roles.add(step.agent)
             if step.kind == "compose":
                 # Coordinator-generated workflows are restricted to these roles.
-                roles.update(
-                    ("planner", "researcher", "reflector", "synthesizer", "critic")
-                )
+                roles.update(("planner", "researcher", "reflector", "synthesizer", "critic"))
     roles.discard("")
     return roles
 
@@ -109,9 +108,7 @@ async def snapshot_catalog_for_execution(
     from .catalog.runtime import create_catalog_runtime_snapshot
 
     workflow = Workflow.model_validate(execution.definition)
-    snapshot = await create_catalog_runtime_snapshot(
-        catalog_repo, workflow_catalog_roles(workflow)
-    )
+    snapshot = await create_catalog_runtime_snapshot(catalog_repo, workflow_catalog_roles(workflow))
     scratch[RUN_CATALOG_CHECKPOINT_KEY] = snapshot.model_dump(mode="json")
 
 
@@ -230,9 +227,7 @@ class DeepResearchAgent:
         if existing_execution is not None:
             scratch = existing_execution.checkpoint.get("scratch", {})
             metrics = (
-                scratch.get(RUN_METRICS_CHECKPOINT_KEY, {})
-                if isinstance(scratch, dict)
-                else {}
+                scratch.get(RUN_METRICS_CHECKPOINT_KEY, {}) if isinstance(scratch, dict) else {}
             )
             if isinstance(metrics, dict):
                 try:
@@ -255,11 +250,7 @@ class DeepResearchAgent:
             settings.validate_llm()
         self._owns_llm = llm is None  # 自建的 client 由本实例负责关闭；注入的归调用方管
         tracer = self.tracer
-        self.llm = (
-            llm
-            if llm is not None
-            else _LazyOwnedLLM(lambda: LLM(settings, tracer))
-        )
+        self.llm = llm if llm is not None else _LazyOwnedLLM(lambda: LLM(settings, tracer))
         self._owns_search_tool = search_tool is None
         self.search_tool = (
             search_tool
@@ -322,9 +313,7 @@ class DeepResearchAgent:
             if self.repo is not None:
                 if run_id is None:
                     run_id = await self.repo.create_run(query)
-                await self.repo.set_status(
-                    run_id, "running", lease_owner=self._lease_owner
-                )
+                await self.repo.set_status(run_id, "running", lease_owner=self._lease_owner)
 
             self.tracer.emit("ORCHESTRATOR", "start", f"开始深度研究：{query}")
 
@@ -356,9 +345,7 @@ class DeepResearchAgent:
             self.tracer.emit("ORCHESTRATOR", "error", f"运行失败：{e}")
             if self.repo is not None and run_id is not None:
                 try:
-                    await self.repo.set_status(
-                        run_id, "error", lease_owner=self._lease_owner
-                    )
+                    await self.repo.set_status(run_id, "error", lease_owner=self._lease_owner)
                 except LeaseLostError:
                     # A successor owns the run now; never overwrite its state.
                     pass
@@ -452,9 +439,7 @@ class DeepResearchAgent:
 
         async def save_checkpoint(execution):  # type: ignore[no-untyped-def]
             if self.repo is not None and run_id is not None:
-                await self.repo.save_orchestration(
-                    run_id, execution, lease_owner=self._lease_owner
-                )
+                await self.repo.save_orchestration(run_id, execution, lease_owner=self._lease_owner)
 
         engine = WorkflowEngine(
             ctx,
@@ -496,8 +481,7 @@ class DeepResearchAgent:
                 if not isinstance(raw_round, dict):
                     continue
                 sub_questions = [
-                    SubQuestion.model_validate(item)
-                    for item in raw_round.get("sub_questions", [])
+                    SubQuestion.model_validate(item) for item in raw_round.get("sub_questions", [])
                 ]
                 reflection_rounds.append((int(raw_round.get("round", 0)), sub_questions))
             # The final derived artifacts are one unit. Replacing them in one

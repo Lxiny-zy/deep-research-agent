@@ -14,8 +14,8 @@ import EvidencePanel from './EvidencePanel'
 
 // 可审计报告视图：
 // - [n] 引用渲染为可点击角标（有匹配 findings 时），点击打开证据侧栏；
-// - 报告头部证据链概览条分开展示原文匹配、语义支持、冲突与来源拦截；
-//   拦截数来自事件流 source_policy 审计事件，拿不到时降级只显示前三项并注明。
+// - 报告头部证据链概览条分开展示原文匹配、语义支持、交叉印证、冲突与来源拦截；
+//   拦截数来自事件流 source_policy 审计事件，拿不到时保留其余统计并注明。
 // 流式阶段 findings/citations 可能为空——引用降级为不可点击的普通角标，不显示概览条。
 export default function ReportView({
   markdown,
@@ -107,6 +107,10 @@ export default function ReportView({
           <span className="evidence-stat supported" data-testid="evidence-supported">
             <AppIcon name="check-circle" size={13} aria-hidden="true" />
             <b>{overview.semanticallySupported}</b> 语义支持
+          </span>
+          <span className="evidence-stat corroborated" data-testid="evidence-corroborated">
+            <AppIcon name="merge" size={13} aria-hidden="true" />
+            <b>{overview.corroborated}</b> 已交叉印证
           </span>
           <span className="evidence-stat conflicted" data-testid="evidence-conflicted">
             <AppIcon name="alert" size={13} aria-hidden="true" />

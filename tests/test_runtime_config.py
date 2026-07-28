@@ -35,9 +35,25 @@ def test_apply_overrides_merges_and_validates():
     assert merged is not base
 
 
+def test_corroboration_gate_setting_is_editable():
+    merged = runtime_config.apply_overrides(
+        Settings(require_corroboration=False),
+        {"require_corroboration": True},
+    )
+    assert merged.require_corroboration is True
+
+
 def test_apply_overrides_rejects_invalid():
     with pytest.raises(ValueError):
         runtime_config.apply_overrides(Settings(), {"max_concurrency": 0})
+
+
+def test_corroboration_gate_rejects_non_boolean_override() -> None:
+    with pytest.raises(ValueError, match="must be a boolean"):
+        runtime_config.apply_overrides(
+            Settings(),
+            {"require_corroboration": "false"},
+        )
 
 
 def test_mask_secret():
@@ -54,6 +70,7 @@ def test_config_view_masks_keys():
     assert view.tavily_api_key_set is True
     # 明文绝不出现在脱敏视图
     assert "sk-secret-key-9999" not in view.model_dump_json()
+    assert view.require_corroboration is False
 
 
 def test_save_overrides_atomic_no_temp_leftover(tmp_path, monkeypatch):

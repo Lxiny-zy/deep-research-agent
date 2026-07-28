@@ -25,8 +25,45 @@ const SEMANTIC_BADGE: Record<
   uncertain: { label: '语义存疑 · 模型判定', cls: 'warning' },
 }
 
+const CORROBORATION_BADGE: Record<
+  Finding['verification']['corroboration_status'],
+  { label: string; cls: string }
+> = {
+  not_checked: { label: '交叉印证未检查', cls: 'warning' },
+  single_source: { label: '单一来源', cls: 'warning' },
+  corroborated: { label: '已交叉印证', cls: 'success' },
+  disputed: { label: '来源存在争议', cls: 'error' },
+}
+
+function corroborationExplanation(v: Finding['verification']): string {
+  const status = v.corroboration_status ?? 'not_checked'
+  const sourceCount = Math.max(0, v.independent_source_count ?? 0)
+  const fallback =
+    status === 'single_source'
+      ? '当前只有一个独立来源，尚未达到双源交叉印证要求。'
+      : status === 'corroborated'
+        ? `该论断已获得 ${sourceCount} 个独立来源支持。`
+        : status === 'disputed'
+          ? '独立来源对该论断存在分歧，请结合各来源原文复核。'
+          : '尚未执行独立来源交叉印证。'
+  const reason = v.corroboration_reason?.trim()
+  if (status === 'disputed') return fallback
+  if (
+    !reason ||
+    reason === 'no_independent_corroboration' ||
+    reason === 'independent_sources_corroborate_claim' ||
+    reason === 'contradiction_detected'
+  ) {
+    return fallback
+  }
+  return reason
+}
+
 function VerificationBadges({ v }: { v: Finding['verification'] }) {
   const semantic = SEMANTIC_BADGE[v.semantic_status]
+  const corroborationStatus = v.corroboration_status ?? 'not_checked'
+  const corroboration = CORROBORATION_BADGE[corroborationStatus]
+  const sourceCount = Math.max(0, v.independent_source_count ?? 0)
   return (
     <div className="evidence-badges">
       {v.status === 'verified' ? (
@@ -52,6 +89,15 @@ function VerificationBadges({ v }: { v: Finding['verification'] }) {
       >
         {semantic.label}
       </span>
+      <span className={`badge ${corroboration.cls}`} title={corroborationExplanation(v)}>
+        <AppIcon
+          name={corroborationStatus === 'disputed' ? 'alert' : 'merge'}
+          size={12}
+          aria-hidden="true"
+        />
+        {corroboration.label}
+        {corroborationStatus !== 'not_checked' && ` · ${sourceCount} 个独立来源`}
+      </span>
       {v.consistency_status === 'conflicted' && (
         <span className="badge error" title={v.contradiction_reason || undefined}>
           conflicted
@@ -63,6 +109,60 @@ function VerificationBadges({ v }: { v: Finding['verification'] }) {
           一致性未检查
         </span>
       )}
+    </div>
+  )
+}
+
+function CorroborationLinks({
+  finding,
+  allFindings,
+}: {
+  finding: Finding
+  allFindings: Finding[]
+}) {
+  const v = finding.verification
+  const status = v.corroboration_status ?? 'not_checked'
+  const claimIds = v.corroborates_claim_ids ?? []
+  if (status === 'not_checked' && claimIds.length === 0 && !v.corroboration_reason) return null
+  if (status === 'disputed' && claimIds.length === 0) return null
+
+  return (
+    <div className={`evidence-corroboration ${status}`}>
+      <span className="evidence-corroboration-title">
+        <AppIcon name={status === 'disputed' ? 'alert' : 'merge'} size={13} aria-hidden="true" />
+        {status === 'disputed' ? '争议来源关联' : '佐证来源关联'}
+      </span>
+      <span>{corroborationExplanation(v)}</span>
+      {claimIds.map((claimId) => {
+        const other = findingByClaimId(allFindings, claimId)
+        if (!other) {
+          return (
+            <div className="evidence-corroboration-claim" key={claimId}>
+              <span className="muted small">claim {claimId}（不在本次报告素材内）</span>
+            </div>
+          )
+        }
+        const sourceTitle = other.verification.source_title?.trim()
+        const sourceLabel = sourceTitle
+          ? `${sourceTitle} · ${hostOf(other.source_url)}`
+          : hostOf(other.source_url)
+        return (
+          <div className="evidence-corroboration-claim" key={claimId}>
+            <span>{other.statement}</span>
+            <a
+              className="evidence-source"
+              href={other.source_url}
+              target="_blank"
+              rel="noreferrer"
+              title={other.source_url}
+              aria-label={`打开佐证来源：${sourceLabel}`}
+            >
+              {sourceLabel}
+              <AppIcon name="external" size={11} aria-hidden="true" />
+            </a>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -150,6 +250,7 @@ function EvidenceCard({ finding, allFindings }: { finding: Finding; allFindings:
           hash {shortHash(hash)}…
         </span>
       )}
+      <CorroborationLinks finding={finding} allFindings={allFindings} />
       <ConflictLinks finding={finding} allFindings={allFindings} />
     </article>
   )

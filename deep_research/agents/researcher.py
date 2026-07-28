@@ -143,7 +143,14 @@ class Researcher:
         user_parts = [f"子问题：{sub_question}"]
         if context_findings:
             # 前驱子问题的发现仅作背景，帮助理解；不得作为本子问题新发现的来源
-            eligible_context = [f for f in context_findings if report_eligible(f)]
+            eligible_context = [
+                f
+                for f in context_findings
+                if report_eligible(
+                    f,
+                    require_corroboration=self.settings.require_corroboration,
+                )
+            ]
             prior = "\n".join(f"- {f.statement}" for f in eligible_context[:20])
             if prior:
                 user_parts.append(

@@ -55,6 +55,12 @@ class EvidenceVerification(BaseModel):
     consistency_status: Literal["not_checked", "clear", "conflicted"] = "not_checked"
     contradicts_claim_ids: list[str] = Field(default_factory=list)
     contradiction_reason: str = ""
+    corroboration_status: Literal["not_checked", "single_source", "corroborated", "disputed"] = (
+        "not_checked"
+    )
+    independent_source_count: int = Field(0, ge=0)
+    corroborates_claim_ids: list[str] = Field(default_factory=list)
+    corroboration_reason: str = ""
 
 
 class Finding(BaseModel):

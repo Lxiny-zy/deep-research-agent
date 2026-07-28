@@ -10,6 +10,12 @@
 - Added second-pass claim validation: deterministic quote checks remain the hard gate, while
   LLM-based semantic support checks and cross-claim contradiction markers constrain which
   findings can be used by Reflector and Synthesizer.
+- Added cross-source corroboration metadata and an optional strict two-source gate. Relationship
+  models only propose links; deterministic code validates confidence, claim identity, registrable
+  publisher domains, and conflict precedence before allowing corroborated claims into reports.
+- Added global and per-run strict-gate controls, evidence-panel corroboration links, an Alembic
+  migration for the new audit fields, and adversarial fixtures for same-publisher and conflict
+  bypass attempts.
 - Persisted evidence quotes, verification status/method, source-content hashes, and verification
   reasons with an Alembic migration and API schema support.
 - Persisted semantic support status, claim IDs, consistency status, contradiction links, and
@@ -58,9 +64,15 @@
 - API rate limiting is per-process and keyed on `client.host`, so it is ineffective behind a
   proxy without forwarded-for handling and does not aggregate across instances.
 - `save_sources` exists on the repository but has no caller yet.
+- Cross-source corroboration establishes independent publisher support, not truth: syndication,
+  coordinated SEO pages, and incorrect but mutually consistent sources remain open risks.
 
 ### Fixed
 
+- Made strict corroboration fail closed for IDN aliases, conflicted corroborators, inconsistent
+  persisted metadata, parallel graph branches, and synthesis runs with no eligible material.
+- Preserved the strict-gate policy in run checkpoints and Compose deployments, rejected non-boolean
+  persisted values, and reflected inherited global state in the per-run UI switch.
 - Kept checkpointed runs recoverable across orderly shutdowns, stopped the
   recovery producer before cancelling workers, and made resource/engine cleanup
   resilient to repeated cancellation and startup interruption.

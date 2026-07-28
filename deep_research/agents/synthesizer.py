@@ -20,6 +20,8 @@ SYSTEM = (
     "用 Markdown 输出，不要自己编写参考来源列表（系统会自动追加）。"
 )
 
+_NO_ELIGIBLE_MATERIAL_MESSAGE = "没有通过证据门禁的可用素材，无法生成事实性结论。"
+
 
 @register("synthesizer")
 class Synthesizer:
@@ -43,12 +45,22 @@ class Synthesizer:
         url_to_idx: dict[str, int] = {}
         for r in results:
             for f in r.findings:
-                if not report_eligible(f):
+                if not report_eligible(
+                    f,
+                    require_corroboration=self.settings.require_corroboration,
+                ):
                     continue
                 url_to_idx.setdefault(f.source_url, len(url_to_idx) + 1)
         blocks: list[str] = []
         for r in results:
-            verified = [f for f in r.findings if report_eligible(f)]
+            verified = [
+                f
+                for f in r.findings
+                if report_eligible(
+                    f,
+                    require_corroboration=self.settings.require_corroboration,
+                )
+            ]
             if not verified:
                 continue
             blocks.append(f"\n### 子问题：{r.sub_question}")
@@ -66,6 +78,13 @@ class Synthesizer:
                 )
                 if conflict:
                     blocks.append(conflict)
+                if f.verification.corroboration_status == "corroborated":
+                    blocks.append(
+                        "\n  Corroboration note: independently supported by "
+                        f"{f.verification.independent_source_count} sources"
+                    )
+                elif f.verification.corroboration_status == "single_source":
+                    blocks.append("\n  Corroboration note: single-source claim")
         return ("\n".join(blocks) or "（无可用素材）"), url_to_idx
 
     def _finalize(self, query: str, body: str, url_to_idx: dict[str, int]) -> Report:
@@ -80,6 +99,15 @@ class Synthesizer:
         """流式综合：逐段 yield 正文增量，并发出 token 事件供 SSE 实时渲染。"""
         self.tracer.emit("SYNTHESIZER", "start", "综合研究报告…")
         material, url_to_idx = self._material(results)
+        if not url_to_idx:
+            self.tracer.emit(
+                "SYNTHESIZER",
+                "info",
+                "没有通过证据门禁的素材，跳过生成模型",
+            )
+            yield _NO_ELIGIBLE_MATERIAL_MESSAGE
+            self.tracer.emit("SYNTHESIZER", "info", "报告完成，引用 0 个来源")
+            return
         user = f"研究问题：{query}\n\n素材（角标即引用编号）：\n{material}"
         async for delta in self.llm.stream(self.system, user, temperature=0.4):
             self.tracer.emit("SYNTHESIZER", "token", data={"delta": delta})

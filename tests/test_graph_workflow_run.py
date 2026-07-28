@@ -5,7 +5,10 @@ import asyncio
 import pytest
 
 from deep_research.agents.base import Blackboard, RunContext
+from deep_research.guardrails import ClaimConsistencyReport
 from deep_research.models import (
+    EvidenceVerification,
+    Finding,
     Report,
     ResearchPlan,
     ResearchResult,
@@ -34,6 +37,104 @@ class GraphAgent:
                 markdown=",".join(result.sub_question for result in bb.results),
             )
         return bb
+
+
+class ParallelCorroborationLLM(FakeLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.relationship_calls = 0
+
+    async def parse(
+        self,
+        system,
+        user,
+        schema,
+        *,
+        temperature=0.2,
+        retries=2,
+    ):  # type: ignore[no-untyped-def]
+        if schema is ClaimConsistencyReport:
+            self.relationship_calls += 1
+            ids = [
+                line.removeprefix("Claim ID: ")
+                for line in user.splitlines()
+                if line.startswith("Claim ID: ")
+            ]
+            return ClaimConsistencyReport(
+                corroborations=[
+                    {
+                        "left_claim_id": ids[0],
+                        "right_claim_id": ids[1],
+                        "confidence": 0.95,
+                        "reason": "independent branch corroboration",
+                    }
+                ]
+            )
+        return await super().parse(
+            system,
+            user,
+            schema,
+            temperature=temperature,
+            retries=retries,
+        )
+
+
+class ParallelFindingAgent:
+    def __init__(self, name: str, source_url: str) -> None:
+        self.name = name
+        self.source_url = source_url
+
+    async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
+        statement = "The policy starts in 2027."
+        bb.results.append(
+            ResearchResult(
+                sub_question=self.name,
+                findings=[
+                    Finding(
+                        statement=statement,
+                        source_url=self.source_url,
+                        evidence_quote=statement,
+                        verification=EvidenceVerification(
+                            status="verified",
+                            method="normalized_quote",
+                            semantic_status="supported",
+                        ),
+                    )
+                ],
+            )
+        )
+        return bb
+
+
+@pytest.mark.asyncio
+async def test_graph_engine_rechecks_relationships_after_parallel_merge(settings) -> None:
+    settings.require_corroboration = True
+    llm = ParallelCorroborationLLM()
+    ctx = RunContext(llm=llm, search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
+    agents = {
+        "left": ParallelFindingAgent("left", "https://left.example.com/a"),
+        "right": ParallelFindingAgent("right", "https://right.example.org/b"),
+        "synthesizer": GraphAgent("synthesizer"),
+    }
+    nodes = [{"id": name, "step": {"kind": "agent", "agent": name}} for name in agents]
+    edges = [
+        {"id": "left-report", "source": "left", "target": "synthesizer"},
+        {"id": "right-report", "source": "right", "target": "synthesizer"},
+    ]
+    engine = WorkflowEngine(ctx, resolver=agents.__getitem__)
+
+    bb = await engine.run(
+        Workflow(name="parallel-corroboration", nodes=nodes, edges=edges),
+        Blackboard(query="Q"),
+    )
+
+    findings = [finding for result in bb.results for finding in result.findings]
+    assert [f.verification.corroboration_status for f in findings] == [
+        "corroborated",
+        "corroborated",
+    ]
+    assert all(f.verification.independent_source_count == 2 for f in findings)
+    assert llm.relationship_calls == 1
 
 
 @pytest.mark.asyncio
@@ -205,9 +306,7 @@ async def test_parallel_researcher_nodes_share_run_level_concurrency_limit(setti
             for i in range(3)
         ],
     ]
-    edges = [
-        {"id": f"s-{i}", "source": "seed", "target": f"research-{i}"} for i in range(3)
-    ]
+    edges = [{"id": f"s-{i}", "source": "seed", "target": f"research-{i}"} for i in range(3)]
     engine = WorkflowEngine(ctx, resolver=resolve)
 
     await engine.run(

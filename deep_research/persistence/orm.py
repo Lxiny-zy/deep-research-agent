@@ -131,6 +131,10 @@ class FindingRow(Base):
     consistency_status: Mapped[str] = mapped_column(String(16), default="not_checked")
     contradicts_claim_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     contradiction_reason: Mapped[str] = mapped_column(Text, default="")
+    corroboration_status: Mapped[str] = mapped_column(String(20), default="not_checked")
+    independent_source_count: Mapped[int] = mapped_column(Integer, default=0)
+    corroborates_claim_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    corroboration_reason: Mapped[str] = mapped_column(Text, default="")
 
     result: Mapped[ResearchResultRow] = relationship(back_populates="findings")
 

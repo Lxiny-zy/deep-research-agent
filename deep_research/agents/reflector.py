@@ -39,7 +39,12 @@ class Reflector:
     async def run(self, query: str, results: list[ResearchResult]) -> Reflection:
         self.tracer.emit("REFLECTOR", "start", "评估证据是否充分…")
         reflection = await self.llm.parse(
-            self.system, f"原始问题：{query}\n\n现有发现：\n{_digest(results)}", Reflection
+            self.system,
+            (
+                f"原始问题：{query}\n\n现有发现：\n"
+                f"{_digest(results, require_corroboration=self.settings.require_corroboration)}"
+            ),
+            Reflection,
         )
         if reflection.is_sufficient:
             self.tracer.emit("REFLECTOR", "info", "证据充分，进入综合")
@@ -54,11 +59,16 @@ class Reflector:
         return reflection
 
 
-def _digest(results: list[ResearchResult], limit: int = 40) -> str:
+def _digest(
+    results: list[ResearchResult],
+    limit: int = 40,
+    *,
+    require_corroboration: bool = False,
+) -> str:
     lines = [
         f"- ({r.sub_question}) {f.statement}"
         for r in results
         for f in r.findings
-        if report_eligible(f)
+        if report_eligible(f, require_corroboration=require_corroboration)
     ]
     return "\n".join(lines[:limit]) or "（暂无发现）"

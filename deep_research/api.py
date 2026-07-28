@@ -64,6 +64,7 @@ _CHECKPOINT_SETTING_FIELDS = {
     "max_rounds",
     "max_concurrency",
     "results_per_search",
+    "require_corroboration",
     "max_tokens",
     "max_replans",
     "request_timeout",
@@ -90,6 +91,7 @@ class ResearchParams(BaseModel):
     max_rounds: int | None = Field(default=None, ge=0, le=5)
     max_concurrency: int | None = Field(default=None, ge=1, le=16)
     results_per_search: int | None = Field(default=None, ge=1, le=15)
+    require_corroboration: bool | None = None
     max_tokens: int | None = Field(default=None, ge=1, le=10_000_000)  # 本次研究 token 预算上限
 
 
@@ -140,6 +142,7 @@ class ConfigView(BaseModel):
     max_rounds: int
     max_concurrency: int
     results_per_search: int
+    require_corroboration: bool
     request_timeout: float
 
 
@@ -157,6 +160,7 @@ class ConfigUpdate(BaseModel):
     max_rounds: int | None = Field(default=None, ge=0, le=5)
     max_concurrency: int | None = Field(default=None, ge=1, le=16)
     results_per_search: int | None = Field(default=None, ge=1, le=15)
+    require_corroboration: bool | None = None
     request_timeout: float | None = Field(default=None, gt=0, le=600)
 
     @field_validator(
@@ -165,6 +169,7 @@ class ConfigUpdate(BaseModel):
         "max_rounds",
         "max_concurrency",
         "results_per_search",
+        "require_corroboration",
         "request_timeout",
         mode="before",
     )
@@ -228,6 +233,7 @@ def _config_view(s: Settings) -> ConfigView:
         max_rounds=s.max_rounds,
         max_concurrency=s.max_concurrency,
         results_per_search=s.results_per_search,
+        require_corroboration=s.require_corroboration,
         request_timeout=s.request_timeout,
     )
 
@@ -350,9 +356,7 @@ async def _recover_orphaned_runs(app: FastAPI, settings: Settings) -> None:
                 continue
             if not execution.checkpoint:
                 try:
-                    await app.state.repo.set_status(
-                        summary.id, "error", lease_owner=lease_owner
-                    )
+                    await app.state.repo.set_status(summary.id, "error", lease_owner=lease_owner)
                 finally:
                     await app.state.repo.release_lease(summary.id, lease_owner)
                     lease_owner = None
@@ -445,11 +449,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             recovery_task.cancel()
             await asyncio.gather(recovery_task, return_exceptions=True)
         # 再取消并回收后台研究任务，最后释放引擎——避免任务在 dispose 后继续发 SQL
-        tasks = [
-            task
-            for task in getattr(app.state, "tasks", set())
-            if task is not recovery_task
-        ]
+        tasks = [task for task in getattr(app.state, "tasks", set()) if task is not recovery_task]
         for task in tasks:
             task.cancel()
         if tasks:
@@ -515,10 +515,8 @@ async def _stream_run_sse(app: FastAPI, run_id: str) -> AsyncIterator[str]:
             try:
                 while True:
                     try:
-                        event = await asyncio.wait_for(
-                            relay.get(), timeout=_SSE_HEARTBEAT_SECONDS
-                        )
-                    except asyncio.TimeoutError:
+                        event = await asyncio.wait_for(relay.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                    except TimeoutError:
                         yield ": keep-alive\n\n"
                         continue
                     if event is None:
@@ -562,8 +560,7 @@ async def _stream_run_sse(app: FastAPI, run_id: str) -> AsyncIterator[str]:
                 break
             events = await repo.get_events(run_id)
             matching_terminal = any(
-                event.stage == "ORCHESTRATOR" and event.type == expected_type
-                for event in events
+                event.stage == "ORCHESTRATOR" and event.type == expected_type for event in events
             )
             if matching_terminal or time.monotonic() >= deadline:
                 if await repo.get_run_status(run_id) != status:
@@ -698,7 +695,7 @@ async def _build_agent(
             settings,
             catalog_repo=getattr(app.state, "catalog", None),
             search_tool=search_tool,
-            **agent_kwargs,
+            **agent_kwargs,  # type: ignore[arg-type]
         )
     except BaseException:
         # 构造期异常（缺 key 等）时归还 search client，避免连接池泄漏
@@ -776,9 +773,7 @@ async def _execute(
             agent.tracer.events = [
                 event
                 for event in historical_events
-                if not (
-                    event.stage == "ORCHESTRATOR" and event.type in {"done", "error"}
-                )
+                if not (event.stage == "ORCHESTRATOR" and event.type in {"done", "error"})
             ]
             for historical_event in agent.tracer.events:
                 hub.publish(historical_event)
@@ -795,12 +790,11 @@ async def _execute(
         logger.exception("run %s 执行失败", run_id)
         hub.publish(Event(stage="ORCHESTRATOR", type="error", message="服务器内部错误，运行已终止"))
         try:
-            await app.state.repo.set_status(
-                run_id, "error", lease_owner=lease_owner
-            )
+            await app.state.repo.set_status(run_id, "error", lease_owner=lease_owner)
         except Exception:
             logger.exception("run %s 兜底置 error 状态失败", run_id)
     finally:
+
         async def cleanup_resources() -> None:
             if heartbeat is not None:
                 heartbeat.cancel()
@@ -898,9 +892,7 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
             execution.definition = get_workflow(req.workflow).model_dump(mode="json")
         execution.workflow_name = str(execution.definition["name"])
     await snapshot_catalog_for_execution(execution, catalog)
-    run_id = await repo.create_run(
-        req.query, execution=execution, lease_owner=lease_owner
-    )
+    run_id = await repo.create_run(req.query, execution=execution, lease_owner=lease_owner)
     request.app.state.live[run_id] = EventHub()
     task = asyncio.create_task(
         _execute(
@@ -1220,10 +1212,7 @@ async def get_events(run_id: str, request: Request, after_seq: int = Query(0, ge
     """事件回放。after_seq 为「跳过前 N 条」的偏移语义（客户端传已收到的条数）。"""
     repo: ResearchRepository = request.app.state.repo
     # 与 /stream 一致：未知 run 返回 404，而非 200 + 空列表（区分「不存在」与「无事件」）
-    if (
-        request.app.state.live.get(run_id) is None
-        and await repo.get_run_status(run_id) is None
-    ):
+    if request.app.state.live.get(run_id) is None and await repo.get_run_status(run_id) is None:
         raise HTTPException(status_code=404, detail="run not found")
     return await repo.get_events(run_id, after_seq=after_seq)
 
@@ -1232,10 +1221,7 @@ async def get_events(run_id: str, request: Request, after_seq: int = Query(0, ge
 async def stream_run(run_id: str, request: Request) -> StreamingResponse:
     app_ = request.app
     # 未知 run 返回 404，而非 200 + 空流（让客户端能区分「不存在」与「无事件」）
-    if (
-        app_.state.live.get(run_id) is None
-        and await app_.state.repo.get_run_status(run_id) is None
-    ):
+    if app_.state.live.get(run_id) is None and await app_.state.repo.get_run_status(run_id) is None:
         raise HTTPException(status_code=404, detail="run not found")
 
     async def gen() -> AsyncIterator[str]:

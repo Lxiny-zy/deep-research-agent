@@ -60,6 +60,10 @@ export interface Finding {
     consistency_status: 'not_checked' | 'clear' | 'conflicted'
     contradicts_claim_ids: string[]
     contradiction_reason: string
+    corroboration_status: 'not_checked' | 'single_source' | 'corroborated' | 'disputed'
+    independent_source_count: number
+    corroborates_claim_ids: string[]
+    corroboration_reason: string
   }
 }
 
@@ -132,6 +136,7 @@ export interface ResearchParams {
   max_concurrency?: number
   results_per_search?: number
   max_tokens?: number
+  require_corroboration?: boolean
 }
 
 // GET /api/workflows 行：可选研究流程（default 为后端 str(bool)，"True"/"False"）
@@ -252,6 +257,7 @@ export interface ConfigView {
   max_concurrency: number
   results_per_search: number
   request_timeout: number
+  require_corroboration: boolean
 }
 
 // 全局配置更新（PUT /api/config 请求，全部可选）
@@ -265,6 +271,7 @@ export interface ConfigUpdate {
   max_concurrency?: number
   results_per_search?: number
   request_timeout?: number
+  require_corroboration?: boolean
 }
 
 // ── 角色广场 catalog ──────────────────────────────────────────────────

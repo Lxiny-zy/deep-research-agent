@@ -319,7 +319,8 @@ async def test_synthesizer_excludes_unverified_findings(settings) -> None:
             ],
         )
     ]
-    synthesizer = Synthesizer(FakeLLM(), Tracer(), settings)
+    llm = FakeLLM()
+    synthesizer = Synthesizer(llm, Tracer(), settings)
 
     material, url_to_idx = synthesizer._material(results)
     report = await synthesizer.run("Q", results)
@@ -327,6 +328,8 @@ async def test_synthesizer_excludes_unverified_findings(settings) -> None:
     assert material == "（无可用素材）"
     assert url_to_idx == {}
     assert report.citations == []
+    assert llm.stream_calls == 0
+    assert "[1]" not in report.markdown
 
 
 @pytest.mark.asyncio

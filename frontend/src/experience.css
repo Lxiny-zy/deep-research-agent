@@ -856,6 +856,25 @@ select option { background: #151914; color: var(--text-primary); }
 .role-card-foot > .row { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .settings-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .settings-item { display: grid; gap: 8px; color: var(--text-secondary); font-size: 0.74rem; }
+.safety-gate-setting { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 18px; min-width: 0; padding: 14px 0; border-top: 1px solid var(--border-secondary); }
+.safety-gate-control, .safety-gate-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; flex: 1; }
+.safety-gate-heading { justify-content: flex-start; }
+.safety-gate-heading > .app-icon { flex: 0 0 auto; color: var(--signal-lime); }
+.safety-gate-copy { display: grid; gap: 3px; min-width: 0; }
+.safety-gate-copy strong { color: var(--text-primary); font-size: 0.82rem; }
+.safety-gate-copy small { color: var(--text-tertiary); font-size: 0.72rem; line-height: 1.5; }
+.toggle-switch { position: relative; display: inline-flex; flex: 0 0 auto; width: 42px; height: 24px; }
+.toggle-switch input[type='checkbox'] { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.toggle-track { width: 100%; height: 100%; border: 1px solid var(--border-primary); border-radius: 999px; background: var(--surface-3); transition: border-color 0.18s ease, background 0.18s ease; }
+.toggle-track::after { content: ''; position: absolute; top: 4px; left: 4px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-tertiary); transition: transform 0.18s ease, background 0.18s ease; }
+.toggle-switch input:checked + .toggle-track { border-color: var(--signal-lime); background: rgba(216, 255, 79, 0.16); }
+.toggle-switch input:checked + .toggle-track::after { background: var(--signal-lime); transform: translateX(18px); }
+.toggle-switch.inherited .toggle-track { border-style: dashed; }
+.toggle-switch.inherited .toggle-track::after { transform: translateX(9px); }
+.toggle-switch input:focus-visible + .toggle-track { outline: 2px solid var(--signal-blue); outline-offset: 2px; }
+.per-run-gate { padding-bottom: 0; }
+.per-run-gate .safety-gate-control { cursor: pointer; }
+.per-run-gate > .btn { flex: 0 0 auto; }
 .global-model-config { display: grid; gap: 18px; padding: 18px; border: 1px solid var(--border-secondary); background: rgba(245, 240, 229, 0.025); }
 .global-model-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .inline-link { display: inline-flex; align-items: center; gap: 6px; color: var(--signal-lime); font-size: 0.75rem; }

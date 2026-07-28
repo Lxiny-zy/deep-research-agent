@@ -69,6 +69,10 @@ def _research_result_row(run_id: str, result: ResearchResult) -> orm.ResearchRes
             consistency_status=finding.verification.consistency_status,
             contradicts_claim_ids=finding.verification.contradicts_claim_ids,
             contradiction_reason=finding.verification.contradiction_reason,
+            corroboration_status=finding.verification.corroboration_status,
+            independent_source_count=finding.verification.independent_source_count,
+            corroborates_claim_ids=finding.verification.corroborates_claim_ids,
+            corroboration_reason=finding.verification.corroboration_reason,
         )
         for finding in result.findings
     ]
@@ -226,6 +230,10 @@ class SqlRepository:
                         consistency_status=f.verification.consistency_status,
                         contradicts_claim_ids=f.verification.contradicts_claim_ids,
                         contradiction_reason=f.verification.contradiction_reason,
+                        corroboration_status=f.verification.corroboration_status,
+                        independent_source_count=f.verification.independent_source_count,
+                        corroborates_claim_ids=f.verification.corroborates_claim_ids,
+                        corroboration_reason=f.verification.corroboration_reason,
                     )
                 )
 
@@ -541,6 +549,10 @@ class SqlRepository:
                                 consistency_status=f.consistency_status,
                                 contradicts_claim_ids=list(f.contradicts_claim_ids or []),
                                 contradiction_reason=f.contradiction_reason,
+                                corroboration_status=f.corroboration_status,
+                                independent_source_count=f.independent_source_count,
+                                corroborates_claim_ids=list(f.corroborates_claim_ids or []),
+                                corroboration_reason=f.corroboration_reason,
                             ),
                         )
                         for f in rr.findings

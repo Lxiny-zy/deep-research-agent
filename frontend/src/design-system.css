@@ -2430,6 +2430,12 @@ img, svg, canvas { max-width: 100%; }
   color: var(--accent-secondary);
 }
 
+.evidence-stat.corroborated {
+  border-color: rgba(103, 211, 145, 0.42);
+  background: rgba(103, 211, 145, 0.13);
+  color: #a5edc0;
+}
+
 .evidence-stat.conflicted {
   border-color: rgba(244, 201, 93, 0.34);
   background: rgba(244, 201, 93, 0.1);
@@ -2444,6 +2450,7 @@ img, svg, canvas { max-width: 100%; }
 
 .evidence-stat.verified b,
 .evidence-stat.supported b,
+.evidence-stat.corroborated b,
 .evidence-stat.conflicted b,
 .evidence-stat.blocked b {
   color: inherit;
@@ -2688,6 +2695,52 @@ button.cite-ref.active {
   gap: 3px;
   padding-left: 8px;
   border-left: 2px solid rgba(244, 201, 93, 0.4);
+}
+
+.evidence-corroboration {
+  display: grid;
+  gap: 6px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(103, 211, 145, 0.28);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.evidence-corroboration.single_source,
+.evidence-corroboration.not_checked {
+  border-top-color: rgba(244, 201, 93, 0.28);
+}
+
+.evidence-corroboration.disputed {
+  border-top-color: rgba(255, 107, 122, 0.34);
+}
+
+.evidence-corroboration-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #a5edc0;
+  font-weight: 650;
+}
+
+.evidence-corroboration.single_source .evidence-corroboration-title,
+.evidence-corroboration.not_checked .evidence-corroboration-title {
+  color: #f7d987;
+}
+
+.evidence-corroboration.disputed .evidence-corroboration-title {
+  color: #ff9aa4;
+}
+
+.evidence-corroboration-claim {
+  display: grid;
+  gap: 3px;
+  padding-left: 8px;
+  border-left: 2px solid rgba(103, 211, 145, 0.38);
+}
+
+.evidence-corroboration.disputed .evidence-corroboration-claim {
+  border-left-color: rgba(255, 107, 122, 0.42);
 }
 
 @media (max-width: 760px) {

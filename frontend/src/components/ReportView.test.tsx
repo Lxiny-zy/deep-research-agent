@@ -15,6 +15,10 @@ function makeFinding(over: {
   consistency_status?: 'not_checked' | 'clear' | 'conflicted'
   contradicts_claim_ids?: string[]
   contradiction_reason?: string
+  corroboration_status?: 'not_checked' | 'single_source' | 'corroborated' | 'disputed'
+  independent_source_count?: number
+  corroborates_claim_ids?: string[]
+  corroboration_reason?: string
   source_content_hash?: string
   source_title?: string
   evidence_context?: string
@@ -38,6 +42,10 @@ function makeFinding(over: {
       consistency_status: over.consistency_status ?? 'clear',
       contradicts_claim_ids: over.contradicts_claim_ids ?? [],
       contradiction_reason: over.contradiction_reason ?? '',
+      corroboration_status: over.corroboration_status ?? 'single_source',
+      independent_source_count: over.independent_source_count ?? 1,
+      corroborates_claim_ids: over.corroborates_claim_ids ?? [],
+      corroboration_reason: over.corroboration_reason ?? '',
     },
   }
 }
@@ -65,6 +73,10 @@ const FINDINGS: Finding[] = [
     source_title: 'GPU Market Quarterly',
     evidence_context:
       'After several flat quarters, GPU shipments hit a record high in Q4 as demand recovered.',
+    corroboration_status: 'corroborated',
+    independent_source_count: 2,
+    corroborates_claim_ids: ['claim-4'],
+    corroboration_reason: '两家独立研究机构均报告 Q4 出货量创新高',
   }),
   makeFinding({
     statement: '整机功耗持续上升',
@@ -74,6 +86,10 @@ const FINDINGS: Finding[] = [
     consistency_status: 'conflicted',
     contradicts_claim_ids: ['claim-3'],
     contradiction_reason: '两来源对功耗趋势结论相反',
+    corroboration_status: 'disputed',
+    independent_source_count: 1,
+    corroborates_claim_ids: [],
+    corroboration_reason: '两来源对功耗趋势结论相反',
   }),
   makeFinding({
     statement: '新工艺下整机功耗明显下降',
@@ -81,6 +97,17 @@ const FINDINGS: Finding[] = [
     evidence_quote: 'power consumption dropped notably',
     claim_id: 'claim-3',
     status: 'unverified',
+  }),
+  makeFinding({
+    statement: '另一家研究机构确认 Q4 GPU 出货量达到纪录水平',
+    source_url: 'https://d.example.org/gpu-market',
+    evidence_quote: 'Q4 GPU shipments reached record levels',
+    claim_id: 'claim-4',
+    source_title: 'Independent GPU Tracker',
+    corroboration_status: 'corroborated',
+    independent_source_count: 2,
+    corroborates_claim_ids: ['claim-1'],
+    corroboration_reason: '与 GPU Market Quarterly 的统计结论一致',
   }),
 ]
 
@@ -110,8 +137,14 @@ describe('ReportView 可审计证据链', () => {
     expect(drawer.getByText('GPU Market Quarterly')).toBeInTheDocument()
     expect(drawer.getByText('原文匹配')).toBeInTheDocument()
     expect(drawer.getByText('语义支持 · 模型判定')).toBeInTheDocument()
+    expect(drawer.getByText('已交叉印证 · 2 个独立来源')).toBeInTheDocument()
     expect(drawer.getByText('未检测到冲突')).toBeInTheDocument()
     expect(drawer.getByText(/hash abcdef1234/)).toBeInTheDocument()
+    expect(drawer.getByText('两家独立研究机构均报告 Q4 出货量创新高')).toBeInTheDocument()
+    expect(drawer.getByText('另一家研究机构确认 Q4 GPU 出货量达到纪录水平')).toBeInTheDocument()
+    expect(
+      drawer.getByRole('link', { name: /打开佐证来源：Independent GPU Tracker/ }),
+    ).toHaveAttribute('href', 'https://d.example.org/gpu-market')
   })
 
   it('切换引用时保持侧栏打开、更新来源并把证据列表滚动位置复位', async () => {
@@ -201,6 +234,7 @@ describe('ReportView 可审计证据链', () => {
 
     const drawer = within(screen.getByRole('dialog', { name: '引用 2 的证据' }))
     expect(drawer.getByText('conflicted')).toBeInTheDocument()
+    expect(drawer.getByText('来源存在争议 · 1 个独立来源')).toBeInTheDocument()
     expect(drawer.getByText('两来源对功耗趋势结论相反')).toBeInTheDocument()
     // 反向 claim（claim-3）的论断与来源链接
     expect(drawer.getByText('新工艺下整机功耗明显下降')).toBeInTheDocument()
@@ -210,7 +244,7 @@ describe('ReportView 可审计证据链', () => {
     )
   })
 
-  it('概览条分开展示论断、原文匹配、语义支持、冲突与来源拦截数', () => {
+  it('概览条分开展示论断、原文匹配、语义支持、交叉印证、冲突与来源拦截数', () => {
     render(
       <ReportView
         markdown={MARKDOWN}
@@ -221,9 +255,10 @@ describe('ReportView 可审计证据链', () => {
       />,
     )
 
-    expect(screen.getByTestId('evidence-records')).toHaveTextContent('3 证据记录')
-    expect(screen.getByTestId('evidence-verbatim')).toHaveTextContent('2 原文匹配')
-    expect(screen.getByTestId('evidence-supported')).toHaveTextContent('2 语义支持')
+    expect(screen.getByTestId('evidence-records')).toHaveTextContent('4 证据记录')
+    expect(screen.getByTestId('evidence-verbatim')).toHaveTextContent('3 原文匹配')
+    expect(screen.getByTestId('evidence-supported')).toHaveTextContent('3 语义支持')
+    expect(screen.getByTestId('evidence-corroborated')).toHaveTextContent('2 已交叉印证')
     expect(screen.getByTestId('evidence-conflicted')).toHaveTextContent('1 存在冲突')
     expect(screen.getByTestId('evidence-blocked')).toHaveTextContent('4 来源被拦截')
   })

@@ -18,6 +18,16 @@ def test_int_env_invalid_falls_back(monkeypatch):
     assert Settings().max_rounds == 2
 
 
+def test_bool_env_override(monkeypatch):
+    monkeypatch.setenv("REQUIRE_CORROBORATION", "true")
+    assert Settings().require_corroboration is True
+
+
+def test_bool_env_invalid_falls_back(monkeypatch):
+    monkeypatch.setenv("REQUIRE_CORROBORATION", "sometimes")
+    assert Settings().require_corroboration is False
+
+
 def test_post_init_rejects_invalid():
     with pytest.raises(ValueError):
         Settings(max_concurrency=0)
@@ -40,6 +50,13 @@ def test_settings_for_overrides_only_provided():
     assert merged.max_sub_questions == 8
     assert merged.max_rounds == base.max_rounds  # 未提供的字段保持不变
     assert merged.llm_api_key == base.llm_api_key  # 密钥等非行为字段照搬
+
+
+def test_settings_for_can_enable_strict_corroboration_gate():
+    base = Settings(require_corroboration=False)
+    merged = _settings_for(base, ResearchParams(require_corroboration=True))
+    assert merged.require_corroboration is True
+    assert base.require_corroboration is False
 
 
 def test_research_params_rejects_out_of_range():

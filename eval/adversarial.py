@@ -1,9 +1,9 @@
-"""对抗性评测执行器：用毒化用例直接调用真实 guardrails 链，输出三项护栏指标。
+"""对抗性评测执行器：用毒化用例直接调用真实 guardrails 链，输出安全指标。
 
 评测链路与生产一致（见 ``deep_research/guardrails.py``）：
 
   SourcePolicy（注入/URL 审查）-> EvidenceVerifier（逐字引用校验）
-  -> SemanticEvidenceVerifier -> ClaimConsistencyVerifier（矛盾标记）
+  -> SemanticEvidenceVerifier -> ClaimConsistencyVerifier（矛盾 + 交叉印证）
 
 完全离线：不访问网络、不调用真实 LLM。两处 LLM 依赖的处理方式（输出中同样注明）：
 
@@ -27,6 +27,7 @@ from deep_research.guardrails import (
     ClaimConsistencyReport,
     ClaimConsistencyVerifier,
     ContradictionPair,
+    CorroborationPair,
     EvidenceVerifier,
     SemanticEvidenceDecisionList,
     SemanticEvidenceVerifier,
@@ -36,9 +37,11 @@ from deep_research.models import Finding, Source
 
 from .adversarial_cases import (
     CONTRADICTION_CASES,
+    CORROBORATION_CASES,
     FAKE_QUOTE_CASES,
     INJECTION_CASES,
     ContradictionCase,
+    CorroborationCase,
     FakeQuoteCase,
     InjectionCase,
 )
@@ -52,8 +55,14 @@ class ScriptedGuardrailLLM:
       高于 ClaimConsistencyVerifier 默认阈值 0.6）。
     """
 
-    def __init__(self, contradiction_id_pairs: tuple[tuple[str, str], ...] = ()) -> None:
+    def __init__(
+        self,
+        contradiction_id_pairs: tuple[tuple[str, str], ...] = (),
+        *,
+        corroboration_id_pairs: tuple[tuple[str, str], ...] = (),
+    ) -> None:
         self.contradiction_id_pairs = tuple(contradiction_id_pairs)
+        self.corroboration_id_pairs = tuple(corroboration_id_pairs)
 
     async def parse(self, system, user, schema, *, temperature=0.0, retries=2):
         if schema is SemanticEvidenceDecisionList:
@@ -83,7 +92,16 @@ class ScriptedGuardrailLLM:
                         reason="mutually_exclusive_ground_truth",
                     )
                     for left, right in self.contradiction_id_pairs
-                ]
+                ],
+                corroborations=[
+                    CorroborationPair(
+                        left_claim_id=left,
+                        right_claim_id=right,
+                        confidence=0.9,
+                        reason="corroboration_ground_truth_proposal",
+                    )
+                    for left, right in self.corroboration_id_pairs
+                ],
             )
         raise AssertionError(f"未预设的 schema：{schema}")
 
@@ -131,8 +149,41 @@ class ContradictionOutcome:
         return self.recalled_pairs == self.total_pairs
 
 
+@dataclass
+class CorroborationOutcome:
+    case: CorroborationCase
+    accepted_expected_pairs: int
+    total_expected_pairs: int
+    blocked_forbidden_pairs: int
+    total_forbidden_pairs: int
+    statuses: list[str] = field(default_factory=list)
+    evidence_failures: list[tuple[int, str]] = field(default_factory=list)
+
+    @property
+    def fully_enforced(self) -> bool:
+        return (
+            self.accepted_expected_pairs == self.total_expected_pairs
+            and self.blocked_forbidden_pairs == self.total_forbidden_pairs
+        )
+
+
+def _corroboration_pair_accepted(
+    findings: list[Finding],
+    pair: tuple[int, int],
+) -> bool:
+    left, right = pair
+    left_v = findings[left].verification
+    right_v = findings[right].verification
+    return (
+        right_v.claim_id in left_v.corroborates_claim_ids
+        and left_v.claim_id in right_v.corroborates_claim_ids
+        and left_v.corroboration_status == "corroborated"
+        and right_v.corroboration_status == "corroborated"
+    )
+
+
 # ---------------------------------------------------------------------------
-# 三类评测执行
+# 四类评测执行
 # ---------------------------------------------------------------------------
 
 
@@ -258,6 +309,69 @@ async def evaluate_contradiction_cases(
     return outcomes
 
 
+async def evaluate_corroboration_cases(
+    cases: tuple[CorroborationCase, ...] = CORROBORATION_CASES,
+) -> list[CorroborationOutcome]:
+    """验证独立来源佐证放行、同发布方/冲突提案拒绝的确定性门禁。"""
+    outcomes: list[CorroborationOutcome] = []
+    for case in cases:
+        evidence_verifier = EvidenceVerifier()
+        sources = {
+            item.url: Source(title="来源", url=item.url, content=item.content)
+            for item in case.sources
+        }
+        findings: list[Finding] = []
+        evidence_failures: list[tuple[int, str]] = []
+        for index, spec in enumerate(case.findings):
+            candidate = Finding(
+                statement=spec.statement,
+                source_url=spec.source_url,
+                evidence_quote=spec.evidence_quote,
+            )
+            check = evidence_verifier.verify(candidate, sources[spec.source_url])
+            if check.accepted and check.finding is not None:
+                findings.append(check.finding)
+            else:
+                evidence_failures.append((index, check.reason))
+                findings.append(candidate)
+
+        findings = await SemanticEvidenceVerifier().verify_batch(findings, ScriptedGuardrailLLM())
+        proposed_id_pairs = tuple(
+            (findings[left].verification.claim_id, findings[right].verification.claim_id)
+            for left, right in case.proposed_pairs
+        )
+        contradiction_id_pairs = tuple(
+            (findings[left].verification.claim_id, findings[right].verification.claim_id)
+            for left, right in case.contradiction_pairs
+        )
+        findings = await ClaimConsistencyVerifier().verify_batch(
+            findings,
+            ScriptedGuardrailLLM(
+                contradiction_id_pairs,
+                corroboration_id_pairs=proposed_id_pairs,
+            ),
+        )
+
+        expected = set(case.expected_pairs)
+        forbidden = [pair for pair in case.proposed_pairs if pair not in expected]
+        outcomes.append(
+            CorroborationOutcome(
+                case=case,
+                accepted_expected_pairs=sum(
+                    _corroboration_pair_accepted(findings, pair) for pair in case.expected_pairs
+                ),
+                total_expected_pairs=len(case.expected_pairs),
+                blocked_forbidden_pairs=sum(
+                    not _corroboration_pair_accepted(findings, pair) for pair in forbidden
+                ),
+                total_forbidden_pairs=len(forbidden),
+                statuses=[f.verification.corroboration_status for f in findings],
+                evidence_failures=evidence_failures,
+            )
+        )
+    return outcomes
+
+
 # ---------------------------------------------------------------------------
 # 汇总
 # ---------------------------------------------------------------------------
@@ -268,6 +382,7 @@ class AdversarialReport:
     injection: list[InjectionOutcome]
     fake_quote: list[FakeQuoteOutcome]
     contradiction: list[ContradictionOutcome]
+    corroboration: list[CorroborationOutcome]
 
     @property
     def injection_block_rate(self) -> float:
@@ -295,6 +410,18 @@ class AdversarialReport:
         return recalled / total if total else 0.0
 
     @property
+    def corroboration_recall(self) -> float:
+        total = sum(o.total_expected_pairs for o in self.corroboration)
+        accepted = sum(o.accepted_expected_pairs for o in self.corroboration)
+        return accepted / total if total else 0.0
+
+    @property
+    def corroboration_bypass_block_rate(self) -> float:
+        total = sum(o.total_forbidden_pairs for o in self.corroboration)
+        blocked = sum(o.blocked_forbidden_pairs for o in self.corroboration)
+        return blocked / total if total else 0.0
+
+    @property
     def escaped_injections(self) -> list[InjectionOutcome]:
         return [o for o in self.injection if not o.intercepted]
 
@@ -308,11 +435,13 @@ async def build_report(
     injection_cases: tuple[InjectionCase, ...] = INJECTION_CASES,
     fake_quote_cases: tuple[FakeQuoteCase, ...] = FAKE_QUOTE_CASES,
     contradiction_cases: tuple[ContradictionCase, ...] = CONTRADICTION_CASES,
+    corroboration_cases: tuple[CorroborationCase, ...] = CORROBORATION_CASES,
 ) -> AdversarialReport:
     return AdversarialReport(
         injection=evaluate_injection_cases(injection_cases),
         fake_quote=evaluate_fake_quote_cases(fake_quote_cases),
         contradiction=await evaluate_contradiction_cases(contradiction_cases),
+        corroboration=await evaluate_corroboration_cases(corroboration_cases),
     )
 
 
@@ -380,14 +509,34 @@ def format_report(report: AdversarialReport) -> str:
     lines.append("矛盾标记召回: " + _rate(recalled_pairs, total_pairs))
 
     lines.append("")
+    lines.append("=== 交叉印证类（独立发布方门禁）===")
+    for o in report.corroboration:
+        mark = "通过" if o.fully_enforced and not o.evidence_failures else "失败"
+        extra = f" 逐字验证失败={o.evidence_failures}" if o.evidence_failures else ""
+        lines.append(
+            f"[{mark}] {o.case.id:<34} 有效佐证 "
+            f"{o.accepted_expected_pairs}/{o.total_expected_pairs}，绕过拦截 "
+            f"{o.blocked_forbidden_pairs}/{o.total_forbidden_pairs} "
+            f"状态={'/'.join(o.statuses)}{extra}"
+        )
+    expected_pairs = sum(o.total_expected_pairs for o in report.corroboration)
+    accepted_pairs = sum(o.accepted_expected_pairs for o in report.corroboration)
+    forbidden_pairs = sum(o.total_forbidden_pairs for o in report.corroboration)
+    blocked_pairs = sum(o.blocked_forbidden_pairs for o in report.corroboration)
+    lines.append("交叉印证召回: " + _rate(accepted_pairs, expected_pairs))
+    lines.append("同源/冲突绕过拦截: " + _rate(blocked_pairs, forbidden_pairs))
+
+    lines.append("")
     lines.append("=== 汇总 ===")
     lines.append(f"注入拦截率      : {report.injection_block_rate * 100:.1f}%")
     lines.append(f"伪引用拦截率    : {report.fake_quote_block_rate * 100:.1f}%")
     lines.append(f"矛盾标记召回    : {report.contradiction_recall * 100:.1f}%")
+    lines.append(f"交叉印证召回    : {report.corroboration_recall * 100:.1f}%")
+    lines.append(f"同源绕过拦截    : {report.corroboration_bypass_block_rate * 100:.1f}%")
     lines.append(
         "说明: 语义验证与矛盾判定依赖 LLM，本评测离线运行，均使用脚本化假 LLM"
-        "（语义全部 supported；矛盾按用例真值返回）——矛盾召回度量的是护栏管线的"
-        "传播正确性，注入/伪引用两项则完全由确定性护栏产生。"
+        "（语义全部 supported；关系按用例真值提出）——矛盾/交叉印证召回度量的是"
+        "护栏管线传播正确性；独立发布方判定与注入/伪引用则由确定性代码执行。"
     )
     if report.escaped_injections:
         gap_ids = ", ".join(o.case.id for o in report.escaped_injections)

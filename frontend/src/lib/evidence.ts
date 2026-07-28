@@ -1,6 +1,6 @@
 // 证据链前端逻辑（可审计报告）：
 // - remarkCitations：把报告正文里的 [n] 引用文本转成可拦截的 link 节点（#cite-n）；
-// - 概览统计：N 论断 / M 原文匹配 / S 语义支持 / K 冲突；
+// - 概览统计：N 论断 / M 原文匹配 / S 语义支持 / C 交叉印证 / K 冲突；
 // - 来源拦截数：解析事件流中 RESEARCHER 发出的 source_policy 审计事件
 //   （与 EventTimeline 相同的事件消费方式，直播与历史回放均可用）；
 // - 引用序号 → 来源 URL：优先 report.citations，缺失时从「## 参考来源」回退解析。
@@ -80,21 +80,24 @@ export interface EvidenceOverview {
   records: number
   verbatimMatched: number
   semanticallySupported: number
+  corroborated: number
   conflicted: number
 }
 
 export function summarizeEvidence(findings: Finding[]): EvidenceOverview {
   let verbatimMatched = 0
   let semanticallySupported = 0
+  let corroborated = 0
   let conflicted = 0
   for (const f of findings) {
     if (f.verification.status === 'verified') verbatimMatched += 1
     if (f.verification.status === 'verified' && f.verification.semantic_status === 'supported') {
       semanticallySupported += 1
     }
+    if (f.verification.corroboration_status === 'corroborated') corroborated += 1
     if (f.verification.consistency_status === 'conflicted') conflicted += 1
   }
-  return { records: findings.length, verbatimMatched, semanticallySupported, conflicted }
+  return { records: findings.length, verbatimMatched, semanticallySupported, corroborated, conflicted }
 }
 
 /**

@@ -17,6 +17,8 @@
 - **来源策略门禁**：检索内容进入 LLM 前检查 URL scheme、非公网/歧义 IP、嵌入凭据，以及网页标题/正文/URL path/query/fragment 中的中英文 Prompt Injection 信号；隔离/拒绝决策进入结构化事件审计。
 - **论断证据门禁**：Finding 必须携带来源原文 `evidence_quote`；程序执行归一化逐字匹配并记录内容哈希，只有 `verified` 且语义判定为 `supported` 的论断能进入 Reflector / Synthesizer 和最终引用。
 - **论断一致性标记**：程序为已支持论断生成稳定 `claim_id`，再做跨论断矛盾检测；冲突不会被静默丢弃，而是以 `conflicted`、反向 claim 链接和原因进入审计与报告素材。
+- **多来源交叉印证门禁**：关系模型只提出“同一事实 / 相互矛盾”候选，确定性代码校验 claim ID、置信阈值与 registrable domain；同一发布方的不同子域及 IDN / punycode 别名不重复计数，任何关联冲突优先于佐证。可按全局或单次研究开启“严格双源门禁”，仅让至少两个独立发布方支持且关系状态完整、无冲突的论断进入 Reflector / Synthesizer。
+- **安全对抗评测**：离线红队集锁定注入拦截、伪引用拦截、矛盾传播、有效双源传播和同源/冲突伪双源拦截；当前固定用例均为 100%，度量的是已知攻击面和管线正确性，不宣称开放世界事实判定率。
 - **流式可观测**：SSE 把每个 Agent 的动作实时推到浏览器；内置 Tracer 统计耗时 / token。
 - **持久化与回放**：每次研究全过程落库（计划 / 结果 / 报告 / 事件）；提供历史列表、详情、SSE 事件回放。仓储接口双实现（内存 / async SQLAlchemy），本地 SQLite 零配置并在启动时准备 schema，生产切 PostgreSQL，Alembic 管 schema 版本。
 - **provider 无关**：任意 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / GLM / Moonshot …）。
@@ -206,6 +208,7 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 前端「设置」页（`GET`/`PUT /api/config`）可在线修改 LLM 模型 / Base URL / API Key、Tavily Key 与研究行为默认值，**改完即持久化、对后续创建的研究生效**——无需改 `.env` 或重启。
 
 - **加载顺序**：环境变量（基础默认）→ `runtime_config.json`（前端写入的覆盖项）→ per-run `params`（本次运行覆盖）。
+- **严格双源门禁**：设置页可全局开启，也可在新建研究的高级设置中按次覆盖；环境变量部署可使用 `REQUIRE_CORROBORATION=true`。默认关闭以兼容既有单来源报告，开启后关系验证失败、单一来源或争议论断均无法进入报告；若没有任何合格素材，Synthesizer 会跳过生成模型并返回确定性的无证据结果。
 - **密钥安全**：`GET` 只脱敏回显（`…末四位` + 是否已设置），表单留空＝保持不变（不会被回写清空）；端点受 `API_KEY` 鉴权保护。
 - **持久化位置**：默认写当前工作目录 `runtime_config.json`（已 gitignore），可经 `RUNTIME_CONFIG_PATH` 改路径。Docker Compose 已自动设置为 `/app/data/runtime_config.json` 并挂载 `appdata` 数据卷，容器重建后不会丢失。
 - `database_url` 与服务端 `api_key` 不可经前端改（自举 / 鉴权安全），仍只来自环境变量。

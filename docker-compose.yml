@@ -36,6 +36,7 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      REQUIRE_CORROBORATION: ${REQUIRE_CORROBORATION:-false}
       # API 认证（强烈建议生产设置；空则所有 /api 端点无认证开放）
       API_KEY: ${API_KEY:-}
       # 前端设置中心写入的运行时配置持久化到独立数据卷，容器重建不丢失

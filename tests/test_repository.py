@@ -95,6 +95,10 @@ async def test_crud_roundtrip(repo):
                         consistency_status="conflicted",
                         contradicts_claim_ids=["claim-b"],
                         contradiction_reason="opposite trend",
+                        corroboration_status="disputed",
+                        independent_source_count=2,
+                        corroborates_claim_ids=["claim-c"],
+                        corroboration_reason="support exists, but another source conflicts",
                     ),
                 )
             ],
@@ -136,6 +140,9 @@ async def test_crud_roundtrip(repo):
     assert detail.results[0].findings[0].verification.claim_id == "claim-a"
     assert detail.results[0].findings[0].verification.consistency_status == "conflicted"
     assert detail.results[0].findings[0].verification.contradicts_claim_ids == ["claim-b"]
+    assert detail.results[0].findings[0].verification.corroboration_status == "disputed"
+    assert detail.results[0].findings[0].verification.independent_source_count == 2
+    assert detail.results[0].findings[0].verification.corroborates_claim_ids == ["claim-c"]
     assert detail.total_tokens == 42
     assert detail.orchestration is not None
     assert detail.orchestration.workflow_name == "deep"
@@ -413,8 +420,15 @@ async def test_prepare_sqlite_schema_accepts_current_create_all_database(tmp_pat
             )
             version = await conn.scalar(text("SELECT version_num FROM alembic_version"))
         detail = await SqlRepository(make_sessionmaker(verification_engine)).get_run(run_id)
-        assert {"source_title", "evidence_context"} <= columns
-        assert version == "0015"
+        assert {
+            "source_title",
+            "evidence_context",
+            "corroboration_status",
+            "independent_source_count",
+            "corroborates_claim_ids",
+            "corroboration_reason",
+        } <= columns
+        assert version == "0016"
         assert detail is not None
         verification = detail.results[0].findings[0].verification
         assert verification.source_title == "Existing source"
@@ -544,7 +558,7 @@ async def test_prepare_sqlite_schema_repairs_legacy_finding_columns(tmp_path):
 
     async with engine.begin() as conn:
         version = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-    assert version == "0015"
+    assert version == "0016"
     await engine.dispose()
 
 
@@ -671,7 +685,7 @@ async def test_prepare_sqlite_schema_reconciles_falsely_stamped_head(tmp_path):
         set(constraint.get("column_names") or []) == {"run_id", "idx"}
         for constraint in schema["unique"]
     )
-    assert version == "0015"
+    assert version == "0016"
     assert repaired_indexes == [0, 1]
     await engine.dispose()
 

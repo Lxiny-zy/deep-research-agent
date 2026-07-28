@@ -55,6 +55,10 @@ describe('summarizeEvidence：区分程序匹配与模型语义判断', () => {
         consistency_status: 'not_checked',
         contradicts_claim_ids: [],
         contradiction_reason: '',
+        corroboration_status: 'corroborated',
+        independent_source_count: 2,
+        corroborates_claim_ids: ['claim-2'],
+        corroboration_reason: '第二个独立来源支持该论断',
       },
     }
 
@@ -62,6 +66,7 @@ describe('summarizeEvidence：区分程序匹配与模型语义判断', () => {
       records: 1,
       verbatimMatched: 1,
       semanticallySupported: 0,
+      corroborated: 1,
       conflicted: 0,
     })
   })

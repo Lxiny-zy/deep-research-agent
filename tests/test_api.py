@@ -154,9 +154,7 @@ async def test_remote_stream_synthesizes_missing_terminal_event(repo, monkeypatc
     monkeypatch.setattr(api, "_REMOTE_STREAM_POLL_SECONDS", 0.001)
     monkeypatch.setattr(api, "_REMOTE_STREAM_TERMINAL_GRACE_SECONDS", 0.005)
 
-    payload = "".join(
-        [chunk async for chunk in api._stream_run_sse(remote_app, run_id)]
-    )
+    payload = "".join([chunk async for chunk in api._stream_run_sse(remote_app, run_id)])
 
     assert '"type":"error"' in payload
     assert '"status":"error"' in payload
@@ -184,9 +182,7 @@ async def test_remote_stream_does_not_replay_same_type_terminal_from_old_attempt
     repo = BarrierRepository()
     owner = "new-attempt"
     execution = _recoverable_execution("retry failure")
-    run_id = await repo.create_run(
-        "retry failure", execution=execution, lease_owner=owner
-    )
+    run_id = await repo.create_run("retry failure", execution=execution, lease_owner=owner)
     await repo.set_status(run_id, "error", lease_owner=owner)
     await repo.save_events(
         run_id,
@@ -199,9 +195,7 @@ async def test_remote_stream_does_not_replay_same_type_terminal_from_old_attempt
     monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 60.0)
 
     async def consume() -> str:
-        return "".join(
-            [chunk async for chunk in api._stream_run_sse(remote_app, run_id)]
-        )
+        return "".join([chunk async for chunk in api._stream_run_sse(remote_app, run_id)])
 
     stream_task = asyncio.create_task(consume())
     await repo.first_status_read.wait()
@@ -225,29 +219,29 @@ async def test_remote_stream_does_not_replay_same_type_terminal_from_old_attempt
 
 @pytest.mark.asyncio
 async def test_legacy_research_uses_runtime_settings(repo, monkeypatch):
-    runtime_settings = Settings(llm_model='saved-model', llm_api_key='saved-key')
+    runtime_settings = Settings(llm_model="saved-model", llm_api_key="saved-key")
     api.app.state.settings = runtime_settings
     captured = {}
 
     class FakeAgent:
         def __init__(self, settings, **kwargs):
-            captured['settings'] = settings
+            captured["settings"] = settings
 
         async def run_stream(self, query):
-            assert query == 'Q'
-            yield Event(stage='ORCHESTRATOR', type='done')
+            assert query == "Q"
+            yield Event(stage="ORCHESTRATOR", type="done")
 
         async def aclose(self):
             return None
 
-    monkeypatch.setattr(api, 'DeepResearchAgent', FakeAgent)
-    monkeypatch.setattr(api, '_check_rate_limit', lambda request: None)
+    monkeypatch.setattr(api, "DeepResearchAgent", FakeAgent)
+    monkeypatch.setattr(api, "_check_rate_limit", lambda request: None)
 
     async with _client() as c:
-        resp = await c.get('/api/research', params={'q': 'Q'})
+        resp = await c.get("/api/research", params={"q": "Q"})
 
     assert resp.status_code == 200
-    assert captured['settings'] is runtime_settings
+    assert captured["settings"] is runtime_settings
 
 
 @pytest.mark.asyncio
@@ -400,6 +394,7 @@ async def test_config_get_masks_secrets(repo):
     assert body["llm_model"] == "m1"
     assert body["llm_api_key_set"] is True
     assert body["llm_api_key_hint"] == "…1234"
+    assert body["require_corroboration"] is False
     assert "sk-aaaa1234" not in resp.text
 
 
@@ -413,6 +408,18 @@ async def test_config_put_keeps_empty_secret(repo, tmp_path, monkeypatch):
     assert api.app.state.settings.llm_model == "new-model"
     assert api.app.state.settings.max_rounds == 3
     assert api.app.state.settings.llm_api_key == "sk-env-key-9999"  # 空密钥保留 env 值
+
+
+@pytest.mark.asyncio
+async def test_config_put_persists_corroboration_gate(repo, tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(cfg))
+    async with _client() as c:
+        resp = await c.put("/api/config", json={"require_corroboration": True})
+    assert resp.status_code == 200
+    assert resp.json()["require_corroboration"] is True
+    assert api.app.state.settings.require_corroboration is True
+    assert json.loads(cfg.read_text(encoding="utf-8"))["require_corroboration"] is True
 
 
 @pytest.mark.asyncio
@@ -455,9 +462,7 @@ async def test_config_put_rejects_explicit_null(repo, tmp_path, monkeypatch):
 async def test_config_get_self_heals_polluted_overrides(repo, tmp_path, monkeypatch):
     """旧版本污染（overrides 含 llm_model: null）下 GET 仍返回 200 并清洗文件。"""
     cfg = tmp_path / "cfg.json"
-    cfg.write_text(
-        json.dumps({"llm_model": None, "max_rounds": 3}), encoding="utf-8"
-    )
+    cfg.write_text(json.dumps({"llm_model": None, "max_rounds": 3}), encoding="utf-8")
     monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(cfg))
     api.app.state.settings = replace(Settings(), llm_model=None)  # 内存已被污染
     async with _client() as c:
@@ -497,9 +502,7 @@ async def test_live_stream_emits_heartbeat_during_silence(monkeypatch) -> None:
     """live 分支长静默时定期发 SSE 注释行保活，事件到达后正常透传。"""
     run_id = "live-heartbeat"
     hub = EventHub()
-    app = SimpleNamespace(
-        state=SimpleNamespace(repo=InMemoryRepository(), live={run_id: hub})
-    )
+    app = SimpleNamespace(state=SimpleNamespace(repo=InMemoryRepository(), live={run_id: hub}))
     monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 0.01)
     chunks: list[str] = []
 
@@ -547,9 +550,7 @@ def test_rate_limit_key_uses_first_forwarded_hop_when_trusted(monkeypatch) -> No
     assert api._rate_limit_key(_fake_request({})) == "10.0.0.9"  # 无头回退直连 IP
 
 
-def _recoverable_execution(
-    query: str, *, checkpoint_scratch: dict | None = None
-):
+def _recoverable_execution(query: str, *, checkpoint_scratch: dict | None = None):
     runtime = OrchestrationRuntime()
     execution = runtime.start("deep", {"query": query})
     runtime.save_checkpoint(
@@ -610,6 +611,7 @@ async def test_lifespan_stops_recovery_before_snapshotting_workers(monkeypatch) 
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
+
             async def late_worker() -> None:
                 worker_started.set()
                 try:
@@ -718,9 +720,7 @@ async def test_orphan_recovery_reloads_checkpoint_after_acquiring_lease(monkeypa
     run_id = await repo.create_run("Q", execution=stale)
     captured: list[str] = []
 
-    async def fake_execute(
-        app, run_id, query, settings, workflow, resume_execution, lease_owner
-    ):  # type: ignore[no-untyped-def]
+    async def fake_execute(app, run_id, query, settings, workflow, resume_execution, lease_owner):  # type: ignore[no-untyped-def]
         captured.append(resume_execution.checkpoint["scratch"]["revision"])
 
     monkeypatch.setattr(api, "_execute", fake_execute)
@@ -807,9 +807,7 @@ async def test_manual_resume_reloads_checkpoint_after_acquiring_lease(monkeypatc
     api.app.state.tasks = set()
     captured: list[str] = []
 
-    async def fake_execute(
-        app, run_id, query, settings, workflow, resume_execution, lease_owner
-    ):  # type: ignore[no-untyped-def]
+    async def fake_execute(app, run_id, query, settings, workflow, resume_execution, lease_owner):  # type: ignore[no-untyped-def]
         captured.append(resume_execution.checkpoint["scratch"]["revision"])
 
     monkeypatch.setattr(api, "_execute", fake_execute)
@@ -825,7 +823,12 @@ async def test_manual_resume_reloads_checkpoint_after_acquiring_lease(monkeypatc
 @pytest.mark.asyncio
 async def test_resume_restores_original_run_settings(repo, monkeypatch) -> None:
     run_id = await repo.create_run("settings")
-    original = Settings(max_rounds=1, max_concurrency=2, max_tokens=321)
+    original = Settings(
+        max_rounds=1,
+        max_concurrency=2,
+        max_tokens=321,
+        require_corroboration=True,
+    )
     execution = _recoverable_execution(
         "settings",
         checkpoint_scratch={
@@ -833,11 +836,17 @@ async def test_resume_restores_original_run_settings(repo, monkeypatch) -> None:
                 "max_rounds": original.max_rounds,
                 "max_concurrency": original.max_concurrency,
                 "max_tokens": original.max_tokens,
+                "require_corroboration": original.require_corroboration,
             }
         },
     )
     await repo.save_orchestration(run_id, execution)
-    api.app.state.settings = Settings(max_rounds=5, max_concurrency=9, max_tokens=999)
+    api.app.state.settings = Settings(
+        max_rounds=5,
+        max_concurrency=9,
+        max_tokens=999,
+        require_corroboration=False,
+    )
     captured: list[Settings] = []
 
     async def fake_execute(
@@ -854,6 +863,7 @@ async def test_resume_restores_original_run_settings(repo, monkeypatch) -> None:
     assert captured[0].max_rounds == 1
     assert captured[0].max_concurrency == 2
     assert captured[0].max_tokens == 321
+    assert captured[0].require_corroboration is True
     detail = await repo.get_run(run_id)
     assert detail is not None and detail.status == "running"
     api.app.state.live.clear()
@@ -889,9 +899,7 @@ async def test_execute_cleanup_survives_lease_release_failure(monkeypatch) -> No
             nonlocal agent_closed
             agent_closed = True
 
-    app = SimpleNamespace(
-        state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub})
-    )
+    app = SimpleNamespace(state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub}))
     monkeypatch.setattr(api, "DeepResearchAgent", Agent)
     monkeypatch.setattr(api, "_build_search_tool", lambda app, settings: asyncio.sleep(0, Search()))
 
@@ -908,9 +916,7 @@ async def test_resume_does_not_replay_previous_terminal_event(monkeypatch) -> No
     owner = "resume-owner"
     execution = _recoverable_execution("resume-history")
     repo = InMemoryRepository()
-    run_id = await repo.create_run(
-        "resume-history", execution=execution, lease_owner=owner
-    )
+    run_id = await repo.create_run("resume-history", execution=execution, lease_owner=owner)
     await repo.save_events(
         run_id,
         [
@@ -931,9 +937,7 @@ async def test_resume_does_not_replay_previous_terminal_event(monkeypatch) -> No
         async def aclose(self) -> None:
             return None
 
-    app = SimpleNamespace(
-        state=SimpleNamespace(repo=repo, catalog=object(), live={run_id: hub})
-    )
+    app = SimpleNamespace(state=SimpleNamespace(repo=repo, catalog=object(), live={run_id: hub}))
     monkeypatch.setattr(api, "DeepResearchAgent", Agent)
     monkeypatch.setattr(api, "_build_search_tool", lambda app, settings: asyncio.sleep(0, None))
 
@@ -966,9 +970,7 @@ async def test_lease_renewal_failure_cancels_execution(monkeypatch) -> None:
         async def release_lease(self, run_id, owner):  # type: ignore[no-untyped-def]
             return None
 
-        async def set_status(
-            self, run_id, status, *, lease_owner=None
-        ):  # type: ignore[no-untyped-def]
+        async def set_status(self, run_id, status, *, lease_owner=None):  # type: ignore[no-untyped-def]
             statuses.append(status)
 
     class Agent:
@@ -981,9 +983,7 @@ async def test_lease_renewal_failure_cancels_execution(monkeypatch) -> None:
         async def aclose(self) -> None:
             return None
 
-    app = SimpleNamespace(
-        state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub})
-    )
+    app = SimpleNamespace(state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub}))
     monkeypatch.setattr(api, "_LEASE_RENEW_INTERVAL_SECONDS", 0.001)
     monkeypatch.setattr(api, "DeepResearchAgent", Agent)
     monkeypatch.setattr(api, "_build_search_tool", lambda app, settings: asyncio.sleep(0, None))
@@ -1030,9 +1030,7 @@ async def test_execute_cleanup_survives_second_cancellation(monkeypatch) -> None
             self.closed = True
 
     search = Search()
-    app = SimpleNamespace(
-        state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub})
-    )
+    app = SimpleNamespace(state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub}))
     monkeypatch.setattr(api, "DeepResearchAgent", Agent)
 
     async def build_search(app, settings):  # type: ignore[no-untyped-def]
@@ -1061,9 +1059,7 @@ async def test_cancelled_execution_remains_recoverable(monkeypatch) -> None:
     repo = InMemoryRepository()
     execution = _recoverable_execution("restartable")
     owner = "shutting-down-worker"
-    run_id = await repo.create_run(
-        "restartable", execution=execution, lease_owner=owner
-    )
+    run_id = await repo.create_run("restartable", execution=execution, lease_owner=owner)
     await repo.set_status(run_id, "running", lease_owner=owner)
     hub = EventHub()
     started = asyncio.Event()

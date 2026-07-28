@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useNavigate } from 'react-router-dom'
 import type { WorkflowInfo } from '../types'
 import NewResearchPage from './NewResearchPage'
@@ -6,11 +6,16 @@ import NewResearchPage from './NewResearchPage'
 const mocks = vi.hoisted(() => ({
   listWorkflows: vi.fn(),
   createRun: vi.fn(),
+  useConfig: vi.fn(),
 }))
 
 vi.mock('../api/client', () => ({
   listWorkflows: mocks.listWorkflows,
   createRun: mocks.createRun,
+}))
+
+vi.mock('../hooks/useConfig', () => ({
+  useConfig: mocks.useConfig,
 }))
 
 const WORKFLOWS: WorkflowInfo[] = [
@@ -40,7 +45,10 @@ function Harness() {
 
 describe('NewResearchPage workflow list race', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    mocks.listWorkflows.mockReset()
+    mocks.createRun.mockReset()
+    mocks.useConfig.mockReset()
+    mocks.useConfig.mockReturnValue({ data: { require_corroboration: false } })
   })
 
   it('ignores a late response from a superseded listWorkflows request', async () => {
@@ -71,5 +79,43 @@ describe('NewResearchPage workflow list race', () => {
       await Promise.resolve()
     })
     expect(screen.getByRole('combobox')).toHaveValue('beta')
+  })
+
+  it('把严格双源门禁的单次覆盖随创建请求提交', async () => {
+    mocks.listWorkflows.mockResolvedValue(WORKFLOWS)
+    mocks.createRun.mockResolvedValue({ run_id: 'run-1' })
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /高级设置/ }))
+    fireEvent.click(screen.getByRole('switch', { name: '本次研究启用严格双源门禁' }))
+    fireEvent.click(screen.getByRole('button', { name: '开始研究' }))
+
+    await waitFor(() =>
+      expect(mocks.createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ params: { require_corroboration: true } }),
+      ),
+    )
+  })
+
+  it('在单次覆盖为空时展示开启的全局门禁状态', async () => {
+    mocks.listWorkflows.mockReturnValue(new Promise<WorkflowInfo[]>(() => {}))
+    mocks.useConfig.mockReturnValue({ data: { require_corroboration: true } })
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /高级设置/ }))
+
+    expect(
+      screen.getByRole('switch', { name: '本次研究启用严格双源门禁' }),
+    ).toBeChecked()
   })
 })
