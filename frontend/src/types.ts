@@ -78,12 +78,57 @@ export interface Report {
   citations: string[]
 }
 
+export interface SourceSnapshot {
+  title: string
+  url: string
+  content: string
+  content_hash: string
+}
+
+export interface RunManifest {
+  schema_version: number
+  created_at: string
+  workflow_name: string
+  workflow_hash: string
+  query_hash: string
+  settings: Record<string, boolean | number | null>
+  llm_model: string
+  llm_endpoint: string
+  search_backend: string
+  catalog_snapshot_hash: string
+  catalog_model_profiles: Record<string, unknown>[]
+}
+
+export interface QualityMetrics {
+  total_findings: number
+  verbatim_verified: number
+  semantically_supported: number
+  report_eligible: number
+  corroborated: number
+  conflicted: number
+  disputed: number
+  source_snapshots: number
+  cited_sources: number
+  cited_source_snapshot_coverage: number
+  verified_finding_rate: number
+  supported_finding_rate: number
+  eligible_finding_rate: number
+  independent_publishers: number
+  blocked_sources: number
+  total_tokens: number
+  elapsed_seconds: number
+}
+
 export interface RunDetail extends RunSummary {
   interpretation: string
   sub_questions: SubQuestion[]
   results: ResearchResult[]
   report: Report | null
   orchestration: WorkflowRun | null
+  sources: SourceSnapshot[]
+  events: ResearchEvent[]
+  manifest: RunManifest | null
+  metrics: QualityMetrics | null
 }
 
 export type WorkflowRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'

@@ -89,8 +89,26 @@ async def test_list_detail_events_and_404(repo):
 
     assert any(item["id"] == run_id for item in lst.json())
     assert detail.json()["report"]["markdown"] == "# R"
+    assert detail.json()["metrics"]["cited_sources"] == 1
+    assert detail.json()["events"][0]["stage"] == "PLANNER"
     assert evs.json()[0]["stage"] == "PLANNER"
     assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_set_tags_returns_enriched_run_detail(repo) -> None:
+    run_id = await repo.create_run("tagged")
+    await repo.save_report(run_id, Report(query="tagged", markdown="# R", citations=[]))
+    await repo.save_events(run_id, [Event(stage="PLANNER", type="start", message="m")])
+
+    async with _client() as client:
+        response = await client.put(f"/api/runs/{run_id}/tags", json={"tags": ["reviewed"]})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["tags"] == ["reviewed"]
+    assert body["events"][0]["stage"] == "PLANNER"
+    assert body["metrics"] is not None
 
 
 @pytest.mark.asyncio

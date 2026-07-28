@@ -66,6 +66,19 @@ class AgentCardSnapshot(BaseModel):
     model_profile_id: str | None = None
 
 
+class ModelProfileSnapshot(BaseModel):
+    """Non-secret model execution parameters frozen for recovery and audit."""
+
+    id: str
+    name: str
+    base_url: str | None = None
+    model: str
+    temperature: float = 0.3
+    parameter_mode: str = "temperature"
+    reasoning_effort: str = "medium"
+    is_default: bool = False
+
+
 class CatalogRuntimeSnapshot(BaseModel):
     """Catalog inputs needed to replay a run without live role-card state.
 
@@ -75,6 +88,7 @@ class CatalogRuntimeSnapshot(BaseModel):
 
     version: Literal[1] = 1
     cards: list[AgentCardSnapshot] = Field(default_factory=list)
+    profiles: list[ModelProfileSnapshot] = Field(default_factory=list)
     default_profile_id: str | None = None
     terminal_roles: list[str] = Field(default_factory=list)
 

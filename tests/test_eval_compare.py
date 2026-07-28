@@ -13,10 +13,12 @@ import pytest
 
 from deep_research.config import Settings
 from deep_research.orchestrator import DeepResearchAgent
+from deep_research.persistence.memory_repository import InMemoryRepository
 from eval.dataset import CASES, CATEGORY_FACT, CATEGORY_FRESH, CATEGORY_MULTI
 from eval.judge import EvalScore
 from eval.run_eval import (
     EvalRow,
+    benchmark_payload,
     format_comparison,
     format_markdown,
     run_comparison,
@@ -108,6 +110,40 @@ async def test_run_comparison_without_budget_keeps_settings(settings) -> None:
     assert seen[0] is settings  # 不指定预算时直接沿用原 settings
 
 
+@pytest.mark.asyncio
+async def test_run_comparison_persists_traceable_run(settings) -> None:
+    repo = InMemoryRepository()
+
+    def persistent_factory(run_settings, workflow, repository, run_id, execution):
+        return DeepResearchAgent(
+            run_settings,
+            llm=FakeLLM(),
+            search_tool=FakeSearch(),
+            repo=repository,
+            run_id=run_id,
+            workflow=workflow,
+            initial_execution=execution,
+        )
+
+    rows = await run_comparison(
+        settings,
+        FakeJudge(),
+        CASES[:1],
+        ["deep"],
+        repository=repo,
+        persistent_agent_factory=persistent_factory,
+    )
+
+    row = rows[0]
+    detail = await repo.get_run(row.run_id)
+    assert detail is not None
+    assert detail.status == "done"
+    assert row.manifest is not None
+    assert row.manifest.workflow_name == "deep"
+    assert row.metrics is not None
+    assert row.metrics.source_snapshots >= 1
+
+
 def test_format_comparison_renders_summary_and_delta() -> None:
     score = EvalScore(coverage=4, groundedness=4, depth=4, coherence=4)
     rows = [
@@ -135,7 +171,7 @@ def test_format_markdown_renders_tables_and_conclusion() -> None:
     assert "# 编排对照实验结果（2026-07-26）" in md
     assert "单次运行 token 预算：30000" in md
     assert f"用例：{len(CASES)} 条" in md
-    assert "| c1 | deep | 4 | 4 | 4 | 4 | 4.0 | 12000 | 20.0 | 30000 |" in md
+    assert "| c1 | deep | - | 4 | 4 | 4 | 4 | 4.0 | n/a | n/a | n/a | n/a | 12000" in md
     assert "## 工作流汇总" in md
     assert "## 对照结论" in md
     assert "quick 相对 deep" in md and "耗时 -75%" in md
@@ -154,6 +190,20 @@ def test_write_results_creates_missing_directories(tmp_path) -> None:
     written = write_results(target, "# 结果\n")
     assert written == target
     assert target.read_text(encoding="utf-8") == "# 结果\n"
+
+
+def test_benchmark_payload_is_machine_readable_and_hashed() -> None:
+    score = EvalScore(coverage=4, groundedness=4, depth=3, coherence=5)
+    row = EvalRow("c1", "deep", score, 100, run_id="run-1")
+    payload = benchmark_payload(
+        [row], ["deep"], cases=CASES[:1], budget=5000, run_date="2026-07-28"
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["rows"][0]["run_id"] == "run-1"
+    assert payload["dataset"] == [CASES[0].id]
+    assert len(payload["dataset_sha256"]) == 64
+    assert len(payload["rows_sha256"]) == 64
 
 
 def test_dataset_covers_three_categories_with_enough_cases() -> None:

@@ -24,6 +24,8 @@
 - **provider 无关**：任意 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / GLM / Moonshot …）。
 - **可测试**：依赖注入（LLM / 检索后端可替换为假实现），单测无需密钥与网络。
 - **自动化评估**：内置 LLM-as-judge，从覆盖度/可靠性/深度/可读性四维给报告打分。
+- **可复现实验清单**：每次运行把工作流 hash、非敏感配置、模型/端点、检索后端与角色目录快照 hash 固化进 checkpoint；原始检索结果按 URL + 内容哈希版本化落库，可离线审计“当时模型看到了什么”。
+- **确定性质量指标**：运行详情直接返回逐字验证率、语义支持率、报告准入率、引用快照覆盖率、独立发布方数、冲突/争议/拦截数及成本耗时，不依赖 judge 模型即可做版本回归。
 
 ## 架构
 
@@ -228,9 +230,39 @@ make revision m="说明"  # = alembic revision --autogenerate，按模型变更�
 
 ```bash
 python -m eval.run_eval
+python -m eval.run_eval --workflows deep,quick,reviewed,auto,teams --output
 ```
 
-对内置用例集逐条研究并由 LLM-as-judge 打分，输出四维 + 均分汇总表。
+默认把每个 `workflow × case` 作为独立研究运行写入 `DATABASE_URL`，并在指定
+`--output` 时同时生成 Markdown 和同名 JSON：Markdown 展示 judge 评分、确定性证据
+指标、成本/耗时与每格 `run_id`；JSON 保存完整矩阵、Run Manifest、质量指标和明细
+SHA-256。临时实验可用 `--no-persist-runs` 禁止落库。
+
+每次持久化运行的 `GET /api/runs/{id}` 还会返回：
+
+- `manifest`：可复现运行清单，不包含 API Key 等密钥；endpoint 会移除凭据与 query。
+- `sources`：检索时实际交给来源安全门禁和 Researcher 的原文快照。
+- `metrics`：从 findings / citations / events 确定性计算的质量、来源与成本指标。
+
+这些字段用于比较工作流与模型版本；LLM-as-judge 负责主观质量维度，确定性指标负责证据链和工程回归，两者不互相替代。
+
+对内置用例集逐条研究并由 LLM-as-judge 打分；每个分数都能经 `run_id` 回溯到运行
+详情、检索快照和事件流，而不是只保留最终平均值。
+
+### Benchmark 回归门禁
+
+```bash
+python -m eval.run_eval \
+  --workflows deep,quick,reviewed,auto,teams \
+  --output eval/results/candidate.md \
+  --baseline eval/baselines/main.json
+```
+
+门禁默认要求引用快照覆盖率不低于 95%、无语义支持论断率不高于 5%、冲突率不高于
+10%，并限制相对基线的 judge 均分下降不超过 0.25、token 增幅不超过 25%。失败时
+进程以退出码 `2` 结束，适合直接接入 CI。阈值可用 `--min-citation-coverage`、
+`--max-unsupported-rate`、`--max-conflict-rate`、`--max-score-drop` 和
+`--max-token-increase` 调整。
 
 ## 测试
 

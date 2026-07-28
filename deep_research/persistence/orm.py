@@ -141,7 +141,9 @@ class FindingRow(Base):
 
 class SourceRow(Base):
     __tablename__ = "source"
-    __table_args__ = (UniqueConstraint("run_id", "url", name="uq_source_run_url"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "url", "content_hash", name="uq_source_run_snapshot"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     run_id: Mapped[str] = mapped_column(
@@ -150,6 +152,7 @@ class SourceRow(Base):
     title: Mapped[str] = mapped_column(Text, default="")
     url: Mapped[str] = mapped_column(Text)
     content: Mapped[str] = mapped_column(Text, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
 
     run: Mapped[ResearchRun] = relationship(back_populates="sources")
 

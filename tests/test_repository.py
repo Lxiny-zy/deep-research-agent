@@ -6,6 +6,7 @@ SQLite 用 StaticPool 共享单连接，使 :memory: 在多次 session 间保持
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
@@ -22,6 +23,7 @@ from deep_research.models import (
     Report,
     ResearchPlan,
     ResearchResult,
+    Source,
     SubQuestion,
 )
 from deep_research.observability import Event
@@ -105,6 +107,13 @@ async def test_crud_roundtrip(repo):
         ),
     )
     await repo.save_report(run_id, Report(query="Q", markdown="# R", citations=["https://a.com"]))
+    await repo.save_sources(
+        run_id,
+        [
+            Source(title="A", url="https://a.com", content="first"),
+            Source(title="A2", url="https://a.com", content="updated"),
+        ],
+    )
     await repo.save_events(
         run_id,
         [Event(stage="PLANNER", type="start"), Event(stage="ORCHESTRATOR", type="done")],
@@ -127,6 +136,8 @@ async def test_crud_roundtrip(repo):
     assert detail.sub_questions[1].depends_on == [0]
     assert detail.report is not None
     assert detail.report.citations == ["https://a.com"]
+    assert {source.content for source in detail.sources} == {"first", "updated"}
+    assert all(len(source.content_hash) == 64 for source in detail.sources)
     assert detail.results[0].findings[0].evidence_quote == "verbatim source evidence"
     assert detail.results[0].findings[0].verification.status == "verified"
     assert detail.results[0].findings[0].verification.source_content_hash == "abc123"
@@ -158,6 +169,43 @@ async def test_crud_roundtrip(repo):
 
     summaries = await repo.list_runs()
     assert summaries[0].id == run_id
+
+
+@pytest.mark.asyncio
+async def test_source_snapshots_preserve_changed_content(repo) -> None:
+    run_id = await repo.create_run("snapshots")
+    await repo.save_sources(run_id, [Source(url="https://a.com", content="version one")])
+    await repo.save_sources(run_id, [Source(url="https://a.com", content="version two")])
+
+    detail = await repo.get_run(run_id)
+    assert detail is not None
+    assert {source.content for source in detail.sources} == {"version one", "version two"}
+    assert len({source.content_hash for source in detail.sources}) == 2
+
+
+@pytest.mark.asyncio
+async def test_sql_source_snapshot_upsert_is_concurrency_safe(tmp_path) -> None:
+    db_path = tmp_path / "source-upsert.db"
+    database_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
+    engine = make_engine(database_url)
+    await create_all(engine)
+    repo = SqlRepository(make_sessionmaker(engine))
+    run_id = await repo.create_run("concurrent")
+    try:
+        await asyncio.gather(
+            *[
+                repo.save_sources(
+                    run_id,
+                    [Source(url="https://same.example", content="same snapshot")],
+                )
+                for _ in range(10)
+            ]
+        )
+        detail = await repo.get_run(run_id)
+        assert detail is not None
+        assert len(detail.sources) == 1
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -428,7 +476,7 @@ async def test_prepare_sqlite_schema_accepts_current_create_all_database(tmp_pat
             "corroborates_claim_ids",
             "corroboration_reason",
         } <= columns
-        assert version == "0016"
+        assert version == "0017"
         assert detail is not None
         verification = detail.results[0].findings[0].verification
         assert verification.source_title == "Existing source"
@@ -558,7 +606,7 @@ async def test_prepare_sqlite_schema_repairs_legacy_finding_columns(tmp_path):
 
     async with engine.begin() as conn:
         version = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-    assert version == "0016"
+    assert version == "0017"
     await engine.dispose()
 
 
@@ -685,7 +733,7 @@ async def test_prepare_sqlite_schema_reconciles_falsely_stamped_head(tmp_path):
         set(constraint.get("column_names") or []) == {"run_id", "idx"}
         for constraint in schema["unique"]
     )
-    assert version == "0016"
+    assert version == "0017"
     assert repaired_indexes == [0, 1]
     await engine.dispose()
 

@@ -124,6 +124,8 @@ async def test_create_run_persists_role_snapshot_before_background_start(
     encoded = json.dumps(raw)
     assert raw["cards"][0]["system_prompt"] == "frozen API prompt"
     assert raw["cards"][0]["model_profile_id"] == profile.id
+    assert raw["profiles"][0]["model"] == "run-model"
+    assert raw["profiles"][0]["base_url"] is None
     assert "run-profile-secret" not in encoded
     assert "api_key" not in encoded
 

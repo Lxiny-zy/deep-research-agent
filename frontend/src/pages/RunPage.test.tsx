@@ -54,6 +54,10 @@ function makeDetail(status: RunStatus, markdown: string | null = null): RunDetai
     results: [],
     report: markdown === null ? null : { query: 'query', markdown, citations: [] },
     orchestration: null,
+    sources: [],
+    events: [],
+    manifest: null,
+    metrics: null,
   }
 }
 

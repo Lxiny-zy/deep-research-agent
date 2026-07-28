@@ -659,7 +659,7 @@ def _is_public_web_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) ->
     )
 
 
-def _registrable_domain(url: str) -> str:
+def publisher_identity(url: str) -> str:
     """Return an offline public-suffix-aware publisher identity for a source URL."""
     try:
         hostname = (urlsplit(url).hostname or "").rstrip(".").lower()
@@ -674,6 +674,10 @@ def _registrable_domain(url: str) -> str:
         pass
     extracted = _TLD_EXTRACT(hostname)
     return extracted.top_domain_under_public_suffix or hostname
+
+
+def _registrable_domain(url: str) -> str:
+    return publisher_identity(url)
 
 
 def _claim_id(finding: Finding) -> str:

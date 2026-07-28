@@ -6,6 +6,7 @@ LLM 被强制产出符合 schema 的 JSON，下游可直接消费而无需脆弱
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -29,6 +30,45 @@ class Source(BaseModel):
     title: str = ""
     url: str
     content: str = ""
+    content_hash: str = ""
+
+
+class RunManifest(BaseModel):
+    """Non-secret inputs that make one research run reproducible."""
+
+    schema_version: int = 1
+    created_at: datetime
+    workflow_name: str
+    workflow_hash: str
+    query_hash: str
+    settings: dict[str, bool | int | float | None] = Field(default_factory=dict)
+    llm_model: str = ""
+    llm_endpoint: str = ""
+    search_backend: str = ""
+    catalog_snapshot_hash: str = ""
+    catalog_model_profiles: list[dict[str, object]] = Field(default_factory=list)
+
+
+class QualityMetrics(BaseModel):
+    """Deterministic run metrics; no judge model is involved."""
+
+    total_findings: int = 0
+    verbatim_verified: int = 0
+    semantically_supported: int = 0
+    report_eligible: int = 0
+    corroborated: int = 0
+    conflicted: int = 0
+    disputed: int = 0
+    source_snapshots: int = 0
+    cited_sources: int = 0
+    cited_source_snapshot_coverage: float = 0.0
+    verified_finding_rate: float = 0.0
+    supported_finding_rate: float = 0.0
+    eligible_finding_rate: float = 0.0
+    independent_publishers: int = 0
+    blocked_sources: int = 0
+    total_tokens: int = 0
+    elapsed_seconds: float = 0.0
 
 
 class EvidenceVerification(BaseModel):

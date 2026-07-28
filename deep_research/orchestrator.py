@@ -30,6 +30,11 @@ from .models import Finding, Report, ResearchResult, SubQuestion
 from .observability import Event, Tracer
 from .orchestration import OrchestrationRuntime, WorkflowRun
 from .persistence.repository import LeaseLostError, ResearchRepository
+from .reproducibility import (
+    RUN_MANIFEST_CHECKPOINT_KEY,
+    RecordingSearchTool,
+    build_run_manifest,
+)
 from .scheduler import research_dag
 from .token_budget import TokenBudget
 from .tools.base import SearchTool
@@ -178,6 +183,10 @@ class _LazyOwnedSearchTool(SearchTool):
         self._factory = factory
         self._value: SearchTool | None = None
 
+    @property
+    def backend_name(self) -> str:
+        return "TavilySearch"
+
     def _get(self) -> SearchTool:
         if self._value is None:
             self._value = self._factory()
@@ -252,11 +261,12 @@ class DeepResearchAgent:
         tracer = self.tracer
         self.llm = llm if llm is not None else _LazyOwnedLLM(lambda: LLM(settings, tracer))
         self._owns_search_tool = search_tool is None
-        self.search_tool = (
+        raw_search_tool = (
             search_tool
             if search_tool is not None
             else _LazyOwnedSearchTool(lambda: _default_search_tool(settings))
         )
+        self.search_tool = RecordingSearchTool(raw_search_tool)
 
         # 仍构造具名角色实例：向后兼容（测试替换 self.researcher、直接调用各角色）
         self.planner = Planner(self.llm, self.tracer, settings)
@@ -436,6 +446,52 @@ class DeepResearchAgent:
             bb.scratch[RUN_CATALOG_CHECKPOINT_KEY] = cr.snapshot(
                 workflow_catalog_roles(wf)
             ).model_dump(mode="json")
+
+        if RUN_MANIFEST_CHECKPOINT_KEY not in bb.scratch:
+            catalog_snapshot = bb.scratch.get(RUN_CATALOG_CHECKPOINT_KEY)
+            catalog_profiles = (
+                catalog_snapshot.get("profiles", [])
+                if isinstance(catalog_snapshot, dict)
+                else []
+            )
+            bb.scratch[RUN_MANIFEST_CHECKPOINT_KEY] = build_run_manifest(
+                query=query,
+                workflow_name=wf.name,
+                workflow_definition=wf.model_dump(mode="json"),
+                settings=checkpoint_settings(self.settings),
+                llm_model=self.settings.llm_model,
+                llm_endpoint=self.settings.llm_base_url,
+                search_backend=getattr(
+                    self.search_tool.delegate,
+                    "backend_name",
+                    type(self.search_tool.delegate).__name__,
+                ),
+                catalog_snapshot=catalog_snapshot,
+                catalog_model_profiles=(
+                    catalog_profiles if isinstance(catalog_profiles, list) else []
+                ),
+            ).model_dump(mode="json")
+
+        if self.repo is not None and run_id is not None:
+            async def save_source_snapshots(sources):  # type: ignore[no-untyped-def]
+                await self.repo.save_sources(
+                    run_id, sources, lease_owner=self._lease_owner
+                )
+
+            self.search_tool.set_sink(save_source_snapshots)
+            def record_snapshot_error(exc, sources):  # type: ignore[no-untyped-def]
+                self.tracer.emit(
+                    "RESEARCHER",
+                    "error",
+                    f"来源快照持久化失败，研究继续：{exc}",
+                    data={
+                        "category": "source_snapshot_persistence",
+                        "source_count": len(sources),
+                        "source_urls": [source.url for source in sources],
+                    },
+                )
+
+            self.search_tool.set_error_sink(record_snapshot_error)
 
         async def save_checkpoint(execution):  # type: ignore[no-untyped-def]
             if self.repo is not None and run_id is not None:

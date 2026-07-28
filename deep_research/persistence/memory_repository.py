@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -102,8 +103,18 @@ class InMemoryRepository:
     async def save_result(self, run_id: str, result: ResearchResult) -> None:
         self._runs[run_id].results.append(result)
 
-    async def save_sources(self, run_id: str, sources: list[Source]) -> None:
-        self._runs[run_id].sources.extend(sources)
+    async def save_sources(
+        self, run_id: str, sources: list[Source], *, lease_owner: str | None = None
+    ) -> None:
+        self._assert_lease(run_id, lease_owner)
+        by_snapshot = {
+            (source.url, source.content_hash): source for source in self._runs[run_id].sources
+        }
+        for source in sources:
+            content_hash = hashlib.sha256(source.content.encode("utf-8")).hexdigest()
+            snapshot = source.model_copy(update={"content_hash": content_hash})
+            by_snapshot[(snapshot.url, snapshot.content_hash)] = snapshot
+        self._runs[run_id].sources = list(by_snapshot.values())
 
     async def save_report(self, run_id: str, report: Report) -> None:
         self._runs[run_id].report = report
@@ -259,6 +270,8 @@ class InMemoryRepository:
             elapsed=rec.elapsed,
             tags=list(rec.tags),
             orchestration=rec.orchestration.model_copy(deep=True) if rec.orchestration else None,
+            sources=list(rec.sources),
+            events=list(rec.events),
         )
 
     async def get_run_status(self, run_id: str) -> str | None:

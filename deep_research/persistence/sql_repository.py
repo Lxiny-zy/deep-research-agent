@@ -6,11 +6,14 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy import delete as sa_delete
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -237,12 +240,38 @@ class SqlRepository:
                     )
                 )
 
-    async def save_sources(self, run_id: str, sources: list[Source]) -> None:
+    async def save_sources(
+        self, run_id: str, sources: list[Source], *, lease_owner: str | None = None
+    ) -> None:
         async with self._sm() as s, s.begin():
-            for src in sources:
-                s.add(
-                    orm.SourceRow(run_id=run_id, title=src.title, url=src.url, content=src.content)
+            await self._owned_workflow_row(s, run_id, lease_owner)
+            values = []
+            seen: set[tuple[str, str]] = set()
+            for source in sources:
+                content_hash = hashlib.sha256(source.content.encode("utf-8")).hexdigest()
+                key = (source.url, content_hash)
+                if key in seen:
+                    continue
+                seen.add(key)
+                values.append(
+                    {
+                        "run_id": run_id,
+                        "title": source.title,
+                        "url": source.url,
+                        "content": source.content,
+                        "content_hash": content_hash,
+                    }
                 )
+            if not values:
+                return
+            dialect = s.bind.dialect.name if s.bind is not None else ""
+            insert = postgresql_insert if dialect == "postgresql" else sqlite_insert
+            statement = insert(orm.SourceRow).values(values)
+            statement = statement.on_conflict_do_update(
+                index_elements=["run_id", "url", "content_hash"],
+                set_={"title": statement.excluded.title, "content": statement.excluded.content},
+            )
+            await s.execute(statement)
 
     async def save_report(self, run_id: str, report: Report) -> None:
         async with self._sm() as s, s.begin():
@@ -509,6 +538,7 @@ class SqlRepository:
                             orm.ResearchResultRow.findings
                         ),
                         selectinload(orm.ResearchRun.report),
+                        selectinload(orm.ResearchRun.sources),
                         selectinload(orm.ResearchRun.tags),
                         selectinload(orm.ResearchRun.orchestration).selectinload(
                             orm.WorkflowRunRow.steps
@@ -609,6 +639,15 @@ class SqlRepository:
                 elapsed=run.elapsed,
                 created_at=run.created_at,
                 tags=[t.tag for t in run.tags],
+                sources=[
+                    Source(
+                        title=source.title,
+                        url=source.url,
+                        content=source.content,
+                        content_hash=source.content_hash,
+                    )
+                    for source in run.sources
+                ],
                 orchestration=orchestration,
             )
 

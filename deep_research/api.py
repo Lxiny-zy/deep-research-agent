@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from . import runtime_config
 from .catalog.repository import CatalogRepository
 from .config import Settings
+from .models import RunManifest
 from .observability import Event, EventHub
 from .orchestration import WorkflowRun
 from .orchestrator import (
@@ -49,6 +50,7 @@ from .orchestrator import (
 from .persistence.db import make_engine, make_sessionmaker, prepare_sqlite_schema
 from .persistence.repository import ResearchRepository, RunDetail, RunSummary, TagCount
 from .persistence.sql_repository import SqlRepository
+from .reproducibility import RUN_MANIFEST_CHECKPOINT_KEY, quality_metrics
 from .tools.base import SearchTool
 
 logger = logging.getLogger(__name__)
@@ -1195,6 +1197,19 @@ async def set_tags(run_id: str, req: TagsUpdate, request: Request) -> RunDetail:
     detail = await repo.get_run(run_id)
     if detail is None:  # 理论不可达（上面已校验）；类型收敛
         raise HTTPException(status_code=404, detail="run not found")
+    return await _enrich_run_detail(repo, detail)
+
+
+async def _enrich_run_detail(repo: ResearchRepository, detail: RunDetail) -> RunDetail:
+    detail.events = await repo.get_events(detail.id)
+    scratch = detail.orchestration.checkpoint.get("scratch", {}) if detail.orchestration else {}
+    raw_manifest = scratch.get(RUN_MANIFEST_CHECKPOINT_KEY) if isinstance(scratch, dict) else None
+    if raw_manifest is not None:
+        detail.manifest = RunManifest.model_validate(raw_manifest)
+    require_corroboration = bool(
+        detail.manifest and detail.manifest.settings.get("require_corroboration", False)
+    )
+    detail.metrics = quality_metrics(detail, require_corroboration=require_corroboration)
     return detail
 
 
@@ -1204,7 +1219,7 @@ async def get_run(run_id: str, request: Request) -> RunDetail:
     detail = await repo.get_run(run_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return detail
+    return await _enrich_run_detail(repo, detail)
 
 
 @app.get("/api/runs/{run_id}/events", dependencies=[Depends(require_api_key)])

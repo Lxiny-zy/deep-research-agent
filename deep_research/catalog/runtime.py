@@ -23,6 +23,7 @@ from .dto import (
     AgentCardView,
     CatalogRuntimeSnapshot,
     ModelProfileFull,
+    ModelProfileSnapshot,
     WorkflowDefView,
 )
 
@@ -58,6 +59,21 @@ async def create_catalog_runtime_snapshot(
     cards = await catalog_repo.list_agents()
     enabled = {card.name: card for card in cards if card.enabled}
     default_profile = await catalog_repo.get_default_profile()
+    profile_ids = {
+        card.model_profile_id
+        for name, card in enabled.items()
+        if name in required and card.model_profile_id
+    }
+    if default_profile is not None:
+        profile_ids.add(default_profile.id)
+    profiles: list[ModelProfileFull] = []
+    for profile_id in sorted(profile_ids):
+        if default_profile is not None and profile_id == default_profile.id:
+            profiles.append(default_profile)
+            continue
+        profile = await catalog_repo.get_profile_full(profile_id)
+        if profile is not None:
+            profiles.append(profile)
     terminal_roles = terminal_roles_for_cards(cards)
 
     return CatalogRuntimeSnapshot(
@@ -71,6 +87,7 @@ async def create_catalog_runtime_snapshot(
             for name, card in sorted(enabled.items())
             if name in required
         ],
+        profiles=[_profile_snapshot(profile) for profile in profiles],
         default_profile_id=default_profile.id if default_profile is not None else None,
         terminal_roles=sorted(
             terminal_roles.intersection(required | _BUILTIN_TERMINAL_ROLES)
@@ -130,6 +147,16 @@ class CatalogRuntime:
                 for name, card in sorted(self._cards.items())
                 if name in required
             ],
+            profiles=[
+                _profile_snapshot(profile)
+                for _, profile in sorted(self._profiles.items())
+            ]
+            + (
+                [_profile_snapshot(self._default_profile)]
+                if self._default_profile is not None
+                and self._default_profile.id not in self._profiles
+                else []
+            ),
             default_profile_id=(
                 self._default_profile.id if self._default_profile is not None else None
             ),
@@ -213,12 +240,18 @@ async def load_catalog_runtime(
         }
         if snapshot.default_profile_id:
             profile_ids.add(snapshot.default_profile_id)
+        frozen_profiles = {profile.id: profile for profile in snapshot.profiles}
         snapshot_profiles: dict[str, ModelProfileFull] = {}
         if catalog_repo is not None:
             for profile_id in profile_ids:
-                profile = await catalog_repo.get_profile_full(profile_id)
-                if profile is not None:
-                    snapshot_profiles[profile.id] = profile
+                live_profile = await catalog_repo.get_profile_full(profile_id)
+                frozen_profile = frozen_profiles.get(profile_id)
+                if live_profile is not None and frozen_profile is not None:
+                    snapshot_profiles[profile_id] = ModelProfileFull(
+                        **frozen_profile.model_dump(), api_key=live_profile.api_key
+                    )
+                elif live_profile is not None:
+                    snapshot_profiles[live_profile.id] = live_profile
         default_profile = (
             snapshot_profiles.get(snapshot.default_profile_id)
             if snapshot.default_profile_id is not None
@@ -252,4 +285,17 @@ async def load_catalog_runtime(
         default_profile=default_profile,
         tracer=tracer,
         settings=settings,
+    )
+
+
+def _profile_snapshot(profile: ModelProfileFull) -> ModelProfileSnapshot:
+    return ModelProfileSnapshot(
+        id=profile.id,
+        name=profile.name,
+        base_url=profile.base_url,
+        model=profile.model,
+        temperature=profile.temperature,
+        parameter_mode=profile.parameter_mode,
+        reasoning_effort=profile.reasoning_effort,
+        is_default=profile.is_default,
     )

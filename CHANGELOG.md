@@ -4,6 +4,21 @@
 
 ### Added
 
+- Added reproducible run manifests with stable workflow/query/catalog hashes, sanitized model
+  endpoint metadata, non-secret behavior settings, and retrieval backend identity.
+- Wired the existing source repository into the live retrieval path. Unique source snapshots are
+  now fenced, deduplicated, persisted before LLM extraction, and returned by run details.
+- Versioned source snapshots by URL and content hash, made SQL writes atomic under concurrent
+  searches, and prevented transient snapshot-write failures from discarding successful research.
+- Added deterministic per-run quality metrics for evidence verification, semantic support,
+  report eligibility, citation snapshot coverage, source diversity, conflicts, policy blocks,
+  token usage, and elapsed time.
+- Upgraded the workflow benchmark to persist every workflow/case cell as a traceable run, include
+  run IDs and deterministic evidence metrics in Markdown, and emit a machine-readable JSON matrix
+  with manifests and a detail-row SHA-256.
+- Added fail-closed benchmark regression gates for citation snapshot coverage, unsupported claims,
+  conflicts, judge-score degradation, token-cost increases, missing cells, and dataset drift.
+
 - Added a deterministic trust boundary between search and synthesis: source URL/prompt-injection
   policy decisions are audited, findings require a verbatim evidence quote, and only
   program-verified findings can reach report generation.
@@ -63,7 +78,6 @@
 - `/healthz` returns `ok` unconditionally without checking database connectivity.
 - API rate limiting is per-process and keyed on `client.host`, so it is ineffective behind a
   proxy without forwarded-for handling and does not aggregate across instances.
-- `save_sources` exists on the repository but has no caller yet.
 - Cross-source corroboration establishes independent publisher support, not truth: syndication,
   coordinated SEO pages, and incorrect but mutually consistent sources remain open risks.
 

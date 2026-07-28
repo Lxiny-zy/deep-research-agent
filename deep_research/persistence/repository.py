@@ -16,7 +16,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
-from ..models import Report, ResearchPlan, ResearchResult, Source, SubQuestion
+from ..models import (
+    QualityMetrics,
+    Report,
+    ResearchPlan,
+    ResearchResult,
+    RunManifest,
+    Source,
+    SubQuestion,
+)
 from ..observability import Event
 from ..orchestration import WorkflowRun
 
@@ -54,6 +62,10 @@ class RunDetail:
     created_at: datetime | None = None
     tags: list[str] = field(default_factory=list)
     orchestration: WorkflowRun | None = None
+    sources: list[Source] = field(default_factory=list)
+    events: list[Event] = field(default_factory=list)
+    manifest: RunManifest | None = None
+    metrics: QualityMetrics | None = None
 
 
 @dataclass
@@ -91,7 +103,9 @@ class ResearchRepository(Protocol):
 
     async def save_result(self, run_id: str, result: ResearchResult) -> None: ...
 
-    async def save_sources(self, run_id: str, sources: list[Source]) -> None: ...
+    async def save_sources(
+        self, run_id: str, sources: list[Source], *, lease_owner: str | None = None
+    ) -> None: ...
 
     async def save_report(self, run_id: str, report: Report) -> None: ...
 
