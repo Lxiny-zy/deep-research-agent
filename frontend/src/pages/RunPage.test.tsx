@@ -58,6 +58,7 @@ function makeDetail(status: RunStatus, markdown: string | null = null): RunDetai
     events: [],
     manifest: null,
     metrics: null,
+    intent: null,
   }
 }
 

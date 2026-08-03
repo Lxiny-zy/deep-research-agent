@@ -41,6 +41,7 @@ def repo(monkeypatch) -> InMemoryRepository:
         resume_execution=None,
         lease_owner=None,
         initial_execution=None,
+        requested_workflow=None,
     ):  # 不跑真实 agent
         return None
 

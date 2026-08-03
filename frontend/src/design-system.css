@@ -3059,3 +3059,181 @@ button.cite-ref.active {
     box-shadow: none;
   }
 }
+
+/* ── 意图识别面板：判定 / 级联层级 / 概率分布 / 依据 ─────────────────
+   与证据链面板同构（同一套 token），因为二者在产品语义上是一对：
+   证据链解释「结论从哪来」，意图面板解释「这次请求为什么这么跑」。 */
+.intent-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.intent-panel.is-blocked {
+  border-color: rgba(255, 107, 107, 0.34);
+  background: rgba(255, 107, 107, 0.05);
+}
+
+.intent-panel .panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.intent-tier-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.intent-tier-chip.tier-rule {
+  border-color: rgba(103, 211, 145, 0.34);
+  background: rgba(103, 211, 145, 0.1);
+  color: #91e7b2;
+}
+
+.intent-tier-chip.tier-model {
+  border-color: rgba(92, 200, 178, 0.34);
+  background: rgba(92, 200, 178, 0.1);
+  color: var(--accent-secondary);
+}
+
+.intent-tier-chip.tier-llm {
+  border-color: rgba(255, 216, 115, 0.34);
+  background: rgba(255, 216, 115, 0.1);
+  color: var(--stage-planner);
+}
+
+.intent-verdicts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.intent-verdict {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.intent-verdict.is-risk {
+  border-color: rgba(255, 107, 107, 0.34);
+  background: rgba(255, 107, 107, 0.08);
+}
+
+.intent-verdict-label {
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.intent-verdict-value {
+  color: var(--text-primary);
+  font-size: 1.02rem;
+}
+
+.intent-verdict.is-risk .intent-verdict-value {
+  color: #ff9c9c;
+}
+
+.intent-cost-note {
+  margin: 0;
+}
+
+.intent-section-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.intent-score-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) 3fr auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 5px;
+  font-size: 0.78rem;
+}
+
+.intent-score-name {
+  color: var(--text-secondary);
+}
+
+.intent-score-track {
+  position: relative;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.intent-score-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--stage-intent);
+  transform-origin: left center;
+  transition: transform 480ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.intent-score-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.intent-signals ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.intent-signals li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+
+.intent-signals code {
+  padding: 2px 7px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.intent-signal-tier {
+  color: var(--text-tertiary);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.intent-reason {
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intent-score-track i {
+    transition: none;
+  }
+}

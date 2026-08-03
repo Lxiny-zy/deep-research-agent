@@ -170,8 +170,8 @@ export default function HistoryPage() {
 
           {rows.length > 0 && (
             <div className="history-run-list">
-              {rows.map((run) => (
-                <article className="history-run-card" key={run.id}>
+              {rows.map((run, index) => (
+                <article className="history-run-card stagger-item" key={run.id} style={{ '--i': index } as React.CSSProperties}>
                   <input type="checkbox" checked={selected.has(run.id)} onChange={() => toggle(run.id)} aria-label={`选择研究：${run.query}`} />
                   <Link to={`/runs/${run.id}`} className="history-run-link">
                     <div className="history-run-query">{run.query}</div>

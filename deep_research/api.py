@@ -36,8 +36,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from . import runtime_config
+from .agents.intent_router import (
+    INTENT_ROUTE_KEY,
+    INTENT_SCRATCH_KEY,
+    INTENT_SUB_QUESTION_KEY,
+)
 from .catalog.repository import CatalogRepository
 from .config import Settings
+from .intent.routing import preroute_workflow
+from .intent.types import IntentDecision
 from .models import RunManifest
 from .observability import Event, EventHub
 from .orchestration import WorkflowRun
@@ -716,6 +723,7 @@ async def _execute(
     resume_execution: WorkflowRun | None = None,
     lease_owner: str | None = None,
     initial_execution: WorkflowRun | None = None,
+    requested_workflow: str | None = None,
 ) -> None:
     """后台执行一次研究：事件经 EventHub 实时扇出给 SSE 订阅者，全程落库。"""
     hub: EventHub = app.state.live.get(run_id)
@@ -763,6 +771,7 @@ async def _execute(
             repo=app.state.repo,
             run_id=run_id,
             workflow=workflow,
+            requested_workflow=requested_workflow,
             resume_execution=resume_execution,
             initial_execution=initial_execution,
             lease_owner=lease_owner,
@@ -871,15 +880,48 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
     repo: ResearchRepository = request.app.state.repo
     settings = _settings_for(request.app.state.settings, req.params)
     lease_owner = uuid4().hex
-    execution = create_initial_execution(req.query, req.workflow, settings)
+
+    # 意图预路由必须在 create_initial_execution 之前：工作流定义会被写进初始
+    # checkpoint 且崩溃恢复直接读它，等流程跑起来再路由就改不动执行路径了。
+    # 只跑规则 + 本地模型（enable_llm=False）——这里在 HTTP 同步段上，
+    # 升级到 LLM 会把创建研究的响应从毫秒级拉到秒级。
+    from .workflows import WORKFLOWS, get_workflow
+
+    workflow_name, intent_decision, route = await preroute_workflow(
+        req.query,
+        requested_workflow=req.workflow,
+        available_workflows=set(WORKFLOWS),
+        enabled=settings.intent_enabled,
+    )
+    execution = create_initial_execution(req.query, workflow_name, settings)
+    if intent_decision is not None:
+        # 把判定写进初始 checkpoint：流程内的 IntentRouter 复用它而不重判，
+        # 恢复后的运行也拿到与首次完全一致的意图结论。
+        scratch = execution.checkpoint.setdefault("scratch", {})
+        if isinstance(scratch, dict):
+            scratch[INTENT_SCRATCH_KEY] = intent_decision.model_dump(mode="json")
+            if route.applied and route.max_sub_questions is not None:
+                # 子问题预算也必须在这里落盘。intent_router 只被编排进 guarded
+                # 流程，而路由的结果通常是 deep/quick/teams——那些流程里没有这个
+                # 角色，预算若只由角色写入就永远到不了 Planner。预算只能收紧：
+                # 与用户配置取 min，绝不放宽。
+                scratch[INTENT_SUB_QUESTION_KEY] = min(
+                    route.max_sub_questions, settings.max_sub_questions
+                )
+            scratch[INTENT_ROUTE_KEY] = {
+                "applied": route.applied,
+                "workflow": route.workflow,
+                "max_sub_questions": route.max_sub_questions,
+                "reason": route.reason,
+            }
     catalog = getattr(request.app.state, "catalog", None)
     if not execution.definition:
         workflow_def = None
         if catalog is not None:
             try:
-                workflow_def = await catalog.get_workflow_def(req.workflow)
+                workflow_def = await catalog.get_workflow_def(workflow_name)
             except Exception:
-                logger.exception("failed to snapshot custom workflow %s", req.workflow)
+                logger.exception("failed to snapshot custom workflow %s", workflow_name)
         if workflow_def is not None and workflow_def.enabled:
             execution.definition = {
                 "name": workflow_def.name,
@@ -889,9 +931,7 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
                 "edges": workflow_def.edges,
             }
         else:
-            from .workflows import get_workflow
-
-            execution.definition = get_workflow(req.workflow).model_dump(mode="json")
+            execution.definition = get_workflow(workflow_name).model_dump(mode="json")
         execution.workflow_name = str(execution.definition["name"])
     await snapshot_catalog_for_execution(execution, catalog)
     run_id = await repo.create_run(req.query, execution=execution, lease_owner=lease_owner)
@@ -902,10 +942,13 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
             run_id,
             req.query,
             settings,
-            req.workflow,
+            workflow_name,
             None,
             lease_owner,
             execution,
+            # 用户原始选择：与 workflow_name（可能已被意图预路由改写）区分，
+            # 让 IntentRouter 只在用户真没指定时才路由。
+            requested_workflow=req.workflow,
         )
     )
     request.app.state.tasks.add(task)
@@ -1206,6 +1249,13 @@ async def _enrich_run_detail(repo: ResearchRepository, detail: RunDetail) -> Run
     raw_manifest = scratch.get(RUN_MANIFEST_CHECKPOINT_KEY) if isinstance(scratch, dict) else None
     if raw_manifest is not None:
         detail.manifest = RunManifest.model_validate(raw_manifest)
+    raw_intent = scratch.get(INTENT_SCRATCH_KEY) if isinstance(scratch, dict) else None
+    if raw_intent is not None:
+        try:
+            detail.intent = IntentDecision.model_validate(raw_intent)
+        except ValidationError:
+            # 旧 checkpoint 的意图结构可能与当前 schema 不符；不能让历史详情整体 500。
+            logger.warning("run %s has an unreadable intent decision", detail.id)
     require_corroboration = bool(
         detail.manifest and detail.manifest.settings.get("require_corroboration", False)
     )

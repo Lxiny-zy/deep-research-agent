@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import DagView from '../components/DagView'
 import EventTimeline from '../components/EventTimeline'
+import IntentPanel from '../components/IntentPanel'
 import OrchestrationPipeline from '../components/OrchestrationPipeline'
 import ReportActions from '../components/ReportActions'
 import ReportView from '../components/ReportView'
@@ -111,6 +112,8 @@ export default function RunPage() {
         connectionStatus={connectionStatus}
         tokensEstimated={stream.tokensEstimated}
       />
+
+      <IntentPanel intent={detail.data?.intent ?? null} />
 
       <OrchestrationPipeline
         execution={detail.data?.orchestration}

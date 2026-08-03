@@ -57,7 +57,15 @@ TEAMS = Workflow(
     steps=[Step(agent="planner"), Step(kind="team_fanout", aggregator="aggregator")],
 )
 
-WORKFLOWS = {wf.name: wf for wf in (DEEP, QUICK, REVIEWED, AUTO, TEAMS)}
+# 意图门禁（安全主线）：先识别意图与风险，再决定是否研究以及怎么研究。
+# 与其他流程一样，这条只是在 steps 前面多加一个已注册角色——引擎与编排器零改动。
+GUARDED = Workflow(
+    name="guarded",
+    description="意图门禁 + 深度研究：先识别任务/风险意图，拒识高危请求，再按意图执行",
+    steps=[Step(agent="intent_router"), *DEEP.steps],
+)
+
+WORKFLOWS = {wf.name: wf for wf in (DEEP, QUICK, REVIEWED, AUTO, TEAMS, GUARDED)}
 
 DEFAULT_WORKFLOW = "deep"
 

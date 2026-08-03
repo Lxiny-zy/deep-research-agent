@@ -9,7 +9,8 @@
 ## ✨ 亮点（面试可讲的点）
 
 - **多 Agent 协作**：Planner / Researcher / Reflector / Synthesizer 各司其职，职责清晰。
-- **Workflow-as-Data 编排引擎**：工作流以带版本的图数据（节点 / 边 / 条件 / Join 模式）落库执行，内置 deep / quick / reviewed / auto / teams 五种模板，也可在前端画布自组工作流。
+- **意图识别与请求侧门禁**：用户 query 与检索来源各走一条意图判定通道，内部是「正则规则 → 本地 TF-IDF+逻辑回归（0 token，随包分发的 JSON 权重，纯 Python 推理）→ LLM 兜底」的三级成本阶梯；任务意图决定走哪条工作流与子问题预算，风险意图（越狱 / 套取系统提示词 / 越权指令）在研究开始前拒识并产出说明性报告。三条单向不变量保证判定器即便被注入操控也只能收紧不能放宽（详见 [docs/INTENT_RECOGNITION.md](docs/INTENT_RECOGNITION.md)）。
+- **Workflow-as-Data 编排引擎**：工作流以带版本的图数据（节点 / 边 / 条件 / Join 模式）落库执行，内置 deep / quick / reviewed / auto / teams / guarded 六种模板，也可在前端画布自组工作流。
 - **可靠性设计**：节点级超时 / 重试 / 退避 / fallback、token 预算、Blackboard checkpoint、崩溃后启动自动恢复，多实例场景用可续期租约 fencing 防止旧实例写脏数据。
 - **角色广场与多模型档案**：Agent 角色卡片与模型档案数据驱动可编辑，检索 key 支持主备池自动切换。
 - **并行 fan-out**：子问题用 `asyncio` 并发检索，墙钟时间 ≈ 最慢的一条链，而非求和。
@@ -66,16 +67,17 @@ deep-research-agent/
 │   ├── models.py            # Pydantic 数据模型（各 Agent 的 schema）
 │   ├── observability.py     # Event + Tracer（控制台订阅 / SSE 队列）
 │   ├── llm.py               # LLM 封装（complete + 流式 + 结构化 parse，provider 无关）
-│   ├── guardrails.py        # 来源安全策略 + 证据验证 + 论断一致性门禁
+│   ├── guardrails.py        # 来源安全策略 + 证据验证 + 论断一致性门禁 + 来源意图收紧
+│   ├── intent/              # 意图识别：标签体系 / 规则 / 本地模型 / 级联 / 路由 / 数据集
 │   ├── dag.py               # 子问题依赖图：构建 / 环检测 / 拓扑分层
 │   ├── registry.py          # Agent 角色注册表
 │   ├── scheduler.py         # DAG 分层调度器
 │   ├── token_budget.py      # token 预算跟踪与软限制
 │   ├── tools/               # 检索后端抽象 + Tavily 实现（含 key 主备池）
-│   ├── agents/              # Planner / Researcher / Reflector / Synthesizer / Critic / Coordinator …
+│   ├── agents/              # Planner / Researcher / Reflector / Synthesizer / Critic / Coordinator / IntentRouter …
 │   ├── orchestration/       # 工作流图模型：节点 / 边 / 条件解释器 / 图运行时
-│   ├── workflow.py          # 工作流执行引擎（checkpoint / 重试 / fallback / 预算）
-│   ├── workflows.py         # 内置工作流模板（deep / quick / reviewed / auto / teams）
+│   ├── workflow.py          # 工作流执行引擎（checkpoint / 重试 / fallback / 预算 / halt）
+│   ├── workflows.py         # 内置工作流模板（deep / quick / reviewed / auto / teams / guarded）
 │   ├── catalog/             # 角色广场：角色卡 / 模型档案 / 检索 key 的仓储与运行时
 │   ├── persistence/         # 仓储层：接口 + InMemory / SQL(async SQLAlchemy) 双实现
 │   ├── orchestrator.py      # 编排：DAG 调度 + 反思循环 + run_stream + 落库
@@ -270,8 +272,25 @@ python -m eval.run_eval \
 pytest            # 使用假 LLM / 假检索，无需任何密钥或联网
 ```
 
+## 意图识别
+
+```bash
+make intent-train    # 训练 L2 本地模型（TF-IDF + 逻辑回归，纯离线，秒级，结果确定性）
+make intent-eval     # 离线评测：准确率 / 混淆矩阵 / 拒识率 / 误伤率 / 级联分流
+```
+
+`make intent-eval` 只覆盖 L1 规则与 L2 本地模型两级（不调真实 LLM，因此可复现且零成本），
+输出中显式标注这一口径。安全指标成对报告——**拒识率**（漏放攻击）与**误伤率**
+（正常研究请求被误拒）同时给出，评测集里有一半是「研究提示词注入防御」这类
+与攻击同词不同意图的困难负例，防止「全部拒绝」把拒识率刷到 100%。
+任一指标出现问题时进程以退出码 `1` 结束，可直接接入 CI。
+
+设计取舍与三条安全不变量见 [docs/INTENT_RECOGNITION.md](docs/INTENT_RECOGNITION.md)。
+
 ## 设计决策（面试可展开）
 
+- **为什么意图识别做成三级级联而不是直接调大模型？** 级联是**成本阶梯**不是准确率堆叠：意图判定是每个请求的前置步骤，做成一次 LLM 调用等于给所有流量加固定开销与秒级延迟；规则与本地模型吃掉大部分常规流量，只把低置信样本让给 LLM。攻击流量在第一级就被拦下，攻击者无法靠刷请求放大 LLM 账单。
+- **为什么意图判定只能收紧不能放宽？** 它读的是攻击者可控的输入。做成单向后，即便判定器被完全操控，最坏结果也只是把正常来源误判为可疑（可用性损失），而不可能让攻击性来源进入模型上下文（安全性损失）——安全属性是结构性质，不依赖组件自身正确。
 - **为什么结构化输出不用 provider 私有 API？** 为了 provider 无关与可移植：靠「Schema 注入 prompt + 稳健 JSON 抽取 + 失败重试」实现，任意兼容端点都能跑。
 - **为什么把 Tracer 做成事件总线？** 同一份事件流，CLI 用来打印、API 用来 SSE，前端用来实时可视化——一处产生、多处消费。
 - **为什么依赖注入？** Orchestrator 接受外部传入的 LLM / 检索后端，测试时注入假实现即可全离线跑完整流程。

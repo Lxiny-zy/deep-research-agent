@@ -176,7 +176,7 @@ export default function App() {
       </header>
 
       <main className="main-content">
-        <div className="content-area">
+        <div className="content-area route-enter" key={location.pathname}>
           <Outlet />
         </div>
       </main>

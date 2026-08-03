@@ -501,6 +501,48 @@ class ClaimConsistencyVerifier:
         return checked
 
 
+async def screen_source_intent(
+    source: Source,
+    decision: SourcePolicyDecision,
+    *,
+    cascade: Any | None = None,
+    use_llm: bool = False,
+) -> SourcePolicyDecision:
+    """用意图判定**收紧**一条来源的门禁结论；永远不放宽。
+
+    这是意图识别接进安全审计链的关键约束。正则信号回答「这段文本里有没有出现
+    已知攻击模式」，意图判定回答「这段文本想让读到它的模型做什么」——后者能
+    覆盖前者写不出规则的表达，但它本身可被精心构造的内容影响。因此：
+
+      - ``deny`` / ``quarantine`` 的结论原样返回，意图判定无权翻案；
+      - 只有 ``allow`` 的来源才会被意图判定进一步收紧为 ``quarantine``。
+
+    换句话说，意图判定在这条链路上只有一个方向的权力。即便它被间接注入完全
+    操控，最坏结果也只是把正常来源误判为可疑（可用性损失），而不可能让一条
+    攻击性来源进入模型上下文（安全性损失）。
+    """
+    if not decision.allowed:
+        return decision
+
+    from .intent.cascade import IntentCascade
+
+    engine = cascade if cascade is not None else IntentCascade()
+    text = "\n".join([source.title, source.content])
+    verdict = await engine.classify_source(text, use_llm=use_llm)
+    if verdict.intent in ("instructional_override", "credential_harvest"):
+        return SourcePolicyDecision(
+            source_url=decision.source_url,
+            verdict="quarantine",
+            reason_codes=[*decision.reason_codes, "source_intent_signal"],
+            matched_signals=[
+                *decision.matched_signals,
+                *[f"intent:{verdict.intent}"],
+                *[signal.code for signal in verdict.signals],
+            ],
+        )
+    return decision
+
+
 def report_eligible(finding: Finding, *, require_corroboration: bool = False) -> bool:
     verification = finding.verification
     if verification.status != "verified" or verification.semantic_status != "supported":

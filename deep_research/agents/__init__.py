@@ -3,6 +3,7 @@
 from .aggregator import Aggregator
 from .coordinator import Coordinator
 from .critic import Critic
+from .intent_router import IntentRouter
 from .planner import Planner
 from .reflector import Reflector
 from .researcher import Researcher
@@ -16,4 +17,5 @@ __all__ = [
     "Critic",
     "Coordinator",
     "Aggregator",
+    "IntentRouter",
 ]

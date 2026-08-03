@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added intent recognition and source-intent screening across workflow routing, run details, and
+  the frontend run experience, with auditable decisions and focused regression coverage.
 - Added reproducible run manifests with stable workflow/query/catalog hashes, sanitized model
   endpoint metadata, non-secret behavior settings, and retrieval backend identity.
 - Wired the existing source repository into the live retrieval path. Unique source snapshots are
@@ -83,6 +85,17 @@
 
 ### Fixed
 
+- Enforced the intent gate at the single point every execution path crosses, so prompt-injection
+  and system-prompt-probe requests are refused on the streaming fast path and the CLI instead of
+  only when the `guarded` workflow happened to be selected.
+- Kept the risk channel independent of the task channel, so a jailbreak no longer bypasses risk
+  classification by embedding a stable task phrase such as "compare A and B".
+- Distinguished the user's explicit workflow choice from the routed result, so intent routing and
+  the sub-question budget are actually applied instead of permanently disabling themselves.
+- Exempted research-framed questions that share vocabulary with attacks, and required a concrete
+  behavior-changing instruction before quarantining a source that merely discusses AI assistants.
+- Aligned the frontend risk verdict with the backend blocking rules, so a non-blocking risk is no
+  longer reported as an intercepted request.
 - Made strict corroboration fail closed for IDN aliases, conflicted corroborators, inconsistent
   persisted metadata, parallel graph branches, and synthesis runs with no eligible material.
 - Preserved the strict-gate policy in run checkpoints and Compose deployments, rejected non-boolean

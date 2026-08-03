@@ -62,7 +62,7 @@ export default function OrchestrationPipeline({ execution, events = [], runStatu
           <div className="runtime-step-wrap" key={step.id}>
             <span className="runtime-edge" aria-hidden="true"><AppIcon name="arrow-right" size={16} /></span>
             <div className={`runtime-step ${step.status}`} title={step.error ?? undefined}>
-              <span>{index + 1}</span>
+              <span>{step.status === 'succeeded' ? <AppIcon name="check" size={12} aria-hidden="true" /> : index + 1}</span>
               <div><strong>{step.label}</strong><small>{step.agent || step.kind}</small></div>
               <i>{STEP_STATUS_LABEL[step.status]}</i>
             </div>

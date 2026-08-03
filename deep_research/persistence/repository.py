@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+from ..intent.types import IntentDecision
 from ..models import (
     QualityMetrics,
     Report,
@@ -66,6 +67,8 @@ class RunDetail:
     events: list[Event] = field(default_factory=list)
     manifest: RunManifest | None = None
     metrics: QualityMetrics | None = None
+    # 本次运行的意图判定（从 checkpoint scratch 还原）；未跑意图门禁时为 None。
+    intent: IntentDecision | None = None
 
 
 @dataclass

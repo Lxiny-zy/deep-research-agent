@@ -1,4 +1,4 @@
-.PHONY: install lint fmt test test-pg chaos-demo up down migrate revision run-api run-cli fe-install fe-dev fe-build fe-lint fe-test help
+.PHONY: install lint fmt test test-pg chaos-demo intent-train intent-eval up down migrate revision run-api run-cli fe-install fe-dev fe-build fe-lint fe-test help
 
 PYTHON ?= python
 
@@ -25,6 +25,12 @@ test-pg:  ## 运行需要 PostgreSQL 的集成测试
 
 chaos-demo:  ## kill -9 故障恢复演示（离线假后端，全程约 3 分钟）
 	$(PYTHON) scripts/chaos_demo.py
+
+intent-train:  ## 训练意图识别 L2 本地模型（TF-IDF + 逻辑回归，纯离线）
+	$(PYTHON) scripts/train_intent_model.py
+
+intent-eval:  ## 意图识别离线评测（准确率 / 混淆矩阵 / 拒识率 / 误伤率 / 级联分流）
+	$(PYTHON) -m eval.intent_eval
 
 up:  ## docker compose 起全栈（构建并启动）
 	docker compose up --build

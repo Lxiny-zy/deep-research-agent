@@ -95,6 +95,19 @@ class Settings:
     # 自组合（auto 流程）生成的流程执行失败/零产出时，Coordinator 重规划的最大次数。
     max_replans: int = field(default_factory=lambda: _int_env("MAX_REPLANS", 1))
 
+    # --- 意图识别 ---
+    # 关闭后 IntentRouter 直接放行（不判定、不路由、不拦截），用于排查误伤或做 A/B 对照。
+    intent_enabled: bool = field(default_factory=lambda: _bool_env("INTENT_ENABLED", True))
+    # 是否允许级联升级到 L3（LLM 兜底）。关闭则只跑规则 + 本地模型，零 token 零网络。
+    intent_llm_fallback: bool = field(
+        default_factory=lambda: _bool_env("INTENT_LLM_FALLBACK", True)
+    )
+    # 来源侧意图审查：对通过 SourcePolicy 的来源再做一次意图判定，命中则追加隔离。
+    # 只收紧不放宽——规则已 deny 的来源不会因意图判定为 informational 而被放行。
+    intent_source_screening: bool = field(
+        default_factory=lambda: _bool_env("INTENT_SOURCE_SCREENING", True)
+    )
+
     # --- 网络 ---
     request_timeout: float = field(default_factory=lambda: _float_env("REQUEST_TIMEOUT", 60.0))
 
@@ -114,6 +127,9 @@ class Settings:
             raise ValueError("max_tokens 必须 >= 1 或为 None（不限）")
         if self.max_replans < 0:
             raise ValueError("max_replans 必须 >= 0")
+        for name in ("intent_enabled", "intent_llm_fallback", "intent_source_screening"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a boolean")
         if self.request_timeout <= 0:
             raise ValueError("request_timeout 必须 > 0")
 

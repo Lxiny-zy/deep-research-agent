@@ -12,6 +12,7 @@ from ..guardrails import (
     SemanticEvidenceVerifier,
     SourcePolicy,
     report_eligible,
+    screen_source_intent,
     verify_claim_consistency,
 )
 from ..llm import LLM
@@ -114,6 +115,13 @@ class Researcher:
             return ResearchResult(sub_question=sub_question, findings=[])
 
         policy_decisions = [self.source_policy.evaluate(source) for source in candidate_sources]
+        if self.settings.intent_source_screening:
+            # 第二道：意图审查。只对规则放行的来源做，且只能把 allow 收紧为
+            # quarantine（见 guardrails.screen_source_intent 的单向约束）。
+            policy_decisions = [
+                await screen_source_intent(source, decision)
+                for source, decision in zip(candidate_sources, policy_decisions, strict=True)
+            ]
         sources = [
             source
             for source, decision in zip(candidate_sources, policy_decisions, strict=True)

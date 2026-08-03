@@ -10,6 +10,7 @@ export interface StageMeta {
 }
 
 export const STAGE_META: Record<string, StageMeta> = {
+  INTENT: { label: '意图', color: 'var(--stage-intent)', icon: 'target' },
   PLANNER: { label: '规划', color: 'var(--stage-planner)', icon: 'route' },
   RESEARCHER: { label: '检索', color: 'var(--stage-researcher)', icon: 'search-code' },
   REFLECTOR: { label: '反思', color: 'var(--stage-reflector)', icon: 'refresh' },

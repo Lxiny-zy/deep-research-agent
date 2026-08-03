@@ -79,6 +79,12 @@ MAX_STEP_ATTEMPTS = 5
 MAX_TOTAL_BACKOFF_SECONDS = 120.0
 # 能产出报告的终端角色：预算耗尽时仍会执行这些步骤，保证尽力而为的报告。
 _TERMINAL_ROLES = {"synthesizer", "aggregator"}
+# 角色请求提前终止的黑板标记：任一角色把它设为真值，引擎即跳过后续非终端步骤。
+# 通用原语而非「意图专用」——引擎不需要知道谁因为什么要求停下（当前使用方是
+# IntentRouter 的风险拒识；将来的合规/配额检查可复用同一机制）。角色在设置它
+# 之前必须自行产出 bb.report，否则 require_report 会判定运行失败。
+HALT_SCRATCH_KEY = "_halt"
+HALT_REASON_KEY = "_halt_reason"
 # 子团队默认内部流程：在隔离子黑板上对其 focus 做一次检索（可被 SubTask.steps 覆盖）。
 _DEFAULT_TEAM_STEPS = [Step(kind="agent", agent="researcher")]
 _INCOMING_CONDITIONS_SKIP_REASON = "incoming conditions not matched"
@@ -477,6 +483,16 @@ class WorkflowEngine:
         return step.kind == "agent" and step.agent in self._terminal_roles
 
     @staticmethod
+    def _halted(bb: Blackboard) -> bool:
+        """是否有角色请求提前终止本次运行。
+
+        与预算耗尽的区别：预算耗尽仍跑终端角色以产出尽力而为的报告，而 halt
+        跳过**包括终端在内**的全部剩余步骤——请求终止的角色已经写好了 bb.report，
+        再跑 synthesizer 只会拿着空结果集覆盖掉那份说明。
+        """
+        return bool(bb.scratch.get(HALT_SCRATCH_KEY))
+
+    @staticmethod
     def _step_label(step: Step) -> str:
         if step.kind == "reflect_loop":
             return "反思补洞"
@@ -548,6 +564,12 @@ class WorkflowEngine:
                     kind=step.kind,
                     agent=step.agent,
                 )
+                # 角色请求提前终止（如意图门禁拒识）：跳过全部剩余步骤，
+                # 记为 skipped 而非消失，保证运行历史仍然完整可回放。
+                if self._halted(bb):
+                    reason = str(bb.scratch.get(HALT_REASON_KEY) or "halted by agent")
+                    self.runtime.skip_step(step_run, reason)
+                    continue
                 # 预算耗尽：显式记录 skipped，而不是让步骤从运行历史中消失。
                 if self._exhausted() and not self._is_terminal(step):
                     self.runtime.skip_step(step_run, "token budget exhausted")
@@ -718,6 +740,10 @@ class WorkflowEngine:
                         should_run = any(active_inputs)
                     if not should_run:
                         self.runtime.skip_step(step_run, _INCOMING_CONDITIONS_SKIP_REASON)
+                        return child, False, False
+                    if self._halted(bb):
+                        reason = str(bb.scratch.get(HALT_REASON_KEY) or "halted by agent")
+                        self.runtime.skip_step(step_run, reason)
                         return child, False, False
                     if self._exhausted() and not self._is_terminal(step):
                         self.runtime.skip_step(step_run, "token budget exhausted")

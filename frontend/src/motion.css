@@ -1,0 +1,286 @@
+﻿/* ============================================================================
+   Motion Layer — 交互动效增强（挂在 Atelier 体验层之后）
+   原则：
+   - 全部使用 transform / opacity，可在合成层完成，不触发重排
+   - 所有循环动画与入场动画都在 prefers-reduced-motion 下降级
+   - 与现有 --ease-expo / --ease-spring / --dur-* 令牌保持一致语言
+   ========================================================================== */
+
+/* ---------------------------------------------------------------------------
+   1. 路由切换：整页柔和上浮入场（key 变化重播 animation）
+   ------------------------------------------------------------------------- */
+@keyframes route-enter {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.route-enter {
+  animation: route-enter 0.5s var(--ease-expo) both;
+  will-change: opacity, transform;
+}
+
+/* ---------------------------------------------------------------------------
+   2. 事件流：新行从左侧淡入（仅本轮新增行，靠 React key + animation 一次性）
+   ------------------------------------------------------------------------- */
+@keyframes event-row-enter {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.event-row {
+  animation: event-row-enter 0.45s var(--ease-expo) both;
+}
+
+/* 进行中最后一行：呼吸微光条，提示“仍在流式” */
+.event-row.live {
+  background: linear-gradient(90deg, rgba(216, 255, 79, 0.05), transparent 62%);
+}
+.event-row.live .event-msg {
+  animation: live-msg-breathe 2.4s ease-in-out infinite;
+}
+@keyframes live-msg-breathe {
+  50% { opacity: 0.62; }
+}
+
+/* ---------------------------------------------------------------------------
+   3. 历史/角色卡片：按 --i 递延 stagger 入场；新卡片插入时同样生效
+   ------------------------------------------------------------------------- */
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.stagger-item {
+  animation: card-enter 0.5s var(--ease-expo) both;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+
+/* ---------------------------------------------------------------------------
+   4. 模态框：背板淡入 + 面板 spring 弹入（替代旧 scale-in 的 bounce 感）
+   ------------------------------------------------------------------------- */
+@keyframes modal-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modal-panel-in {
+  from { opacity: 0; transform: translateY(22px) scale(0.96); }
+  60% { opacity: 1; }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-backdrop {
+  animation: modal-backdrop-in 0.28s var(--ease-atelier) both;
+}
+.modal-backdrop .modal {
+  animation: modal-panel-in 0.46s var(--ease-spring) both;
+}
+
+/* ---------------------------------------------------------------------------
+   5. 进度条：流式期间光泽扫过 + 完成瞬间高光
+   ------------------------------------------------------------------------- */
+.research-progress-track > span {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.6s var(--ease-expo);
+}
+.research-progress-track > span::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 22%, rgba(255, 255, 255, 0.5) 50%, transparent 78%);
+  transform: translateX(-130%);
+  animation: progress-sheen 2.1s var(--ease-atelier) infinite;
+}
+@keyframes progress-sheen {
+  55%, 100% { transform: translateX(130%); }
+}
+/* 非 live（已完成/回放）状态不扫光，保持安静 */
+.research-live-overview:not(.is-live) .research-progress-track > span::after {
+  animation: none;
+  opacity: 0;
+}
+
+/* 运行时头部细进度条同样补光泽 */
+.runtime-header-progress span {
+  position: relative;
+  overflow: hidden;
+}
+.runtime-header-progress span::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 25%, rgba(255, 255, 255, 0.42) 50%, transparent 75%);
+  transform: translateX(-130%);
+  animation: progress-sheen 2.4s var(--ease-atelier) infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   6. 运行时步骤：状态切换时边框/阴影平滑过渡 + 完成打勾弹跳
+   ------------------------------------------------------------------------- */
+.runtime-step {
+  transition: border-color 0.4s var(--ease-atelier), box-shadow 0.4s var(--ease-atelier),
+    background 0.4s var(--ease-atelier), opacity 0.3s var(--ease-atelier);
+}
+.runtime-step.succeeded > span {
+  animation: step-check-pop 0.5s var(--ease-spring);
+}
+@keyframes step-check-pop {
+  0% { transform: scale(0.6); }
+  60% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+
+/* ---------------------------------------------------------------------------
+   7. 报告流式光标：更柔和的呼吸，并跟随容器而非纯白
+   ------------------------------------------------------------------------- */
+.report .cursor,
+.report-view .cursor {
+  display: inline-block;
+  color: var(--signal-lime);
+  animation: cursor-breathe 1.1s ease-in-out infinite;
+}
+@keyframes cursor-breathe {
+  0%, 100% { opacity: 1; transform: translateY(0); }
+  50% { opacity: 0.25; transform: translateY(1px); }
+}
+
+/* ---------------------------------------------------------------------------
+   8. 实时指标：数值更新时整卡短暂提亮（配合既有 is-updating）
+   ------------------------------------------------------------------------- */
+.live-metric {
+  transition: border-color 0.4s var(--ease-atelier), background 0.4s var(--ease-atelier);
+}
+.live-metric.is-updating {
+  border-color: rgba(216, 255, 79, 0.34);
+  background: rgba(216, 255, 79, 0.045);
+}
+
+/* ---------------------------------------------------------------------------
+   9. 导航：active 指示 pill 平滑出现（新增底色微光扫过）
+   ------------------------------------------------------------------------- */
+.top-navigation .nav-link {
+  position: relative;
+  overflow: hidden;
+}
+.top-navigation .nav-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.16) 50%, transparent 70%);
+  transform: translateX(-140%);
+  transition: transform 0.6s var(--ease-expo);
+  pointer-events: none;
+}
+.top-navigation .nav-link:hover::after {
+  transform: translateX(140%);
+}
+.top-navigation .nav-link.active::after {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   10. 按钮：主按钮按下时的微回弹已由 spring 过渡承担；
+       这里给 ghost/secondary 加 hover 微光扫过，统一触感
+   ------------------------------------------------------------------------- */
+.btn-secondary,
+.btn-ghost,
+.btn.ghost {
+  position: relative;
+  overflow: hidden;
+}
+.btn-secondary::after,
+.btn-ghost::after,
+.btn.ghost::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 32%, rgba(216, 255, 79, 0.1) 50%, transparent 68%);
+  transform: translateX(-140%);
+  transition: transform 0.55s var(--ease-expo);
+  pointer-events: none;
+}
+.btn-secondary:hover:not(:disabled)::after,
+.btn-ghost:hover:not(:disabled)::after,
+.btn.ghost:hover:not(:disabled)::after {
+  transform: translateX(140%);
+}
+
+/* ---------------------------------------------------------------------------
+   11. 骨架屏：在既有 .sk-row 基础上补一条更细腻的扫光（组件级 class）
+   ------------------------------------------------------------------------- */
+@keyframes sk-sheen {
+  from { background-position: 180% 0; }
+  to { background-position: -80% 0; }
+}
+.sk-row {
+  background-color: rgba(245, 240, 229, 0.055);
+  height: 14px;
+  margin-bottom: 10px;
+  border-radius: 2px;
+  background-image: linear-gradient(
+    100deg,
+    rgba(245, 240, 229, 0.045) 38%,
+    rgba(216, 255, 79, 0.09) 50%,
+    rgba(245, 240, 229, 0.045) 62%
+  );
+  background-size: 220% 100%;
+  animation: sk-sheen 1.6s var(--ease-atelier) infinite;
+}
+.sk-row:last-child { width: 62%; }
+
+/* ---------------------------------------------------------------------------
+   12. 状态徽标：运行中呼吸点
+   ------------------------------------------------------------------------- */
+.badge.info .app-icon,
+.live-sync-state i {
+  animation: live-signal-soft 1.8s ease-out infinite;
+}
+@keyframes live-signal-soft {
+  0% { box-shadow: 0 0 0 0 rgba(216, 255, 79, 0.45); }
+  70%, 100% { box-shadow: 0 0 0 7px rgba(216, 255, 79, 0); }
+}
+.live-sync-state.disconnected i {
+  animation: reconnect-blink-soft 1.1s ease-in-out infinite;
+}
+@keyframes reconnect-blink-soft {
+  50% { opacity: 0.3; }
+}
+
+/* ---------------------------------------------------------------------------
+   13. 焦点可见性：统一键盘焦点环动效
+   ------------------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid rgba(216, 255, 79, 0.75);
+  outline-offset: 2px;
+  transition: outline-offset 0.18s var(--ease-expo);
+}
+
+/* ---------------------------------------------------------------------------
+   Reduced motion：本层全部降级
+   ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .route-enter,
+  .event-row,
+  .stagger-item,
+  .modal-backdrop,
+  .modal-backdrop .modal,
+  .sk-row {
+    animation: none !important;
+  }
+  .event-row.live .event-msg,
+  .research-progress-track > span::after,
+  .runtime-header-progress span::after,
+  .badge.info .app-icon,
+  .live-sync-state i,
+  .report .cursor,
+  .report-view .cursor,
+  .runtime-step.succeeded > span {
+    animation: none !important;
+  }
+  .top-navigation .nav-link::after,
+  .btn-secondary::after,
+  .btn-ghost::after,
+  .btn.ghost::after {
+    display: none;
+  }
+}

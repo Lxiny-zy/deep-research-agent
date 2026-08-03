@@ -218,6 +218,7 @@ class DeepResearchAgent:
         repo: ResearchRepository | None = None,
         run_id: str | None = None,
         workflow: str | None = None,
+        requested_workflow: str | None = None,
         catalog_repo: CatalogSource | None = None,
         resume_execution: WorkflowRun | None = None,
         initial_execution: WorkflowRun | None = None,
@@ -228,6 +229,11 @@ class DeepResearchAgent:
         self.repo = repo
         self._run_id = run_id
         self._workflow_name = workflow
+        # 用户**显式**指定的工作流，与上面解析后的 workflow 区分开。
+        # 二者混用是个真实的坑：意图预路由会把 workflow 改写成推断结果，
+        # 若拿它当「用户的显式选择」，plan_route 会认为用户已指定而完全让位，
+        # 意图路由与子问题预算就永远不生效。默认 None＝用户没指定。
+        self._requested_workflow = requested_workflow
         self._catalog_repo = catalog_repo  # 数据驱动角色/模型档案来源（鸭子类型）
         self._resume_execution = resume_execution
         self._initial_execution = initial_execution
@@ -398,6 +404,31 @@ class DeepResearchAgent:
                 )
         return get_workflow(name)
 
+    async def _apply_intent_gate(self, bb: Blackboard, ctx: RunContext) -> None:
+        """在引擎启动前统一执行意图门禁——所有入口的必经之路。
+
+        **为什么不做成工作流里的一个步骤**：那样门禁只在编排了 ``intent_router``
+        的流程（``guarded``）里生效，而 ``/api/research`` 快路径与 CLI 都不走那条
+        流程，攻击请求会拿到一份正常报告。把安全属性挂在「用户/路由恰好选中了
+        某条���作流」上，等于让它可被绕过——安全门禁必须在**所有执行路径的交汇点**
+        上，而 ``_run_workflow`` 正是这个点。
+
+        **为什么不把 intent_router 插进 wf.steps**：引擎按位置 ``step-{i+1}``
+        匹配 checkpoint 做断点续跑，往前面插一步会让所有既有 run 的步骤编号错位，
+        恢复时张冠李戴。这里改为在引擎之外跑，通过既有的 halt 原语终止——
+        halt 本来就是为「角色请求提前终止」设计的通用机制。
+
+        ``guarded`` 流程仍保留 ``intent_router`` 步骤：它是**显式声明**，
+        且角色见到已有判定会复用而不重判，因此不会双重付费。
+        """
+        if not self.settings.intent_enabled:
+            return
+        # 已有判定（API 预路由或 checkpoint 恢复）由 IntentRouter 自己处理复用与
+        # 补跑逻辑，这里只负责保证「门禁一定跑过一次」。
+        from .agents.intent_router import IntentRouter
+
+        await IntentRouter().step(bb, ctx)
+
     async def _run_workflow(self, query: str, run_id: str | None) -> Report:
         """组装上下文、执行工作流，并在产出关键里程碑时落库（计划/结果/报告）。
 
@@ -416,6 +447,11 @@ class DeepResearchAgent:
             else Blackboard(query=query)
         )
         bb.scratch.setdefault(RUN_SETTINGS_CHECKPOINT_KEY, checkpoint_settings(self.settings))
+        # 让 IntentRouter 知道用户是否显式选了工作流：显式选择优先于意图路由。
+        # 注意用的是 _requested_workflow 而非 _workflow_name——后者可能是意图
+        # 预路由推断出来的结果，拿它当「显式选择」会让路由永久自我禁用。
+        if self._requested_workflow:
+            bb.scratch.setdefault("requested_workflow", self._requested_workflow)
         raw_catalog_snapshot = bb.scratch.get(RUN_CATALOG_CHECKPOINT_KEY)
         if raw_catalog_snapshot is not None and not isinstance(raw_catalog_snapshot, dict):
             raise ValueError("catalog checkpoint snapshot must be an object")
@@ -522,6 +558,7 @@ class DeepResearchAgent:
             )
             if errors:
                 raise ValueError("工作流不合法：" + "；".join(errors))
+        await self._apply_intent_gate(bb, ctx)
         await engine.run(wf, bb)
 
         if bb.report is None:  # WorkflowEngine(require_report=True) should have raised first.

@@ -119,6 +119,26 @@ export interface QualityMetrics {
   elapsed_seconds: number
 }
 
+export type IntentTier = 'rule' | 'model' | 'llm' | 'fallback'
+
+export interface IntentSignal {
+  tier: IntentTier
+  code: string
+  detail: string
+}
+
+export interface IntentDecision {
+  intent: string
+  confidence: number
+  tier: IntentTier
+  risk: 'none' | 'prompt_injection' | 'system_prompt_probe' | 'off_task_instruction' | 'unsafe_content'
+  risk_confidence: number
+  signals: IntentSignal[]
+  escalated: boolean
+  scores: Record<string, number>
+  reason: string
+}
+
 export interface RunDetail extends RunSummary {
   interpretation: string
   sub_questions: SubQuestion[]
@@ -129,6 +149,7 @@ export interface RunDetail extends RunSummary {
   events: ResearchEvent[]
   manifest: RunManifest | null
   metrics: QualityMetrics | null
+  intent: IntentDecision | null
 }
 
 export type WorkflowRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'
