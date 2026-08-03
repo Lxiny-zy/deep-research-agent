@@ -207,3 +207,125 @@ async def test_execute_forwards_explicit_user_choice(monkeypatch, repo) -> None:
     monkeypatch.setattr(api, "_execute", _capture)
     await _create("调研一下多智能体系统的工程实践现状", workflow="quick")
     assert captured["requested_workflow"] == "quick"
+
+
+# --- 多轮：history 由客户端携带，服务端无会话状态 ---
+
+
+@pytest.mark.asyncio
+async def test_history_is_optional_and_costs_nothing_when_absent(repo) -> None:
+    """不传 history 的请求走原路径，不构造 LLM、不做消解。"""
+    run_id, _ = await _create("Kafka 和 RabbitMQ 的区别")
+    detail = await repo.get_run(run_id)
+    assert detail is not None and detail.orchestration is not None
+    decision = detail.orchestration.checkpoint["scratch"][INTENT_SCRATCH_KEY]
+    assert decision["context_resolved"] is False
+    assert decision["resolved_query"] == ""
+
+
+@pytest.mark.asyncio
+async def test_history_is_rejected_when_too_long(repo) -> None:
+    """限长 6 轮：history 全文进 LLM prompt，不限长等于开放成本放大面。"""
+    history = [{"query": f"第{i}轮", "intent": "unknown"} for i in range(8)]
+    async with _client() as client:
+        response = await client.post(
+            "/api/runs", json={"query": "那第二个呢", "history": history}
+        )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_followup_is_resolved_through_the_api(monkeypatch, repo) -> None:
+    """端到端：带 history 的追问必须被消解，且消解结果进 checkpoint。
+
+    这条覆盖的是「多轮功能是否真的接通」——消解发生在 API 预路由，
+    若没接通，判定看到的是「那第二个呢」这种零信息量残句，必然弃权。
+    """
+    monkeypatch.setenv("DR_DEMO_FAKE_BACKENDS", "1")  # 借假 LLM 做消解
+    history = [
+        {
+            "query": "对比 Milvus 和 Qdrant",
+            "intent": "comparative",
+            "slots": {
+                "entities": ["Milvus", "Qdrant"],
+                "time_range": "",
+                "domain": "",
+                "language": "",
+                "aspects": [],
+            },
+        }
+    ]
+    run_id, _ = await _create("那第二个呢", history=history)
+    detail = await repo.get_run(run_id)
+    assert detail is not None and detail.orchestration is not None
+    decision = detail.orchestration.checkpoint["scratch"][INTENT_SCRATCH_KEY]
+
+    assert decision["context_resolved"] is True
+    assert decision["resolved_query"] == "对比 Milvus 和 Qdrant"
+    # 消解后的完整问题命中了对比规则；原文「那第二个呢」不可能命中。
+    assert decision["intent"] == "comparative"
+    assert any(s["code"] == "anaphoric_reference" for s in decision["signals"])
+
+
+@pytest.mark.asyncio
+async def test_followup_degrades_gracefully_without_an_llm(repo) -> None:
+    """LLM 不可用时保留原文，绝不编造补全——残句好过幻觉。
+
+    此时没有设 DR_DEMO_FAKE_BACKENDS 且测试环境无真实 key，消解必然失败。
+    """
+    history = [{"query": "对比 Milvus 和 Qdrant", "intent": "comparative"}]
+    run_id, _ = await _create("那第二个呢", history=history)
+    detail = await repo.get_run(run_id)
+    assert detail is not None and detail.orchestration is not None
+    decision = detail.orchestration.checkpoint["scratch"][INTENT_SCRATCH_KEY]
+
+    assert decision["context_resolved"] is False
+    assert decision["resolved_query"] == ""
+    # 但「检测到了依赖」这件事仍要留痕，否则事后无法解释判定质量为何偏低。
+    assert any(s["code"] == "anaphoric_reference" for s in decision["signals"])
+
+
+@pytest.mark.asyncio
+async def test_malformed_history_does_not_500(repo) -> None:
+    async with _client() as client:
+        response = await client.post(
+            "/api/runs", json={"query": "那第二个呢", "history": [{"nope": 1}]}
+        )
+    assert response.status_code == 422
+
+
+# --- 澄清：与拒识共用 guarded 路径 ---
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_query_is_routed_to_clarification(repo) -> None:
+    run_id, _ = await _create("帮我看看")
+    detail = await repo.get_run(run_id)
+    assert detail is not None and detail.orchestration is not None
+    assert detail.orchestration.definition["name"] == "guarded"
+    decision = detail.orchestration.checkpoint["scratch"][INTENT_SCRATCH_KEY]
+    assert decision["clarification"] is not None
+    assert decision["clarification"]["options"]
+
+
+@pytest.mark.asyncio
+async def test_clear_query_is_never_routed_to_clarification(repo) -> None:
+    """澄清的门槛必须高——正常提问被反问是最糟糕的体验回归。"""
+    for query in ("Kafka 和 RabbitMQ 的区别", "为什么大模型会产生幻觉", "向量数据库"):
+        run_id, _ = await _create(query)
+        detail = await repo.get_run(run_id)
+        assert detail is not None and detail.orchestration is not None
+        decision = detail.orchestration.checkpoint["scratch"][INTENT_SCRATCH_KEY]
+        assert decision["clarification"] is None, f"{query} 不该被反问"
+
+
+@pytest.mark.asyncio
+async def test_run_detail_exposes_slots_and_clarification(repo) -> None:
+    run_id, _ = await _create("对比 Milvus 和 Qdrant 近三年在医疗领域的成本")
+    async with _client() as client:
+        response = await client.get(f"/api/runs/{run_id}")
+    assert response.status_code == 200
+    intent = response.json()["intent"]
+    assert intent["slots"]["time_range"] == "近三年"
+    assert intent["slots"]["domain"] == "医疗"
+    assert "成本" in intent["slots"]["aspects"]

@@ -39,6 +39,13 @@ INTENT_ROUTE_KEY = "intent_route"
 # 子问题预算。由 API 层预路由或本角色写入，Planner 读取。两个写入方都必须
 # 先与 settings.max_sub_questions 取 min——这个键的语义是「已收紧过的上限」。
 INTENT_SUB_QUESTION_KEY = "intent_max_sub_questions"
+# 抽到的槽位（约束），供 Planner 注入到拆解 prompt。
+INTENT_SLOTS_KEY = "intent_slots"
+# 多轮消解后的完整问题。非空时下游必须用它而不是 bb.query——
+# 原文可能是「那第二个呢」，拿去检索必然打空。
+INTENT_RESOLVED_QUERY_KEY = "intent_resolved_query"
+# 澄清请求。存在即表示本次运行没有执行研究，而是在等用户补充信息。
+INTENT_CLARIFY_KEY = "intent_clarification"
 
 _BLOCK_MESSAGES = {
     "prompt_injection": "该请求试图覆盖系统指令或绕过安全设定",
@@ -71,6 +78,34 @@ def blocked_report(query: str, decision: IntentDecision) -> Report:
         "本系统只处理研究类请求。若这是一次正常的研究提问，"
         "请换一种表述方式重新提交；针对提示词注入、越狱等主题的**研究性问题**"
         "是被允许的，被拦截的是试图直接对系统下达指令的请求。\n"
+    )
+    return Report(query=query, markdown=markdown, citations=[])
+
+
+def clarification_report(query: str, decision: IntentDecision) -> Report:
+    """为需要澄清的请求产出追问报告。
+
+    与拒识共用「不执行研究但给一份可读说明」的产品语义，因此走同一条 halt 路径。
+    区别在措辞与可操作性：拒识是终局，澄清是**邀请用户补充信息后重来**，
+    所以必须给出具体的候选解读，而不是一句「请说清楚点」——
+    开放式追问把认知负担全推回用户，正是澄清体验最差的做法。
+    """
+    request = decision.clarification
+    assert request is not None  # 调用方已用 needs_clarification 判过
+    options = "\n".join(f"{i + 1}. {option}" for i, option in enumerate(request.options))
+    slots = decision.slots.describe()
+    markdown = (
+        "# 需要你补充一点信息\n\n"
+        "## 我的疑问\n"
+        f"{request.question}\n\n"
+        "## 可能的理解\n"
+        f"{options or '（暂无候选，请直接补充描述）'}\n\n"
+        "## 我已经读到的\n"
+        f"- 原始提问：{query}\n"
+        f"{f'- 已识别的约束：{slots}' if slots else '- 暂未识别出明确的约束条件'}\n\n"
+        "## 怎么继续\n"
+        "选一个方向、或直接把问题说得更具体一些，重新提交即可。"
+        "研究没有开始，因此没有消耗检索与生成成本。\n"
     )
     return Report(query=query, markdown=markdown, citations=[])
 
@@ -147,6 +182,36 @@ class IntentRouter:
             )
             return bb
 
+        clarification = decision.clarification if decision.needs_clarification else None
+        if clarification is not None:
+            bb.scratch[INTENT_CLARIFY_KEY] = clarification.model_dump(mode="json")
+            bb.report = clarification_report(bb.query, decision)
+            # 与拒识同一条 halt 路径：先写报告再请求终止，否则 require_report
+            # 会把「需要澄清」变成一次运行失败。
+            bb.scratch[HALT_SCRATCH_KEY] = True
+            bb.scratch[HALT_REASON_KEY] = "intent gate: needs clarification"
+            self.tracer.emit(
+                "INTENT",
+                "info",
+                f"意图存在歧义，请求澄清：{clarification.question}",
+                data={
+                    "category": "intent_gate",
+                    "blocked": False,
+                    "needs_clarification": True,
+                    "clarification": bb.scratch[INTENT_CLARIFY_KEY],
+                    "tier": decision.tier,
+                },
+            )
+            return bb
+
+        # 槽位写进黑板供 Planner 使用（见 planner.step 的约束注入）。
+        if not decision.slots.is_empty():
+            bb.scratch[INTENT_SLOTS_KEY] = decision.slots.model_dump(mode="json")
+        # 消解后的完整问题：多轮追问的原文（「那第二个呢」）无法独立检索，
+        # 下游必须拿消解结果去研究。
+        if decision.resolved_query:
+            bb.scratch[INTENT_RESOLVED_QUERY_KEY] = decision.resolved_query
+
         route = plan_route(
             decision,
             requested_workflow=bb.scratch.get("requested_workflow") or None,
@@ -176,6 +241,8 @@ class IntentRouter:
                 "escalated": decision.escalated,
                 "scores": decision.scores,
                 "route": bb.scratch[INTENT_ROUTE_KEY],
+                "slots": decision.slots.model_dump(mode="json"),
+                "context_resolved": decision.context_resolved,
             },
         )
         return bb
@@ -196,4 +263,7 @@ class IntentRouter:
         cascade = self._cascade or IntentCascade(
             llm=self.llm, enable_llm=self.settings.intent_llm_fallback
         )
-        return await cascade.classify_query(query)
+        # 走完整的 classify（含槽位与澄清判定），而不是只跑意图级联。
+        # history 不在这里传：多轮消解发生在 API 预路由（那时才有会话上下文），
+        # 判定结果连同消解后的问题一起进 checkpoint，本角色只是复用或补判。
+        return await cascade.classify(query)

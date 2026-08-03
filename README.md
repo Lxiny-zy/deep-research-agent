@@ -9,7 +9,7 @@
 ## ✨ 亮点（面试可讲的点）
 
 - **多 Agent 协作**：Planner / Researcher / Reflector / Synthesizer 各司其职，职责清晰。
-- **意图识别与请求侧门禁**：用户 query 与检索来源各走一条意图判定通道，内部是「正则规则 → 本地 TF-IDF+逻辑回归（0 token，随包分发的 JSON 权重，纯 Python 推理）→ LLM 兜底」的三级成本阶梯；任务意图决定走哪条工作流与子问题预算，风险意图（越狱 / 套取系统提示词 / 越权指令）在研究开始前拒识并产出说明性报告。三条单向不变量保证判定器即便被注入操控也只能收紧不能放宽（详见 [docs/INTENT_RECOGNITION.md](docs/INTENT_RECOGNITION.md)）。
+- **意图识别与请求侧门禁**：用户 query 与检索来源各走一条意图判定通道。输入侧是「多轮指代消解 → 三级意图级联 → 槽位抽取 → 澄清判定」四步：级联内部为「正则规则 → 本地 TF-IDF+逻辑回归（0 token，随包分发的 JSON 权重，纯 Python 推理）→ LLM 兜底」的成本阶梯；任���意图决定走哪条工作流与子问题预算，槽位（时间/领域/语言/侧面/实体）作为约束注入拆解 prompt，意图模糊时反问澄清而非猜着跑，风险意图（越狱 / 套取系统提示词 / 越权指令）在研究开始前拒识并产出说明性报告。四条单向不变量保证判定器即便被注入操控也只能收紧不能放宽（详见 [docs/INTENT_RECOGNITION.md](docs/INTENT_RECOGNITION.md)）。
 - **Workflow-as-Data 编排引擎**：工作流以带版本的图数据（节点 / 边 / 条件 / Join 模式）落库执行，内置 deep / quick / reviewed / auto / teams / guarded 六种模板，也可在前端画布自组工作流。
 - **可靠性设计**：节点级超时 / 重试 / 退避 / fallback、token 预算、Blackboard checkpoint、崩溃后启动自动恢复，多实例场景用可续期租约 fencing 防止旧实例写脏数据。
 - **角色广场与多模型档案**：Agent 角色卡片与模型档案数据驱动可编辑，检索 key 支持主备池自动切换。
@@ -68,7 +68,7 @@ deep-research-agent/
 │   ├── observability.py     # Event + Tracer（控制台订阅 / SSE 队列）
 │   ├── llm.py               # LLM 封装（complete + 流式 + 结构化 parse，provider 无关）
 │   ├── guardrails.py        # 来源安全策略 + 证据验证 + 论断一致性门禁 + 来源意图收紧
-│   ├── intent/              # 意图识别：标签体系 / 规则 / 本地模型 / 级联 / 路由 / 数据集
+│   ├── intent/              # 意图识别：标签体系 / 规则 / 本地模型 / 级联 / 多轮消解 / 槽位 / 澄清 / 路由
 │   ├── dag.py               # 子问题依赖图：构建 / 环检测 / 拓扑分层
 │   ├── registry.py          # Agent 角色注册表
 │   ├── scheduler.py         # DAG 分层调度器

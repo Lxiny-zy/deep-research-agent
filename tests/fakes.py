@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from deep_research.guardrails import ClaimConsistencyReport, SemanticEvidenceDecisionList
+from deep_research.intent.context import ResolvedQuery
+from deep_research.intent.slots import SlotExtraction
 from deep_research.models import (
     EvidenceVerification,
     Finding,
@@ -109,6 +111,22 @@ class FakeLLM:
             )
         if schema is ClaimConsistencyReport:
             return ClaimConsistencyReport(contradictions=[])
+        if schema is ResolvedQuery:
+            # 指代消解：把最近一轮历史里的问题原样当作补全结果。够用来验证
+            # 「消解结果是否真的流到了下游」，且不引入随机性。
+            history_line = next(
+                (
+                    line.removeprefix("第1轮用户提问：").split("（")[0]
+                    for line in user.splitlines()
+                    if line.startswith("第1轮用户提问：")
+                ),
+                "",
+            )
+            return ResolvedQuery(
+                resolved=history_line or "", needed_context=bool(history_line), reason="fixture"
+            )
+        if schema is SlotExtraction:
+            return SlotExtraction(entities=["实体A", "实体B"])
         raise AssertionError(f"未预设的 schema：{schema}")
 
 

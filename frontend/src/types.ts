@@ -127,6 +127,20 @@ export interface IntentSignal {
   detail: string
 }
 
+export interface IntentSlots {
+  entities: string[]
+  time_range: string
+  domain: string
+  language: string
+  aspects: string[]
+}
+
+export interface ClarificationRequest {
+  question: string
+  options: string[]
+  reason: string
+}
+
 export interface IntentDecision {
   intent: string
   confidence: number
@@ -137,6 +151,10 @@ export interface IntentDecision {
   escalated: boolean
   scores: Record<string, number>
   reason: string
+  slots: IntentSlots
+  context_resolved: boolean
+  resolved_query: string
+  clarification: ClarificationRequest | null
 }
 
 export interface RunDetail extends RunSummary {

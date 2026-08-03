@@ -18,12 +18,18 @@ from .cascade import (
     classify_query,
     classify_source_intent,
 )
+from .clarify import plan_clarification
+from .context import detect_context_dependency, resolve_followup
 from .model import IntentModelBundle, TextClassifier, load_bundled_model
+from .slots import extract_slots, extract_slots_by_rule
 from .types import (
     QUERY_INTENTS,
     RISK_INTENTS,
     SOURCE_INTENTS,
+    ClarificationRequest,
+    ConversationTurn,
     IntentDecision,
+    IntentSlots,
     IntentTier,
     QueryIntent,
     RiskIntent,
@@ -31,9 +37,12 @@ from .types import (
 )
 
 __all__ = [
+    "ClarificationRequest",
+    "ConversationTurn",
     "IntentCascade",
     "IntentDecision",
     "IntentModelBundle",
+    "IntentSlots",
     "IntentTier",
     "QUERY_INTENTS",
     "QueryIntent",
@@ -44,5 +53,10 @@ __all__ = [
     "TextClassifier",
     "classify_query",
     "classify_source_intent",
+    "detect_context_dependency",
+    "extract_slots",
+    "extract_slots_by_rule",
     "load_bundled_model",
+    "plan_clarification",
+    "resolve_followup",
 ]

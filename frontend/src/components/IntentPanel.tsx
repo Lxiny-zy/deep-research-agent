@@ -1,6 +1,6 @@
 // 意图判定面板：把「识别到什么意图 / 哪一级给出的 / 依据是什么 / 是否被拦截」
 // 摊开给用户看。这是安全审计主线的一部分——判定必须可解释，而不是一个黑箱标签。
-import type { IntentDecision, IntentTier } from '../types'
+import type { IntentDecision, IntentSlots, IntentTier } from '../types'
 import { AppIcon } from './AppIcon'
 
 const INTENT_LABELS: Record<string, string> = {
@@ -35,6 +35,26 @@ const TIER_META: Record<IntentTier, { label: string; note: string }> = {
 // off_task 请求会在 UI 上被写成「已在研究开始前拦截」，与事实相反。
 const BLOCKING_RISKS = new Set(['prompt_injection', 'system_prompt_probe', 'unsafe_content'])
 
+const SLOT_LABELS: Array<[keyof IntentSlots, string]> = [
+  ['entities', '研究对象'],
+  ['time_range', '时间范围'],
+  ['domain', '领域'],
+  ['language', '语料语言'],
+  ['aspects', '关注侧面'],
+]
+
+/** 把槽位对象摊平成 [中文标签, 值] 列表，跳过空槽位。 */
+function slotRows(slots: IntentSlots | undefined): Array<[string, string]> {
+  if (!slots) return []
+  const rows: Array<[string, string]> = []
+  for (const [key, label] of SLOT_LABELS) {
+    const raw = slots[key]
+    const value = Array.isArray(raw) ? raw.join('、') : raw
+    if (value) rows.push([label, value])
+  }
+  return rows
+}
+
 function intentLabel(intent: string): string {
   return INTENT_LABELS[intent] ?? intent
 }
@@ -49,6 +69,7 @@ export default function IntentPanel({ intent }: { intent: IntentDecision | null 
   const ranked = Object.entries(intent.scores)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 4)
+  const slotEntries = slotRows(intent.slots)
 
   return (
     <section className={`panel intent-panel${blocked ? ' is-blocked' : ''}`} aria-label="意图识别">
@@ -87,6 +108,43 @@ export default function IntentPanel({ intent }: { intent: IntentDecision | null 
         {tier.note}
         {intent.escalated ? ' · 本次判定调用了大模型' : ' · 本次判定未调用大模型'}
       </p>
+
+      {intent.clarification && (
+        <div className="intent-clarify">
+          <span className="intent-section-label">需要澄清</span>
+          <p className="intent-clarify-question">{intent.clarification.question}</p>
+          {intent.clarification.options.length > 0 && (
+            <ol className="intent-clarify-options">
+              {intent.clarification.options.map((option) => (
+                <li key={option}>{option}</li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+
+      {intent.context_resolved && intent.resolved_query && (
+        <div className="intent-resolved">
+          <span className="intent-section-label">多轮消解</span>
+          {/* 展示消解结果是可解释性的一部分：用户要能看到系统「以为」他在问什么，
+              否则一次错误的指代消解会表现为「答非所问」且无从追溯。 */}
+          <p className="intent-resolved-query">{intent.resolved_query}</p>
+        </div>
+      )}
+
+      {slotEntries.length > 0 && (
+        <div className="intent-slots">
+          <span className="intent-section-label">识别到的约束</span>
+          <ul>
+            {slotEntries.map(([label, value]) => (
+              <li key={label}>
+                <span className="intent-slot-name">{label}</span>
+                <span className="intent-slot-value">{value}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {ranked.length > 0 && (
         <div className="intent-scores">

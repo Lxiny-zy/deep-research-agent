@@ -3232,6 +3232,75 @@ button.cite-ref.active {
   margin: 0;
 }
 
+/* --- 多轮消解 / 槽位 / 澄清 --- */
+
+.intent-resolved,
+.intent-slots,
+.intent-clarify {
+  display: grid;
+  gap: 6px;
+}
+
+.intent-resolved-query {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent-primary, var(--border-primary));
+  background: var(--surface-2);
+  border-radius: 0 6px 6px 0;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+}
+
+.intent-slots ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.intent-slots li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+
+.intent-slot-name {
+  min-width: 62px;
+  color: var(--text-tertiary);
+  font-size: 0.74rem;
+}
+
+.intent-slot-value {
+  color: var(--text-primary);
+}
+
+/* 澄清不是错误状态，但需要比普通信息更醒目——它在等用户做一个动作。 */
+.intent-clarify {
+  padding: 10px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.intent-clarify-question {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.intent-clarify-options {
+  margin: 0;
+  padding-left: 1.2em;
+  display: grid;
+  gap: 4px;
+  font-size: 0.79rem;
+  color: var(--text-secondary);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .intent-score-track i {
     transition: none;

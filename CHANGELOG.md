@@ -4,6 +4,11 @@
 
 ### Added
 
+- Added multi-turn intent resolution, slot extraction, and clarification to the request-side
+  intent pipeline. Follow-ups such as "what about the second one" are rewritten into
+  self-contained questions before classification, extracted constraints (time range, domain,
+  language, aspects, entities) are injected into planning, and genuinely directionless input is
+  answered with a clarifying question instead of a guessed workflow.
 - Added intent recognition and source-intent screening across workflow routing, run details, and
   the frontend run experience, with auditable decisions and focused regression coverage.
 - Added reproducible run manifests with stable workflow/query/catalog hashes, sanitized model

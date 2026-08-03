@@ -32,18 +32,24 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from . import rules
+from . import clarify, context, rules
+from . import slots as slots_module
 from .model import TextClassifier, load_bundled_model
 from .types import (
     QUERY_INTENTS,
     RISK_INTENTS,
     SOURCE_INTENTS,
+    ConversationTurn,
     IntentDecision,
     IntentSignal,
     RiskIntent,
 )
 
 logger = logging.getLogger(__name__)
+
+# 需要实体槽位才能拆好子问题的意图。只有这些才值得为抽实体调一次 LLM——
+# comparative 的下游动作是「逐侧面对比 A 与 B」，不知道 A、B 是谁就拆不出计划。
+_SLOT_ENTITY_INTENTS = frozenset({"comparative"})
 
 # 风险严重度：数值越大越严重。用于强制「风险单调不可降级」。
 _RISK_SEVERITY: dict[RiskIntent, int] = {
@@ -130,6 +136,83 @@ class IntentCascade:
         self._enable_llm = enable_llm
 
     # --- 输入侧 ---
+
+    async def classify(
+        self,
+        query: str,
+        *,
+        history: list[ConversationTurn] | None = None,
+        extract_slots: bool = True,
+        allow_clarification: bool = True,
+    ) -> IntentDecision:
+        """完整的输入侧判定：多轮消解 → 意图级联 → 槽位抽取 → 澄清判定。
+
+        分层组合而非揉进一个函数，是因为四步的**失效方式与评测口径都不同**：
+        消解看还原准确率、级联看分类准确率、槽位看抽取 P/R、澄清看打扰率。
+        每一层都能单独关闭、单独评测、单独回归。
+
+        成本纪律：消解与槽位的 LLM 调用都是**条件触发**的——
+        消解只在检测到指代/省略信号时跑，槽位只在意图是 comparative（唯一真正
+        需要实体才能拆子问题的意图）时跑。无历史、非对比的常规单轮请求，
+        成本与加这些功能之前完全一致。
+        """
+        signals: list[IntentSignal] = []
+        resolved_query = ""
+        context_resolved = False
+
+        # 步骤 1：多轮消解。必须在分类之前——分类器要看的是完整问题，
+        # 而不是「那第二个呢」这种脱离上下文毫无信息量的残句。
+        if history:
+            candidate, context_signal, did_resolve = await context.resolve_followup(
+                query, history, llm=self._llm if self._enable_llm else None
+            )
+            if context_signal is not None:
+                signals.append(context_signal)
+            if did_resolve:
+                resolved_query = candidate
+                context_resolved = True
+
+        target = resolved_query or query
+
+        # 步骤 2：意图级联（原有三级，作用在消解后的完整问题上）。
+        decision = await self.classify_query(target)
+        if signals:
+            # 消解信号排在级联信号之前：它解释了「为什么分类器看到的是这句话」。
+            decision.signals = [*signals, *decision.signals]
+        decision.context_resolved = context_resolved
+        decision.resolved_query = resolved_query
+
+        if decision.blocked:
+            # 拒识优先：不为一个已被拒的请求抽槽位或想澄清问题。
+            return decision
+
+        # 步骤 3：槽位抽取。规则永远跑（零成本）。
+        #
+        # LLM 只在**槽位真的会改变下游行为**时才补。这个条件必须写得很紧：
+        # 实体是规则层永远抽不到的（开放集合），若用「没抽到实体」当触发条件，
+        # 等于每条已分类的请求都要调一次 LLM——那就把级联「零 token 吃掉大部分
+        # 流量」的核心结论废掉了。
+        #
+        # 真正需要实体的只有 comparative：它的下游动作是「逐个侧面对比 A 与 B」，
+        # 不知道 A、B 是谁就没法拆子问题。其余意图用原始 query 的自由文本足够。
+        if extract_slots:
+            decision.slots = slots_module.extract_slots_by_rule(target)
+            need_llm = (
+                decision.intent in _SLOT_ENTITY_INTENTS
+                and self._enable_llm
+                and self._llm is not None
+            )
+            if need_llm:
+                decision.slots = await slots_module.extract_slots(
+                    target, llm=self._llm, use_llm=True
+                )
+                decision.escalated = True
+
+        # 步骤 4：澄清判定。门槛很高（见 clarify 模块），绝大多数请求不触发。
+        if allow_clarification:
+            decision.clarification = clarify.plan_clarification(decision, target)
+
+        return decision
 
     async def classify_query(self, query: str) -> IntentDecision:
         signals: list[IntentSignal] = []

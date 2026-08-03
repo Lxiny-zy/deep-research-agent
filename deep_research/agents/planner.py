@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from typing import cast
 
+from pydantic import ValidationError
+
 from ..config import Settings
+from ..intent.types import IntentSlots
 from ..llm import LLM
 from ..models import ResearchPlan
 from ..observability import Tracer
 from ..registry import register
 from .base import Blackboard, RunContext
-from .intent_router import INTENT_SUB_QUESTION_KEY
+from .intent_router import (
+    INTENT_RESOLVED_QUERY_KEY,
+    INTENT_SLOTS_KEY,
+    INTENT_SUB_QUESTION_KEY,
+)
 
 SYSTEM = (
     "你是一名资深研究规划师。把用户的研究问题拆解为若干互补、可独立检索的子问题，"
@@ -46,15 +53,48 @@ class Planner:
         limit = self.settings.max_sub_questions
         if isinstance(budget, int) and 1 <= budget < limit:
             limit = budget
-        bb.plan = await self.run(bb.query, max_sub_questions=limit)
+        # 多轮追问的原文（「那第二个呢」）无法独立检索，必须用消解后的完整问题。
+        query = bb.scratch.get(INTENT_RESOLVED_QUERY_KEY) or bb.query
+        bb.plan = await self.run(
+            str(query),
+            max_sub_questions=limit,
+            constraints=self._constraints(bb),
+        )
         return bb
 
-    async def run(self, query: str, *, max_sub_questions: int | None = None) -> ResearchPlan:
+    @staticmethod
+    def _constraints(bb: Blackboard) -> str:
+        """把意图槽位渲染成给 LLM 的约束描述。
+
+        槽位是**用户明确说过的约束**（抽取层不猜、抽不到就留空），因此可以直接
+        进 prompt 要求遵守。为空时返回空串——不注入任何伪造的默认约束。
+        """
+        raw = bb.scratch.get(INTENT_SLOTS_KEY)
+        if not isinstance(raw, dict):
+            return ""
+        try:
+            return IntentSlots.model_validate(raw).describe()
+        except ValidationError:
+            # 槽位来自 checkpoint，结构变更时不该让整次规划失败——降级为无约束。
+            return ""
+
+    async def run(
+        self,
+        query: str,
+        *,
+        max_sub_questions: int | None = None,
+        constraints: str = "",
+    ) -> ResearchPlan:
         limit = max_sub_questions or self.settings.max_sub_questions
         self.tracer.emit("PLANNER", "start", "拆解研究问题…")
+        constraint_block = (
+            f"\n\n用户明确给出的约束（拆解时必须遵守，不要扩大范围）：\n{constraints}"
+            if constraints
+            else ""
+        )
         plan = await self.llm.parse(
             self.system,
-            f"研究问题：{query}\n\n请给出不超过 {limit} 个子问题。",
+            f"研究问题：{query}{constraint_block}\n\n请给出不超过 {limit} 个子问题。",
             ResearchPlan,
         )
         plan.sub_questions = plan.sub_questions[:limit]

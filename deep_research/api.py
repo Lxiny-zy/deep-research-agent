@@ -44,9 +44,10 @@ from .agents.intent_router import (
 from .catalog.repository import CatalogRepository
 from .config import Settings
 from .intent.routing import preroute_workflow
-from .intent.types import IntentDecision
+from .intent.types import ConversationTurn, IntentDecision
+from .llm import LLM
 from .models import RunManifest
-from .observability import Event, EventHub
+from .observability import Event, EventHub, Tracer
 from .orchestration import WorkflowRun
 from .orchestrator import (
     RUN_SETTINGS_CHECKPOINT_KEY,
@@ -108,6 +109,10 @@ class CreateRunRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)  # 限长：query 全文进 prompt，防成本放大
     params: ResearchParams | None = None
     workflow: str | None = Field(default=None, max_length=64)  # 任务流程选择；None＝默认 deep
+    # 多轮上下文由客户端携带，服务端不存会话：run 之间无状态是这个系统的既有性质
+    # （崩溃恢复、租约 fencing、回放都建立在「一个 run 自包含」之上）���加一张会话表
+    # 会把这些不变量全部拖进多轮语义里。限长 6 轮：消解只依赖最近的话题焦点。
+    history: list[ConversationTurn] = Field(default_factory=list, max_length=6)
 
 
 class CreateRunResponse(BaseModel):
@@ -874,6 +879,39 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@asynccontextmanager
+async def _intent_llm(app: FastAPI, settings: Settings) -> AsyncIterator[Any | None]:
+    """为多轮消解临时借一个 LLM，用完必关。
+
+    只有带 history 的请求才会走到这里。自建 client 必须显式 aclose——
+    AsyncOpenAI 不关只能靠 GC 兜底，在 HTTP 处理路径上逐请求泄漏 FD 会很快耗尽。
+
+    缺 key 或构造失败时返回 None：多轮消解是**增强**而非必需，退化成不消解
+    （拿原始残句去分类，大概率弃权走默认流程）也比让创建研究整个失败好。
+    """
+    if _demo_fake_backends_enabled():  # 演示/测试：复用假后端，不建真连接
+        demo_llm, demo_search = _build_demo_backends()
+        try:
+            yield demo_llm
+        finally:
+            await demo_search.aclose()
+        return
+    try:
+        settings.validate_llm()
+        llm = LLM(settings, Tracer())
+    except Exception:
+        logger.warning("intent llm unavailable; multi-turn resolution degraded", exc_info=True)
+        yield None
+        return
+    try:
+        yield llm
+    finally:
+        try:
+            await llm.aclose()
+        except Exception:
+            logger.exception("failed to close intent llm")
+
+
 @app.post("/api/runs", status_code=202, dependencies=[Depends(require_api_key)])
 async def create_run(req: CreateRunRequest, request: Request) -> CreateRunResponse:
     _check_rate_limit(request)
@@ -883,16 +921,29 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
 
     # 意图预路由必须在 create_initial_execution 之前：工作流定义会被写进初始
     # checkpoint 且崩溃恢复直接读它，等流程跑起来再路由就改不动执行路径了。
-    # 只跑规则 + 本地模型（enable_llm=False）——这里在 HTTP 同步段上，
-    # 升级到 LLM 会把创建研究的响应从毫秒级拉到秒级。
+    # 单轮请求只跑规则 + 本地模型——这里在 HTTP 同步段上，升级到 LLM 会把
+    # 创建研究的响应从毫秒级拉到秒级。带 history 的多轮请求是例外（见 preroute_workflow）。
     from .workflows import WORKFLOWS, get_workflow
 
-    workflow_name, intent_decision, route = await preroute_workflow(
-        req.query,
-        requested_workflow=req.workflow,
-        available_workflows=set(WORKFLOWS),
-        enabled=settings.intent_enabled,
-    )
+    if req.history:
+        # 借一个 LLM 做指代消解，用完立刻归还——作用域只包住预路由这一步，
+        # 不能让它跨越后面的落库与任务派发（那会把连接白白占住）。
+        async with _intent_llm(request.app, settings) as intent_llm:
+            workflow_name, intent_decision, route = await preroute_workflow(
+                req.query,
+                requested_workflow=req.workflow,
+                available_workflows=set(WORKFLOWS),
+                enabled=settings.intent_enabled,
+                llm=intent_llm,
+                history=req.history,
+            )
+    else:
+        workflow_name, intent_decision, route = await preroute_workflow(
+            req.query,
+            requested_workflow=req.workflow,
+            available_workflows=set(WORKFLOWS),
+            enabled=settings.intent_enabled,
+        )
     execution = create_initial_execution(req.query, workflow_name, settings)
     if intent_decision is not None:
         # 把判定写进初始 checkpoint：流程内的 IntentRouter 复用它而不重判，
