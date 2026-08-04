@@ -3361,6 +3361,105 @@ button.cite-ref.active {
   overflow-wrap: anywhere;
 }
 
+/* --- 澄清对话框：研究开始之前把问题问清楚 --- */
+
+.clarify-dialog {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--accent-primary, var(--border-primary));
+  background: var(--surface-2);
+}
+
+.clarify-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.clarify-head .panel-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clarify-question {
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.clarify-options {
+  display: grid;
+  gap: 8px;
+}
+
+.clarify-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--border-primary);
+  border-radius: 9px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s ease, transform .18s ease, background .18s ease;
+}
+
+.clarify-option:hover:not(:disabled) {
+  border-color: var(--accent-primary, var(--text-secondary));
+  transform: translateX(3px);
+}
+
+.clarify-option:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.clarify-custom {
+  display: grid;
+  gap: 6px;
+}
+
+.clarify-custom-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.clarify-custom-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.clarify-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .clarify-custom-row {
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clarify-option:hover:not(:disabled) {
+    transform: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .intent-score-track i {
     transition: none;

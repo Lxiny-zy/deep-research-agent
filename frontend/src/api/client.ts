@@ -2,6 +2,8 @@
 import type {
   AgentCard,
   AgentCardInput,
+  AssessRequest,
+  AssessResponse,
   Behavior,
   ConfigUpdate,
   ConfigView,
@@ -133,6 +135,14 @@ async function requestVoid(url: string, init?: RequestInit): Promise<void> {
 
 export function createRun(body: CreateRunRequest): Promise<CreateRunResponse> {
   return request<CreateRunResponse>('/api/runs', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/** 建 run 之前判断信息够不够。不够时返回追问与候选项，且**不会创建任何 run**。 */
+export function assessIntent(body: AssessRequest): Promise<AssessResponse> {
+  return request<AssessResponse>('/api/intent/assess', {
     method: 'POST',
     body: JSON.stringify(body),
   })

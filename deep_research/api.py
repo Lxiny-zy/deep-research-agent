@@ -43,8 +43,11 @@ from .agents.intent_router import (
 )
 from .catalog.repository import CatalogRepository
 from .config import Settings
+from .intent import readiness as readiness_module
+from .intent.cascade import IntentCascade
+from .intent.readiness import MAX_CLARIFY_ROUNDS
 from .intent.routing import preroute_workflow
-from .intent.types import ConversationTurn, IntentDecision
+from .intent.types import ConversationTurn, IntentDecision, IntentSlots
 from .llm import LLM
 from .models import RunManifest
 from .observability import Event, EventHub, Tracer
@@ -117,6 +120,34 @@ class CreateRunRequest(BaseModel):
 
 class CreateRunResponse(BaseModel):
     run_id: str
+
+
+class AssessRequest(BaseModel):
+    """澄清循环的一轮输入。服务端不存任何东西——累积的答案由客户端携带，
+    因此同样的请求体永远得到同样的判定（与 ``CreateRunRequest.history`` 同源的原则）。
+    """
+
+    query: str = Field(min_length=1, max_length=2000)
+    # 已经问出来的答案。本质就是槽位值（选了「性能与效率」= aspects），
+    # 因此直接复用 IntentSlots，不另造类型。
+    answers: IntentSlots = Field(default_factory=IntentSlots)
+    # 已经问过几轮。客户端可篡改，但每轮成本极低且有独立限流，
+    # 为此引入服务端状态不划算。
+    round: int = Field(0, ge=0, le=MAX_CLARIFY_ROUNDS)
+    history: list[ConversationTurn] = Field(default_factory=list, max_length=6)
+
+
+class AssessResponse(BaseModel):
+    ready: bool
+    # ready 时前端拿它去建 run：由服务端合成，前端不参与拼接。
+    resolved_query: str = ""
+    question: str = ""
+    options: list[str] = Field(default_factory=list)
+    gap: str = "none"
+    # 安全拦截：前端照常走 create_run，让拒识留下审计痕迹。
+    blocked: bool = False
+    intent: str = ""
+    reason: str = ""
 
 
 class TagsUpdate(BaseModel):
@@ -304,6 +335,10 @@ class _RateLimiter:
 
 
 _run_limiter = _RateLimiter(max_calls=10, window_seconds=60.0)
+# 澄清判定独立限流：一次澄清循环最多 3 轮，与建 run 共用配额的话，
+# 用户问三个问题就能把 10 次/分钟的建 run 额度耗掉大半。这条路径只跑
+# 规则 + 本地模型（零 token、毫秒级），配额可以宽得多。
+_assess_limiter = _RateLimiter(max_calls=30, window_seconds=60.0)
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -322,6 +357,11 @@ def _rate_limit_key(request: Request) -> str:
 
 def _check_rate_limit(request: Request) -> None:
     if not _run_limiter.check(_rate_limit_key(request)):
+        raise HTTPException(status_code=429, detail="too many requests, slow down")
+
+
+def _check_assess_rate_limit(request: Request) -> None:
+    if not _assess_limiter.check(_rate_limit_key(request)):
         raise HTTPException(status_code=429, detail="too many requests, slow down")
 
 
@@ -912,6 +952,102 @@ async def _intent_llm(app: FastAPI, settings: Settings) -> AsyncIterator[Any | N
             logger.exception("failed to close intent llm")
 
 
+@asynccontextmanager
+async def _no_llm() -> AsyncIterator[Any | None]:
+    """与 ``_intent_llm`` 同形状的空实现：不构造任何连接，直接给 None。
+
+    让「要不要 LLM」这个判断留在调用点的一行三元里，而不是散进
+    ``_intent_llm`` 内部再加一个参数——后者会让那个函数同时负责
+    「构造 LLM」和「决定要不要构造」两件事。
+    """
+    yield None
+
+
+@app.post("/api/intent/assess", dependencies=[Depends(require_api_key)])
+async def assess_intent(req: AssessRequest, request: Request) -> AssessResponse:
+    """澄清循环的一轮：判断信息够不够开始研究，不够就给出追问与候选项。
+
+    **这个端点不创建任何 run，也不写库。** 这正是它存在的理由——旧实现让澄清
+    走完整的建 run 流程再 halt，于是历史列表里躺着一条状态 done、却什么都没
+    研究的记录。把判定挪到建 run 之前，既不脏历史，也不需要引入「挂起态」
+    （那会把崩溃恢复、租约 fencing、事件回放全部拖进多轮语义里）。
+
+    成本纪律：第一轮只跑规则 + 本地模型（零 token）。只有进入第二轮才让 LLM
+    生成贴合具体提问的候选项——能走到第二轮说明情况确实复杂，值得花这次钱。
+    """
+    _check_assess_rate_limit(request)
+    settings = request.app.state.settings
+    if not settings.intent_enabled:
+        # 意图识别关掉了就不该由它拦路：直接放行，让用户照常提问。
+        return AssessResponse(ready=True, resolved_query=req.query, reason="意图识别已关闭")
+
+    # 累积到的答案先并进 query，再判定——判定必须作用在「补充之后」的问题上，
+    # 否则每一轮看到的都是最初那句残缺的话，gap 永远消不掉。
+    composed = readiness_module.compose_query(req.query, req.answers)
+
+    # 只有真要用 LLM 时才构造它：第一轮纯规则 + 本地模型，多轮消解也只在带
+    # history 时才需要。无谓地构造既白付一次连接开销，在没配 key 的环境里
+    # 还会刷一串「llm unavailable」告警，把真正的问题淹掉。
+    needs_llm = req.round >= 1 or bool(req.history)
+
+    async with _intent_llm(request.app, settings) if needs_llm else _no_llm() as intent_llm:
+        cascade = IntentCascade(llm=intent_llm, enable_llm=intent_llm is not None)
+        decision = await cascade.classify(
+            composed,
+            history=req.history,
+            extract_entities=False,  # 与预路由同理：实体留给异步段抽
+            allow_clarification=False,  # 澄清由 readiness 判，不走 clarify 那条兜底路径
+        )
+        # 已抽到的槽位要并回累积答案：用户这轮填的「医疗」既是答案也是槽位，
+        # 下一轮的 gap 判定要看到它。
+        merged = readiness_module.merge_slots_for_assess(req.answers, decision.slots)
+        decision.slots = merged
+        verdict = readiness_module.assess(decision, composed)
+
+        if decision.blocked:
+            # 拒识不在这里终止：前端照常走 create_run，让这条请求留下
+            # 「为什么被拒」的审计记录。澄清是产品交互，拒识是安全事件。
+            return AssessResponse(
+                ready=True,
+                resolved_query=composed,
+                blocked=True,
+                intent=decision.intent,
+                reason=verdict.reason,
+            )
+
+        # 轮次上限：到顶强制放行。把用户问烦的代价，高于跑一次信息不全的研究。
+        if verdict.ready or req.round >= MAX_CLARIFY_ROUNDS - 1:
+            return AssessResponse(
+                ready=True,
+                resolved_query=composed,
+                intent=decision.intent,
+                gap=verdict.gap,
+                reason=verdict.reason if verdict.ready else "已达追问上限，带现有信息开始研究",
+            )
+
+        options: list[str] = []
+        question = verdict.question
+        if req.round >= 1:
+            generated = await readiness_module.llm_options(
+                composed, verdict, merged, llm=intent_llm
+            )
+            if generated is not None:
+                question, options = generated.question, generated.options
+        if not options:
+            # 第一轮，或 LLM 不可用/失败：退回零成本的规则模板。
+            options = readiness_module.rule_options(verdict.gap)
+
+    return AssessResponse(
+        ready=False,
+        resolved_query=composed,
+        question=question,
+        options=options,
+        gap=verdict.gap,
+        intent=decision.intent,
+        reason=verdict.reason,
+    )
+
+
 @app.post("/api/runs", status_code=202, dependencies=[Depends(require_api_key)])
 async def create_run(req: CreateRunRequest, request: Request) -> CreateRunResponse:
     _check_rate_limit(request)
@@ -944,6 +1080,27 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
             available_workflows=set(WORKFLOWS),
             enabled=settings.intent_enabled,
         )
+    if intent_decision is not None and intent_decision.needs_clarification:
+        # 信息不全的请求不建 run：旧实现会建一个 run、跑到 IntentRouter 再 halt，
+        # 于是历史里留下一条状态 done、却什么都没研究的记录。
+        #
+        # 注意这里**只拦澄清，不拦拒识**——拒识必须照常建 run，把「这条请求
+        # 为什么被拒」留成审计痕迹。二者今天共用 halt 路径，但产品语义不同：
+        # 拒识是安全事件（要留痕），澄清是产品交互（不该脏历史）。
+        #
+        # 正常前端不会撞到这个 422（它会先调 /api/intent/assess）。这是兜底：
+        # 防止绕过 assess 的调用方把一个信息不全的请求直接送进研究。
+        clarification = intent_decision.clarification
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "needs_clarification",
+                "message": "请求信息不足，请先通过 /api/intent/assess 补全",
+                "question": clarification.question if clarification else "",
+                "options": list(clarification.options) if clarification else [],
+            },
+        )
+
     execution = create_initial_execution(req.query, workflow_name, settings)
     if intent_decision is not None:
         # 把判定写进初始 checkpoint：流程内的 IntentRouter 复用它而不重判，

@@ -4,6 +4,15 @@
 
 ### Added
 
+- Added an interactive clarification loop that runs *before* a run is created. A request whose
+  information is insufficient now gets a question with clickable candidate readings and a free
+  text field, and only reaches the research workflow once the answer is in — up to three rounds,
+  with an always-present escape hatch. Previously a clarification cost a fully persisted run
+  that researched nothing and left a `done` record in history next to real reports.
+- Added a readiness judgement derived from what downstream actually needs rather than from
+  classifier confidence. "Compare them" is classified as comparative with high confidence yet
+  carries no entities, so planning cannot decompose it; the old confidence gate let exactly that
+  case through. Being sure of the *category* is not the same as being able to *act*.
 - Added multi-turn intent resolution, slot extraction, and clarification to the request-side
   intent pipeline. Follow-ups such as "what about the second one" are rewritten into
   self-contained questions before classification, extracted constraints (time range, domain,

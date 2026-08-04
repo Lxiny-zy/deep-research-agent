@@ -323,6 +323,27 @@ export interface CreateRunResponse {
   run_id: string
 }
 
+// POST /api/intent/assess —— 建 run 之前的「信息够不够」判定。
+// 累积的答案由客户端携带（见 lib/clarification.ts），服务端不存会话。
+export interface AssessRequest {
+  query: string
+  answers?: IntentSlots
+  round?: number
+  history?: ConversationTurn[]
+}
+
+export interface AssessResponse {
+  ready: boolean
+  resolved_query: string
+  question: string
+  options: string[]
+  gap: string
+  /** 安全拦截：前端照常建 run，让拒识留下审计痕迹 */
+  blocked: boolean
+  intent: string
+  reason: string
+}
+
 // done 事件的 data 负载
 export interface RunStats {
   elapsed: number

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
+import ClarifyDialog from '../components/ClarifyDialog'
 import SettingsPanel from '../components/SettingsPanel'
 import { BUILTIN_TEMPLATE_META } from '../components/BuiltinTemplateGallery'
 import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { useConfig } from '../hooks/useConfig'
-import { createRun, listWorkflows } from '../api/client'
+import { assessIntent, createRun, listWorkflows } from '../api/client'
+import { advance, emptySlots, isSkip, type ClarifyState } from '../lib/clarification'
 import { clearThread, loadThread } from '../lib/conversation'
 import type { ConversationTurn, ResearchParams, WorkflowInfo } from '../types'
 
@@ -31,6 +33,9 @@ export default function NewResearchPage() {
   // 追问上下文来自 sessionStorage，在挂载时读一次即可：本页是唯一的写入方之一，
   // 而另一个写入方（运行详情页的「继续追问」）跳转过来时组件会重新挂载。
   const [thread, setThread] = useState<ConversationTurn[]>(() => loadThread())
+  // 澄清循环的临时状态：非 null 表示正在等用户补充信息，研究尚未开始。
+  // 刻意不落 sessionStorage——它是一次提问内部的过程，刷新页面就该重来。
+  const [clarify, setClarify] = useState<ClarifyState | null>(null)
 
   useEffect(() => {
     // stale 标记：连续导航或组件卸载后，旧请求的迟到响应不得覆盖新选择。
@@ -61,22 +66,100 @@ export default function NewResearchPage() {
     setThread([])
   }
 
+  /** 真正创建研究。到这一步意味着信息已经够了（或用户主动跳过了追问）。 */
+  async function launch(finalQuery: string) {
+    const hasParams = Object.values(params).some((item) => item != null)
+    const { run_id } = await createRun({
+      query: finalQuery,
+      params: hasParams ? params : null,
+      workflow: workflow || null,
+      // 空数组也照常传：后端把它当作「无上下文」，与不传等价，
+      // 省掉一个仅为省几字节而存在的条件分支。
+      history: thread,
+    })
+    navigate(`/runs/${run_id}`)
+  }
+
+  /** 走一轮澄清判定：够了就建 run，不够就把追问渲染出来等用户作答。 */
+  async function step(state: ClarifyState) {
+    const verdict = await assessIntent({
+      query: state.query,
+      answers: state.answers,
+      round: state.round,
+      history: thread,
+    })
+    if (verdict.ready) {
+      // blocked 的请求也走这里：它必须照常建 run，把「为什么被拒」
+      // 留成审计记录——拒识是安全事件，不是可以澄清掉的产品交互。
+      setClarify(null)
+      await launch(verdict.resolved_query || state.query)
+      return
+    }
+    setClarify({
+      ...state,
+      question: verdict.question,
+      options: verdict.options,
+      gap: verdict.gap,
+    })
+    // 追问期间必须解除提交锁：否则用户点了选项也没反应。
+    setSubmitting(false)
+  }
+
   async function start() {
     const value = query.trim()
     if (!value || submitting) return
     setSubmitting(true)
     setError(null)
+    const initial: ClarifyState = {
+      query: value,
+      round: 0,
+      answers: emptySlots(),
+      question: '',
+      options: [],
+      gap: 'none',
+    }
     try {
-      const hasParams = Object.values(params).some((item) => item != null)
-      const { run_id } = await createRun({
-        query: value,
-        params: hasParams ? params : null,
-        workflow: workflow || null,
-        // 空数组也照常传：后端把它当作「无上下文」，与不传等价，
-        // 省掉一个仅为省几字节而存在的条件分支。
-        history: thread,
-      })
-      navigate(`/runs/${run_id}`)
+      await step(initial)
+    } catch (cause) {
+      // 澄清判定挂了（网络/限流/后端版本没有这个端点）不该挡住提问——
+      // 它是增强而非必需。直接按老路建 run。
+      try {
+        setClarify(null)
+        await launch(value)
+      } catch (fallbackCause) {
+        setError(fallbackCause instanceof Error ? fallbackCause.message : '提交失败')
+        setSubmitting(false)
+      }
+      void cause
+    }
+  }
+
+  /** 用户答了一轮：累积答案后再判一次。 */
+  async function answerClarification(answer: string) {
+    if (!clarify || submitting) return
+    setSubmitting(true)
+    setError(null)
+    const next = isSkip(answer) ? null : advance(clarify, answer)
+    try {
+      if (next === null) {
+        setClarify(null)
+        await launch(clarify.query)
+        return
+      }
+      await step(next)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '提交失败')
+      setSubmitting(false)
+    }
+  }
+
+  async function skipClarification() {
+    if (!clarify) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      setClarify(null)
+      await launch(clarify.query)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '提交失败')
       setSubmitting(false)
@@ -177,12 +260,23 @@ export default function NewResearchPage() {
             globalRequireCorroboration={config?.require_corroboration ?? false}
           />
 
+          {clarify && (
+            <ClarifyDialog
+              question={clarify.question}
+              options={clarify.options}
+              round={clarify.round}
+              busy={submitting}
+              onAnswer={answerClarification}
+              onSkip={skipClarification}
+            />
+          )}
+
           <div className="submit-panel research-submit-panel">
             <div className="submit-context">
               <AppIcon name="help" size={17} aria-hidden="true" />
               <p>提交后创建可持久化研究任务，全程实时推送，可在「研究历史」回放。</p>
             </div>
-            <button className="btn btn-primary btn-lg submit-button" onClick={start} disabled={submitting || !query.trim()} type="button">
+            <button className="btn btn-primary btn-lg submit-button" onClick={start} disabled={submitting || !query.trim() || clarify !== null} type="button">
               <AppIcon name={submitting ? 'loader' : 'arrow-right'} size={17} aria-hidden="true" className={submitting ? 'spin' : ''} />
               {submitting ? '提交中…' : '开始研究'}
             </button>
