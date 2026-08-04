@@ -133,7 +133,11 @@ async def preroute_workflow(
         return requested_workflow, None, RoutingPlan(reason="意图识别已关闭")
 
     cascade = IntentCascade(llm=llm, enable_llm=enable_llm or bool(history))
-    decision = await cascade.classify(query, history=history or [])
+    # 不在这里抽实体：它只有 Planner 拆子问题时才用得上，而 Planner 跑在异步
+    # 执行段。在 HTTP 同步段抽，等于让用户为一件本可以稍后做的事多等一次网络
+    # 往返——对多轮追问尤其明显（消解已经花了一次，抽实体会让它翻倍）。
+    # IntentRouter 会在异步段补上（见 `_needs_entities`）。
+    decision = await cascade.classify(query, history=history or [], extract_entities=False)
     if decision.blocked:
         # 拒识不在这里终止请求：仍然创建 run，交给流程内的 IntentRouter 产出
         # 说明性报告。这样拒识与正常运行共用同一套落库 / SSE / 回放语义，

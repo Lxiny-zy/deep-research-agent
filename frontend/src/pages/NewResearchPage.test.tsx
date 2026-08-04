@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useNavigate } from 'react-router-dom'
+import { appendTurn } from '../lib/conversation'
 import type { WorkflowInfo } from '../types'
 import NewResearchPage from './NewResearchPage'
 
@@ -117,5 +118,102 @@ describe('NewResearchPage workflow list race', () => {
     expect(
       screen.getByRole('switch', { name: '本次研究启用严格双源门禁' }),
     ).toBeChecked()
+  })
+})
+
+// --- 多轮追问：上下文必须可见、可清除、且真的被发出去 ---
+
+describe('NewResearchPage 追问上下文', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    mocks.listWorkflows.mockReset()
+    mocks.createRun.mockReset()
+    mocks.useConfig.mockReset()
+    mocks.useConfig.mockReturnValue({ data: { require_corroboration: false } })
+    mocks.listWorkflows.mockResolvedValue(WORKFLOWS)
+    mocks.createRun.mockResolvedValue({ run_id: 'run-2' })
+  })
+
+  function seedThread() {
+    appendTurn({
+      query: '对比 Milvus 和 Qdrant',
+      intent: 'comparative',
+      slots: { entities: ['Milvus', 'Qdrant'], time_range: '', domain: '', language: '', aspects: [] },
+    })
+  }
+
+  it('把已有的追问上下文随创建请求发出', async () => {
+    seedThread()
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+
+    fireEvent.change(screen.getByLabelText(/研究问题/), { target: { value: '那第二个呢' } })
+    fireEvent.click(screen.getByRole('button', { name: '开始研究' }))
+
+    await waitFor(() =>
+      expect(mocks.createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: '那第二个呢',
+          history: [expect.objectContaining({ query: '对比 Milvus 和 Qdrant', intent: 'comparative' })],
+        }),
+      ),
+    )
+  })
+
+  it('展示上下文并允许一键开始新话题', async () => {
+    seedThread()
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+
+    // 上下文必须可见：一段用户看不见的历史会悄悄改变本次判定，
+    // 「为什么它答的是另一个东西」将无从解释。
+    expect(screen.getByTestId('thread-context')).toBeInTheDocument()
+    expect(screen.getByText('对比 Milvus 和 Qdrant')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '开始新话题' }))
+
+    expect(screen.queryByTestId('thread-context')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/研究问题/), { target: { value: '全新的问题' } })
+    fireEvent.click(screen.getByRole('button', { name: '开始研究' }))
+
+    await waitFor(() =>
+      expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({ history: [] })),
+    )
+  })
+
+  it('没有上下文时不展示追问区块', () => {
+    mocks.listWorkflows.mockReturnValue(new Promise<WorkflowInfo[]>(() => {}))
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+
+    expect(screen.queryByTestId('thread-context')).not.toBeInTheDocument()
+  })
+
+  it('从运行页跳来追问时清空默认示例问题', () => {
+    // 留着示例文案的话，用户会对着一段与上文无关的问题继续追问。
+    seedThread()
+    // 工作流列表挂起：本用例只关心 followup 参数对输入框的影响，
+    // 让它 resolve 只会引入一次与断言无关的异步状态更新。
+    mocks.listWorkflows.mockReturnValue(new Promise<WorkflowInfo[]>(() => {}))
+
+    render(
+      <MemoryRouter initialEntries={['/?followup=1']}>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByLabelText(/研究问题/)).toHaveValue('')
   })
 })

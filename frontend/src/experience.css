@@ -949,6 +949,10 @@ select option { background: #151914; color: var(--text-primary); }
 /* Run / telemetry --------------------------------------------------------- */
 
 .run-head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; }
+/* 「继续追问」只在研究跑完后出现，多出的这一列也必须随它出现——固定四列的话，
+   按钮不在时那条空轨道仍会吃掉一个 gap，标题与状态之间凭空多出一段空白。 */
+.run-head.has-followup { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+.run-followup { flex: none; white-space: nowrap; }
 .run-q { min-width: 0; color: var(--text-primary); font-family: var(--font-display); font-size: clamp(1.35rem, 2.5vw, 2.3rem); line-height: 1.15; letter-spacing: -0.045em; text-wrap: pretty; }
 /* 报告是核心产出：报告栏约 60% 宽，另提供全宽阅读切换 */
 .grid-2 { display: grid; grid-template-columns: minmax(330px, 0.8fr) minmax(0, 1.2fr); gap: 18px; align-items: start; }

@@ -2,9 +2,16 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { useResearchStream, type ResearchStreamState } from '../hooks/useResearchStream'
 import { useRunDetail } from '../hooks/useRuns'
+import { loadThread } from '../lib/conversation'
 import type { RunDetail, RunStatus } from '../types'
 import RunPage from './RunPage'
 
+const navigateMock = vi.hoisted(() => vi.fn())
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  return { ...actual, useNavigate: () => navigateMock }
+})
 vi.mock('../hooks/useResearchStream', () => ({ useResearchStream: vi.fn() }))
 vi.mock('../hooks/useRuns', () => ({ useRunDetail: vi.fn() }))
 vi.mock('../components/DagView', () => ({ default: () => null }))
@@ -152,5 +159,48 @@ describe('RunPage database synchronization', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '双栏视图' }))
     expect(grid).not.toHaveClass('report-expanded')
+  })
+})
+
+// --- 继续追问：把本次运行折叠成一轮上下文再跳去提问页 ---
+
+describe('RunPage follow-up', () => {
+  beforeEach(() => sessionStorage.clear())
+  afterEach(() => vi.clearAllMocks())
+
+  it('records the finished run as a turn and navigates to the composer', () => {
+    useResearchStreamMock.mockReturnValue(makeStream('done'))
+    useRunDetailMock.mockReturnValue({
+      data: makeDetail('done', 'complete'),
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+
+    renderRunPage()
+
+    fireEvent.click(screen.getByRole('button', { name: '继续追问' }))
+
+    expect(loadThread()).toEqual([
+      { query: 'query', intent: 'unknown', slots: { entities: [], time_range: '', domain: '', language: '', aspects: [] } },
+    ])
+    expect(navigateMock).toHaveBeenCalledWith('/?followup=1')
+  })
+
+  it('hides the follow-up action while the run is still going', () => {
+    // 半截的运行没有可供下一轮指代的结论，把它塞进历史只会误导消解器。
+    useResearchStreamMock.mockReturnValue(makeStream('streaming'))
+    useRunDetailMock.mockReturnValue({
+      data: makeDetail('running'),
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+
+    const { container } = renderRunPage()
+
+    expect(screen.queryByRole('button', { name: '继续追问' })).not.toBeInTheDocument()
+    // 按钮不在时那条网格轨道也不该留着，否则标题与状态之间凭空多出一段空白。
+    expect(container.querySelector('.run-head')).not.toHaveClass('has-followup')
   })
 })

@@ -31,6 +31,12 @@ from .types import IntentSlots
 
 logger = logging.getLogger(__name__)
 
+# 需要实体槽位才能拆好子问题的意图。只有这些才值得为抽实体调一次 LLM——
+# comparative 的下游动作是「逐侧面对比 A 与 B」，不知道 A、B 是谁就拆不出计划。
+# 定义放在这里而不是 cascade：它是「槽位对谁有用」的知识，级联与 IntentRouter
+# 都要用，放在 slots 才不用跨模块引私有名。
+ENTITY_INTENTS = frozenset({"comparative"})
+
 # --- 时间槽位：取值空间封闭，正则精度接近 1 ---
 _TIME_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:近|最近|过去)\s*([一二三四五六七八九十百\d]+)\s*(年|个月|周|天)"),

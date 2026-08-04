@@ -110,7 +110,7 @@ class CreateRunRequest(BaseModel):
     params: ResearchParams | None = None
     workflow: str | None = Field(default=None, max_length=64)  # 任务流程选择；None＝默认 deep
     # 多轮上下文由客户端携带，服务端不存会话：run 之间无状态是这个系统的既有性质
-    # （崩溃恢复、租约 fencing、回放都建立在「一个 run 自包含」之上）���加一张会话表
+    # （崩溃恢复、租约 fencing、回放都建立在「一个 run 自包含」之上）；加一张会话表
     # 会把这些不变量全部拖进多轮语义里。限长 6 轮：消解只依赖最近的话题焦点。
     history: list[ConversationTurn] = Field(default_factory=list, max_length=6)
 

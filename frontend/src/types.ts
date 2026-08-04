@@ -304,10 +304,19 @@ export interface RoleInfo {
   produces_report?: boolean
 }
 
+// 多轮追问的一轮历史。由**客户端**保管并随创建请求上传（见 lib/conversation.ts）：
+// 服务端不持有会话状态，因此同样的请求体永远得到同样的判定。
+export interface ConversationTurn {
+  query: string
+  intent: string
+  slots: IntentSlots
+}
+
 export interface CreateRunRequest {
   query: string
   params?: ResearchParams | null
   workflow?: string | null
+  history?: ConversationTurn[]
 }
 
 export interface CreateRunResponse {

@@ -6,7 +6,8 @@ import { BUILTIN_TEMPLATE_META } from '../components/BuiltinTemplateGallery'
 import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { useConfig } from '../hooks/useConfig'
 import { createRun, listWorkflows } from '../api/client'
-import type { ResearchParams, WorkflowInfo } from '../types'
+import { clearThread, loadThread } from '../lib/conversation'
+import type { ConversationTurn, ResearchParams, WorkflowInfo } from '../types'
 
 const DEFAULT_QUERY = '2026 年主流 AI Agent 框架有哪些？各自的设计取舍是什么？'
 const SAMPLES = [
@@ -27,6 +28,9 @@ export default function NewResearchPage() {
   const [workflow, setWorkflow] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 追问上下文来自 sessionStorage，在挂载时读一次即可：本页是唯一的写入方之一，
+  // 而另一个写入方（运行详情页的「继续追问」）跳转过来时组件会重新挂载。
+  const [thread, setThread] = useState<ConversationTurn[]>(() => loadThread())
 
   useEffect(() => {
     // stale 标记：连续导航或组件卸载后，旧请求的迟到响应不得覆盖新选择。
@@ -46,6 +50,17 @@ export default function NewResearchPage() {
     }
   }, [searchParams])
 
+  // 从运行详情页点「继续追问」过来时带 followup=1：此时把默认问题清空，
+  // 否则用户会对着一段与上文无关的示例文案继续追问。
+  useEffect(() => {
+    if (searchParams.get('followup') === '1') setQuery('')
+  }, [searchParams])
+
+  function dropThread() {
+    clearThread()
+    setThread([])
+  }
+
   async function start() {
     const value = query.trim()
     if (!value || submitting) return
@@ -53,7 +68,14 @@ export default function NewResearchPage() {
     setError(null)
     try {
       const hasParams = Object.values(params).some((item) => item != null)
-      const { run_id } = await createRun({ query: value, params: hasParams ? params : null, workflow: workflow || null })
+      const { run_id } = await createRun({
+        query: value,
+        params: hasParams ? params : null,
+        workflow: workflow || null,
+        // 空数组也照常传：后端把它当作「无上下文」，与不传等价，
+        // 省掉一个仅为省几字节而存在的条件分支。
+        history: thread,
+      })
       navigate(`/runs/${run_id}`)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '提交失败')
@@ -88,9 +110,35 @@ export default function NewResearchPage() {
         </div>
 
         <div className="panel-body stack">
+          {thread.length > 0 && (
+            <div className="thread-context" data-testid="thread-context">
+              {/* 上下文必须可见且可清除：一段用户看不见的历史会悄悄改变本次判定，
+                  「为什么它答的是另一个东西」将无从解释。 */}
+              <div className="field-label thread-heading">
+                <span>
+                  <AppIcon name="history" size={14} aria-hidden="true" /> 追问上下文（{thread.length} 轮）
+                </span>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={dropThread}>
+                  开始新话题
+                </button>
+              </div>
+              <ol className="thread-list">
+                {thread.map((turn, index) => (
+                  <li key={`${turn.query}-${index}`}>
+                    <span className="thread-index">{index + 1}</span>
+                    <span className="thread-query">{turn.query}</span>
+                  </li>
+                ))}
+              </ol>
+              <p className="hint">
+                本次提问会带上以上轮次，「那第二个呢」这类追问会先被还原成完整问题再研究。
+              </p>
+            </div>
+          )}
+
           <label className="field-label research-query-label" htmlFor="query">
             研究问题
-            <textarea id="query" className="input textarea research-query-input" rows={4} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入一个值得深挖的问题…" />
+            <textarea id="query" className="input textarea research-query-input" rows={4} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={thread.length > 0 ? '接着上文追问，例如「那第二个呢」…' : '输入一个值得深挖的问题…'} />
           </label>
 
           <div className="sample-block">

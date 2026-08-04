@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import DagView from '../components/DagView'
 import EventTimeline from '../components/EventTimeline'
@@ -13,12 +13,14 @@ import TagEditor from '../components/TagEditor'
 import { AppIcon } from '../components/AppIcon'
 import { useResearchStream } from '../hooks/useResearchStream'
 import { useRunDetail } from '../hooks/useRuns'
+import { appendTurn, turnFromRun } from '../lib/conversation'
 import { countBlockedSources, flattenFindings } from '../lib/evidence'
 import { deriveResearchProgress } from '../lib/runProgress'
 import type { RunStatus } from '../types'
 
 export default function RunPage() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   // 研究报告是核心产出：默认给报告栏更大权重，也允许一键展开全宽阅读。
   const [reportExpanded, setReportExpanded] = useState(false)
   const stream = useResearchStream(id ?? null)
@@ -76,6 +78,18 @@ export default function RunPage() {
   const evidenceFindings = useMemo(() => flattenFindings(detailResults), [detailResults])
   const blockedSources = useMemo(() => countBlockedSources(stream.events), [stream.events])
 
+  // 「继续追问」把本次运行折叠成一轮历史再跳去提问页。只在研究真正跑完后可用：
+  // 半截的运行没有可供下一轮指代的结论，把它塞进历史只会误导消解器。
+  const runDetail = detail.data
+  const canFollowUp = status === 'done' && Boolean(runDetail?.query)
+
+  function askFollowUp() {
+    if (!runDetail) return
+    const turn = turnFromRun(runDetail)
+    if (turn) appendTurn(turn)
+    navigate('/?followup=1')
+  }
+
   if (detail.isError) {
     const notFound = detail.error instanceof ApiError && detail.error.status === 404
     return (
@@ -94,11 +108,17 @@ export default function RunPage() {
 
   return (
     <div className="stack">
-      <div className="panel run-head">
+      <div className={`panel run-head${canFollowUp ? ' has-followup' : ''}`}>
         <div className="run-q">{query || '加载中…'}</div>
         <StatusBadge status={status} />
         {stream.status === 'disconnected' && !dbFinished && (
           <span className="muted small">实时连接已断开，正在轮询获取进度…</span>
+        )}
+        {canFollowUp && (
+          <button type="button" className="btn btn-ghost btn-sm run-followup" onClick={askFollowUp}>
+            <AppIcon name="sparkles" size={14} aria-hidden="true" />
+            继续追问
+          </button>
         )}
         {id && <TagEditor runId={id} tags={detail.data?.tags ?? []} />}
       </div>

@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from ..config import Settings
 from ..intent.cascade import IntentCascade
 from ..intent.routing import plan_route
+from ..intent.slots import ENTITY_INTENTS, extract_slots
 from ..intent.types import IntentDecision
 from ..llm import LLM
 from ..models import Report
@@ -153,6 +154,11 @@ class IntentRouter:
                     # INTENT_LLM_FALLBACK 这个开关在 HTTP 路径上真正有意义。
                     self.tracer.emit("INTENT", "start", "前序判定弃权，升级到 LLM 复判…")
                     decision = await self._classify(bb.query)
+                elif self._needs_entities(decision):
+                    # 预路由同样跳过了实体抽取（延迟敏感）。这里补上——Planner
+                    # 马上就要用它拆子问题，而这一段不在用户的等待路径上。
+                    self.tracer.emit("INTENT", "start", "补充抽取对比实体…")
+                    decision = await self._complete_entities(decision, bb.query)
                 else:
                     self.tracer.emit("INTENT", "info", "复用已有的意图判定")
         else:
@@ -258,6 +264,32 @@ class IntentRouter:
         if not self.settings.intent_llm_fallback:
             return False
         return decision.tier == "fallback" and not decision.blocked and not decision.escalated
+
+    def _needs_entities(self, decision: IntentDecision) -> bool:
+        """该判定是否还缺 Planner 要用的对比实体？
+
+        只补 comparative——其余意图的下游不需要实体（见 cascade 的同名判断）。
+        已经抽到实体的不重抽：预路由若跑过（比如调用方显式要求），这里就没必要
+        再花一次。
+        """
+        if not self.settings.intent_llm_fallback:
+            return False
+        return (
+            decision.intent in ENTITY_INTENTS
+            and not decision.slots.entities
+            and not decision.blocked
+        )
+
+    async def _complete_entities(self, decision: IntentDecision, query: str) -> IntentDecision:
+        """在异步段补抽实体，保留其余判定字段不变。
+
+        只覆盖 slots：意图、风险、置信度、层级都是预路由已经定好的，重抽实体
+        不该动它们——否则恢复一致性（同一个 run 两次执行得到同样结论）就没了。
+        """
+        target = decision.resolved_query or query
+        decision.slots = await extract_slots(target, llm=self.llm, use_llm=True)
+        decision.escalated = True
+        return decision
 
     async def _classify(self, query: str) -> IntentDecision:
         cascade = self._cascade or IntentCascade(

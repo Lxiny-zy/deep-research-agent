@@ -3301,6 +3301,66 @@ button.cite-ref.active {
   color: var(--text-secondary);
 }
 
+/* --- 追问上下文（新建研究页）--- */
+
+.thread-context {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-primary);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.thread-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+}
+
+.thread-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.thread-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.thread-index {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--surface-3, var(--surface-1));
+  color: var(--text-tertiary);
+  font-size: 0.68rem;
+}
+
+.thread-query {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .intent-score-track i {
     transition: none;

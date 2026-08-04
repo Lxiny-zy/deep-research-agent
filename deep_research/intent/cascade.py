@@ -47,10 +47,6 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
-# 需要实体槽位才能拆好子问题的意图。只有这些才值得为抽实体调一次 LLM——
-# comparative 的下游动作是「逐侧面对比 A 与 B」，不知道 A、B 是谁就拆不出计划。
-_SLOT_ENTITY_INTENTS = frozenset({"comparative"})
-
 # 风险严重度：数值越大越严重。用于强制「风险单调不可降级」。
 _RISK_SEVERITY: dict[RiskIntent, int] = {
     "none": 0,
@@ -143,6 +139,7 @@ class IntentCascade:
         *,
         history: list[ConversationTurn] | None = None,
         extract_slots: bool = True,
+        extract_entities: bool = True,
         allow_clarification: bool = True,
     ) -> IntentDecision:
         """完整的输入侧判定：多轮消解 → 意图级联 → 槽位抽取 → 澄清判定。
@@ -151,10 +148,15 @@ class IntentCascade:
         消解看还原准确率、级联看分类准确率、槽位看抽取 P/R、澄清看打扰率。
         每一层都能单独关闭、单独评测、单独回归。
 
-        成本纪律：消解与槽位的 LLM 调用都是**条件触发**的——
-        消解只在检测到指代/省略信号时跑，槽位只在意图是 comparative（唯一真正
-        需要实体才能拆子问题的意图）时跑。无历史、非对比的常规单轮请求，
-        成本与加这些功能之前完全一致。
+        成本纪律：消解与实体抽取的 LLM 调用都是**条件触发**的——
+        消解只在检测到指代/省略信号时跑，实体抽取只在意图是 comparative
+        （唯一真正需要实体才能拆子问题的意图）时跑。无历史、非对比的常规单轮
+        请求，成本与加这些功能之前完全一致。
+
+        ``extract_entities=False`` 只跑规则槽位（零成本），跳过实体抽取。
+        调用方在**延迟敏感**的路径上应当关掉它：实体只有 Planner 拆子问题时
+        才用得上，而 Planner 跑在异步执行段——在 HTTP 同步段上先把它抽出来，
+        等于让用户为一件本可以稍后做的事多等一次网络往返。
         """
         signals: list[IntentSignal] = []
         resolved_query = ""
@@ -188,17 +190,18 @@ class IntentCascade:
 
         # 步骤 3：槽位抽取。规则永远跑（零成本）。
         #
-        # LLM 只在**槽位真的会改变下游行为**时才补。这个条件必须写得很紧：
-        # 实体是规则层永远抽不到的（开放集合），若用「没抽到实体」当触发条件，
-        # 等于每条已分类的请求都要调一次 LLM——那就把级联「零 token 吃掉大部分
-        # 流量」的核心结论废掉了。
-        #
-        # 真正需要实体的只有 comparative：它的下游动作是「逐个侧面对比 A 与 B」，
-        # 不知道 A、B 是谁就没法拆子问题。其余意图用原始 query 的自由文本足够。
+        # 实体抽取要调 LLM，因此有两道门：
+        #  ① 意图必须是 comparative——实体是规则层永远抽不到的（开放集合），
+        #     若用「没抽到实体」当触发条件，等于每条已分类请求都要调一次 LLM，
+        #     那就把级联「零 token 吃掉大部分流量」的核心结论废掉了。真正需要
+        #     实体的只有对比类（下游要逐侧面对比 A 与 B，不知道是谁就拆不出计划）。
+        #  ② 调用方允许（``extract_entities``）——延迟敏感路径可以先跳过，
+        #     等到异步段真正要用时再抽。
         if extract_slots:
             decision.slots = slots_module.extract_slots_by_rule(target)
             need_llm = (
-                decision.intent in _SLOT_ENTITY_INTENTS
+                extract_entities
+                and decision.intent in slots_module.ENTITY_INTENTS
                 and self._enable_llm
                 and self._llm is not None
             )

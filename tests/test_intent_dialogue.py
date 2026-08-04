@@ -242,6 +242,44 @@ async def test_only_comparative_pays_for_entity_extraction() -> None:
 
 
 @pytest.mark.asyncio
+async def test_extract_entities_off_keeps_rule_slots_but_skips_the_call() -> None:
+    """延迟敏感路径可以只要免费的规则槽位，不为实体多等一次网络往返。"""
+    llm = ScriptedLLM(entities=["不该被调用"])
+    decision = await IntentCascade(llm=llm, enable_llm=True).classify(
+        "对比 Kafka 和 RabbitMQ 近三年的成本", extract_entities=False
+    )
+    assert decision.intent == "comparative"
+    assert llm.calls == [], "关掉实体抽取后，对比类请求也不该调 LLM"
+    # 规则槽位是零成本的，不该被一起关掉——否则 Planner 连时间约束都拿不到。
+    assert decision.slots.time_range == "近三年"
+    assert "成本" in decision.slots.aspects
+    assert decision.slots.entities == [], "实体留给异步段补，此处必须是空的"
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_preroute_pays_for_resolution_only() -> None:
+    """多轮追问在 HTTP 同步段上只该花一次调用：消解。
+
+    实体抽取挪去异步段之前，这里是两次（消解 + 抽实体），用户创建研究的等待
+    时间因此翻倍——而实体只有 Planner 拆子问题时才用得上，那时早已不在
+    用户的等待路径上。
+    """
+    from deep_research.intent.routing import preroute_workflow
+
+    llm = ScriptedLLM(resolved="Qdrant 和 Milvus 的区别是什么", entities=["Qdrant", "Milvus"])
+    workflow, decision, _ = await preroute_workflow(
+        "那第二个呢",
+        requested_workflow=None,
+        available_workflows={"quick", "deep", "teams", "guarded"},
+        llm=llm,
+        history=_history(),
+    )
+    assert llm.calls == ["ResolvedQuery"], "同步段只允许消解这一次调用"
+    assert decision is not None and decision.intent == "comparative"
+    assert workflow == "deep", "消解成功后路由照常生效"
+
+
+@pytest.mark.asyncio
 async def test_full_pipeline_resolves_then_classifies() -> None:
     """消解必须发生在分类之前——分类器要看的是完整问题。"""
     llm = ScriptedLLM(resolved="Qdrant 和 Milvus 的区别是什么", entities=["Qdrant", "Milvus"])

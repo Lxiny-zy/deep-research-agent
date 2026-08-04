@@ -9,6 +9,10 @@
   self-contained questions before classification, extracted constraints (time range, domain,
   language, aspects, entities) are injected into planning, and genuinely directionless input is
   answered with a clarifying question instead of a guessed workflow.
+- Made multi-turn follow-ups reachable from the UI: a finished run can be carried into the
+  composer as conversation context, which is shown, clearable, and uploaded with the next
+  request. The thread lives in the browser session, so the server holds no conversation state
+  and an identical request body always yields an identical decision.
 - Added intent recognition and source-intent screening across workflow routing, run details, and
   the frontend run experience, with auditable decisions and focused regression coverage.
 - Added reproducible run manifests with stable workflow/query/catalog hashes, sanitized model
@@ -61,6 +65,10 @@
 
 ### Changed
 
+- Moved comparison-entity extraction off the request-creation path. Pre-routing now runs only the
+  free rule-based slot extraction and the in-workflow intent role completes entities during
+  asynchronous execution, where the only consumer (planning) already runs. Multi-turn follow-up
+  creation dropped from two blocking model calls to one.
 - Redesigned the frontend research experience: top-navigation layout with ambient signal theme,
   reworked new-research / run / history / settings pages, live telemetry preview, and a refreshed
   design-system stylesheet split (`design-system.css`, `experience.css`, `run-page-styles.css`).

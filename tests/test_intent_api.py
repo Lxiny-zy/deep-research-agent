@@ -224,6 +224,31 @@ async def test_history_is_optional_and_costs_nothing_when_absent(repo) -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_history_takes_the_cheap_path(repo, monkeypatch) -> None:
+    """``history: []`` 必须与不传等价：不构造 LLM、不做消解。
+
+    前端对首轮提问也会把这个键带上（省掉一个仅为省几字节的条件分支），
+    因此「空数组走廉价路径」是个前端依赖的契约，而不是实现细节。
+    """
+    built = {"n": 0}
+    original = api._intent_llm
+
+    def _spy(app, settings):
+        built["n"] += 1
+        return original(app, settings)
+
+    monkeypatch.setattr(api, "_intent_llm", _spy)
+    run_id, _ = await _create("Kafka 和 RabbitMQ 的区别", history=[])
+    assert built["n"] == 0, "空 history 不该为消解构造 LLM"
+
+    detail = await repo.get_run(run_id)
+    assert detail is not None and detail.orchestration is not None
+    decision = detail.orchestration.checkpoint["scratch"][INTENT_SCRATCH_KEY]
+    assert decision["context_resolved"] is False
+    assert decision["resolved_query"] == ""
+
+
+@pytest.mark.asyncio
 async def test_history_is_rejected_when_too_long(repo) -> None:
     """限长 6 轮：history 全文进 LLM prompt，不限长等于开放成本放大面。"""
     history = [{"query": f"第{i}轮", "intent": "unknown"} for i in range(8)]
