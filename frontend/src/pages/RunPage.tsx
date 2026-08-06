@@ -154,7 +154,7 @@ export default function RunPage() {
             </div>
           )}
         </div>
-        <div className={`panel report-panel${streaming ? ' is-streaming' : ''}`}>
+        <div className={`panel report-panel${liveActive ? ' is-streaming' : ''}`}>
           <div className="row between panel-head">
             <h3 className="panel-title">研究报告</h3>
             <div className="row report-panel-tools">
@@ -173,6 +173,7 @@ export default function RunPage() {
           <ReportView
             markdown={markdown}
             streaming={streaming}
+            isLive={liveActive}
             findings={evidenceFindings}
             citations={detail.data?.report?.citations ?? []}
             blockedSources={blockedSources}

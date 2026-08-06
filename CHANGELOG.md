@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed live report Markdown escaping its panel during streaming and SSE disconnect recovery;
+  live rendering now remains bounded until the persisted run reaches a terminal state.
+
 ### Added
 
 - Added an interactive clarification loop that runs *before* a run is created. A request whose

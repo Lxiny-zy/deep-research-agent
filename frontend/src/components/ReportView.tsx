@@ -20,12 +20,14 @@ import EvidencePanel from './EvidencePanel'
 export default function ReportView({
   markdown,
   streaming,
+  isLive,
   findings = [],
   citations = [],
   blockedSources = null,
 }: {
   markdown: string
   streaming: boolean
+  isLive?: boolean
   findings?: Finding[]
   citations?: string[]
   blockedSources?: number | null
@@ -91,9 +93,12 @@ export default function ReportView({
 
   const activeUrl = activeCitation != null ? targets[activeCitation - 1] : undefined
   const activeFindings = findingsForUrl(findings, activeUrl)
+  const reportIsLive = isLive ?? streaming
 
   return (
-    <div className={`report-view${activeCitation != null ? ' has-evidence' : ''}`}>
+    <div
+      className={`report-view${activeCitation != null ? ' has-evidence' : ''}${reportIsLive ? ' is-streaming' : ''}`}
+    >
       {findings.length > 0 && (
         <div className="evidence-overview" data-testid="evidence-overview">
           <span className="evidence-stat" data-testid="evidence-records">

@@ -22,8 +22,10 @@ vi.mock('../components/StatsBar', () => ({ default: () => null }))
 vi.mock('../components/StatusBadge', () => ({ default: ({ status }: { status: string }) => <div data-testid="status">{status}</div> }))
 vi.mock('../components/TagEditor', () => ({ default: () => null }))
 vi.mock('../components/ReportView', () => ({
-  default: ({ markdown }: { markdown: string }) => (
-    <div data-testid="report-markdown">{markdown}</div>
+  default: ({ markdown, isLive }: { markdown: string; isLive?: boolean }) => (
+    <div data-live={isLive ? 'true' : 'false'} data-testid="report-markdown">
+      {markdown}
+    </div>
   ),
 }))
 
@@ -80,6 +82,52 @@ function renderRunPage() {
 }
 
 describe('RunPage database synchronization', () => {
+  it('keeps the live report bounded when full-width reading is active', () => {
+    useResearchStreamMock.mockReturnValue(makeStream('streaming', '# partial report'))
+    useRunDetailMock.mockReturnValue({
+      data: makeDetail('running'),
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+
+    const { container } = renderRunPage()
+    const reportPanel = container.querySelector('.report-panel')
+    expect(reportPanel).toHaveClass('is-streaming')
+    expect(screen.getByTestId('report-markdown')).toHaveAttribute('data-live', 'true')
+
+    const toggle = container.querySelector<HTMLButtonElement>('.report-expand-toggle')
+    expect(toggle).not.toBeNull()
+    if (!toggle) return
+    fireEvent.click(toggle)
+
+    expect(container.querySelector('.grid-2')).toHaveClass('report-expanded')
+    expect(reportPanel).toHaveClass('is-streaming')
+  })
+
+  it('keeps the live report bounded after SSE disconnects while the database run is active', () => {
+    useResearchStreamMock.mockReturnValue(makeStream('disconnected', 'partial stream'))
+    useRunDetailMock.mockReturnValue({
+      data: makeDetail('running'),
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+
+    const { container } = renderRunPage()
+    const reportPanel = container.querySelector('.report-panel')
+    expect(reportPanel).toHaveClass('is-streaming')
+    expect(screen.getByTestId('report-markdown')).toHaveAttribute('data-live', 'true')
+
+    const toggle = container.querySelector<HTMLButtonElement>('.report-expand-toggle')
+    expect(toggle).not.toBeNull()
+    if (!toggle) return
+    fireEvent.click(toggle)
+
+    expect(container.querySelector('.grid-2')).toHaveClass('report-expanded')
+    expect(reportPanel).toHaveClass('is-streaming')
+  })
+
   afterEach(() => vi.clearAllMocks())
 
   it('uses a persisted complete report after the stream disconnects', () => {
