@@ -153,7 +153,14 @@ class IntentRouter:
                     # 这里是异步执行段，补跑 L3 既不影响创建研究的延迟，也让
                     # INTENT_LLM_FALLBACK 这个开关在 HTTP 路径上真正有意义。
                     self.tracer.emit("INTENT", "start", "前序判定弃权，升级到 LLM 复判…")
-                    decision = await self._classify(bb.query)
+                    fresh = await self._classify(bb.query)
+                    # bb.query 已是消解后的完整问题（API 建 run 时写入），复判不必
+                    # 重做消解；但消解痕迹必须搬过来——run 详情与下一轮追问的历史
+                    # 都从这份判定读 resolved_query，复判只该刷新分类结论，
+                    # 不该把「这次研究的到底是哪句话」洗掉。
+                    fresh.resolved_query = decision.resolved_query
+                    fresh.context_resolved = decision.context_resolved
+                    decision = fresh
                 elif self._needs_entities(decision):
                     # 预路由同样跳过了实体抽取（延迟敏感）。这里补上——Planner
                     # 马上就要用它拆子问题，而这一段不在用户的等待路径上。

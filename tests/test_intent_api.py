@@ -279,9 +279,7 @@ async def test_history_is_rejected_when_too_long(repo) -> None:
     """限长 6 轮：history 全文进 LLM prompt，不限长等于开放成本放大面。"""
     history = [{"query": f"第{i}轮", "intent": "unknown"} for i in range(8)]
     async with _client() as client:
-        response = await client.post(
-            "/api/runs", json={"query": "那第二个呢", "history": history}
-        )
+        response = await client.post("/api/runs", json={"query": "那第二个呢", "history": history})
     assert response.status_code == 422
 
 
@@ -293,6 +291,7 @@ async def test_followup_is_resolved_through_the_api(monkeypatch, repo) -> None:
     若没接通，判定看到的是「那第二个呢」这种零信息量残句，必然弃权。
     """
     monkeypatch.setenv("DR_DEMO_FAKE_BACKENDS", "1")  # 借假 LLM 做消解
+    monkeypatch.setenv("DR_DEMO_STEP_DELAY", "0")
     history = [
         {
             "query": "对比 Milvus 和 Qdrant",
@@ -316,6 +315,12 @@ async def test_followup_is_resolved_through_the_api(monkeypatch, repo) -> None:
     # 消解后的完整问题命中了对比规则；原文「那第二个呢」不可能命中。
     assert decision["intent"] == "comparative"
     assert any(s["code"] == "anaphoric_reference" for s in decision["signals"])
+    # 黑板 query 必须是消解后的完整问题：它是 Planner 拆解、Reflector 补洞、
+    # Synthesizer 综合共同的靶子。曾经这里是原文残句——消解调用照付、判定
+    # 正确，反思与综合却仍对着「那第二个呢」进行。
+    assert detail.orchestration.checkpoint["query"] == "对比 Milvus 和 Qdrant"
+    # 用户敲的原文保留在 run 记录里，审计与历史列表不受影响。
+    assert detail.query == "那第二个呢"
 
 
 @pytest.mark.asyncio
@@ -334,6 +339,8 @@ async def test_followup_degrades_gracefully_without_an_llm(repo) -> None:
     assert decision["resolved_query"] == ""
     # 但「检测到了依赖」这件事仍要留痕，否则事后无法解释判定质量为何偏低。
     assert any(s["code"] == "anaphoric_reference" for s in decision["signals"])
+    # 消解失败时黑板保持原文——残句好过幻觉，这条与 effective_query 的语义一致。
+    assert detail.orchestration.checkpoint["query"] == "那第二个呢"
 
 
 @pytest.mark.asyncio
@@ -432,11 +439,36 @@ async def test_assess_does_not_interrupt_clear_queries(repo, query: str) -> None
 @pytest.mark.asyncio
 async def test_assess_becomes_ready_once_answered(repo) -> None:
     """第二轮带上答案后应当放行，且合成出一句通顺的完整问题。"""
-    verdict = await _assess(
-        query="对比一下", answers={"entities": ["Kafka", "RabbitMQ"]}, round=1
-    )
+    verdict = await _assess(query="对比一下", answers={"entities": ["Kafka", "RabbitMQ"]}, round=1)
     assert verdict["ready"] is True
     assert verdict["resolved_query"] == "对比 Kafka、RabbitMQ"
+
+
+@pytest.mark.asyncio
+async def test_assess_returns_the_resolved_followup(monkeypatch, repo) -> None:
+    """多轮追问 ready 时必须返回**消解后**的完整问题，而不是原残句。
+
+    前端拿这个字段去建 run。返回原文的话，assess 里那次消解调用等于白付——
+    create_run 还得对同一句话再消解一次，且最终效果押在第二次也成功上。
+    """
+    monkeypatch.setenv("DR_DEMO_FAKE_BACKENDS", "1")
+    monkeypatch.setenv("DR_DEMO_STEP_DELAY", "0")
+    history = [
+        {
+            "query": "对比 Milvus 和 Qdrant",
+            "intent": "comparative",
+            "slots": {
+                "entities": ["Milvus", "Qdrant"],
+                "time_range": "",
+                "domain": "",
+                "language": "",
+                "aspects": [],
+            },
+        }
+    ]
+    verdict = await _assess(query="那第二个呢", history=history)
+    assert verdict["ready"] is True
+    assert verdict["resolved_query"] == "对比 Milvus 和 Qdrant"
 
 
 @pytest.mark.asyncio
@@ -450,9 +482,7 @@ async def test_assess_stops_asking_at_the_round_cap(repo) -> None:
 async def test_assess_rejects_an_out_of_range_round(repo) -> None:
     """轮次由客户端传，越界必须被模型层挡下，而不是靠调用方自觉。"""
     async with _client() as client:
-        response = await client.post(
-            "/api/intent/assess", json={"query": "帮我看看", "round": 99}
-        )
+        response = await client.post("/api/intent/assess", json={"query": "帮我看看", "round": 99})
     assert response.status_code == 422
 
 

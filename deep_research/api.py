@@ -1007,6 +1007,8 @@ async def assess_intent(req: AssessRequest, request: Request) -> AssessResponse:
         if decision.blocked:
             # 拒识不在这里终止：前端照常走 create_run，让这条请求留下
             # 「为什么被拒」的审计记录。澄清是产品交互，拒识是安全事件。
+            # resolved_query 保持 composed 原样：留痕要的是用户提交的内容，
+            # 而不是消解器改写后的版本。
             return AssessResponse(
                 ready=True,
                 resolved_query=composed,
@@ -1019,7 +1021,10 @@ async def assess_intent(req: AssessRequest, request: Request) -> AssessResponse:
         if verdict.ready or req.round >= MAX_CLARIFY_ROUNDS - 1:
             return AssessResponse(
                 ready=True,
-                resolved_query=composed,
+                # 消解过就返回消解结果：前端拿它去建 run，create_run 的二次消解
+                # 在完整问题上不会再触发，同一条追问不必付两次消解调用——
+                # 也不必把最终效果押在第二次消解恰好也成功上。
+                resolved_query=decision.effective_query(composed),
                 intent=decision.intent,
                 gap=verdict.gap,
                 reason=verdict.reason if verdict.ready else "已达追问上限，带现有信息开始研究",
@@ -1101,7 +1106,14 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
             },
         )
 
-    execution = create_initial_execution(req.query, workflow_name, settings)
+    # 黑板 query 用消解后的完整问题：它是 Planner 拆解、Reflector 补洞、
+    # Synthesizer 综合共同的靶子——只把消解结果放进 scratch 键的话，读键的
+    # 只有 Planner，反思与综合仍对着「那第二个呢」进行。用户敲的原文保留在
+    # run 记录里（下面的 repo.create_run），审计与历史列表不受影响。
+    effective_query = (
+        intent_decision.effective_query(req.query) if intent_decision is not None else req.query
+    )
+    execution = create_initial_execution(effective_query, workflow_name, settings)
     if intent_decision is not None:
         # 把判定写进初始 checkpoint：流程内的 IntentRouter 复用它而不重判，
         # 恢复后的运行也拿到与首次完全一致的意图结论。
@@ -1148,7 +1160,7 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
         _execute(
             request.app,
             run_id,
-            req.query,
+            effective_query,
             settings,
             workflow_name,
             None,
