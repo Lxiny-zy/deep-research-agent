@@ -1,4 +1,43 @@
-import { clearApiKey, setApiKey, streamRun } from './client'
+import { clearApiKey, createRun, setApiKey, streamRun } from './client'
+
+describe('request error formatting', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('renders an object-shaped business detail instead of the bare status text', async () => {
+    // needs_clarification 兜底 422 的 detail 是对象。不解析它的话，
+    // 用户在错误框里只看到「Unprocessable Entity」，完全不知道该怎么办。
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: 'needs_clarification',
+            message: '请求信息不足，请把问题说得更具体一些',
+            question: '想研究什么方向？',
+            options: [],
+          },
+        }),
+        { status: 422, statusText: 'Unprocessable Entity' },
+      ),
+    )
+
+    await expect(createRun({ query: '帮我看看' })).rejects.toThrow(
+      '请求信息不足，请把问题说得更具体一些：想研究什么方向？',
+    )
+  })
+
+  it('keeps FastAPI validation array formatting', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ detail: [{ loc: ['body', 'query'], msg: '不能为空' }] }),
+        { status: 422, statusText: 'Unprocessable Entity' },
+      ),
+    )
+
+    await expect(createRun({ query: '' })).rejects.toThrow('query: 不能为空')
+  })
+})
 
 describe('streamRun', () => {
   afterEach(() => {

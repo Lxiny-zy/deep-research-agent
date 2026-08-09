@@ -52,6 +52,15 @@ function formatDetail(detail: unknown, fallback: string): string {
       .filter(Boolean)
     if (parts.length > 0) return parts.join('；')
   }
+  // 业务错误的对象形态（如 needs_clarification）：不认对象的话，
+  // 用户只会看到一句「Unprocessable Entity」，完全不知道该怎么办。
+  if (detail && typeof detail === 'object') {
+    const obj = detail as { message?: unknown; question?: unknown }
+    const message = typeof obj.message === 'string' ? obj.message : ''
+    const question = typeof obj.question === 'string' ? obj.question : ''
+    const combined = [message, question].filter(Boolean).join('：')
+    if (combined) return combined
+  }
   return fallback
 }
 

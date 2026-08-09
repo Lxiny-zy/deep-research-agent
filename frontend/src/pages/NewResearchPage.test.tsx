@@ -326,13 +326,14 @@ describe('NewResearchPage 澄清循环', () => {
         answers: expect.objectContaining({ entities: ['Kafka', 'RabbitMQ'] }),
       }),
     )
-    // 交给研究的是服务端合成的完整问题，不是用户最初那句。
+    // 交给研究的是服务端合成的完整问题，不是用户最初那句；
+    // 走完澄清循环的创建必须带 clarified，免得被 create_run 再拦一次。
     expect(mocks.createRun).toHaveBeenCalledWith(
-      expect.objectContaining({ query: '对比 Kafka、RabbitMQ' }),
+      expect.objectContaining({ query: '对比 Kafka、RabbitMQ', clarified: true }),
     )
   })
 
-  it('「直接研究」立刻跳过追问', async () => {
+  it('「直接研究」立刻跳过追问，且已答槽位不丢', async () => {
     // 用户比系统更清楚自己要什么，任何时候都该能跳过。
     mocks.assessIntent.mockResolvedValue(asking('想研究什么方向？', ['某项技术的原理与机制']))
 
@@ -340,10 +341,44 @@ describe('NewResearchPage 澄清循环', () => {
     await ask('帮我看看')
     await waitFor(() => expect(screen.getByText('想研究什么方向？')).toBeInTheDocument())
 
+    // 跳过时服务端负责把已答槽位合成进最终问题（skip 标记），
+    // 且建 run 必须带 clarified——否则 create_run 的澄清兜底会把跳过 422 打回。
+    mocks.assessIntent.mockResolvedValue({
+      ready: true,
+      resolved_query: '帮我看看',
+      question: '',
+      options: [],
+      gap: 'direction',
+      blocked: false,
+      intent: 'unknown',
+      reason: '用户选择跳过追问',
+    })
     fireEvent.click(screen.getByRole('button', { name: '直接研究' }))
 
     await waitFor(() =>
-      expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({ query: '帮我看看' })),
+      expect(mocks.createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ query: '帮我看看', clarified: true }),
+      ),
+    )
+    expect(mocks.assessIntent).toHaveBeenLastCalledWith(expect.objectContaining({ skip: true }))
+  })
+
+  it('跳过时 assess 挂了也能建 run，不把用户锁在追问里', async () => {
+    mocks.assessIntent.mockResolvedValueOnce(
+      asking('想研究什么方向？', ['某项技术的原理与机制']),
+    )
+
+    renderPage()
+    await ask('帮我看看')
+    await waitFor(() => expect(screen.getByText('想研究什么方向？')).toBeInTheDocument())
+
+    mocks.assessIntent.mockRejectedValue(new Error('boom'))
+    fireEvent.click(screen.getByRole('button', { name: '直接研究' }))
+
+    await waitFor(() =>
+      expect(mocks.createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ query: '帮我看看', clarified: true }),
+      ),
     )
   })
 

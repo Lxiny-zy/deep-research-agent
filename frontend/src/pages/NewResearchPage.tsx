@@ -66,8 +66,13 @@ export default function NewResearchPage() {
     setThread([])
   }
 
-  /** 真正创建研究。到这一步意味着信息已经够了（或用户主动跳过了追问）。 */
-  async function launch(finalQuery: string) {
+  /** 真正创建研究。到这一步意味着信息已经够了（或用户主动跳过了追问）。
+   *
+   * ``clarified`` 表示本次已走过澄清循环（assess 放行或用户点了「直接研究」）：
+   * 服务端见到它就不再复核澄清。没有这个标记，「直接研究」会被 create_run
+   * 的澄清兜底 422 打回——用户刚说完「别问了」，系统回一句「请先补全信息」。
+   */
+  async function launch(finalQuery: string, clarified = false) {
     const hasParams = Object.values(params).some((item) => item != null)
     const { run_id } = await createRun({
       query: finalQuery,
@@ -76,6 +81,7 @@ export default function NewResearchPage() {
       // 空数组也照常传：后端把它当作「无上下文」，与不传等价，
       // 省掉一个仅为省几字节而存在的条件分支。
       history: thread,
+      clarified,
     })
     navigate(`/runs/${run_id}`)
   }
@@ -92,7 +98,7 @@ export default function NewResearchPage() {
       // blocked 的请求也走这里：它必须照常建 run，把「为什么被拒」
       // 留成审计记录——拒识是安全事件，不是可以澄清掉的产品交互。
       setClarify(null)
-      await launch(verdict.resolved_query || state.query)
+      await launch(verdict.resolved_query || state.query, true)
       return
     }
     setClarify({
@@ -137,16 +143,15 @@ export default function NewResearchPage() {
   /** 用户答了一轮：累积答案后再判一次。 */
   async function answerClarification(answer: string) {
     if (!clarify || submitting) return
+    if (isSkip(answer)) {
+      // 服务端生成的候选里也可能带「直接研究」，与底部跳过键同一条路。
+      await skipClarification()
+      return
+    }
     setSubmitting(true)
     setError(null)
-    const next = isSkip(answer) ? null : advance(clarify, answer)
     try {
-      if (next === null) {
-        setClarify(null)
-        await launch(clarify.query)
-        return
-      }
-      await step(next)
+      await step(advance(clarify, answer))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '提交失败')
       setSubmitting(false)
@@ -154,15 +159,33 @@ export default function NewResearchPage() {
   }
 
   async function skipClarification() {
-    if (!clarify) return
+    if (!clarify || submitting) return
     setSubmitting(true)
     setError(null)
     try {
+      // 跳过 ≠ 丢弃：用户前几轮答过的槽位仍要合成进最终问题。
+      // 曾经这里直接拿最初的残句建 run，第一轮答的「Kafka 和 RabbitMQ」
+      // 在第二轮点「直接研究」时被整个扔掉。合成必须在服务端做
+      // （它才看得到槽位语义），所以带 skip 标记再问一次 assess。
+      const verdict = await assessIntent({
+        query: clarify.query,
+        answers: clarify.answers,
+        round: clarify.round,
+        history: thread,
+        skip: true,
+      })
       setClarify(null)
-      await launch(clarify.query)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '提交失败')
-      setSubmitting(false)
+      await launch(verdict.resolved_query || clarify.query, true)
+    } catch {
+      // assess 挂了也不能挡住跳过：退化为拿原句建 run（答案合成不了，
+      // 但「用户想立刻开始」这个意图必须被满足）。
+      try {
+        setClarify(null)
+        await launch(clarify.query, true)
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : '提交失败')
+        setSubmitting(false)
+      }
     }
   }
 

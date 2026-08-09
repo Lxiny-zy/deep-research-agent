@@ -83,8 +83,7 @@ def plan_route(
     if decision.confidence < MIN_ROUTING_CONFIDENCE:
         return RoutingPlan(
             reason=(
-                f"意图置信度 {decision.confidence:.2f} 低于 "
-                f"{MIN_ROUTING_CONFIDENCE}，走默认工作流"
+                f"意图置信度 {decision.confidence:.2f} 低于 {MIN_ROUTING_CONFIDENCE}，走默认工作流"
             )
         )
 
@@ -111,6 +110,7 @@ async def preroute_workflow(
     llm: object | None = None,
     enable_llm: bool = False,
     history: list[ConversationTurn] | None = None,
+    allow_clarification: bool = True,
 ) -> tuple[str | None, IntentDecision | None, RoutingPlan]:
     """在运行开始前决定这次要跑哪条工作流。
 
@@ -127,6 +127,11 @@ async def preroute_workflow(
     因此有 history 时允许消解调用 LLM，代价是这类请求的创建响应变慢。
     这是个有意识的取舍：多轮追问本来就少于首轮提问，且用户对追问的等待容忍度更高。
 
+    ``allow_clarification=False`` 供「用户已明确表态跳过澄清」的调用方使用
+    （前端澄清循环里点了「直接研究」）：跳过的是**澄清**，不是风险门禁——
+    拒识判定照常进行。没有这个口子，跳过澄清的请求会被本函数再判一次
+    需要澄清，422 打回，「直接研究」按钮就是个死胡同。
+
     返回 (最终工作流名, 意图判定, 路由计划)。工作流名为 None 表示保持调用方原值。
     """
     if not enabled:
@@ -137,7 +142,12 @@ async def preroute_workflow(
     # 执行段。在 HTTP 同步段抽，等于让用户为一件本可以稍后做的事多等一次网络
     # 往返——对多轮追问尤其明显（消解已经花了一次，抽实体会让它翻倍）。
     # IntentRouter 会在异步段补上（见 `_needs_entities`）。
-    decision = await cascade.classify(query, history=history or [], extract_entities=False)
+    decision = await cascade.classify(
+        query,
+        history=history or [],
+        extract_entities=False,
+        allow_clarification=allow_clarification,
+    )
     if decision.blocked:
         # 拒识不在这里终止请求：仍然创建 run，交给流程内的 IntentRouter 产出
         # 说明性报告。这样拒识与正常运行共用同一套落库 / SSE / 回放语义，

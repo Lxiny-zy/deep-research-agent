@@ -317,6 +317,8 @@ export interface CreateRunRequest {
   params?: ResearchParams | null
   workflow?: string | null
   history?: ConversationTurn[]
+  /** 已走过澄清循环（含用户点「直接研究」）：服务端不再复核澄清，风险门禁照常 */
+  clarified?: boolean
 }
 
 export interface CreateRunResponse {
@@ -330,6 +332,8 @@ export interface AssessRequest {
   answers?: IntentSlots
   round?: number
   history?: ConversationTurn[]
+  /** 用户显式跳过追问：服务端把已答槽位合成进最终问题后放行 */
+  skip?: boolean
 }
 
 export interface AssessResponse {

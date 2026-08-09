@@ -116,6 +116,11 @@ class CreateRunRequest(BaseModel):
     # （崩溃恢复、租约 fencing、回放都建立在「一个 run 自包含」之上）；加一张会话表
     # 会把这些不变量全部拖进多轮语义里。限长 6 轮：消解只依赖最近的话题焦点。
     history: list[ConversationTurn] = Field(default_factory=list, max_length=6)
+    # 客户端声明已走过 /api/intent/assess 的澄清循环（含用户显式点「直接研究」）。
+    # 置位后本次创建不再复核澄清——否则用户刚跳过追问就被 422 打回，「直接研究」
+    # 成了死胡同。真实性无法验证，但谎报的后果只是少一次追问建议；风险门禁
+    # 不看这个字段，拒识照常拦截。
+    clarified: bool = False
 
 
 class CreateRunResponse(BaseModel):
@@ -135,6 +140,9 @@ class AssessRequest(BaseModel):
     # 为此引入服务端状态不划算。
     round: int = Field(0, ge=0, le=MAX_CLARIFY_ROUNDS)
     history: list[ConversationTurn] = Field(default_factory=list, max_length=6)
+    # 用户显式跳过追问（点了「直接研究」）。服务端仍要把已答槽位合成进最终
+    # 问题——跳过的是**后续追问**，不是已经给过的答案；风险门禁也照常跑。
+    skip: bool = False
 
 
 class AssessResponse(BaseModel):
@@ -988,7 +996,9 @@ async def assess_intent(req: AssessRequest, request: Request) -> AssessResponse:
     # 只有真要用 LLM 时才构造它：第一轮纯规则 + 本地模型，多轮消解也只在带
     # history 时才需要。无谓地构造既白付一次连接开销，在没配 key 的环境里
     # 还会刷一串「llm unavailable」告警，把真正的问题淹掉。
-    needs_llm = req.round >= 1 or bool(req.history)
+    # skip 请求同理：它不再生成候选项，第二轮起的 LLM 只为选项服务——
+    # 除非带 history 要做消解，否则纯属白建。
+    needs_llm = (req.round >= 1 and not req.skip) or bool(req.history)
 
     async with _intent_llm(request.app, settings) if needs_llm else _no_llm() as intent_llm:
         cascade = IntentCascade(llm=intent_llm, enable_llm=intent_llm is not None)
@@ -1017,8 +1027,22 @@ async def assess_intent(req: AssessRequest, request: Request) -> AssessResponse:
                 reason=verdict.reason,
             )
 
+        # 用户显式跳过：不再追问，但已答的槽位必须并进最终问题——
+        # 「直接研究”跳过的是后续追问，不是用户已经给过的答案。曾经前端
+        # 对跳过直接拿**最初的残句**建 run，第一轮答的实体全被扔掉。
+        if req.skip:
+            return AssessResponse(
+                ready=True,
+                resolved_query=decision.effective_query(composed),
+                intent=decision.intent,
+                gap=verdict.gap,
+                reason="用户选择跳过追问，带现有信息开始研究",
+            )
+
         # 轮次上限：到顶强制放行。把用户问烦的代价，高于跑一次信息不全的研究。
-        if verdict.ready or req.round >= MAX_CLARIFY_ROUNDS - 1:
+        # 判据是 >= MAX：round 是「已答过几轮」，第 N 轮的提问在 round=N-1 时发出，
+        # 用 MAX-1 会让 UI 里「第 3/3 轮」永远问不出来——分母成了谎言。
+        if verdict.ready or req.round >= MAX_CLARIFY_ROUNDS:
             return AssessResponse(
                 ready=True,
                 # 消解过就返回消解结果：前端拿它去建 run，create_run 的二次消解
@@ -1077,6 +1101,7 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
                 enabled=settings.intent_enabled,
                 llm=intent_llm,
                 history=req.history,
+                allow_clarification=not req.clarified,
             )
     else:
         workflow_name, intent_decision, route = await preroute_workflow(
@@ -1084,6 +1109,7 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
             requested_workflow=req.workflow,
             available_workflows=set(WORKFLOWS),
             enabled=settings.intent_enabled,
+            allow_clarification=not req.clarified,
         )
     if intent_decision is not None and intent_decision.needs_clarification:
         # 信息不全的请求不建 run：旧实现会建一个 run、跑到 IntentRouter 再 halt，
@@ -1100,7 +1126,9 @@ async def create_run(req: CreateRunRequest, request: Request) -> CreateRunRespon
             status_code=422,
             detail={
                 "code": "needs_clarification",
-                "message": "请求信息不足，请先通过 /api/intent/assess 补全",
+                # 这条文案会经前端错误框直达用户（assess 不可用时的兜底路径），
+                # 不能是「请调用 /api/intent/assess」这种开发者语言。
+                "message": "请求信息不足，请把问题说得更具体一些",
                 "question": clarification.question if clarification else "",
                 "options": list(clarification.options) if clarification else [],
             },

@@ -144,8 +144,13 @@ class IntentRouter:
             except ValidationError:
                 # 判定结构损坏时必须重判而不是放行——直接 return 会让一条本该被
                 # 拦截的请求因为「缓存读不出来」而畅通无阻。
+                # 重判丢弃澄清（下面统一清）：缓存曾经存在就说明创建时的澄清
+                # 闸门已经跑过并放行。这条 run 已在执行中，用户没有作答的界面
+                # ——此刻再判「需要澄清」只会把一次已受理的研究改判成 halt。
+                # 风险门禁不受影响：重判照常可以拒识。
                 self.tracer.emit("INTENT", "info", "已有判定无法解析，重新识别")
                 decision = await self._classify(bb.query)
+                decision.clarification = None
             else:
                 if self._should_complete(decision):
                     # 预路由跑在 HTTP 同步段上，刻意用 enable_llm=False 换响应时间，
@@ -154,6 +159,9 @@ class IntentRouter:
                     # INTENT_LLM_FALLBACK 这个开关在 HTTP 路径上真正有意义。
                     self.tracer.emit("INTENT", "start", "前序判定弃权，升级到 LLM 复判…")
                     fresh = await self._classify(bb.query)
+                    # 复判只该刷新分类结论，不该把已受理的 run 中途改判成
+                    # 「请补充信息」（理由同上面的损坏重判分支）。
+                    fresh.clarification = None
                     # bb.query 已是消解后的完整问题（API 建 run 时写入），复判不必
                     # 重做消解；但消解痕迹必须搬过来——run 详情与下一轮追问的历史
                     # 都从这份判定读 resolved_query，复判只该刷新分类结论，
@@ -305,4 +313,7 @@ class IntentRouter:
         # 走完整的 classify（含槽位与澄清判定），而不是只跑意图级联。
         # history 不在这里传：多轮消解发生在 API 预路由（那时才有会话上下文），
         # 判定结果连同消解后的问题一起进 checkpoint，本角色只是复用或补判。
+        # 首判（CLI / guarded 无缓存）保留澄清判定——那些入口没有交互式循环，
+        # halt 报告是它们唯一的追问方式；对缓存的复判则由调用方清掉澄清
+        # （见 step 里的两处 `.clarification = None`）。
         return await cascade.classify(query)

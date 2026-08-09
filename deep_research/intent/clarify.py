@@ -95,9 +95,7 @@ def _comparison_options(slots: IntentSlots) -> list[str]:
     return [f"{prefix}性能与效率", f"{prefix}成本与投入", f"{prefix}生态与易用性", "以上都要"]
 
 
-def plan_clarification(
-    decision: IntentDecision, query: str
-) -> ClarificationRequest | None:
+def plan_clarification(decision: IntentDecision, query: str) -> ClarificationRequest | None:
     """判断是否需要澄清；需要则给出问题与候选选项。
 
     四道闸门（任一不满足就不澄清）：拒识优先、上下文已消解、置信度足够低、
@@ -115,6 +113,16 @@ def plan_clarification(
     if signal is None:
         return None
     code, question = signal
+
+    # 第②道闸门（与 readiness 同一判据）：下游是不是真的缺这一样。
+    # 判据必须从下游动作反推，不能只看正则——「帮我看看医疗方向」命中模糊句式，
+    # 但领域槽位已经抽到了，Planner 拆得动。曾经这里只有正则一道闸，于是
+    # /api/intent/assess（走 readiness，看槽位）放行的问题，create_run（走这里）
+    # 却 422 打回——同一句话两把尺子，用户被夹在「已补全」与「先补全」之间。
+    if code == "underspecified_comparison" and len(decision.slots.entities) >= 2:
+        return None
+    if code == "vague_directive" and not decision.slots.is_empty():
+        return None
 
     # 极短输入若已抽到实体，说明用户至少指明了对象，降级为不澄清。
     if len(normalize(query)) < MIN_SELF_SUFFICIENT_CHARS and decision.slots.entities:
