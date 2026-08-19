@@ -6,7 +6,7 @@
   apply_overrides(...)  把覆盖项叠加到 Settings 之上（dataclasses.replace + 范围校验）
 
 只允许覆盖白名单字段；database_url 与服务端 api_key 不可经前端改（自举 / 鉴权安全）。
-密钥也可持久化，但 API 层只脱敏回显、空表单不清空（详见 api.py）。
+密钥只保留在进程内存或环境变量中，绝不写入此 JSON 文件。
 """
 
 from __future__ import annotations
@@ -32,10 +32,14 @@ EDITABLE_FIELDS: tuple[str, ...] = (
     "results_per_search",
     "require_corroboration",
     "request_timeout",
+    "max_run_seconds",
 )
 
 # 密钥字段：API 层脱敏回显、空值＝保持不变
 SECRET_FIELDS: frozenset[str] = frozenset({"llm_api_key", "tavily_api_key"})
+PERSISTED_FIELDS: tuple[str, ...] = tuple(
+    field for field in EDITABLE_FIELDS if field not in SECRET_FIELDS
+)
 
 
 def config_path() -> Path:
@@ -44,17 +48,22 @@ def config_path() -> Path:
 
 
 def load_overrides() -> dict:
-    """读取持久化覆盖项；文件缺失 / 损坏一律回退为空（不阻塞启动）。"""
+    """读取持久化覆盖项；文件缺失/内容损坏回退为空，权限与 I/O 错误直接暴露。"""
     path = config_path()
-    if not path.exists():
-        return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, ValueError):
+    except FileNotFoundError:
+        return {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return {}
     if not isinstance(data, dict):
         return {}
-    return {k: v for k, v in data.items() if k in EDITABLE_FIELDS}
+    clean = {k: v for k, v in data.items() if k in PERSISTED_FIELDS}
+    if any(key in data for key in SECRET_FIELDS):
+        # Prior releases wrote plaintext credentials here. Do not knowingly
+        # continue with those secrets at rest when the in-place scrub fails.
+        save_overrides(clean)
+    return clean
 
 
 def save_overrides(overrides: dict) -> None:
@@ -64,9 +73,13 @@ def save_overrides(overrides: dict) -> None:
     原子重命名）。进程中途被杀不会留下半截 JSON——load_overrides 读到损坏文件
     会静默回退为空，配置将凭空丢失，故写入必须全有或全无。
     """
-    clean = {k: v for k, v in overrides.items() if k in EDITABLE_FIELDS}
+    clean = {k: v for k, v in overrides.items() if k in PERSISTED_FIELDS}
     payload = json.dumps(clean, ensure_ascii=False, indent=2)
     path = config_path()
+    # A custom runtime path is common in containers and desktop installs.  Create
+    # its parent before allocating the temporary file so the first configuration
+    # update works even when the mounted subdirectory is initially absent.
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(
         prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent or Path("."))
     )

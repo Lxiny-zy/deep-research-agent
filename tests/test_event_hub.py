@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from deep_research.observability import Event, EventHub
+from deep_research.observability import Event, EventHub, EventStreamGap
 
 
 def _ev(type: str, stage: str = "ORCHESTRATOR") -> Event:
@@ -81,3 +81,66 @@ async def test_subscriber_after_close_replays_then_ends():
 
     got = [e.type async for e in hub.stream()]
     assert got == ["start", "done"]
+
+
+@pytest.mark.asyncio
+async def test_live_non_token_events_receive_stable_sequence_ids():
+    """实时事件在持久化回填前也带可续传的序号。"""
+    hub = EventHub()
+    first = _ev("start")
+    second = _ev("done")
+
+    hub.publish(first)
+    hub.publish(_ev("token"))
+    hub.publish(second)
+    hub.close()
+
+    assert first.seq == 0
+    assert second.seq == 1
+    replayed = [event async for event in hub.stream(after_seq=1)]
+    assert [event.type for event in replayed] == ["done"]
+
+
+def test_resume_sequence_is_primed_by_hidden_terminal_history():
+    """恢复时不回放的旧终态也必须占用序号，避免新事件复用旧 ID。"""
+    hub = EventHub()
+    hub.prime_sequence([Event(seq=0, stage="PLANNER", type="info")])
+    hub.prime_sequence([Event(seq=1, stage="ORCHESTRATOR", type="error")])
+    fresh = _ev("start")
+
+    hub.publish(fresh)
+
+    assert fresh.seq == 2
+
+
+@pytest.mark.asyncio
+async def test_slow_subscriber_gets_explicit_gap_instead_of_unbounded_queue(monkeypatch):
+    hub = EventHub()
+    monkeypatch.setattr(hub, "_QUEUE_MAXSIZE", 2)
+
+    stream = hub.stream()
+    consumer = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+
+    # The first event is consumed by the pending anext call; subsequent events
+    # fill the bounded queue and then wake the subscriber with a gap marker.
+    hub.publish(_ev("info"))
+    await consumer
+    hub.publish(_ev("info"))
+    hub.publish(_ev("info"))
+    hub.publish(_ev("info"))
+
+    with pytest.raises(EventStreamGap):
+        await anext(stream)
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_old_cursor_reports_gap_after_buffer_window_is_trimmed(monkeypatch):
+    hub = EventHub()
+    monkeypatch.setattr(hub, "_BUFFER_MAXSIZE", 2)
+    for _ in range(3):
+        hub.publish(_ev("info"))
+
+    with pytest.raises(EventStreamGap):
+        await anext(hub.stream(after_seq=0))

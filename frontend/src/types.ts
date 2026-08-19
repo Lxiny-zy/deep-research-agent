@@ -12,10 +12,13 @@ export type EventType =
   | 'report'
   | 'done'
   | 'error'
+  | 'cancelled'
 
-export type RunStatus = 'pending' | 'running' | 'done' | 'error'
+export type RunStatus = 'pending' | 'running' | 'cancelling' | 'cancelled' | 'done' | 'error'
 
 export interface ResearchEvent {
+  seq?: number | null
+  attempt?: number
   stage: Stage
   type: EventType
   message: string
@@ -33,6 +36,11 @@ export interface RunSummary {
   total_tokens: number
   elapsed: number
   tags: string[]
+}
+
+export interface CancelRunResponse {
+  run_id: string
+  status: 'cancelling' | 'cancelled'
 }
 
 export interface SubQuestion {
@@ -220,6 +228,7 @@ export interface ResearchParams {
   max_concurrency?: number
   results_per_search?: number
   max_tokens?: number
+  max_run_seconds?: number
   require_corroboration?: boolean
 }
 
@@ -375,6 +384,7 @@ export interface ConfigView {
   max_concurrency: number
   results_per_search: number
   request_timeout: number
+  max_run_seconds: number
   require_corroboration: boolean
 }
 
@@ -389,6 +399,7 @@ export interface ConfigUpdate {
   max_concurrency?: number
   results_per_search?: number
   request_timeout?: number
+  max_run_seconds?: number
   require_corroboration?: boolean
 }
 

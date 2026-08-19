@@ -33,12 +33,14 @@ export default function OrchestrationPipeline({ execution, events = [], runStatu
   if (!steps.length && progress.total === 0) return null
 
   const runtimeStatus =
-    runStatus === 'running'
+    runStatus === 'running' || runStatus === 'cancelling'
       ? 'running'
       : runStatus === 'done'
         ? 'succeeded'
         : runStatus === 'error'
           ? 'failed'
+          : runStatus === 'cancelled'
+            ? 'cancelled'
           : execution?.status ?? runStatus
 
   return (

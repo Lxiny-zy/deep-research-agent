@@ -110,7 +110,9 @@ export function mergeWorkflowSteps(
 
   const workflowIsTerminal =
     execution != null && TERMINAL_WORKFLOW_STATUSES.has(execution.status)
-  if (workflowIsTerminal && runStatus !== 'running') return collapseByNode([...base])
+  if (workflowIsTerminal && runStatus !== 'running' && runStatus !== 'cancelling') {
+    return collapseByNode([...base])
+  }
 
   const live = eventSteps(events)
   const order = base.map((step) => step.id)
@@ -177,15 +179,20 @@ export function deriveResearchProgress({
   const readyStep = [...steps].reverse().find((step) => step.status === 'ready') ?? null
   const persistedWorkflowTerminal =
     runStatus !== 'running' &&
+    runStatus !== 'cancelling' &&
     (execution?.status === 'succeeded' ||
       execution?.status === 'failed' ||
       execution?.status === 'cancelled')
-  const terminal = runStatus === 'done' || runStatus === 'error' || persistedWorkflowTerminal
+  const terminal =
+    runStatus === 'done' ||
+    runStatus === 'error' ||
+    runStatus === 'cancelled' ||
+    persistedWorkflowTerminal
 
   let percent = 0
   if (
     runStatus === 'done' ||
-    (runStatus !== 'running' && execution?.status === 'succeeded')
+    (runStatus !== 'running' && runStatus !== 'cancelling' && execution?.status === 'succeeded')
   ) {
     percent = 100
   } else if (total > 0) {
@@ -198,7 +205,7 @@ export function deriveResearchProgress({
         : 0
     percent = ((completed + activeWeight) / total) * 100
     percent = Math.min(terminal ? 99 : 96, Math.max(runStatus === 'pending' ? 0 : 2, percent))
-  } else if (runStatus === 'running') {
+  } else if (runStatus === 'running' || runStatus === 'cancelling') {
     percent = 3
   }
 
@@ -207,6 +214,10 @@ export function deriveResearchProgress({
       ? '研究任务已完成'
       : runStatus === 'error'
         ? '研究任务已停止'
+        : runStatus === 'cancelled'
+          ? '研究任务已取消'
+          : runStatus === 'cancelling'
+            ? '正在取消研究任务'
         : activeStep?.label || readyStep?.label || latestActivityLabel(events)
 
   return {

@@ -326,14 +326,10 @@ async def test_graph_parallel_pop_preserves_sibling_append(
         name="parallel-destructive-list-merge",
         nodes=[
             {"id": "root", "step": {"agent": "root"}},
-            *[
-                {"id": branch, "step": {"agent": branch}}
-                for branch in branch_order
-            ],
+            *[{"id": branch, "step": {"agent": branch}} for branch in branch_order],
         ],
         edges=[
-            {"id": f"root-{branch}", "source": "root", "target": branch}
-            for branch in branch_order
+            {"id": f"root-{branch}", "source": "root", "target": branch} for branch in branch_order
         ],
     )
 
@@ -346,9 +342,7 @@ async def test_graph_parallel_pop_preserves_sibling_append(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("graph", [False, True], ids=["linear", "graph"])
-async def test_lease_loss_during_cancel_does_not_mask_cancellation(
-    settings, graph: bool
-) -> None:
+async def test_lease_loss_during_cancel_does_not_mask_cancellation(settings, graph: bool) -> None:
     started = asyncio.Event()
     cancelled = asyncio.Event()
     blocking = BlockingAgent(started, cancelled)

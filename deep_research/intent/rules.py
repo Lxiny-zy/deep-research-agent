@@ -52,7 +52,9 @@ _RISK_RULES: tuple[tuple[RiskIntent, str, re.Pattern[str]], ...] = (
         "prompt_injection",
         "cn_override_previous_instructions",
         # 中文「忽略前面的指令」及其把字句变体；动词表与 guardrails 保持一致。
-        re.compile(r"(?:忽略|无视|忘掉|忘记|抛开|不要理会).{0,16}(?:之前|以上|前面|先前).{0,16}(?:指令|提示词|规则|要求|设定)"),
+        re.compile(
+            r"(?:忽略|无视|忘掉|忘记|抛开|不要理会).{0,16}(?:之前|以上|前面|先前).{0,16}(?:指令|提示词|规则|要求|设定)"
+        ),
     ),
     (
         "prompt_injection",

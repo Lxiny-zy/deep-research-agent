@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import NoReturn
 
@@ -28,6 +29,55 @@ from .catalog.dto import (
 from .catalog.repository import CatalogRepository, WorkflowVersionConflictError
 from .config import Settings
 from .observability import Tracer
+from .security import (
+    ProviderURLPolicyError,
+    provider_http_client,
+    validate_provider_url_resolved,
+)
+
+_PROBE_TIMEOUT_SECONDS = 20.0
+
+
+class _ProbeLimiter:
+    """Bound upstream connectivity probes per direct client address."""
+
+    _MAX_KEYS = 10_000
+
+    def __init__(self, max_calls: int = 10, window_seconds: float = 60.0) -> None:
+        self.max_calls = max_calls
+        self.window_seconds = window_seconds
+        self._hits: dict[str, list[float]] = {}
+
+    def check(self, key: str) -> bool:
+        now = time.monotonic()
+        if len(self._hits) >= self._MAX_KEYS and key not in self._hits:
+            self._hits = {
+                stored_key: stamps
+                for stored_key, stamps in self._hits.items()
+                if any(now - stamp < self.window_seconds for stamp in stamps)
+            }
+            if len(self._hits) >= self._MAX_KEYS:
+                return False
+        hits = [stamp for stamp in self._hits.get(key, []) if now - stamp < self.window_seconds]
+        if len(hits) >= self.max_calls:
+            self._hits[key] = hits
+            return False
+        hits.append(now)
+        self._hits[key] = hits
+        return True
+
+
+_probe_limiter = _ProbeLimiter()
+
+
+def _check_probe_limit(request: Request) -> None:
+    key = request.client.host if request.client else "unknown"
+    if not _probe_limiter.check(key):
+        raise HTTPException(
+            status_code=429,
+            detail="too many upstream probes; retry later",
+            headers={"Retry-After": "5"},
+        )
 
 
 class ProfileCreate(BaseModel):
@@ -115,6 +165,11 @@ async def _probe_llm(profile: ModelProfileFull, settings: Settings) -> None:
     """用档案参数建一次性 LLM，发最小补全验证端点/key 可用；失败抛异常。"""
     from .llm import LLM
 
+    await validate_provider_url_resolved(
+        profile.base_url,
+        allow_private=settings.allow_private_provider_urls,
+        allowlist=settings.provider_host_allowlist,
+    )
     llm = LLM.from_params(
         Tracer(),
         api_key=profile.api_key,
@@ -125,6 +180,7 @@ async def _probe_llm(profile: ModelProfileFull, settings: Settings) -> None:
         temperature=0.0,
         parameter_mode=profile.parameter_mode,
         reasoning_effort=profile.reasoning_effort,
+        allow_private_provider_urls=settings.allow_private_provider_urls,
     )
     try:
         await llm.complete("connectivity test", "ping", temperature=0.0)
@@ -138,7 +194,8 @@ async def _probe_search(api_key: str) -> None:
 
     client = AsyncTavilyClient(api_key=api_key)
     try:
-        await client.search("ping", max_results=1)
+        async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
+            await client.search("ping", max_results=1)
     finally:
         await client.close()
 
@@ -188,9 +245,18 @@ def _catalog(request: Request) -> CatalogRepository:
     return request.app.state.catalog
 
 
-def _raise_for_integrity(
-    exc: IntegrityError, *, duplicate_detail: str, fk_detail: str
-) -> NoReturn:
+async def _validate_profile_url(base_url: str | None, settings: Settings) -> None:
+    try:
+        await validate_provider_url_resolved(
+            base_url,
+            allow_private=settings.allow_private_provider_urls,
+            allowlist=settings.provider_host_allowlist,
+        )
+    except ProviderURLPolicyError as exc:
+        raise HTTPException(status_code=422, detail=f"base_url 无效：{exc}") from exc
+
+
+def _raise_for_integrity(exc: IntegrityError, *, duplicate_detail: str, fk_detail: str) -> NoReturn:
     """把数据库完整性错误翻译为语义化 HTTP 状态：唯一约束 → 409，外键缺失 → 422。
 
     仓储写方法的 ``async with s.begin()`` 在异常时已回滚并关闭会话，
@@ -346,6 +412,7 @@ async def list_models(request: Request) -> list[ModelProfileView]:
 
 @router.post("/models", status_code=201)
 async def create_model(req: ProfileCreate, request: Request) -> ModelProfileView:
+    await _validate_profile_url(req.base_url, request.app.state.settings)
     try:
         return await _catalog(request).create_profile(
             name=req.name,
@@ -358,21 +425,19 @@ async def create_model(req: ProfileCreate, request: Request) -> ModelProfileView
             is_default=req.is_default,
         )
     except IntegrityError as exc:
-        _raise_for_integrity(
-            exc, duplicate_detail=_PROFILE_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE
-        )
+        _raise_for_integrity(exc, duplicate_detail=_PROFILE_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE)
 
 
 @router.put("/models/{profile_id}")
 async def update_model(profile_id: str, req: ProfileUpdate, request: Request) -> ModelProfileView:
+    if "base_url" in req.model_fields_set:
+        await _validate_profile_url(req.base_url, request.app.state.settings)
     try:
         view = await _catalog(request).update_profile(
             profile_id, req.model_dump(exclude_unset=True)
         )
     except IntegrityError as exc:
-        _raise_for_integrity(
-            exc, duplicate_detail=_PROFILE_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE
-        )
+        _raise_for_integrity(exc, duplicate_detail=_PROFILE_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE)
     if view is None:
         raise HTTPException(status_code=404, detail="model profile not found")
     return view
@@ -388,6 +453,7 @@ async def delete_model(profile_id: str, request: Request) -> Response:
 @router.post("/models/{profile_id}/test")
 async def test_model(profile_id: str, request: Request) -> TestResult:
     """对模型档案发一个最小补全,验证 base_url/key/model 可用。"""
+    _check_probe_limit(request)
     profile = await _catalog(request).get_profile_full(profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="model profile not found")
@@ -398,6 +464,7 @@ async def test_model(profile_id: str, request: Request) -> TestResult:
 
 @router.post("/models/test-config")
 async def test_model_config(req: ProfileProbe, request: Request) -> TestResult:
+    _check_probe_limit(request)
     profile = await _resolve_probe(req, _catalog(request))
     if not profile.api_key:
         return TestResult(ok=False, latency_ms=0, detail="未设置 API Key")
@@ -406,17 +473,30 @@ async def test_model_config(req: ProfileProbe, request: Request) -> TestResult:
 
 @router.post("/models/discover")
 async def discover_models(req: ProfileProbe, request: Request) -> ModelDiscoveryResult:
+    _check_probe_limit(request)
     from openai import AsyncOpenAI
 
     profile = await _resolve_probe(req, _catalog(request))
     if not profile.api_key:
         raise HTTPException(status_code=422, detail="请先填写 API Key")
+    try:
+        await validate_provider_url_resolved(
+            profile.base_url,
+            allow_private=request.app.state.settings.allow_private_provider_urls,
+            allowlist=request.app.state.settings.provider_host_allowlist,
+        )
+    except ProviderURLPolicyError as exc:
+        raise HTTPException(status_code=422, detail=f"base_url 无效：{exc}") from exc
     started = time.perf_counter()
     client = AsyncOpenAI(
         api_key=profile.api_key,
         base_url=profile.base_url,
         timeout=20.0,
         max_retries=0,
+        http_client=provider_http_client(
+            allow_private=request.app.state.settings.allow_private_provider_urls,
+            timeout=20.0,
+        ),
     )
     try:
         page = await client.models.list()
@@ -500,6 +580,7 @@ async def delete_key(key_id: str, request: Request) -> Response:
 @router.post("/search-keys/{key_id}/test")
 async def test_key(key_id: str, request: Request) -> TestResult:
     """对搜索 key 发一次最小检索,验证 key 可用。"""
+    _check_probe_limit(request)
     secret = await _catalog(request).get_key_secret(key_id)
     if secret is None:
         raise HTTPException(status_code=404, detail="search key not found")

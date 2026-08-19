@@ -16,11 +16,15 @@ __pycache__/
 
 # 虚拟环境
 .venv/
+.wheel-smoke/
+.ci-wheel-venv/
+.ci-wheel-venv-final*/
 venv/
 
 # 本地 SQLite 库与环境文件（密钥不进镜像）
 *.db
-.env
+.env*
+!.env.example
 
 # 测试与评估不进运行镜像
 tests/
@@ -30,3 +34,32 @@ eval/
 frontend/node_modules/
 frontend/.vite/
 frontend/dist/
+node_modules/
+
+# Local virtual environments and build artefacts
+.venv-desktop/
+.venv-*/
+build/
+dist/
+backups/
+*.egg-info/
+.coverage
+coverage.xml
+
+# Local runtime state and database sidecar files
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+data/
+runtime_config.json
+
+# Local assets and temporary audit output
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+.tmp-*/

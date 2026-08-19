@@ -5,6 +5,7 @@ import type {
   AssessRequest,
   AssessResponse,
   Behavior,
+  CancelRunResponse,
   ConfigUpdate,
   ConfigView,
   CreateRunRequest,
@@ -66,11 +67,10 @@ function formatDetail(detail: unknown, fallback: string): string {
 
 const API_KEY_STORAGE = 'dr_api_key'
 
-// 后端启用 API_KEY 鉴权时，前端用此 key 走 X-API-Key 头 / ?api_key= 参数。
-// 由密钥登录 gate（LoginGate）写入；也可在浏览器控制台手动设置。
+// API keys are tab-scoped in sessionStorage and cleared when the tab closes.
 export function getApiKey(): string | null {
   try {
-    return localStorage.getItem(API_KEY_STORAGE)
+    return sessionStorage.getItem(API_KEY_STORAGE)
   } catch {
     return null
   }
@@ -78,15 +78,15 @@ export function getApiKey(): string | null {
 
 export function setApiKey(key: string): void {
   try {
-    localStorage.setItem(API_KEY_STORAGE, key)
+    sessionStorage.setItem(API_KEY_STORAGE, key)
   } catch {
-    // localStorage 不可用（隐私模式等）：忽略
+    // sessionStorage 不可用（隐私模式等）：忽略
   }
 }
 
 export function clearApiKey(): void {
   try {
-    localStorage.removeItem(API_KEY_STORAGE)
+    sessionStorage.removeItem(API_KEY_STORAGE)
   } catch {
     // 忽略
   }
@@ -102,11 +102,12 @@ function signalUnauthorized(): void {
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const key = getApiKey()
   const res = await fetch(url, {
+    ...init,
     headers: {
       'Content-Type': 'application/json',
-      ...(key ? { 'X-API-Key': key } : {}),
+      ...(key ? { Authorization: `Bearer ${key}` } : {}),
+      ...(init?.headers ?? {}),
     },
-    ...init,
   })
   if (!res.ok) {
     if (res.status === 401) signalUnauthorized()
@@ -126,8 +127,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 async function requestVoid(url: string, init?: RequestInit): Promise<void> {
   const key = getApiKey()
   const res = await fetch(url, {
-    headers: { ...(key ? { 'X-API-Key': key } : {}) },
     ...init,
+    headers: {
+      ...(key ? { Authorization: `Bearer ${key}` } : {}),
+      ...(init?.headers ?? {}),
+    },
   })
   if (!res.ok) {
     if (res.status === 401) signalUnauthorized()
@@ -143,8 +147,13 @@ async function requestVoid(url: string, init?: RequestInit): Promise<void> {
 }
 
 export function createRun(body: CreateRunRequest): Promise<CreateRunResponse> {
+  const idempotencyKey =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
   return request<CreateRunResponse>('/api/runs', {
     method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify(body),
   })
 }
@@ -215,6 +224,12 @@ export function deleteRun(id: string): Promise<void> {
   return requestVoid(`/api/runs/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+export function cancelRun(id: string): Promise<CancelRunResponse> {
+  return request<CancelRunResponse>(`/api/runs/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+  })
+}
+
 export function batchDeleteRuns(ids: string[]): Promise<{ deleted: number; skipped: number }> {
   return request<{ deleted: number; skipped: number }>('/api/runs/batch_delete', {
     method: 'POST',
@@ -235,14 +250,16 @@ export function listTags(): Promise<TagCount[]> {
 
 export async function streamRun(
   id: string,
-  onMessage: (data: string) => void,
+  onMessage: (data: string, eventId?: string) => void,
   signal?: AbortSignal,
+  lastEventId?: string,
 ): Promise<void> {
   const key = getApiKey()
   const res = await fetch(`/api/runs/${encodeURIComponent(id)}/stream`, {
     headers: {
       Accept: 'text/event-stream',
-      ...(key ? { 'X-API-Key': key } : {}),
+      ...(key ? { Authorization: `Bearer ${key}` } : {}),
+      ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}),
     },
     signal,
   })
@@ -261,12 +278,17 @@ export async function streamRun(
     while (boundary?.index != null) {
       const block = buffer.slice(0, boundary.index)
       buffer = buffer.slice(boundary.index + boundary[0].length)
+      const id = block
+        .split(/\r?\n/)
+        .find((line) => line.startsWith('id:'))
+        ?.slice(3)
+        .trim()
       const data = block
         .split(/\r?\n/)
         .filter((line) => line.startsWith('data:'))
         .map((line) => line.slice(5).replace(/^ /, ''))
         .join('\n')
-      if (data) onMessage(data)
+      if (data) onMessage(data, id || undefined)
       boundary = buffer.match(/\r?\n\r?\n/)
     }
   }

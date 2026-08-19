@@ -19,7 +19,9 @@ export default function LoginGate({ onClose }: Props) {
     setPending(true)
     setError('')
     try {
-      const response = await fetch('/api/config', { headers: { 'X-API-Key': value } })
+      const response = await fetch('/api/config', {
+        headers: { Authorization: `Bearer ${value}` },
+      })
       if (!response.ok) {
         throw new Error(response.status === 401 ? '管理员凭证无效' : `验证失败（${response.status}）`)
       }

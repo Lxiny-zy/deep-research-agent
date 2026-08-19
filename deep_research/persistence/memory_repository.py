@@ -10,7 +10,13 @@ from uuid import uuid4
 from ..models import Report, ResearchPlan, ResearchResult, Source, SubQuestion
 from ..observability import Event
 from ..orchestration import WorkflowRun
-from .repository import LeaseLostError, RunDetail, RunSummary, TagCount
+from .repository import (
+    IdempotencyConflictError,
+    LeaseLostError,
+    RunDetail,
+    RunSummary,
+    TagCount,
+)
 
 
 @dataclass
@@ -30,6 +36,9 @@ class _RunRecord:
     orchestration: WorkflowRun | None = None
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
+    idempotency_key: str | None = None
+    request_hash: str | None = None
+    attempt: int = 1
 
 
 class InMemoryRepository:
@@ -38,6 +47,7 @@ class InMemoryRepository:
     def __init__(self) -> None:
         self._runs: dict[str, _RunRecord] = {}
         self._order: list[str] = []
+        self._idempotency: dict[str, tuple[str, str]] = {}
 
     async def create_run(
         self,
@@ -46,19 +56,51 @@ class InMemoryRepository:
         execution: WorkflowRun | None = None,
         lease_owner: str | None = None,
     ) -> str:
+        run_id, _ = await self.create_run_once(
+            query,
+            request_hash="",
+            execution=execution,
+            lease_owner=lease_owner,
+        )
+        return run_id
+
+    async def create_run_once(
+        self,
+        query: str,
+        *,
+        request_hash: str,
+        idempotency_key: str | None = None,
+        execution: WorkflowRun | None = None,
+        lease_owner: str | None = None,
+    ) -> tuple[str, bool]:
+        if idempotency_key:
+            existing = self._idempotency.get(idempotency_key)
+            if existing is not None:
+                existing_id, existing_hash = existing
+                if existing_hash != request_hash:
+                    raise IdempotencyConflictError(
+                        "idempotency key was already used for a different request"
+                    )
+                return existing_id, False
         run_id = str(uuid4())
-        record = _RunRecord(id=run_id, query=query)
+        record = _RunRecord(
+            id=run_id,
+            query=query,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            attempt=execution.attempt if execution is not None else 1,
+        )
         if execution is not None:
             record.orchestration = execution.model_copy(deep=True)
             record.lease_owner = lease_owner
             record.lease_expires_at = (
-                datetime.now(UTC) + timedelta(seconds=120)
-                if lease_owner is not None
-                else None
+                datetime.now(UTC) + timedelta(seconds=120) if lease_owner is not None else None
             )
         self._runs[run_id] = record
         self._order.append(run_id)
-        return run_id
+        if idempotency_key:
+            self._idempotency[idempotency_key] = (run_id, request_hash)
+        return run_id, True
 
     def _assert_lease(self, run_id: str, owner: str | None) -> None:
         if owner is None:
@@ -72,23 +114,26 @@ class InMemoryRepository:
         ):
             raise LeaseLostError(f"run {run_id} lease is no longer owned by this worker")
 
-    async def set_status(
-        self, run_id: str, status: str, *, lease_owner: str | None = None
-    ) -> None:
+    async def set_status(self, run_id: str, status: str, *, lease_owner: str | None = None) -> None:
         self._assert_lease(run_id, lease_owner)
         self._runs[run_id].status = status
 
-    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> None:
+    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> int:
         self._assert_lease(run_id, lease_owner)
         rec = self._runs[run_id]
         rec.status = "running"
-        rec.events = [
-            event
-            for event in rec.events
-            if not (
-                event.stage == "ORCHESTRATOR" and event.type in {"done", "error"}
-            )
-        ]
+        rec.attempt += 1
+        if rec.orchestration is not None:
+            rec.orchestration.attempt = rec.attempt
+        return rec.attempt
+
+    async def request_cancel(self, run_id: str) -> str | None:
+        rec = self._runs.get(run_id)
+        if rec is None:
+            return None
+        if rec.status in {"pending", "running"}:
+            rec.status = "cancelling"
+        return rec.status
 
     async def save_plan(self, run_id: str, plan: ResearchPlan) -> None:
         rec = self._runs[run_id]
@@ -143,7 +188,25 @@ class InMemoryRepository:
     ) -> None:
         self._assert_lease(run_id, lease_owner)
         # 覆盖式：按产生顺序存全部非 token 事件（seq 即下标）
-        self._runs[run_id].events = list(events)
+        rec = self._runs[run_id]
+        durable = [event for event in events if event.type != "token"]
+        rec.events = [
+            event.model_copy(update={"seq": i, "attempt": rec.attempt})
+            for i, event in enumerate(durable)
+        ]
+
+    async def append_events(
+        self, run_id: str, events: list[Event], *, lease_owner: str | None = None
+    ) -> list[Event]:
+        self._assert_lease(run_id, lease_owner)
+        rec = self._runs[run_id]
+        durable = [event for event in events if event.type != "token"]
+        appended = [
+            event.model_copy(update={"seq": len(rec.events) + i, "attempt": rec.attempt})
+            for i, event in enumerate(durable)
+        ]
+        rec.events.extend(appended)
+        return appended
 
     async def save_orchestration(
         self,
@@ -154,6 +217,7 @@ class InMemoryRepository:
     ) -> None:
         self._assert_lease(run_id, lease_owner)
         self._runs[run_id].orchestration = execution.model_copy(deep=True)
+        self._runs[run_id].attempt = execution.attempt
 
     async def acquire_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool:
         rec = self._runs.get(run_id)
@@ -172,11 +236,7 @@ class InMemoryRepository:
         if rec is None:
             return False
         now = datetime.now(UTC)
-        if (
-            rec.lease_owner != owner
-            or rec.lease_expires_at is None
-            or rec.lease_expires_at <= now
-        ):
+        if rec.lease_owner != owner or rec.lease_expires_at is None or rec.lease_expires_at <= now:
             return False
         rec.lease_expires_at = now + timedelta(seconds=seconds)
         return True
@@ -201,13 +261,17 @@ class InMemoryRepository:
         rec = self._runs[run_id]
         rec.elapsed = elapsed
         rec.total_tokens = total_tokens
-        rec.status = "done"
+        if rec.status != "cancelling":
+            rec.status = "done"
 
     async def delete_run(self, run_id: str) -> bool:
         if run_id not in self._runs:
             return False
         del self._runs[run_id]
         self._order.remove(run_id)
+        for key, (stored_id, _hash) in list(self._idempotency.items()):
+            if stored_id == run_id:
+                del self._idempotency[key]
         return True
 
     async def set_tags(self, run_id: str, tags: list[str]) -> None:
@@ -278,8 +342,18 @@ class InMemoryRepository:
         rec = self._runs.get(run_id)
         return rec.status if rec is not None else None
 
-    async def get_events(self, run_id: str, *, after_seq: int = 0) -> list[Event]:
+    async def get_run_attempt(self, run_id: str) -> int | None:
+        rec = self._runs.get(run_id)
+        return rec.attempt if rec is not None else None
+
+    async def get_events(
+        self, run_id: str, *, after_seq: int = 0, limit: int | None = None
+    ) -> list[Event]:
         rec = self._runs.get(run_id)
         if rec is None:
             return []
-        return rec.events[after_seq:]
+        events = [event for event in rec.events if event.seq is not None and event.seq >= after_seq]
+        return events if limit is None else events[:limit]
+
+    async def healthcheck(self) -> bool:
+        return True

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +111,27 @@ async def _sqlite_table_names(engine: AsyncEngine) -> set[str]:
     return {name for name in names if not name.startswith("sqlite_")}
 
 
+def _migration_root() -> Path:
+    """Locate Alembic assets in a source checkout or an installed wheel."""
+    source_root = Path(__file__).resolve().parents[2]
+    candidates = [source_root, Path(sys.prefix) / "share" / "deep-research-agent"]
+    try:
+        installed = distribution("deep-research-agent")
+    except PackageNotFoundError:
+        installed = None
+    if installed is not None:
+        for entry in installed.files or ():
+            if entry.as_posix().endswith("share/deep-research-agent/alembic.ini"):
+                candidates.append(Path(str(installed.locate_file(entry))).parent)
+                break
+    for root in candidates:
+        if (root / "alembic.ini").is_file() and (root / "alembic" / "versions").is_dir():
+            return root
+    raise RuntimeError(
+        "Alembic 迁移资源未找到；请从源码树运行，或安装包含 share/deep-research-agent 的完整 wheel"
+    )
+
+
 async def _stamp_sqlite_revision(engine: AsyncEngine, revision: str) -> None:
     async with engine.begin() as conn:
         await conn.execute(
@@ -133,7 +156,7 @@ async def _run_alembic_upgrade(database_url: str) -> None:
 
         from alembic import command
 
-        project_root = Path(__file__).resolve().parents[2]
+        project_root = _migration_root()
         config = Config(str(project_root / "alembic.ini"))
         config.set_main_option("script_location", str(project_root / "alembic"))
         # 经 Config.attributes 显式传连接串给 env.py，不临时改写进程级

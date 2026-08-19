@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
-import { AppIcon, agentIconName, type AppIconName } from './AppIcon'
+import { agentIconName } from '../lib/agentIcons'
 import type { RoleInfo } from '../types'
+import { AppIcon, type AppIconName } from './AppIcon'
 
 /**
  * 内置角色陈列（角色广场）：按管线执行序（/api/roles 返回序）展示 5 个内置角色。

@@ -65,9 +65,7 @@ def _revision_metadata() -> sa.MetaData:
         sa.Column("depends_on", sa.JSON(), nullable=False),
         sa.Column("origin", sa.String(16), nullable=False),
         sa.Column("round", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["research_run.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["run_id"], ["research_run.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("run_id", "idx", name="uq_subquestion_run_idx"),
     )
@@ -79,9 +77,7 @@ def _revision_metadata() -> sa.MetaData:
         sa.Column("id", sa.String(36), nullable=False),
         sa.Column("run_id", sa.String(36), nullable=False),
         sa.Column("sub_question", sa.Text(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["research_run.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["run_id"], ["research_run.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     sa.Index("ix_research_result_run_id", research_result.c.run_id)
@@ -141,9 +137,7 @@ def _revision_metadata() -> sa.MetaData:
             server_default="[]",
         ),
         sa.Column("contradiction_reason", sa.Text(), nullable=False, server_default=""),
-        sa.ForeignKeyConstraint(
-            ["result_id"], ["research_result.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["result_id"], ["research_result.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     sa.Index("ix_finding_result_id", finding.c.result_id)
@@ -156,9 +150,7 @@ def _revision_metadata() -> sa.MetaData:
         sa.Column("title", sa.Text(), nullable=False),
         sa.Column("url", sa.Text(), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["research_run.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["run_id"], ["research_run.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("run_id", "url", name="uq_source_run_url"),
     )
@@ -171,9 +163,7 @@ def _revision_metadata() -> sa.MetaData:
         sa.Column("run_id", sa.String(36), nullable=False),
         sa.Column("markdown", sa.Text(), nullable=False),
         sa.Column("citations", sa.JSON(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["research_run.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["run_id"], ["research_run.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     sa.Index("ix_report_run_id", report.c.run_id, unique=True)
@@ -189,9 +179,7 @@ def _revision_metadata() -> sa.MetaData:
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column("elapsed", sa.Float(), nullable=False),
         sa.Column("data", sa.JSON(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["research_run.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["run_id"], ["research_run.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("run_id", "seq", name="uq_event_run_seq"),
     )
@@ -203,9 +191,7 @@ def _revision_metadata() -> sa.MetaData:
         sa.Column("id", sa.String(36), nullable=False),
         sa.Column("run_id", sa.String(36), nullable=False),
         sa.Column("tag", sa.String(64), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["research_run.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["run_id"], ["research_run.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("run_id", "tag", name="uq_run_tag"),
     )
@@ -271,9 +257,7 @@ def _revision_metadata() -> sa.MetaData:
             nullable=False,
             server_default=sa.func.now(),
         ),
-        sa.ForeignKeyConstraint(
-            ["model_profile_id"], ["model_profile.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["model_profile_id"], ["model_profile.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name", name="uq_agent_card_name"),
     )
@@ -340,9 +324,7 @@ def _revision_metadata() -> sa.MetaData:
         sa.Column("checkpoint", sa.JSON(), nullable=False, server_default="{}"),
         sa.Column("lease_owner", sa.String(64), nullable=True),
         sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["research_run_id"], ["research_run.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["research_run_id"], ["research_run.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("research_run_id"),
     )
@@ -363,9 +345,7 @@ def _revision_metadata() -> sa.MetaData:
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["workflow_run_id"], ["workflow_run.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["workflow_run_id"], ["workflow_run.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     sa.Index("ix_step_run_workflow_run_id", step_run.c.workflow_run_id)
@@ -428,9 +408,7 @@ def _column_repairs() -> dict[str, list[sa.Column[object]]]:
                 nullable=False,
                 server_default="not_checked",
             ),
-            sa.Column(
-                "semantic_confidence", sa.Float(), nullable=False, server_default="0"
-            ),
+            sa.Column("semantic_confidence", sa.Float(), nullable=False, server_default="0"),
             sa.Column("semantic_reason", sa.Text(), nullable=False, server_default=""),
             sa.Column("claim_id", sa.String(32), nullable=False, server_default=""),
             sa.Column(

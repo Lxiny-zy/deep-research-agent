@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   batchDeleteRuns,
+  cancelRun,
   deleteRun,
   getRun,
   listRuns,
@@ -52,6 +53,17 @@ export function useDeleteRun() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['runs'] })
       qc.invalidateQueries({ queryKey: ['tags'] })
+    },
+  })
+}
+
+export function useCancelRun(id: string | undefined) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => cancelRun(id as string),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['run', id] })
+      qc.invalidateQueries({ queryKey: ['runs'] })
     },
   })
 }

@@ -213,9 +213,7 @@ async def test_team_fanout_reuses_run_level_concurrency_limit(settings) -> None:
     """5 个子团队并行：各团队内的检索共用 run 级信号量，总并发不超 max_concurrency。"""
     settings.max_concurrency = 2
     probe = _ConcurrencyProbeSearch()
-    agent = DeepResearchAgent(
-        settings, llm=_ManyTeamsLLM(), search_tool=probe, workflow="teams"
-    )
+    agent = DeepResearchAgent(settings, llm=_ManyTeamsLLM(), search_tool=probe, workflow="teams")
 
     report = await agent.run("测试问题")
 
@@ -262,10 +260,7 @@ async def test_nested_step_ids_do_not_hide_future_root_steps_on_resume(settings)
     async def save_checkpoint(run):  # type: ignore[no-untyped-def]
         checkpoints.append(run.model_copy(deep=True))
 
-    agents = {
-        name: _CheckpointTeamAgent(name)
-        for name in ("researcher", "aggregator", "final")
-    }
+    agents = {name: _CheckpointTeamAgent(name) for name in ("researcher", "aggregator", "final")}
     ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
     workflow = Workflow(
         name="root-after-team",

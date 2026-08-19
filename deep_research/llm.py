@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from .config import Settings
 from .observability import Tracer
+from .security import provider_http_client
 
 T = TypeVar("T", bound=BaseModel)  # 3.11 兼容写法（不用 3.12 的 def f[T]() 语法）
 
@@ -43,6 +44,10 @@ class LLM:
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
             timeout=settings.request_timeout,
+            http_client=provider_http_client(
+                allow_private=settings.allow_private_provider_urls,
+                timeout=settings.request_timeout,
+            ),
             # 覆盖 SDK 默认 UA：上游网关（Cloudflare 等）可能拦 "OpenAI/Python ..."
             default_headers={"User-Agent": settings.llm_user_agent},
         )
@@ -60,6 +65,7 @@ class LLM:
         temperature: float = 0.3,
         parameter_mode: str = "temperature",
         reasoning_effort: str = "medium",
+        allow_private_provider_urls: bool = False,
     ) -> LLM:
         """按模型档案的显式参数构造（角色绑不同模型档案时用）。
 
@@ -75,6 +81,7 @@ class LLM:
             llm_model=model,
             llm_user_agent=user_agent,
             request_timeout=timeout,
+            allow_private_provider_urls=allow_private_provider_urls,
         )
         inst = cls(s, tracer)
         inst.default_temperature = temperature

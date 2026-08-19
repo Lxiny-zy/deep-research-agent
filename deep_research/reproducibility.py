@@ -83,16 +83,12 @@ class RecordingSearchTool(SearchTool):
         sources = await self.delegate.search(query, max_results=max_results)
         snapshots = [
             source.model_copy(
-                update={
-                    "content_hash": hashlib.sha256(source.content.encode("utf-8")).hexdigest()
-                }
+                update={"content_hash": hashlib.sha256(source.content.encode("utf-8")).hexdigest()}
             )
             for source in sources
         ]
         fresh = [
-            source
-            for source in snapshots
-            if (source.url, source.content_hash) not in self._seen
+            source for source in snapshots if (source.url, source.content_hash) not in self._seen
         ]
         if fresh and self._sink is not None:
             try:

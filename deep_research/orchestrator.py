@@ -67,6 +67,7 @@ _RUN_SETTING_FIELDS = (
     "max_tokens",
     "max_replans",
     "request_timeout",
+    "max_run_seconds",
 )
 
 
@@ -238,6 +239,7 @@ class DeepResearchAgent:
         self._resume_execution = resume_execution
         self._initial_execution = initial_execution
         self._lease_owner = lease_owner
+        self._persisted_event_count = 0
         existing_execution = resume_execution or initial_execution
         if existing_execution is not None:
             scratch = existing_execution.checkpoint.get("scratch", {})
@@ -369,17 +371,28 @@ class DeepResearchAgent:
                     logger.exception("failed to persist error status for run %s", run_id)
             raise
         finally:
-            # run 结束（含异常）后一次性落库全部非 token 事件，seq 即顺序，保证回放有序
+            # Checkpoints flush incrementally; this final flush captures the
+            # report and terminal event emitted after the last checkpoint.
             if self.repo is not None and run_id is not None:
                 try:
-                    await self.repo.save_events(
-                        run_id, self.tracer.events, lease_owner=self._lease_owner
-                    )
+                    await self._flush_events(run_id)
                 except LeaseLostError:
                     # Do not mask the original failure/cancellation after fencing.
                     pass
                 except Exception:
                     logger.exception("failed to persist events for run %s", run_id)
+
+    async def _flush_events(self, run_id: str) -> None:
+        if self.repo is None:
+            return
+        pending = self.tracer.events[self._persisted_event_count :]
+        if not pending:
+            return
+        stored = await self.repo.append_events(run_id, pending, lease_owner=self._lease_owner)
+        for original, durable in zip(pending, stored, strict=True):
+            original.seq = durable.seq
+            original.attempt = durable.attempt
+        self._persisted_event_count += len(pending)
 
     async def _resolve_workflow(self) -> Workflow:
         """解析本次要跑的工作流：内置预置优先 → 自定义（catalog 按名）→ 兜底默认。
@@ -486,9 +499,7 @@ class DeepResearchAgent:
         if RUN_MANIFEST_CHECKPOINT_KEY not in bb.scratch:
             catalog_snapshot = bb.scratch.get(RUN_CATALOG_CHECKPOINT_KEY)
             catalog_profiles = (
-                catalog_snapshot.get("profiles", [])
-                if isinstance(catalog_snapshot, dict)
-                else []
+                catalog_snapshot.get("profiles", []) if isinstance(catalog_snapshot, dict) else []
             )
             bb.scratch[RUN_MANIFEST_CHECKPOINT_KEY] = build_run_manifest(
                 query=query,
@@ -509,12 +520,12 @@ class DeepResearchAgent:
             ).model_dump(mode="json")
 
         if self.repo is not None and run_id is not None:
+
             async def save_source_snapshots(sources):  # type: ignore[no-untyped-def]
-                await self.repo.save_sources(
-                    run_id, sources, lease_owner=self._lease_owner
-                )
+                await self.repo.save_sources(run_id, sources, lease_owner=self._lease_owner)
 
             self.search_tool.set_sink(save_source_snapshots)
+
             def record_snapshot_error(exc, sources):  # type: ignore[no-untyped-def]
                 self.tracer.emit(
                     "RESEARCHER",
@@ -532,6 +543,7 @@ class DeepResearchAgent:
         async def save_checkpoint(execution):  # type: ignore[no-untyped-def]
             if self.repo is not None and run_id is not None:
                 await self.repo.save_orchestration(run_id, execution, lease_owner=self._lease_owner)
+                await self._flush_events(run_id)
 
         engine = WorkflowEngine(
             ctx,

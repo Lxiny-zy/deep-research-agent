@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 from httpx import ASGITransport
@@ -9,7 +11,7 @@ from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from deep_research import api
+from deep_research import api, catalog_api
 from deep_research.catalog.repository import CatalogRepository
 from deep_research.config import Settings
 from deep_research.persistence.db import create_all
@@ -21,6 +23,11 @@ async def test_model_config_probe_and_discovery(cat_app, monkeypatch) -> None:
         assert profile.api_key == "sk-test"
 
     monkeypatch.setattr("deep_research.catalog_api._probe_llm", ok_probe)
+
+    async def allow_test_host(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr("deep_research.catalog_api.validate_provider_url_resolved", allow_test_host)
 
     class Item:
         def __init__(self, id_: str) -> None:
@@ -59,6 +66,7 @@ def _client() -> httpx.AsyncClient:
 
 @pytest.fixture
 async def cat_app():
+    catalog_api._probe_limiter = catalog_api._ProbeLimiter()
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         poolclass=StaticPool,
@@ -165,25 +173,19 @@ async def test_search_key_crud_and_mask(cat_app):
 @pytest.mark.asyncio
 async def test_updates_reject_null_for_non_nullable_catalog_fields(cat_app) -> None:
     async with _client() as c:
-        profile = (
-            await c.post("/api/models", json={"name": "profile", "model": "model"})
-        ).json()
+        profile = (await c.post("/api/models", json={"name": "profile", "model": "model"})).json()
         agent = (
             await c.post(
                 "/api/agents",
                 json={"name": "reviewer", "behavior": "critique"},
             )
         ).json()
-        search_key = (
-            await c.post("/api/search-keys", json={"api_key": "tvly-test"})
-        ).json()
+        search_key = (await c.post("/api/search-keys", json={"api_key": "tvly-test"})).json()
 
         responses = [
             await c.put(f"/api/models/{profile['id']}", json={"model": None}),
             await c.put(f"/api/agents/{agent['id']}", json={"enabled": None}),
-            await c.put(
-                f"/api/search-keys/{search_key['id']}", json={"priority": None}
-            ),
+            await c.put(f"/api/search-keys/{search_key['id']}", json={"priority": None}),
         ]
 
     assert [response.status_code for response in responses] == [422, 422, 422]
@@ -228,8 +230,6 @@ async def test_model_test_without_key(cat_app):
 
 @pytest.mark.asyncio
 async def test_search_key_test_endpoint(cat_app, monkeypatch):
-    from deep_research import catalog_api
-
     async with _client() as c:
         kid = (await c.post("/api/search-keys", json={"api_key": "tvly-x"})).json()["id"]
 
@@ -248,6 +248,41 @@ async def test_search_key_test_endpoint(cat_app, monkeypatch):
         assert body["ok"] is False and "quota" in body["detail"]
 
         assert (await c.post("/api/search-keys/nope/test")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_search_probe_has_hard_timeout(monkeypatch) -> None:
+    closed = False
+
+    class Client:
+        def __init__(self, *, api_key):  # type: ignore[no-untyped-def]
+            assert api_key == "tvly-test"
+
+        async def search(self, query, *, max_results):  # type: ignore[no-untyped-def]
+            await asyncio.Event().wait()
+
+        async def close(self):  # type: ignore[no-untyped-def]
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr("tavily.AsyncTavilyClient", Client)
+    monkeypatch.setattr(catalog_api, "_PROBE_TIMEOUT_SECONDS", 0.001)
+
+    with pytest.raises(TimeoutError):
+        await catalog_api._probe_search("tvly-test")
+    assert closed is True
+
+
+@pytest.mark.asyncio
+async def test_probe_endpoints_return_429_when_probe_budget_is_exhausted(cat_app) -> None:
+    catalog_api._probe_limiter = catalog_api._ProbeLimiter(max_calls=1, window_seconds=60.0)
+    async with _client() as c:
+        first = await c.post("/api/models/test-config", json={"api_key": ""})
+        second = await c.post("/api/models/test-config", json={"api_key": ""})
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.headers["Retry-After"] == "5"
 
 
 @pytest.mark.asyncio
@@ -287,9 +322,9 @@ async def test_agent_with_invalid_model_profile_returns_422(cat_app_fk):
         assert bad.status_code == 422
         assert "模型档案" in bad.json()["detail"]
 
-        aid = (
-            await c.post("/api/agents", json={"name": "fk-b", "behavior": "critique"})
-        ).json()["id"]
+        aid = (await c.post("/api/agents", json={"name": "fk-b", "behavior": "critique"})).json()[
+            "id"
+        ]
         bad = await c.put(f"/api/agents/{aid}", json={"model_profile_id": "nope"})
         assert bad.status_code == 422
         assert "模型档案" in bad.json()["detail"]

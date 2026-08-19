@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -71,9 +72,7 @@ async def test_run_comparison_records_wall_clock(settings) -> None:
     def factory(_settings: Settings, _workflow: str):
         return _StubAgent(delay=delay)
 
-    rows = await run_comparison(
-        settings, FakeJudge(), CASES[:1], ["deep"], agent_factory=factory
-    )
+    rows = await run_comparison(settings, FakeJudge(), CASES[:1], ["deep"], agent_factory=factory)
     # 墙钟应至少覆盖 agent.run 内的 sleep（留计时器精度余量）
     assert rows[0].wall_seconds >= delay * 0.5
 
@@ -104,9 +103,7 @@ async def test_run_comparison_without_budget_keeps_settings(settings) -> None:
         seen.append(run_settings)
         return _StubAgent()
 
-    await run_comparison(
-        settings, FakeJudge(), CASES[:1], ["deep"], agent_factory=factory
-    )
+    await run_comparison(settings, FakeJudge(), CASES[:1], ["deep"], agent_factory=factory)
     assert seen[0] is settings  # 不指定预算时直接沿用原 settings
 
 
@@ -165,9 +162,7 @@ def test_format_markdown_renders_tables_and_conclusion() -> None:
         EvalRow("c1", "deep", score, 12000, wall_seconds=20.0, budget=30000),
         EvalRow("c1", "quick", score, 6000, wall_seconds=5.0, budget=30000),
     ]
-    md = format_markdown(
-        rows, ["deep", "quick"], cases=CASES, budget=30000, run_date="2026-07-26"
-    )
+    md = format_markdown(rows, ["deep", "quick"], cases=CASES, budget=30000, run_date="2026-07-26")
     assert "# 编排对照实验结果（2026-07-26）" in md
     assert "单次运行 token 预算：30000" in md
     assert f"用例：{len(CASES)} 条" in md
@@ -218,7 +213,9 @@ def test_dataset_covers_three_categories_with_enough_cases() -> None:
 async def test_judge_aclose_closes_underlying_llm(settings) -> None:
     from eval.judge import Judge
 
-    judge = Judge(settings)
+    # OpenAI >=2.54 rejects an empty key during client construction even though
+    # this test never sends a request; use an explicit non-secret test value.
+    judge = Judge(replace(settings, llm_api_key="test-key"))
     real_llm = judge.llm
 
     closed = False

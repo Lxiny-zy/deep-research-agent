@@ -70,9 +70,7 @@ _CONTEXT_DEPENDENT: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 # 本轮已经是完整问题的强信号：出现这些就不必消解，直接省掉一次 LLM 调用。
 # 「有明确的研究对象 + 完整谓词」是完整问题的典型形态。
-_SELF_CONTAINED = re.compile(
-    r"(?:是什么|有哪些|怎么样|如何|为什么|区别|对比|现状|趋势|原理|方案)"
-)
+_SELF_CONTAINED = re.compile(r"(?:是什么|有哪些|怎么样|如何|为什么|区别|对比|现状|趋势|原理|方案)")
 
 # 纯指代：这些词本身就是「必须回指上文」的，完整谓词也救不了它们。
 # 「前者怎么样」有完整谓词，但「前者」指谁只有上文知道——不消解就无法检索。
@@ -120,9 +118,7 @@ def detect_context_dependency(text: str) -> IntentSignal | None:
     # 只有上文知道是谁）。放在完整谓词判断之前，否则会被错误豁免。
     anaphor = _ANAPHORIC.search(normalized)
     if anaphor:
-        return IntentSignal(
-            tier="rule", code="anaphoric_reference", detail=anaphor.group(0)[:80]
-        )
+        return IntentSignal(tier="rule", code="anaphoric_reference", detail=anaphor.group(0)[:80])
     # 完整问题的强信号：避免「这个技术的原理是什么」这类既有指示代词
     # 又自带完整谓词的句子被误判为需要消解。
     has_self_contained = bool(_SELF_CONTAINED.search(normalized))

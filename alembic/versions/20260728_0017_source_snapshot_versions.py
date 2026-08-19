@@ -38,13 +38,10 @@ def upgrade() -> None:
     rows = bind.execute(sa.select(source.c.id, source.c.content)).all()
     for row in rows:
         content_hash = hashlib.sha256((row.content or "").encode("utf-8")).hexdigest()
-        bind.execute(
-            source.update().where(source.c.id == row.id).values(content_hash=content_hash)
-        )
+        bind.execute(source.update().where(source.c.id == row.id).values(content_hash=content_hash))
 
     unique_constraints = {
-        constraint.get("name")
-        for constraint in sa.inspect(bind).get_unique_constraints("source")
+        constraint.get("name") for constraint in sa.inspect(bind).get_unique_constraints("source")
     }
     with op.batch_alter_table("source") as batch:
         if "uq_source_run_url" in unique_constraints:
@@ -58,9 +55,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     duplicate_urls = bind.execute(
-        sa.text(
-            "SELECT run_id, url FROM source GROUP BY run_id, url HAVING COUNT(*) > 1"
-        )
+        sa.text("SELECT run_id, url FROM source GROUP BY run_id, url HAVING COUNT(*) > 1")
     ).first()
     if duplicate_urls is not None:
         raise RuntimeError("cannot downgrade source snapshots while URL versions exist")

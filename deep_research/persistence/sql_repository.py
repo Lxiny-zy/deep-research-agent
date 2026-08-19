@@ -14,6 +14,7 @@ from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -29,7 +30,13 @@ from ..models import (
 from ..observability import Event
 from ..orchestration import StepRun, WorkflowRun
 from . import orm
-from .repository import LeaseLostError, RunDetail, RunSummary, TagCount
+from .repository import (
+    IdempotencyConflictError,
+    LeaseLostError,
+    RunDetail,
+    RunSummary,
+    TagCount,
+)
 
 
 def _sub_question_row(
@@ -93,32 +100,78 @@ class SqlRepository:
         execution: WorkflowRun | None = None,
         lease_owner: str | None = None,
     ) -> str:
-        async with self._sm() as s, s.begin():
-            run = orm.ResearchRun(query=query, status="pending")
-            s.add(run)
-            await s.flush()
-            if execution is not None:
-                s.add(
-                    orm.WorkflowRunRow(
-                        id=execution.id,
-                        research_run_id=run.id,
-                        workflow_name=execution.workflow_name,
-                        status=execution.status.value,
-                        input=execution.input,
-                        output=execution.output,
-                        definition=execution.definition,
-                        checkpoint=execution.checkpoint,
-                        lease_owner=lease_owner,
-                        lease_expires_at=(
-                            datetime.now(UTC) + timedelta(seconds=120)
-                            if lease_owner is not None
-                            else None
-                        ),
-                        started_at=execution.started_at,
-                        finished_at=execution.finished_at,
+        run_id, _ = await self.create_run_once(
+            query,
+            request_hash="",
+            execution=execution,
+            lease_owner=lease_owner,
+        )
+        return run_id
+
+    async def create_run_once(
+        self,
+        query: str,
+        *,
+        request_hash: str,
+        idempotency_key: str | None = None,
+        execution: WorkflowRun | None = None,
+        lease_owner: str | None = None,
+    ) -> tuple[str, bool]:
+        """Insert a run and its initial workflow atomically.
+
+        The unique idempotency index is the cross-process arbiter.  A failed
+        insert is followed by a read of the winning row so retries return the
+        original run rather than launching a second worker.
+        """
+        try:
+            async with self._sm() as s, s.begin():
+                run = orm.ResearchRun(
+                    query=query,
+                    status="pending",
+                    idempotency_key=idempotency_key,
+                    request_hash=request_hash or None,
+                )
+                s.add(run)
+                await s.flush()
+                if execution is not None:
+                    s.add(
+                        orm.WorkflowRunRow(
+                            id=execution.id,
+                            research_run_id=run.id,
+                            workflow_name=execution.workflow_name,
+                            status=execution.status.value,
+                            attempt=execution.attempt,
+                            input=execution.input,
+                            output=execution.output,
+                            definition=execution.definition,
+                            checkpoint=execution.checkpoint,
+                            lease_owner=lease_owner,
+                            lease_expires_at=(
+                                datetime.now(UTC) + timedelta(seconds=120)
+                                if lease_owner is not None
+                                else None
+                            ),
+                            started_at=execution.started_at,
+                            finished_at=execution.finished_at,
+                        )
+                    )
+                return run.id, True
+        except IntegrityError as exc:
+            if not idempotency_key:
+                raise
+            async with self._sm() as s:
+                row = await s.scalar(
+                    select(orm.ResearchRun).where(
+                        orm.ResearchRun.idempotency_key == idempotency_key
                     )
                 )
-            return run.id
+                if row is None:
+                    raise
+                if row.request_hash != request_hash:
+                    raise IdempotencyConflictError(
+                        "idempotency key was already used for a different request"
+                    ) from exc
+                return row.id, False
 
     async def _owned_workflow_row(
         self, s: AsyncSession, run_id: str, owner: str | None
@@ -152,19 +205,38 @@ class SqlRepository:
             if run is not None:
                 run.status = status
 
-    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> None:
+    async def request_cancel(self, run_id: str) -> str | None:
         async with self._sm() as s, s.begin():
-            await self._owned_workflow_row(s, run_id, lease_owner)
+            result = await s.execute(
+                update(orm.ResearchRun)
+                .where(
+                    orm.ResearchRun.id == run_id,
+                    orm.ResearchRun.status.in_(("pending", "running")),
+                )
+                .values(status="cancelling")
+            )
+            if not cast("CursorResult[Any]", result).rowcount:
+                return await s.scalar(
+                    select(orm.ResearchRun.status).where(orm.ResearchRun.id == run_id)
+                )
+            return "cancelling"
+
+    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> int:
+        async with self._sm() as s, s.begin():
+            workflow = await self._owned_workflow_row(s, run_id, lease_owner)
             run = await s.get(orm.ResearchRun, run_id)
             if run is not None:
                 run.status = "running"
-            await s.execute(
-                sa_delete(orm.EventRow).where(
-                    orm.EventRow.run_id == run_id,
-                    orm.EventRow.stage == "ORCHESTRATOR",
-                    orm.EventRow.type.in_(("done", "error")),
+            if workflow is None:
+                workflow = await s.scalar(
+                    select(orm.WorkflowRunRow)
+                    .where(orm.WorkflowRunRow.research_run_id == run_id)
+                    .with_for_update()
                 )
-            )
+            if workflow is None:
+                raise ValueError(f"run {run_id} has no workflow row")
+            workflow.attempt = max(1, workflow.attempt or 1) + 1
+            return workflow.attempt
 
     async def save_plan(self, run_id: str, plan: ResearchPlan) -> None:
         async with self._sm() as s, s.begin():
@@ -343,11 +415,17 @@ class SqlRepository:
         async with self._sm() as s, s.begin():
             await self._owned_workflow_row(s, run_id, lease_owner)
             await s.execute(sa_delete(orm.EventRow).where(orm.EventRow.run_id == run_id))
-            for i, ev in enumerate(events):
+            workflow = await s.scalar(
+                select(orm.WorkflowRunRow).where(orm.WorkflowRunRow.research_run_id == run_id)
+            )
+            attempt = workflow.attempt if workflow is not None else 1
+            durable = [event for event in events if event.type != "token"]
+            for i, ev in enumerate(durable):
                 s.add(
                     orm.EventRow(
                         run_id=run_id,
                         seq=i,
+                        attempt=attempt,
                         stage=ev.stage,
                         type=ev.type,
                         message=ev.message,
@@ -355,6 +433,48 @@ class SqlRepository:
                         data=ev.data,
                     )
                 )
+
+    async def append_events(
+        self, run_id: str, events: list[Event], *, lease_owner: str | None = None
+    ) -> list[Event]:
+        """Append a checkpoint's new events with monotonically increasing ids."""
+        durable = [event for event in events if event.type != "token"]
+        if not durable:
+            return []
+        async with self._sm() as s, s.begin():
+            await self._owned_workflow_row(s, run_id, lease_owner)
+            # Lock the root row before reading MAX(seq), which serializes
+            # appenders on PostgreSQL and forces SQLite into its writer path.
+            await s.execute(
+                update(orm.ResearchRun)
+                .where(orm.ResearchRun.id == run_id)
+                .values(status=orm.ResearchRun.status)
+            )
+            workflow = await s.scalar(
+                select(orm.WorkflowRunRow).where(orm.WorkflowRunRow.research_run_id == run_id)
+            )
+            attempt = workflow.attempt if workflow is not None else 1
+            last_seq = await s.scalar(
+                select(func.max(orm.EventRow.seq)).where(orm.EventRow.run_id == run_id)
+            )
+            next_seq = int(last_seq) + 1 if last_seq is not None else 0
+            appended: list[Event] = []
+            for offset, event in enumerate(durable):
+                stored = event.model_copy(update={"seq": next_seq + offset, "attempt": attempt})
+                appended.append(stored)
+                s.add(
+                    orm.EventRow(
+                        run_id=run_id,
+                        seq=next_seq + offset,
+                        attempt=attempt,
+                        stage=event.stage,
+                        type=event.type,
+                        message=event.message,
+                        elapsed=event.elapsed,
+                        data=event.data,
+                    )
+                )
+            return appended
 
     async def save_orchestration(
         self,
@@ -377,6 +497,7 @@ class SqlRepository:
             workflow_run_id = row.id
             row.workflow_name = execution.workflow_name
             row.status = execution.status.value
+            row.attempt = execution.attempt
             row.input = execution.input
             row.output = execution.output
             row.definition = execution.definition
@@ -462,7 +583,8 @@ class SqlRepository:
             if run is not None:
                 run.elapsed = elapsed
                 run.total_tokens = total_tokens
-                run.status = "done"
+                if run.status != "cancelling":
+                    run.status = "done"
                 run.finished_at = datetime.now(UTC)
 
     async def delete_run(self, run_id: str) -> bool:
@@ -605,6 +727,7 @@ class SqlRepository:
                     id=run.orchestration.id,
                     workflow_name=run.orchestration.workflow_name,
                     status=run.orchestration.status,
+                    attempt=run.orchestration.attempt,
                     input=run.orchestration.input or {},
                     output=run.orchestration.output or {},
                     definition=run.orchestration.definition or {},
@@ -657,17 +780,30 @@ class SqlRepository:
                 select(orm.ResearchRun.status).where(orm.ResearchRun.id == run_id)
             )
 
-    async def get_events(self, run_id: str, *, after_seq: int = 0) -> list[Event]:
+    async def get_run_attempt(self, run_id: str) -> int | None:
         async with self._sm() as s:
-            rows = (
-                await s.scalars(
-                    select(orm.EventRow)
-                    .where(orm.EventRow.run_id == run_id, orm.EventRow.seq >= after_seq)
-                    .order_by(orm.EventRow.seq)
+            return await s.scalar(
+                select(orm.WorkflowRunRow.attempt).where(
+                    orm.WorkflowRunRow.research_run_id == run_id
                 )
-            ).all()
+            )
+
+    async def get_events(
+        self, run_id: str, *, after_seq: int = 0, limit: int | None = None
+    ) -> list[Event]:
+        async with self._sm() as s:
+            stmt = (
+                select(orm.EventRow)
+                .where(orm.EventRow.run_id == run_id, orm.EventRow.seq >= after_seq)
+                .order_by(orm.EventRow.seq)
+            )
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            rows = (await s.scalars(stmt)).all()
             return [
                 Event(
+                    seq=r.seq,
+                    attempt=r.attempt,
                     stage=r.stage,
                     type=r.type,
                     message=r.message,
@@ -676,3 +812,7 @@ class SqlRepository:
                 )
                 for r in rows
             ]
+
+    async def healthcheck(self) -> bool:
+        async with self._sm() as s:
+            return (await s.scalar(select(1))) == 1

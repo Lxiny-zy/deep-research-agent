@@ -12,6 +12,8 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: '', label: '全部状态' },
   { value: 'done', label: '已完成' },
   { value: 'running', label: '进行中' },
+  { value: 'cancelling', label: '取消中' },
+  { value: 'cancelled', label: '已取消' },
   { value: 'pending', label: '排队中' },
   { value: 'error', label: '出错' },
 ]

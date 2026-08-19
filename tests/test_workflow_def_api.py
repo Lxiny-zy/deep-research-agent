@@ -249,9 +249,7 @@ async def test_roles_endpoint_lists_composable_builtins(cat_app):
                 "description": "把发现写成终稿报告",
             },
         )
-        critic = await c.post(
-            "/api/agents", json={"name": "my-critic", "behavior": "critique"}
-        )
+        critic = await c.post("/api/agents", json={"name": "my-critic", "behavior": "critique"})
         disabled = await c.post(
             "/api/agents",
             json={"name": "disabled-writer", "behavior": "synthesize", "enabled": False},
@@ -368,12 +366,9 @@ async def test_partial_graph_updates_are_merged_validated_and_normalized(cat_app
         assert {key: body["viewport"][key] for key in ("x", "y", "zoom")} == viewport
 
         moved_nodes = [
-            {**node, "position": {"x": node["position"]["x"] + 100, "y": 80}}
-            for node in nodes
+            {**node, "position": {"x": node["position"]["x"] + 100, "y": 80}} for node in nodes
         ]
-        moved = await c.put(
-            f"/api/workflows/custom/{workflow_id}", json={"nodes": moved_nodes}
-        )
+        moved = await c.put(f"/api/workflows/custom/{workflow_id}", json={"nodes": moved_nodes})
         assert moved.status_code == 200, moved.text
         moved_body = moved.json()
         assert [(edge["source"], edge["target"]) for edge in moved_body["edges"]] == [
@@ -385,9 +380,7 @@ async def test_partial_graph_updates_are_merged_validated_and_normalized(cat_app
             "planner",
             "synthesizer",
         ]
-        assert {
-            key: moved_body["viewport"][key] for key in ("x", "y", "zoom")
-        } == viewport
+        assert {key: moved_body["viewport"][key] for key in ("x", "y", "zoom")} == viewport
 
         invalid_viewport = await c.put(
             f"/api/workflows/custom/{workflow_id}", json={"viewport": {"zoom": 0}}
@@ -399,9 +392,7 @@ async def test_partial_graph_updates_are_merged_validated_and_normalized(cat_app
             f"/api/workflows/custom/{workflow_id}", json={"viewport": next_viewport}
         )
         assert viewport_only.status_code == 200, viewport_only.text
-        steps_only = await c.put(
-            f"/api/workflows/custom/{workflow_id}", json={"steps": _VALID}
-        )
+        steps_only = await c.put(f"/api/workflows/custom/{workflow_id}", json={"steps": _VALID})
         assert steps_only.status_code == 200, steps_only.text
         assert {
             key: steps_only.json()["viewport"][key] for key in ("x", "y", "zoom")
@@ -490,8 +481,6 @@ async def test_duplicate_workflow_name_returns_409(cat_app):
     async with _client() as c:
         first = await c.post("/api/workflows/custom", json={"name": "dup-flow", "steps": _VALID})
         assert first.status_code == 201, first.text
-        conflict = await c.post(
-            "/api/workflows/custom", json={"name": "dup-flow", "steps": _VALID}
-        )
+        conflict = await c.post("/api/workflows/custom", json={"name": "dup-flow", "steps": _VALID})
         assert conflict.status_code == 409
         assert "已存在" in conflict.json()["detail"]

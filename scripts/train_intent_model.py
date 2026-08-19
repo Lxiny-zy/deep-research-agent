@@ -139,9 +139,7 @@ def train(
             row = weights[feature]
             for index in range(width):
                 # L2 正则只作用于权重不作用于偏置（标准做法：偏置不该被压向 0）
-                row[index] -= LEARNING_RATE * (
-                    gradient[index] / n + L2_REGULARIZATION * row[index]
-                )
+                row[index] -= LEARNING_RATE * (gradient[index] / n + L2_REGULARIZATION * row[index])
     return weights, bias
 
 

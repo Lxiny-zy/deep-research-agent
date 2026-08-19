@@ -13,9 +13,10 @@ def test_int_env_override(monkeypatch):
     assert Settings().max_sub_questions == 9
 
 
-def test_int_env_invalid_falls_back(monkeypatch):
+def test_int_env_invalid_fails_fast(monkeypatch):
     monkeypatch.setenv("MAX_ROUNDS", "abc")
-    assert Settings().max_rounds == 2
+    with pytest.raises(ValueError, match="MAX_ROUNDS"):
+        Settings()
 
 
 def test_bool_env_override(monkeypatch):
@@ -23,14 +24,27 @@ def test_bool_env_override(monkeypatch):
     assert Settings().require_corroboration is True
 
 
-def test_bool_env_invalid_falls_back(monkeypatch):
+def test_bool_env_invalid_fails_fast(monkeypatch):
     monkeypatch.setenv("REQUIRE_CORROBORATION", "sometimes")
-    assert Settings().require_corroboration is False
+    with pytest.raises(ValueError, match="REQUIRE_CORROBORATION"):
+        Settings()
+
+
+def test_optional_int_env_invalid_fails_fast(monkeypatch):
+    monkeypatch.setenv("MAX_TOKENS", "not-a-number")
+    with pytest.raises(ValueError, match="MAX_TOKENS"):
+        Settings()
 
 
 def test_post_init_rejects_invalid():
     with pytest.raises(ValueError):
         Settings(max_concurrency=0)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_post_init_rejects_non_finite_request_timeout(value: float):
+    with pytest.raises(ValueError, match="request_timeout"):
+        Settings(request_timeout=value)
 
 
 def test_settings_for_none_returns_base():

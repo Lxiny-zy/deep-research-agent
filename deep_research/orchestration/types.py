@@ -82,6 +82,9 @@ class WorkflowRun(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     workflow_name: str
     status: RunStatus = RunStatus.PENDING
+    # A run may be resumed more than once.  This counter is deliberately part
+    # of the checkpoint so old terminal events remain auditable.
+    attempt: int = Field(default=1, ge=1)
     input: dict = Field(default_factory=dict)
     output: dict = Field(default_factory=dict)
     definition: dict = Field(default_factory=dict)

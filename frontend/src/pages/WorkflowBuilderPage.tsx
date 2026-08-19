@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import BuiltinTemplateGallery, { type TemplateClone } from '../components/BuiltinTemplateGallery'
+import BuiltinTemplateGallery from '../components/BuiltinTemplateGallery'
 import Skeleton from '../components/Skeleton'
 import WorkflowEditor from '../components/WorkflowEditor'
 import { AppIcon } from '../components/AppIcon'
 import { ApiError, listWorkflows } from '../api/client'
 import { useCustomWorkflows, useRoles, useWorkflowMutations } from '../hooks/useCatalog'
+import type { TemplateClone } from '../lib/workflowTemplates'
 import type { WorkflowDef, WorkflowDefInput, WorkflowInfo, WorkflowViewport } from '../types'
 
 function errMsg(e: unknown): string {
@@ -16,7 +17,9 @@ function errMsg(e: unknown): string {
 }
 
 function stepSummary(wf: WorkflowDef): string {
-  return wf.steps.map((s) => (s.kind === 'reflect_loop' ? '反思循环' : (s.agent ?? '?'))).join(' · ')
+  return wf.steps
+    .map((s) => (s.kind === 'reflect_loop' ? '反思循环' : (s.agent ?? '?')))
+    .join(' · ')
 }
 
 type EditSession = {
@@ -97,7 +100,13 @@ export default function WorkflowBuilderPage() {
       },
       onError: (error: unknown) => {
         setSaveErrors((current) => ({ ...current, [sessionKey]: errMsg(error) }))
-        if (!(error instanceof ApiError) || error.status !== 409 || !session.workflow || session.clone) return
+        if (
+          !(error instanceof ApiError) ||
+          error.status !== 409 ||
+          !session.workflow ||
+          session.clone
+        )
+          return
         // Refresh only the server version. The editor remains mounted, so its
         // local draft stays intact and the next submit carries the new version.
         void workflows.refetch().then((result) => {
@@ -131,13 +140,19 @@ export default function WorkflowBuilderPage() {
     <div className="stack">
       <section className="page-intro workflow-intro page-intro-compact">
         <div>
-          <span className="eyebrow"><AppIcon name="workflow" size={14} aria-hidden="true" /> WORKFLOW / BUILDER</span>
-          <h1>可视化<span className="accent">自由编排</span>研究团队</h1>
+          <span className="eyebrow">
+            <AppIcon name="workflow" size={14} aria-hidden="true" /> WORKFLOW / BUILDER
+          </span>
+          <h1>
+            可视化<span className="accent">自由编排</span>研究团队
+          </h1>
           <p className="sub">
-          从可用角色里挑选、排成一条有序流程（可插入反思循环），保存后即可在「新建研究」中选用并运行。
+            从可用角色里挑选、排成一条有序流程（可插入反思循环），保存后即可在「新建研究」中选用并运行。
           </p>
         </div>
-        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="waypoints" size={40} strokeWidth={1.2} /></div>
+        <div className="page-intro-mark" aria-hidden="true">
+          <AppIcon name="waypoints" size={40} strokeWidth={1.2} />
+        </div>
       </section>
 
       <BuiltinTemplateGallery templates={templates} onClone={cloneTemplate} />
@@ -145,7 +160,9 @@ export default function WorkflowBuilderPage() {
       <section className="builtin-rail" aria-label="自定义工作流">
         <div className="builtin-rail-head">
           <div>
-            <span className="panel-kicker"><AppIcon name="waypoints" size={12} aria-hidden="true" /> CUSTOM / WORKFLOWS</span>
+            <span className="panel-kicker">
+              <AppIcon name="waypoints" size={12} aria-hidden="true" /> CUSTOM / WORKFLOWS
+            </span>
             <h2 className="builtin-rail-title">自定义工作流</h2>
           </div>
           <button className="btn btn-primary" onClick={() => openEditor(null)} type="button">
@@ -153,37 +170,44 @@ export default function WorkflowBuilderPage() {
             新建工作流
           </button>
         </div>
-        <span className="hint">把角色拼成你自己的多智能体流程，存库后可在「新建研究」中选用，也可从上方模板克隆起步。</span>
+        <span className="hint">
+          把角色拼成你自己的多智能体流程，存库后可在「新建研究」中选用，也可从上方模板克隆起步。
+        </span>
 
         {workflows.isLoading && <Skeleton rows={3} />}
-        {workflows.isError && <p className="error-text"><AppIcon name="circle-x" size={14} aria-hidden="true" />{errMsg(workflows.error)}</p>}
+        {workflows.isError && (
+          <p className="error-text">
+            <AppIcon name="circle-x" size={14} aria-hidden="true" />
+            {errMsg(workflows.error)}
+          </p>
+        )}
 
         <div className="card-grid">
-        {workflows.data?.map((wf) => (
-          <div key={wf.id} className={`role-card${wf.enabled ? '' : ' disabled'}`}>
-            <div className="role-card-head">
-              <span className="badge">{wf.steps.length} 步</span>
-              <strong>{wf.display_name || wf.name}</strong>
+          {workflows.data?.map((wf) => (
+            <div key={wf.id} className={`role-card${wf.enabled ? '' : ' disabled'}`}>
+              <div className="role-card-head">
+                <span className="badge">{wf.steps.length} 步</span>
+                <strong>{wf.display_name || wf.name}</strong>
+              </div>
+              <code className="muted small">{wf.name}</code>
+              {wf.description && <p className="muted small">{wf.description}</p>}
+              <p className="step-summary">{stepSummary(wf)}</p>
+              <div className="role-card-foot row gap">
+                <button
+                  className="btn ghost small"
+                  onClick={() => navigate(`/?workflow=${encodeURIComponent(wf.name)}`)}
+                >
+                  <AppIcon name="play" size={13} aria-hidden="true" /> 去研究
+                </button>
+                <button className="btn ghost small" onClick={() => openEditor(wf)}>
+                  <AppIcon name="edit" size={13} aria-hidden="true" /> 编辑
+                </button>
+                <button className="btn ghost small danger" onClick={() => remove(wf)}>
+                  <AppIcon name="trash" size={13} aria-hidden="true" /> 删除
+                </button>
+              </div>
             </div>
-            <code className="muted small">{wf.name}</code>
-            {wf.description && <p className="muted small">{wf.description}</p>}
-            <p className="step-summary">{stepSummary(wf)}</p>
-            <div className="role-card-foot row gap">
-              <button
-                className="btn ghost small"
-                onClick={() => navigate(`/?workflow=${encodeURIComponent(wf.name)}`)}
-              >
-                <AppIcon name="play" size={13} aria-hidden="true" /> 去研究
-              </button>
-              <button className="btn ghost small" onClick={() => openEditor(wf)}>
-                <AppIcon name="edit" size={13} aria-hidden="true" /> 编辑
-              </button>
-              <button className="btn ghost small danger" onClick={() => remove(wf)}>
-                <AppIcon name="trash" size={13} aria-hidden="true" /> 删除
-              </button>
-            </div>
-          </div>
-        ))}
+          ))}
         </div>
       </section>
 

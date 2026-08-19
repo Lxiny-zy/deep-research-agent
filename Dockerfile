@@ -14,13 +14,15 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    APP_ENV=production \
+    RUNTIME_CONFIG_PATH=/app/data/runtime_config.json
 
 WORKDIR /app
 
-# 先装依赖：requirements 不变时这层走缓存，改代码不触发重装
-COPY requirements.txt ./
-RUN pip install -r requirements.txt
+# 先装带哈希的锁定依赖：锁文件不变时这层走缓存，改代码不触发重装。
+COPY requirements.lock ./
+RUN pip install --require-hashes -r requirements.lock
 
 # 再拷应用代码 + 迁移脚本 + 前端静态页
 COPY deep_research ./deep_research
@@ -39,9 +41,10 @@ USER appuser
 
 EXPOSE 8000
 
-# 容器探针：命中 /healthz（slim 无 curl，用 stdlib urllib）
+# 容器探针：命中 /readyz，确保数据库也可用（slim 无 curl，用 stdlib urllib）
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz').status==200 else 1)"
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz').status==200 else 1)"
 
 # entrypoint：先 alembic upgrade head 建/升级表，再起 uvicorn
 ENTRYPOINT ["./docker/entrypoint.sh"]
+CMD ["python", "-m", "uvicorn", "deep_research.api:app", "--host", "0.0.0.0", "--port", "8000"]

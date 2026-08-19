@@ -46,7 +46,7 @@ export default function App() {
 
     setAuthStatus('checking')
     fetch('/api/config', {
-      ...(key ? { headers: { 'X-API-Key': key } } : {}),
+      ...(key ? { headers: { Authorization: `Bearer ${key}` } } : {}),
       signal: controller.signal,
     })
       .then((response) => {

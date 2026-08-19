@@ -12,7 +12,7 @@ import StatusBadge from '../components/StatusBadge'
 import TagEditor from '../components/TagEditor'
 import { AppIcon } from '../components/AppIcon'
 import { useResearchStream } from '../hooks/useResearchStream'
-import { useRunDetail } from '../hooks/useRuns'
+import { useCancelRun, useRunDetail } from '../hooks/useRuns'
 import { appendTurn, turnFromRun } from '../lib/conversation'
 import { countBlockedSources, flattenFindings } from '../lib/evidence'
 import { deriveResearchProgress } from '../lib/runProgress'
@@ -24,6 +24,7 @@ export default function RunPage() {
   // 研究报告是核心产出：默认给报告栏更大权重，也允许一键展开全宽阅读。
   const [reportExpanded, setReportExpanded] = useState(false)
   const stream = useResearchStream(id ?? null)
+  const cancel = useCancelRun(id)
   // 详情（query / 已落库报告）：流式中轮询；流断开但未到终态时继续轮询兜底，
   // 直到 DB 状态本身到达终态才停止
   // Keep syncing until the persisted run reaches a terminal state. The stream can
@@ -32,17 +33,21 @@ export default function RunPage() {
   const detail = useRunDetail(id, {
     refetchInterval: (q) => {
       const s = q.state.data?.status
-      const finished = s === 'done' || s === 'error'
+      const finished = s === 'done' || s === 'error' || s === 'cancelled'
       return shouldSyncDetail && !finished ? 4000 : false
     },
   })
 
   const dbStatus = detail.data?.status
-  const dbFinished = dbStatus === 'done' || dbStatus === 'error'
+  const dbFinished = dbStatus === 'done' || dbStatus === 'error' || dbStatus === 'cancelled'
   const refetchDetail = detail.refetch
 
   useEffect(() => {
-    if (stream.status !== 'done' && stream.status !== 'error') return
+    if (
+      stream.status !== 'done' &&
+      stream.status !== 'error' &&
+      stream.status !== 'cancelled'
+    ) return
     void refetchDetail()
   }, [refetchDetail, stream.status])
 
@@ -53,12 +58,18 @@ export default function RunPage() {
       ? 'done'
       : stream.status === 'error'
         ? 'error'
+        : stream.status === 'cancelled'
+          ? 'cancelled'
         : (detail.data?.status ?? 'running')
   // Once the stream has ended, any persisted report is the authoritative complete copy.
   const persistedMarkdown = detail.data?.report?.markdown || ''
   const preferPersistedReport =
     Boolean(persistedMarkdown) &&
-    (dbFinished || stream.status === 'disconnected' || stream.status === 'done' || stream.status === 'error')
+    (dbFinished ||
+      stream.status === 'disconnected' ||
+      stream.status === 'done' ||
+      stream.status === 'error' ||
+      stream.status === 'cancelled')
   const markdown = preferPersistedReport
     ? persistedMarkdown
     : stream.reportMarkdown || persistedMarkdown
@@ -66,7 +77,13 @@ export default function RunPage() {
   const liveActive =
     (stream.status === 'streaming' || stream.status === 'disconnected') && !dbFinished
   const connectionStatus =
-    status === 'done' ? 'done' : status === 'error' ? 'error' : stream.status
+    status === 'done'
+      ? 'done'
+      : status === 'error'
+        ? 'error'
+        : status === 'cancelled'
+          ? 'cancelled'
+          : stream.status
   const progress = deriveResearchProgress({
     execution: detail.data?.orchestration,
     events: stream.events,
@@ -82,6 +99,7 @@ export default function RunPage() {
   // 半截的运行没有可供下一轮指代的结论，把它塞进历史只会误导消解器。
   const runDetail = detail.data
   const canFollowUp = status === 'done' && Boolean(runDetail?.query)
+  const canCancel = Boolean(id) && (status === 'pending' || status === 'running')
 
   function askFollowUp() {
     if (!runDetail) return
@@ -118,6 +136,17 @@ export default function RunPage() {
           <button type="button" className="btn btn-ghost btn-sm run-followup" onClick={askFollowUp}>
             <AppIcon name="sparkles" size={14} aria-hidden="true" />
             继续追问
+          </button>
+        )}
+        {(canCancel || status === 'cancelling') && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm danger"
+            disabled={cancel.isPending || status === 'cancelling'}
+            onClick={() => cancel.mutate()}
+          >
+            <AppIcon name="stop" size={14} aria-hidden="true" />
+            {status === 'cancelling' || cancel.isPending ? '取消中' : '取消运行'}
           </button>
         )}
         {id && <TagEditor runId={id} tags={detail.data?.tags ?? []} />}

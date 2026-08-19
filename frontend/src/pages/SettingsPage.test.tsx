@@ -36,6 +36,7 @@ const CONFIG: ConfigView = {
   max_concurrency: 4,
   results_per_search: 5,
   request_timeout: 60,
+  max_run_seconds: 3600,
   require_corroboration: false,
 }
 

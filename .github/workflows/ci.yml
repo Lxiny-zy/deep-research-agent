@@ -2,28 +2,70 @@ name: CI
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
+  supply-chain:
+    name: 供应链审计与 SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 安装带哈希的审计工具链
+        run: pip install --require-hashes -r requirements-dev.lock
+      - name: 校验直接依赖与锁文件一致性
+        run: python scripts/check_dependency_locks.py
+      - name: 审计 Python 生产依赖
+        run: python -m pip_audit -r requirements.lock --progress-spinner off
+      - name: 审计前端依赖
+        working-directory: frontend
+        run: npm audit --audit-level=high --package-lock-only
+      - name: 生成 CycloneDX SBOM
+        run: |
+          mkdir -p sbom
+          python -m pip_audit -r requirements.lock --progress-spinner off --format cyclonedx-json --output sbom/python-runtime.cdx.json
+          cd frontend
+          npm sbom --package-lock-only --sbom-format cyclonedx > ../sbom/frontend.cdx.json
+      - name: 保存 SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-sbom-${{ github.sha }}
+          path: sbom/*.json
+          if-no-files-found: error
+          retention-days: 14
+
   backend:
     name: 后端 lint + 类型检查 + 测试
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: requirements-dev.lock
       - name: 安装依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.lock
       - name: Ruff 检查与格式校验
         run: |
-          ruff check .
-          ruff format --check .
+          ruff check deep_research tests alembic scripts eval
+          ruff format --check deep_research tests alembic scripts eval
       - name: Mypy 类型检查
         run: mypy deep_research
       - name: Pytest（离线，跳过需要 PostgreSQL 的用例）
-        run: pytest -m "not pg"
+        run: |
+          pytest -m "not pg" --cov=deep_research --cov-report=term-missing --cov-fail-under=80
 
   # 需要真实 PostgreSQL 的 repository 集成测试，独立 job 用 service container
   backend-pg:
@@ -46,17 +88,57 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://dr:dr@localhost:5432/deep_research
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: requirements-dev.lock
       - name: 安装依赖
+        run: pip install --require-hashes -r requirements-dev.lock
+      - name: Alembic 迁移到最新版本
+        run: python -m deep_research.migrate
+      - name: Alembic 模型漂移检查
+        run: alembic check
+      - name: Alembic 最新版本回滚与重放
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          alembic downgrade -1
+          alembic upgrade head
       - name: Pytest（仅 PostgreSQL 集成用例）
         run: pytest -m pg
+
+  package:
+    name: Wheel 构建与隔离安装
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 构建前端静态资源
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: 安装构建依赖
+        run: pip install --require-hashes -r requirements-dev.lock
+      - name: 构建 wheel
+        run: python -m pip wheel . --no-deps --no-build-isolation --wheel-dir dist
+      - name: 在隔离环境安装并冒烟
+        run: |
+          python -m venv .ci-wheel-venv
+          .ci-wheel-venv/bin/python -m pip install --require-hashes -r requirements.lock
+          .ci-wheel-venv/bin/python -m pip install --no-deps dist/*.whl
+          .ci-wheel-venv/bin/python -m pip check
+          .ci-wheel-venv/bin/deep-research --help
+          .ci-wheel-venv/bin/python scripts/smoke_installed_package.py
 
   frontend:
     name: 前端 lint + 构建 + 测试
@@ -65,8 +147,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: npm
@@ -79,3 +161,37 @@ jobs:
         run: npm run build
       - name: 单元测试
         run: npm run test
+
+  container:
+    name: Docker 生产镜像
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: ci-postgres-password
+      API_KEY: ci-api-key
+      CATALOG_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: 校验 Compose 配置
+        run: docker compose config --quiet
+      - name: 启动生产栈并验证默认入口
+        run: |
+          docker compose up --build --detach
+          cleanup() {
+            docker compose logs --no-color || true
+            docker compose down --volumes --remove-orphans || true
+          }
+          trap cleanup EXIT
+          for _ in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:8000/readyz; then
+              break
+            fi
+            sleep 2
+          done
+          curl --fail --silent --show-error http://127.0.0.1:8000/readyz
+          image_id="$(docker compose images -q api)"
+          if docker run --rm "$image_id" sh -c 'exit 0'; then
+            echo "production image unexpectedly accepted missing deployment configuration" >&2
+            exit 1
+          fi
+          docker compose run --rm --no-deps api python -c "import os; from pathlib import Path; import deep_research.api; assert os.getuid() == 10001; assert Path('/app/alembic/versions').is_dir()"
+          docker compose exec -T api python -m alembic check

@@ -78,9 +78,7 @@ async def test_catalog_snapshot_freezes_semantics_without_secrets(catalog):
 
 
 @pytest.mark.asyncio
-async def test_create_run_persists_role_snapshot_before_background_start(
-    catalog, monkeypatch
-):
+async def test_create_run_persists_role_snapshot_before_background_start(catalog, monkeypatch):
     profile = await catalog.create_profile(
         name="run-profile",
         base_url=None,
@@ -112,9 +110,7 @@ async def test_create_run_persists_role_snapshot_before_background_start(
     async with httpx.AsyncClient(
         transport=ASGITransport(app=api.app), base_url="http://test"
     ) as client:
-        response = await client.post(
-            "/api/runs", json={"query": "Q", "workflow": "quick"}
-        )
+        response = await client.post("/api/runs", json={"query": "Q", "workflow": "quick"})
     await asyncio.gather(*api.app.state.tasks)
 
     assert response.status_code == 202

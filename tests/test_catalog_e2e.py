@@ -106,3 +106,29 @@ async def test_default_profile_applies_without_custom_cards(settings, catalog):
     assert llm.model == profile.model
     assert llm.default_temperature == 0.55
     await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_disabled_card_profile_cannot_block_runtime_loading(settings, catalog):
+    profile = await catalog.create_profile(
+        name="disabled-private-profile",
+        base_url="https://127.0.0.1/v1",
+        api_key="unused-key",
+        model="unused-model",
+        temperature=0.3,
+        is_default=False,
+    )
+    await catalog.create_agent(
+        AgentCardCreate(
+            name="disabled-researcher",
+            behavior="research",
+            enabled=False,
+            model_profile_id=profile.id,
+        )
+    )
+
+    runtime = await load_catalog_runtime(catalog, Tracer(), settings)
+
+    assert runtime is not None
+    assert runtime.resolve_llm("disabled-researcher") is None
+    await runtime.aclose()

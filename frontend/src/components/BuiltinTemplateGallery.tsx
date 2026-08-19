@@ -1,6 +1,11 @@
 import type { CSSProperties } from 'react'
-import { AppIcon, type AppIconName } from './AppIcon'
-import type { WorkflowInfo, WorkflowStep } from '../types'
+import {
+  BUILTIN_TEMPLATE_META,
+  type TemplateClone,
+  type TemplateMeta,
+} from '../lib/workflowTemplates'
+import type { WorkflowInfo } from '../types'
+import { AppIcon } from './AppIcon'
 
 /**
  * 内置工作流模板陈列：只读模板卡（名称 / 描述 / default 徽章 / 迷你流程链）。
@@ -8,79 +13,6 @@ import type { WorkflowInfo, WorkflowStep } from '../types'
  * steps 为可克隆进编排 Studio 的预填链——含运行时控制原语（compose/team_fanout）
  * 的模板无法用自定义步骤表达，steps 为 null，克隆时降级为打开空 Studio。
  */
-
-export type TemplateClone = {
-  name: string
-  title: string
-  description: string
-  steps: WorkflowStep[] | null
-}
-
-type ChainNode = { label: string; icon: AppIconName; loop?: boolean }
-
-type TemplateMeta = {
-  title: string
-  icon: AppIconName
-  chain: ChainNode[]
-  steps: WorkflowStep[] | null
-}
-
-const PLAN: ChainNode = { label: '规划', icon: 'route' }
-const RESEARCH: ChainNode = { label: '研究', icon: 'search-code' }
-const REFLECT: ChainNode = { label: '反思循环', icon: 'refresh', loop: true }
-const SYNTH: ChainNode = { label: '综合', icon: 'file' }
-
-const DEEP_STEPS: WorkflowStep[] = [
-  { kind: 'agent', agent: 'planner' },
-  { kind: 'agent', agent: 'researcher' },
-  { kind: 'reflect_loop', reflector: 'reflector', researcher: 'researcher' },
-  { kind: 'agent', agent: 'synthesizer' },
-]
-
-export const BUILTIN_TEMPLATE_META: Record<string, TemplateMeta> = {
-  deep: {
-    title: '深度研究',
-    icon: 'radar',
-    chain: [PLAN, RESEARCH, REFLECT, SYNTH],
-    steps: DEEP_STEPS,
-  },
-  quick: {
-    title: '快速查询',
-    icon: 'zap',
-    chain: [PLAN, RESEARCH, SYNTH],
-    steps: [
-      { kind: 'agent', agent: 'planner' },
-      { kind: 'agent', agent: 'researcher' },
-      { kind: 'agent', agent: 'synthesizer' },
-    ],
-  },
-  reviewed: {
-    title: '深度复核',
-    icon: 'shield',
-    chain: [PLAN, RESEARCH, REFLECT, SYNTH, { label: '评审', icon: 'shield' }],
-    steps: [...DEEP_STEPS, { kind: 'agent', agent: 'critic' }],
-  },
-  auto: {
-    title: '自组合',
-    icon: 'wand',
-    chain: [
-      { label: '协调者', icon: 'wand' },
-      { label: '动态组队', icon: 'network' },
-      { label: '报告', icon: 'file' },
-    ],
-    steps: null,
-  },
-  teams: {
-    title: '多团队并行',
-    icon: 'network',
-    chain: [
-      PLAN,
-      { label: '多团队并行', icon: 'branch' },
-      { label: '归并报告', icon: 'merge' },
-    ],
-    steps: null,
-  },
-}
 
 const FALLBACK_META: TemplateMeta = { title: '', icon: 'workflow', chain: [], steps: null }
 
@@ -157,7 +89,12 @@ export default function BuiltinTemplateGallery({ templates, onClone }: Props) {
                   type="button"
                   className="btn ghost small"
                   onClick={() =>
-                    onClone({ name: wf.name, title, description: wf.description, steps: meta.steps })
+                    onClone({
+                      name: wf.name,
+                      title,
+                      description: wf.description,
+                      steps: meta.steps,
+                    })
                   }
                 >
                   <AppIcon name="copy" size={13} aria-hidden="true" /> 克隆为自定义

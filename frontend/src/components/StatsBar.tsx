@@ -98,7 +98,7 @@ export default function StatsBar({
   progress: ResearchProgress
   live?: LiveStats | null
   liveActive?: boolean
-  connectionStatus?: 'idle' | 'streaming' | 'disconnected' | 'done' | 'error'
+  connectionStatus?: 'idle' | 'streaming' | 'disconnected' | 'done' | 'error' | 'cancelled'
   tokensEstimated?: boolean
 }) {
   const liveElapsed = live?.elapsed ?? 0
@@ -134,7 +134,9 @@ export default function StatsBar({
   const progressPulse = useChangePulse(progress.percent, liveActive)
 
   const connectionLabel =
-    connectionStatus === 'disconnected'
+    connectionStatus === 'cancelled'
+      ? '运行已取消'
+      : connectionStatus === 'disconnected'
       ? '连接恢复中'
       : liveActive
         ? '实时同步'

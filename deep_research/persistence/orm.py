@@ -41,10 +41,13 @@ class Base(DeclarativeBase):
 
 class ResearchRun(Base):
     __tablename__ = "research_run"
+    __table_args__ = (Index("uq_research_run_idempotency_key", "idempotency_key", unique=True),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     query: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/running/done/error
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     interpretation: Mapped[str] = mapped_column(Text, default="")
     elapsed: Mapped[float] = mapped_column(Float, default=0.0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
@@ -179,6 +182,7 @@ class EventRow(Base):
         ForeignKey("research_run.id", ondelete="CASCADE"), index=True
     )
     seq: Mapped[int] = mapped_column(Integer)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
     stage: Mapped[str] = mapped_column(String(20))
     type: Mapped[str] = mapped_column(String(16))
     message: Mapped[str] = mapped_column(Text, default="")
@@ -212,6 +216,7 @@ class WorkflowRunRow(Base):
     research_run_id: Mapped[str] = mapped_column(ForeignKey("research_run.id", ondelete="CASCADE"))
     workflow_name: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(20))
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
     input: Mapped[dict] = mapped_column(JSON, default=dict)
     output: Mapped[dict] = mapped_column(JSON, default=dict)
     definition: Mapped[dict] = mapped_column(JSON, default=dict)

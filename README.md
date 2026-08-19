@@ -100,12 +100,16 @@ deep-research-agent/
 ## 快速开始
 
 ```bash
-pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements.lock
 cp .env.example .env   # 填入 LLM_API_KEY 与 TAVILY_API_KEY
 
 # 命令行
-python -m deep_research.cli "2026 年主流 AI Agent 框架有哪些？各自取舍是什么？"
+python -m dotenv run -- python -m deep_research.cli "2026 年主流 AI Agent 框架有哪些？各自取舍是什么？"
 ```
+
+`requirements.txt` / `requirements-dev.txt` 只维护直接依赖与允许升级范围；日常安装、CI
+和镜像构建使用带完整传递依赖及发行包哈希的 `requirements*.lock`。修改依赖范围后运行
+`make lock`（需要 `uv`）并提交两个锁文件，避免不同时间部署得到不同依赖组合。
 
 ## Web 实时 Demo（React 前端）
 
@@ -115,17 +119,17 @@ python -m deep_research.cli "2026 年主流 AI Agent 框架有哪些？各自取
 
 ```bash
 # 终端 1：后端（:8000）
-uvicorn deep_research.api:app --reload
+python -m uvicorn --env-file .env --reload deep_research.api:app
 
 # 终端 2：前端（Vite dev server，自动 proxy /api 与 /healthz 到 :8000）
-cd frontend && npm install && npm run dev   # 打开 http://127.0.0.1:5173
+cd frontend && npm ci && npm run dev   # 打开 http://127.0.0.1:5173
 ```
 
-**生产模式**（构建后由后端同源托管）：
+**同源构建模式**（本地构建后由后端托管）：
 
 ```bash
-cd frontend && npm install && npm run build  # 产出 frontend/dist
-uvicorn deep_research.api:app                # 访问 http://127.0.0.1:8000（加载构建版 SPA）
+cd frontend && npm ci && npm run build  # 产出 frontend/dist
+python -m uvicorn --env-file .env deep_research.api:app  # 访问 http://127.0.0.1:8000
 ```
 
 页面提供：新建研究（可选工作流模板、可调研究参数）、实时观看（Agent 时间线 / DAG 分层调度 / 流式报告 / **实时统计**：耗时秒级跳动、token 随阶段累加）、**报告导出**（复制 / 下载 `.md`）、历史列表与回放、**历史管理**（删除单条·批量 / 状态·关键词·标签筛选 / 打标签分类）、**工作流构建器**（自由画布拖排角色、连线加条件、存库后可直接运行）、**角色广场**（角色卡 / 模型档案 / 检索 key 在线编辑）、**全局设置**（前端改模型 / 端点 / 密钥 / 检索参数并持久化）。未认证访客会先看到欢迎页并可弹出密钥登录。后端 `GET /` 优先加载 `frontend/dist/index.html`，未构建时回退到占位页。
@@ -133,18 +137,23 @@ uvicorn deep_research.api:app                # 访问 http://127.0.0.1:8000（�
 ## Docker 一键启动（含 PostgreSQL）
 
 ```bash
-cp .env.example .env   # 填入 LLM_API_KEY、TAVILY_API_KEY，并设置 POSTGRES_PASSWORD（必填）
+cp .env.example .env
+# 至少填写 POSTGRES_PASSWORD、API_KEY、CATALOG_ENCRYPTION_KEY；
+# 使用内置模型/检索时再填写 LLM_API_KEY、TAVILY_API_KEY。
 docker compose up --build
 # 启动后访问 http://127.0.0.1:8000
 # 容器内置 Postgres，API 启动时自动 alembic upgrade head 建/升级表
-docker compose down -v # 停止并清库（含数据卷）
+make down       # 停止服务，保留数据库与运行时配置
+# make down-clean  # 危险：永久删除 pgdata/appdata 数据卷
 ```
 
-`docker-compose.yml` 起两个服务：`db`（postgres:16-alpine，带健康检查）与 `api`（构建本仓库镜像，待数据库就绪后启动）。`DATABASE_URL` 已在 compose 中指向内部 `db` 服务，LLM / 检索密钥从根目录 `.env` 注入。数据库使用 `pgdata` 卷，前端设置中心的运行时配置使用 `appdata` 卷，容器重建后仍会保留。
+`docker-compose.yml` 起两个服务：`db`（postgres:16-alpine，带健康检查）与 `api`（构建本仓库镜像，待数据库就绪后启动）。`DATABASE_URL` 已在 compose 中指向内部 `db` 服务，LLM / 检索密钥从根目录 `.env` 注入。数据库使用 `pgdata` 卷，前端设置中心的运行时配置使用 `appdata` 卷；常规 `make down` 与容器重建都会保留二者，只有显式执行 `make down-clean` 才会删除。
 
-安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问请经反向代理（TLS/限流）。生产建议在 `.env` 中设置 `API_KEY` —— 设置后所有 `/api` 端点要求 `X-API-Key` 请求头（后端同时兼容 `?api_key=` 查询参数；前端 SSE 走 fetch 流 + 请求头，密钥不会出现在 URL 中）。前端无需手改：启动时探测 `/api/config`，401 时展示访客欢迎页并弹出**密钥登录**，输入后密钥存于浏览器 `localStorage`；也可随时在 header 的密钥入口更换 / 清除。
+两个服务均使用 Docker `local` 日志驱动，每个日志文件上限 10 MB、最多保留 5 个，避免访问日志或数据库日志无限占满宿主机磁盘；需要长期审计时应接入集中日志系统。
 
-Nginx 反向代理可从 `docker/nginx.conf.example` 起步。SSE 实时进度要求关闭 `proxy_buffering`，并把读写超时提高到覆盖最长研究任务；若不用反向代理、明确要直接暴露端口，可在 `.env` 设置 `APP_BIND=0.0.0.0`，但仍应在安全组中限制来源并配置 HTTPS。
+安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问请经反向代理（TLS/限流）。Compose 为 API 设置 `APP_ENV=production`，启动时会强制校验 PostgreSQL、`API_KEY` 与 `CATALOG_ENCRYPTION_KEY`，缺一即失败。所有 `/api` 端点接受 `Authorization: Bearer <key>` 或 `X-API-Key` 请求头，不接受 URL 查询参数。前端 SSE 同样使用请求头，登录凭据只保存在当前标签页的 `sessionStorage`，关闭标签页即清除。
+
+Nginx 反向代理可从 `docker/nginx.conf.example` 起步。SSE 实时进度要求关闭 `proxy_buffering`，并把读写超时提高到覆盖最长研究任务。宿主机 Nginx 经 Docker bridge 访问 API 时，在 `APP_BIND` 保持 `127.0.0.1` 的前提下同时设置 `APP_TRUST_PROXY=true` 与 `FORWARDED_ALLOW_IPS=*`，分别让应用限流和 Uvicorn 信任代理覆盖的客户端 IP/协议；直接暴露 API 时两项都必须保持收紧，尤其不要把 `FORWARDED_ALLOW_IPS` 设为 `*`。若不用反向代理、明确要直接暴露端口，可在 `.env` 设置 `APP_BIND=0.0.0.0`，但仍应在安全组中限制来源并配置 HTTPS。
 
 ### 服务器端口与配置清单
 
@@ -161,7 +170,7 @@ Nginx 反向代理可从 `docker/nginx.conf.example` 起步。SSE 实时进度�
 
 部署时主要维护以下文件：
 
-- `.env`：服务器私有配置，不提交 Git。至少设置 `POSTGRES_PASSWORD`、`LLM_API_KEY`、`TAVILY_API_KEY`，生产环境建议设置 `API_KEY`。
+- `.env`：服务器私有配置，不提交 Git。生产必须设置 `POSTGRES_PASSWORD`、`API_KEY`、`CATALOG_ENCRYPTION_KEY`；使用内置后端时设置 `LLM_API_KEY`、`TAVILY_API_KEY`。
 - `docker-compose.yml`：应用、PostgreSQL、数据卷和端口绑定。
 - `docker/nginx.conf.example`：Nginx 反向代理与 SSE 长连接示例；复制到服务器 Nginx 配置目录后修改域名。
 - `.env.example`：环境变量模板，不包含真实密钥。
@@ -173,10 +182,51 @@ git clone https://github.com/Lxiny-zy/deep-research-agent.git
 cd deep-research-agent
 cp .env.example .env
 # 编辑 .env，填写口令与 API Key
+chmod 600 .env  # Linux 服务器：限制密钥文件只对当前用户可读写
 docker compose up --build -d
 docker compose ps
-curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/readyz
 ```
+
+### 备份与恢复
+
+升级或执行 `make down-clean` 前，至少备份 PostgreSQL 和 `.env` 中的
+`CATALOG_ENCRYPTION_KEY`。数据库可在服务运行时导出为自包含归档：
+
+```bash
+mkdir -p backups  # Windows PowerShell 可用：New-Item -ItemType Directory -Force backups
+docker compose exec -T db sh -c 'umask 077; pg_dump -U dr -d deep_research -Fc -f /tmp/deep_research.dump'
+docker compose cp db:/tmp/deep_research.dump backups/deep_research.dump
+docker compose exec -T db rm -f /tmp/deep_research.dump
+```
+
+恢复前先停止 API 写入并确认目标库可以被覆盖；以下命令会清理归档中已有的数据库对象，
+不要指向仍需保留的数据：
+
+```bash
+docker compose cp backups/deep_research.dump db:/tmp/deep_research.dump
+docker compose exec -T --user root db chown postgres:postgres /tmp/deep_research.dump
+docker compose exec -T db pg_restore --list /tmp/deep_research.dump
+docker compose stop api
+docker compose exec -T db pg_restore -U dr -d deep_research --clean --if-exists /tmp/deep_research.dump
+docker compose exec -T db rm -f /tmp/deep_research.dump
+docker compose start api
+curl http://127.0.0.1:8000/readyz
+```
+
+`appdata` 仅保存 `/app/data/runtime_config.json` 的非密钥运行时覆盖，可用
+`docker compose cp api:/app/data/runtime_config.json backups/runtime_config.json` 备份；恢复时先停止
+`api`，再写回、校验 JSON 并恢复 UID 10001 的文件所有权后启动：
+
+```bash
+docker compose stop api
+docker compose cp backups/runtime_config.json api:/app/data/runtime_config.json
+docker compose run --rm --no-deps --user root --entrypoint sh api -c 'python -m json.tool /app/data/runtime_config.json >/dev/null && chown 10001:10001 /app/data/runtime_config.json && chmod 600 /app/data/runtime_config.json'
+docker compose start api
+```
+
+Catalog 凭据在 PostgreSQL 中加密，恢复数据库时必须同时恢复原 `CATALOG_ENCRYPTION_KEY`，否则已保存的
+模型与检索凭据无法解密。恢复后应实际读取一条历史 run 并验证 Catalog 凭据，而不只检查 `/readyz`。
 
 ## 持久化 · 历史与回放
 
@@ -189,7 +239,7 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/api/runs` | 提交研究（后台执行），返回 `run_id` |
+| `POST` | `/api/runs` | 提交研究（支持 `Idempotency-Key`），返回 `run_id` |
 | `GET`  | `/api/runs` | 历史列表（分页 `limit`/`offset`，可按 `status`/`q`/`tag` 筛选） |
 | `GET`  | `/api/runs/{id}` | 单次详情（计划 + 结果 + 报告 + 标签） |
 | `DELETE` | `/api/runs/{id}` | 删除单条（进行中返回 409）；级联清子表 |
@@ -197,24 +247,25 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 | `PUT`  | `/api/runs/{id}/tags` | 设置标签（替换语义，body `{tags:[...]}`） |
 | `GET`  | `/api/tags` | 全部标签 + 引用计数 |
 | `GET`  | `/api/runs/{id}/events` | 事件回放（支持 `after_seq` 增量） |
-| `GET`  | `/api/runs/{id}/stream` | SSE：进行中实时推送，已结束则从库回放 |
+| `GET`  | `/api/runs/{id}/stream` | SSE：支持 `Last-Event-ID` 断点续传与跨实例增量轮询 |
+| `POST` | `/api/runs/{id}/cancel` | 幂等请求取消运行，进入 `cancelling` / `cancelled` |
 | `POST` | `/api/runs/{id}/resume` | 从最近 checkpoint 手动恢复中断的 run |
 | `GET`  | `/api/workflows` | 可用工作流列表（内置模板 + 自定义） |
 | `GET`  | `/api/roles` | 可用 Agent 角色列表 |
 | `GET`  | `/api/config` | 当前全局配置（密钥脱敏） |
 | `PUT`  | `/api/config` | 更新并持久化全局配置（对后续 run 生效） |
-| `GET`  | `/api/research?q=` | 无持久化的即跑即看快路径（向后兼容） |
+| `GET`  | `/api/research?q=` | 兼容旧 SSE 客户端：创建持久化 run 后转发事件流，响应含 `X-Run-ID` |
 
 角色广场 / 自定义工作流另有一组 Catalog API（`catalog_api.py`）：`/api/behaviors`、`/api/models*`、`/api/agents*`、`/api/search-keys*`、`/api/workflows/custom*`，覆盖角色卡、模型档案、检索 key 池与画布工作流的增删改查。
 
 ## 全局配置 · 前端设置中心
 
-前端「设置」页（`GET`/`PUT /api/config`）可在线修改 LLM 模型 / Base URL / API Key、Tavily Key 与研究行为默认值，**改完即持久化、对后续创建的研究生效**——无需改 `.env` 或重启。
+前端「设置」页（`GET`/`PUT /api/config`）可在线修改 LLM 模型 / Base URL、当前进程使用的 API Key / Tavily Key 与研究行为默认值，并对后续创建的研究生效。
 
 - **加载顺序**：环境变量（基础默认）→ `runtime_config.json`（前端写入的覆盖项）→ per-run `params`（本次运行覆盖）。
 - **严格双源门禁**：设置页可全局开启，也可在新建研究的高级设置中按次覆盖；环境变量部署可使用 `REQUIRE_CORROBORATION=true`。默认关闭以兼容既有单来源报告，开启后关系验证失败、单一来源或争议论断均无法进入报告；若没有任何合格素材，Synthesizer 会跳过生成模型并返回确定性的无证据结果。
-- **密钥安全**：`GET` 只脱敏回显（`…末四位` + 是否已设置），表单留空＝保持不变（不会被回写清空）；端点受 `API_KEY` 鉴权保护。
-- **持久化位置**：默认写当前工作目录 `runtime_config.json`（已 gitignore），可经 `RUNTIME_CONFIG_PATH` 改路径。Docker Compose 已自动设置为 `/app/data/runtime_config.json` 并挂载 `appdata` 数据卷，容器重建后不会丢失。
+- **密钥安全**：`GET` 只脱敏回显（`…末四位` + 是否已设置），表单留空＝保持不变；运行时输入的密钥只驻留进程内存，不写 `runtime_config.json`，重启后回到环境变量。Catalog 中的模型/检索凭据使用 `CATALOG_ENCRYPTION_KEY` 加密落库，启动时自动迁移旧明文。
+- **持久化位置**：非密钥配置默认写当前工作目录 `runtime_config.json`（已 gitignore），可经 `RUNTIME_CONFIG_PATH` 改路径。Docker Compose 已自动设置为 `/app/data/runtime_config.json` 并挂载 `appdata` 数据卷，容器重建后不会丢失。
 - `database_url` 与服务端 `api_key` 不可经前端改（自举 / 鉴权安全），仍只来自环境变量。
 
 ## 数据库迁移（Alembic）
@@ -270,6 +321,7 @@ python -m eval.run_eval \
 
 ```bash
 pytest            # 使用假 LLM / 假检索，无需任何密钥或联网
+verify.bat         # Windows：锁依赖、静态检查、迁移、覆盖率、前端、Wheel 与 Compose 核心门禁
 ```
 
 ## 意图识别

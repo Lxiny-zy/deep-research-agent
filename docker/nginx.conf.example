@@ -1,13 +1,39 @@
+limit_req_zone $binary_remote_addr zone=deep_research_per_ip:10m rate=10r/s;
+
 server {
     listen 80;
+    listen [::]:80;
     server_name research.example.com;
+    # Canonical target prevents an attacker-controlled Host from becoming an open redirect.
+    return 308 https://$server_name$request_uri;
+}
+
+server {
+    # Compatible with distribution Nginx releases older than 1.25.1.
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name research.example.com;
+
+    # Replace these paths with certificates managed by Certbot or your platform.
+    ssl_certificate /etc/letsencrypt/live/research.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/research.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:TLS:10m;
+    ssl_session_timeout 1d;
+
+    limit_req zone=deep_research_per_ip burst=30 nodelay;
+    limit_req_status 429;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        # This virtual host serves one canonical origin; do not forward an
+        # attacker-controlled Host value to application redirects or logs.
+        proxy_set_header Host $server_name;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # 单层代理必须覆盖客户端自带的转发头，避免伪造 IP 绕过应用限流。
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
 
         # SSE 实时进度必须禁用代理缓冲，并允许长时间研究连接。
@@ -15,6 +41,7 @@ server {
         proxy_cache off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
-        add_header X-Accel-Buffering no;
+        # The application already emits X-Accel-Buffering: no for SSE. Keeping
+        # add_header only at server scope preserves HSTS inheritance here.
     }
 }

@@ -105,9 +105,7 @@ async def test_resolution_failure_keeps_the_original_text() -> None:
         async def parse(self, *a, **k):
             raise RuntimeError("llm down")
 
-    resolved, signal, did = await context.resolve_followup(
-        "那第二个呢", _history(), llm=Failing()
-    )
+    resolved, signal, did = await context.resolve_followup("那第二个呢", _history(), llm=Failing())
     assert resolved == "那第二个呢"
     assert did is False
     assert signal is not None, "检测到依赖这件事仍要留痕，便于解释判定质量"

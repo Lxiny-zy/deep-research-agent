@@ -381,9 +381,7 @@ async def test_nested_graph_steps_use_unique_runtime_node_ids(settings) -> None:
             await engine.run(nested, bb)
             return bb
 
-    ctx = RunContext(
-        llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings
-    )
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
     agents = {"delegate": NestedGraphAgent(), "leaf": leaf}
     engine = WorkflowEngine(ctx, resolver=agents.__getitem__)
     root = Workflow(
@@ -394,11 +392,7 @@ async def test_nested_graph_steps_use_unique_runtime_node_ids(settings) -> None:
     await engine.run(root, Blackboard(query="Q"))
 
     assert engine.runtime.run is not None
-    nested_ids = [
-        step.node_id
-        for step in engine.runtime.run.steps
-        if step.agent == "leaf"
-    ]
+    nested_ids = [step.node_id for step in engine.runtime.run.steps if step.agent == "leaf"]
     assert calls == ["leaf", "leaf"]
     assert len(nested_ids) == 2
     assert len(set(nested_ids)) == 2
@@ -417,9 +411,7 @@ async def test_initial_persisted_run_keeps_its_runtime_id(settings) -> None:
     calls: list[str] = []
     tracer = Tracer()
     engine = WorkflowEngine(
-        RunContext(
-            llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings
-        ),
+        RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings),
         resolver={"a": ResumeAgent("a", calls)}.__getitem__,
         initial_run=execution,
     )

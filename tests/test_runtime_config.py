@@ -20,11 +20,47 @@ def test_save_then_load_filters_to_whitelist(tmp_path, monkeypatch):
     assert runtime_config.load_overrides() == {"llm_model": "x", "max_rounds": 3}
 
 
+def test_save_creates_parent_directory_for_custom_path(tmp_path, monkeypatch):
+    path = tmp_path / "mounted" / "config" / "runtime.json"
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(path))
+
+    runtime_config.save_overrides({"llm_model": "x"})
+
+    assert path.is_file()
+    assert runtime_config.load_overrides() == {"llm_model": "x"}
+
+
 def test_load_corrupt_returns_empty(tmp_path, monkeypatch):
     p = tmp_path / "cfg.json"
     p.write_text("{not json", encoding="utf-8")
     monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(p))
     assert runtime_config.load_overrides() == {}
+
+
+def test_load_permission_error_is_not_silently_treated_as_empty(tmp_path, monkeypatch):
+    p = tmp_path / "cfg.json"
+    p.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(p))
+
+    def denied(*args, **kwargs):
+        raise PermissionError("runtime config is not readable")
+
+    monkeypatch.setattr(runtime_config.Path, "read_text", denied)
+    with pytest.raises(PermissionError, match="not readable"):
+        runtime_config.load_overrides()
+
+
+def test_legacy_plaintext_scrub_failure_is_fatal(tmp_path, monkeypatch):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"llm_api_key":"legacy-secret","max_rounds":3}', encoding="utf-8")
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(p))
+
+    def denied(overrides):
+        raise PermissionError("runtime config cannot be scrubbed")
+
+    monkeypatch.setattr(runtime_config, "save_overrides", denied)
+    with pytest.raises(PermissionError, match="cannot be scrubbed"):
+        runtime_config.load_overrides()
 
 
 def test_apply_overrides_merges_and_validates():

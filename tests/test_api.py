@@ -24,6 +24,11 @@ def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=api.app), base_url="http://test")
 
 
+async def _assert_hub_closed(hub: EventHub) -> None:
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(hub.stream()), timeout=0.1)
+
+
 @pytest.fixture
 def repo(monkeypatch) -> InMemoryRepository:
     r = InMemoryRepository()
@@ -31,6 +36,16 @@ def repo(monkeypatch) -> InMemoryRepository:
     api.app.state.repo = r
     api.app.state.live = {}
     api.app.state.tasks = set()
+    api.app.state.run_tasks = {}
+    api.app.state.cancellation_requested = set()
+    api.app.state.run_admission = api.RunAdmission(
+        api.app.state.settings.max_active_runs, api.app.state.settings.max_queued_runs
+    )
+    api.app.state.config_lock = asyncio.Lock()
+    api.app.state.run_admission = api.RunAdmission(
+        api.app.state.settings.max_active_runs,
+        api.app.state.settings.max_queued_runs,
+    )
 
     async def _noop(
         app,
@@ -58,6 +73,28 @@ async def test_healthz():
 
 
 @pytest.mark.asyncio
+async def test_liveness_and_readiness(repo):
+    async with _client() as c:
+        live = await c.get("/livez")
+        ready = await c.get("/readyz")
+    assert live.json() == {"status": "ok"}
+    assert ready.json() == {"status": "ready"}
+
+
+@pytest.mark.asyncio
+async def test_request_id_and_metrics_endpoint(repo):
+    async with _client() as c:
+        health = await c.get("/healthz", headers={"X-Request-ID": "test-request-1"})
+        metrics_response = await c.get("/metrics")
+
+    assert health.headers["X-Request-ID"] == "test-request-1"
+    assert metrics_response.status_code == 200
+    assert metrics_response.headers["content-type"].startswith("text/plain")
+    assert "deep_research_http_requests_total" in metrics_response.text
+    assert 'route="/healthz"' in metrics_response.text
+
+
+@pytest.mark.asyncio
 async def test_create_run(repo):
     async with _client() as c:
         resp = await c.post("/api/runs", json={"query": "Q"})
@@ -68,6 +105,177 @@ async def test_create_run(repo):
     assert detail.query == "Q"
     assert detail.orchestration is not None
     assert await repo.acquire_lease(run_id, "another-worker") is False
+
+
+@pytest.mark.asyncio
+async def test_create_run_rejects_when_admission_capacity_is_full(repo, monkeypatch):
+    api.app.state.settings = Settings(max_active_runs=1, max_queued_runs=0)
+    api.app.state.run_admission = api.RunAdmission(1, 0)
+    monkeypatch.setattr(api, "_check_rate_limit", lambda request: None)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_execute(*args, **kwargs):  # type: ignore[no-untyped-def]
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(api, "_execute", blocked_execute)
+    async with _client() as c:
+        first = asyncio.create_task(c.post("/api/runs", json={"query": "first"}))
+        await started.wait()
+        second = await c.post("/api/runs", json={"query": "second"})
+        assert second.status_code == 503
+        release.set()
+        assert (await first).status_code == 202
+    await asyncio.gather(*list(api.app.state.tasks), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_create_request_releases_admission(repo, monkeypatch) -> None:
+    admission = api.RunAdmission(1, 0)
+    api.app.state.run_admission = admission
+    persistence_started = asyncio.Event()
+
+    async def blocked_create_run_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+        persistence_started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(repo, "create_run_once", blocked_create_run_once)
+    async with _client() as client:
+        request_task = asyncio.create_task(client.post("/api/runs", json={"query": "cancel me"}))
+        await persistence_started.wait()
+        request_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request_task
+
+    assert admission.active == 0
+    assert admission.queued == 0
+    assert await repo.list_runs() == []
+
+
+@pytest.mark.asyncio
+async def test_create_run_idempotency_replays_and_conflicts(repo):
+    headers = {"Idempotency-Key": "create-1"}
+    async with _client() as c:
+        first = await c.post("/api/runs", json={"query": "Q"}, headers=headers)
+        replay = await c.post("/api/runs", json={"query": "Q"}, headers=headers)
+        conflict = await c.post("/api/runs", json={"query": "different"}, headers=headers)
+
+    assert first.status_code == replay.status_code == 202
+    assert first.json()["run_id"] == replay.json()["run_id"]
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "idempotency_conflict"
+    assert len(await repo.list_runs()) == 1
+
+
+@pytest.mark.asyncio
+async def test_blank_idempotency_key_is_treated_as_absent(repo):
+    headers = {"Idempotency-Key": "   "}
+    async with _client() as c:
+        first = await c.post("/api/runs", json={"query": "Q"}, headers=headers)
+        second = await c.post("/api/runs", json={"query": "Q"}, headers=headers)
+
+    assert first.status_code == second.status_code == 202
+    assert first.json()["run_id"] != second.json()["run_id"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_endpoint_is_idempotent_for_active_run(repo):
+    run_id = await repo.create_run("cancel me")
+    async with _client() as c:
+        first = await c.post(f"/api/runs/{run_id}/cancel")
+        second = await c.post(f"/api/runs/{run_id}/cancel")
+    assert first.status_code == second.status_code == 202
+    assert first.json()["status"] == second.json()["status"] == "cancelling"
+
+
+@pytest.mark.asyncio
+async def test_task_cancelled_before_start_reaches_cancelled(repo):
+    owner = "prestart-owner"
+    execution = OrchestrationRuntime().start("deep", {"query": "cancel before start"})
+    run_id = await repo.create_run("cancel before start", execution=execution, lease_owner=owner)
+    api.app.state.live[run_id] = EventHub()
+    assert await repo.request_cancel(run_id) == "cancelling"
+
+    async def never_started() -> None:
+        await asyncio.sleep(60)
+
+    task = asyncio.create_task(never_started())
+    api.app.state.cancellation_requested = {run_id}
+    api._track_run_task(api.app, run_id, task, lease_owner=owner)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    for _ in range(10):
+        if await repo.get_run_status(run_id) == "cancelled":
+            break
+        await asyncio.sleep(0)
+
+    assert await repo.get_run_status(run_id) == "cancelled"
+    events = await repo.get_events(run_id)
+    assert events[-1].type == "cancelled"
+    assert run_id not in api.app.state.live
+    assert run_id not in api.app.state.cancellation_requested
+
+
+@pytest.mark.asyncio
+async def test_prestart_shutdown_cancellation_releases_lease_and_hub(repo) -> None:
+    owner = "prestart-shutdown-owner"
+    execution = _recoverable_execution("shutdown before start")
+    run_id = await repo.create_run("shutdown before start", execution=execution, lease_owner=owner)
+    hub = EventHub()
+    api.app.state.live[run_id] = hub
+    admission = api.RunAdmission(1, 0)
+    slot = admission.acquire()
+
+    task = asyncio.create_task(
+        api._execute_with_admission(
+            slot,
+            api.app,
+            run_id,
+            "shutdown before start",
+            Settings(),
+            "deep",
+            None,
+            owner,
+        )
+    )
+    api._track_run_task(api.app, run_id, task, lease_owner=owner, admission=slot)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    await asyncio.sleep(0)
+    cleanup_tasks = list(api.app.state.cleanup_tasks)
+    if cleanup_tasks:
+        await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+
+    assert await repo.get_run_status(run_id) == "pending"
+    assert await repo.acquire_lease(run_id, "replacement-worker") is True
+    assert run_id not in api.app.state.live
+    assert admission.active == 0
+    await _assert_hub_closed(hub)
+
+
+@pytest.mark.asyncio
+async def test_handled_task_cancellation_clears_requested_marker(repo) -> None:
+    run_id = await repo.create_run("handled cancellation")
+    api.app.state.cancellation_requested = {run_id}
+
+    async def handle_cancellation() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return
+
+    task = asyncio.create_task(handle_cancellation())
+    api._track_run_task(api.app, run_id, task)
+    await asyncio.sleep(0)
+    task.cancel()
+    await task
+    await asyncio.sleep(0)
+
+    assert task.cancelled() is False
+    assert run_id not in api.app.state.cancellation_requested
 
 
 @pytest.mark.asyncio
@@ -128,6 +336,24 @@ async def test_stream_replays_from_db(repo):
 
 
 @pytest.mark.asyncio
+async def test_stream_resumes_after_last_event_id(repo):
+    run_id = await repo.create_run("Q")
+    await repo.append_events(
+        run_id,
+        [
+            Event(stage="PLANNER", type="start", message="first"),
+            Event(stage="ORCHESTRATOR", type="done", message="second"),
+        ],
+    )
+    await repo.finalize(run_id, elapsed=1, total_tokens=1)
+    async with _client() as c:
+        response = await c.get(f"/api/runs/{run_id}/stream", headers={"Last-Event-ID": "0"})
+    assert "first" not in response.text
+    assert "second" in response.text
+    assert "id: 1" in response.text
+
+
+@pytest.mark.asyncio
 async def test_remote_stream_waits_for_durable_terminal_events(repo, monkeypatch) -> None:
     run_id = await repo.create_run("remote")
     await repo.set_status(run_id, "running")
@@ -177,6 +403,30 @@ async def test_remote_stream_synthesizes_missing_terminal_event(repo, monkeypatc
 
     assert '"type":"error"' in payload
     assert '"status":"error"' in payload
+
+
+@pytest.mark.asyncio
+async def test_remote_stream_drains_all_pages_before_terminal_grace(repo, monkeypatch) -> None:
+    run_id = await repo.create_run("large remote replay")
+    progress_count = api._SSE_EVENT_BATCH_SIZE * 2 + 1
+    await repo.save_events(
+        run_id,
+        [
+            Event(stage="RESEARCHER", type="info", message=f"progress-{index}")
+            for index in range(progress_count)
+        ]
+        + [Event(stage="ORCHESTRATOR", type="done", message="durable-success")],
+    )
+    await repo.finalize(run_id, elapsed=1.0, total_tokens=1)
+    remote_app = SimpleNamespace(state=SimpleNamespace(repo=repo, live={}))
+    monkeypatch.setattr(api, "_REMOTE_STREAM_POLL_SECONDS", 0.0)
+    monkeypatch.setattr(api, "_REMOTE_STREAM_TERMINAL_GRACE_SECONDS", 0.0)
+
+    payload = "".join([chunk async for chunk in api._stream_run_sse(remote_app, run_id)])
+
+    assert f"progress-{progress_count - 1}" in payload
+    assert "durable-success" in payload
+    assert f"id: {progress_count}" in payload
 
 
 @pytest.mark.asyncio
@@ -237,35 +487,56 @@ async def test_remote_stream_does_not_replay_same_type_terminal_from_old_attempt
 
 
 @pytest.mark.asyncio
-async def test_legacy_research_uses_runtime_settings(repo, monkeypatch):
+async def test_legacy_research_creates_persisted_run_and_streams_it(repo, monkeypatch):
     runtime_settings = Settings(llm_model="saved-model", llm_api_key="saved-key")
     api.app.state.settings = runtime_settings
     captured = {}
 
-    class FakeAgent:
-        def __init__(self, settings, **kwargs):
-            captured["settings"] = settings
+    async def fake_execute(
+        app,
+        run_id,
+        query,
+        settings,
+        workflow=None,
+        resume_execution=None,
+        lease_owner=None,
+        initial_execution=None,
+        requested_workflow=None,
+    ):
+        captured["settings"] = settings
+        captured["query"] = query
+        event = Event(stage="ORCHESTRATOR", type="done", message="finished")
+        persisted = await app.state.repo.append_events(run_id, [event], lease_owner=lease_owner)
+        await app.state.repo.finalize(run_id, elapsed=0.1, total_tokens=1, lease_owner=lease_owner)
+        hub = app.state.live.get(run_id)
+        if hub is not None:
+            for stored_event in persisted:
+                hub.publish(stored_event)
+            hub.close()
+            app.state.live.pop(run_id, None)
+        if lease_owner is not None:
+            await app.state.repo.release_lease(run_id, lease_owner)
 
-        async def run_stream(self, query):
-            assert query == "Q"
-            yield Event(stage="ORCHESTRATOR", type="done")
-
-        async def aclose(self):
-            return None
-
-    monkeypatch.setattr(api, "DeepResearchAgent", FakeAgent)
+    monkeypatch.setattr(api, "_execute", fake_execute)
     monkeypatch.setattr(api, "_check_rate_limit", lambda request: None)
 
     async with _client() as c:
         resp = await c.get("/api/research", params={"q": "Q"})
 
     assert resp.status_code == 200
+    run_id = resp.headers["X-Run-ID"]
+    detail = await repo.get_run(run_id)
+    assert detail is not None
+    assert detail.query == "Q"
+    assert detail.status == "done"
+    assert '"type":"done"' in resp.text
+    assert captured["query"] == "Q"
     assert captured["settings"] is runtime_settings
 
 
 @pytest.mark.asyncio
-async def test_legacy_research_uses_search_key_pool(repo, monkeypatch):
-    """快路径与 /api/runs 同一构造路径：key 池非空时注入 TavilyKeyPoolSearch。"""
+async def test_build_agent_uses_search_key_pool(repo, monkeypatch):
+    """持久化执行构造 agent 时，key 池非空则注入 TavilyKeyPoolSearch。"""
     from deep_research.tools.tavily_pool import TavilyKeyPoolSearch
 
     class FakeCatalog:
@@ -286,14 +557,15 @@ async def test_legacy_research_uses_search_key_pool(repo, monkeypatch):
             return None
 
     monkeypatch.setattr(api, "DeepResearchAgent", FakeAgent)
-    monkeypatch.setattr(api, "_check_rate_limit", lambda request: None)
-
-    async with _client() as c:
-        resp = await c.get("/api/research", params={"q": "Q"})
-
-    assert resp.status_code == 200
-    assert isinstance(captured["search_tool"], TavilyKeyPoolSearch)
-    assert captured["catalog_repo"] is api.app.state.catalog
+    agent, search_tool = await api._build_agent(api.app, api.app.state.settings)
+    try:
+        assert isinstance(search_tool, TavilyKeyPoolSearch)
+        assert captured["search_tool"] is search_tool
+        assert captured["catalog_repo"] is api.app.state.catalog
+    finally:
+        await agent.aclose()
+        if search_tool is not None:
+            await search_tool.aclose()
 
 
 @pytest.mark.asyncio
@@ -418,6 +690,16 @@ async def test_config_get_masks_secrets(repo):
 
 
 @pytest.mark.asyncio
+async def test_api_key_accepts_bearer_but_not_query_parameter(repo):
+    api.app.state.settings = Settings(api_key="service-secret")
+    async with _client() as c:
+        query = await c.get("/api/config", params={"api_key": "service-secret"})
+        bearer = await c.get("/api/config", headers={"Authorization": "Bearer service-secret"})
+    assert query.status_code == 401
+    assert bearer.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_config_put_keeps_empty_secret(repo, tmp_path, monkeypatch):
     monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(tmp_path / "cfg.json"))
     monkeypatch.setenv("LLM_API_KEY", "sk-env-key-9999")
@@ -442,7 +724,7 @@ async def test_config_put_persists_corroboration_gate(repo, tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_config_put_sets_and_persists_secret(repo, tmp_path, monkeypatch):
+async def test_config_put_sets_secret_without_persisting_plaintext(repo, tmp_path, monkeypatch):
     cfg = tmp_path / "cfg.json"
     monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(cfg))
     async with _client() as c:
@@ -451,7 +733,8 @@ async def test_config_put_sets_and_persists_secret(repo, tmp_path, monkeypatch):
     assert api.app.state.settings.llm_api_key == "sk-new-1234"
     assert resp.json()["llm_api_key_hint"] == "…1234"
     assert "sk-new-1234" not in resp.text  # 响应已脱敏
-    assert json.loads(cfg.read_text(encoding="utf-8"))["llm_api_key"] == "sk-new-1234"
+    assert "llm_api_key" not in json.loads(cfg.read_text(encoding="utf-8"))
+    assert "sk-new-1234" not in cfg.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -459,6 +742,14 @@ async def test_config_put_validates_range(repo, tmp_path, monkeypatch):
     monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(tmp_path / "cfg.json"))
     async with _client() as c:
         resp = await c.put("/api/config", json={"max_concurrency": 0})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_config_put_rejects_ambiguous_provider_hostname(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(tmp_path / "cfg.json"))
+    async with _client() as c:
+        resp = await c.put("/api/config", json={"llm_base_url": "https://127.0.0.1%20/v1"})
     assert resp.status_code == 422
 
 
@@ -509,11 +800,185 @@ async def test_config_put_cleans_polluted_overrides(repo, tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_config_put_persistence_failure_keeps_memory_state(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(tmp_path / "cfg.json"))
+    before = api.app.state.settings
+
+    def fail_save(_overrides):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(api.runtime_config, "save_overrides", fail_save)
+    async with _client() as c:
+        resp = await c.put("/api/config", json={"llm_model": "not-committed"})
+
+    assert resp.status_code == 500
+    assert api.app.state.settings is before
+
+
+@pytest.mark.asyncio
+async def test_create_task_failure_releases_admission_and_run_lease(repo, monkeypatch):
+    admission = api.RunAdmission(1, 0)
+    api.app.state.run_admission = admission
+    hub = EventHub()
+    monkeypatch.setattr(api, "EventHub", lambda: hub)
+
+    def fail_create_task(coro):  # type: ignore[no-untyped-def]
+        coro.close()
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr(api.asyncio, "create_task", fail_create_task)
+    async with _client() as c:
+        with pytest.raises(RuntimeError, match="scheduler unavailable"):
+            await c.post("/api/runs", json={"query": "cannot schedule"})
+
+    assert admission.active == 0
+    assert admission.queued == 0
+    runs = await repo.list_runs()
+    assert len(runs) == 1
+    assert runs[0].status == "error"
+    assert await repo.acquire_lease(runs[0].id, "replacement-worker") is True
+    assert runs[0].id not in api.app.state.live
+    await _assert_hub_closed(hub)
+
+
+@pytest.mark.asyncio
+async def test_orphan_task_creation_failure_releases_all_leases(monkeypatch):
+    repo = InMemoryRepository()
+    run_id = await repo.create_run(
+        "recover cannot schedule",
+        execution=_recoverable_execution("recover cannot schedule"),
+    )
+    admission = api.RunAdmission(1, 0)
+    hub = EventHub()
+    monkeypatch.setattr(api, "EventHub", lambda: hub)
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            repo=repo,
+            live={},
+            tasks=set(),
+            settings=Settings(max_active_runs=1, max_queued_runs=0),
+            run_admission=admission,
+        )
+    )
+
+    def fail_create_task(coro):  # type: ignore[no-untyped-def]
+        coro.close()
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr(api.asyncio, "create_task", fail_create_task)
+    await api._recover_orphaned_runs(app, app.state.settings)
+
+    assert admission.active == 0
+    assert admission.queued == 0
+    assert run_id not in app.state.live
+    assert await repo.acquire_lease(run_id, "replacement-worker") is True
+    await _assert_hub_closed(hub)
+
+
+@pytest.mark.asyncio
+async def test_queued_wrapper_setup_failure_releases_admission_and_durable_lease(monkeypatch):
+    repo = InMemoryRepository()
+    owner = "queued-owner"
+    run_id = await repo.create_run(
+        "queued setup failure",
+        execution=_recoverable_execution("queued setup failure"),
+        lease_owner=owner,
+    )
+    admission = api.RunAdmission(1, 0)
+    slot = admission.acquire()
+    hub = EventHub()
+    app = SimpleNamespace(state=SimpleNamespace(repo=repo, live={run_id: hub}))
+
+    def fail_create_task(coro):  # type: ignore[no-untyped-def]
+        coro.close()
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr(api.asyncio, "create_task", fail_create_task)
+    with pytest.raises(RuntimeError, match="scheduler unavailable"):
+        await api._execute_with_admission(
+            slot,
+            app,
+            run_id,
+            "queued setup failure",
+            Settings(),
+            "deep",
+            None,
+            owner,
+            lease_owner=owner,
+        )
+
+    assert admission.active == 0
+    assert await repo.acquire_lease(run_id, "replacement-worker") is True
+    assert run_id not in app.state.live
+    await _assert_hub_closed(hub)
+
+
+@pytest.mark.asyncio
+async def test_resume_task_creation_failure_releases_resources(repo, monkeypatch):
+    run_id = await repo.create_run(
+        "resume cannot schedule",
+        execution=_recoverable_execution("resume cannot schedule"),
+    )
+    admission = api.RunAdmission(1, 0)
+    api.app.state.run_admission = admission
+    hub = EventHub()
+    monkeypatch.setattr(api, "EventHub", lambda: hub)
+
+    def fail_create_task(coro):  # type: ignore[no-untyped-def]
+        coro.close()
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr(api.asyncio, "create_task", fail_create_task)
+    async with _client() as c:
+        with pytest.raises(RuntimeError, match="scheduler unavailable"):
+            await c.post(f"/api/runs/{run_id}/resume")
+
+    assert admission.active == 0
+    assert admission.queued == 0
+    assert run_id not in api.app.state.live
+    assert await repo.acquire_lease(run_id, "replacement-worker") is True
+    await _assert_hub_closed(hub)
+
+
+@pytest.mark.asyncio
+async def test_close_live_hub_wakes_subscribers_and_preserves_replacement() -> None:
+    run_id = "replaced-hub"
+    old_hub = EventHub()
+    replacement = EventHub()
+    app = SimpleNamespace(state=SimpleNamespace(live={run_id: old_hub}))
+    stream = old_hub.stream()
+    pending = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+    app.state.live[run_id] = replacement
+
+    api._close_live_hub(app, run_id, old_hub)
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(pending, timeout=0.1)
+    assert app.state.live[run_id] is replacement
+    replacement.close()
+
+
+@pytest.mark.asyncio
 async def test_events_unknown_run_returns_404(repo):
     """与 /stream 语义一致：未知 run 404，而非 200 + 空列表。"""
     async with _client() as c:
         resp = await c.get("/api/runs/does-not-exist/events")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_unknown_api_route_is_authenticated_json_404(repo):
+    api.app.state.settings.api_key = "secret"
+    try:
+        async with _client() as c:
+            unauthenticated = await c.get("/api/not-a-route")
+            missing = await c.get("/api/not-a-route", headers={"Authorization": "Bearer secret"})
+        assert unauthenticated.status_code == 401
+        assert missing.status_code == 404
+        assert missing.headers["content-type"].startswith("application/json")
+    finally:
+        api.app.state.settings.api_key = ""
 
 
 @pytest.mark.asyncio
@@ -538,6 +1003,42 @@ async def test_live_stream_emits_heartbeat_during_silence(monkeypatch) -> None:
     assert any('"type":"done"' in chunk for chunk in chunks)
 
 
+@pytest.mark.asyncio
+async def test_live_stream_recovers_from_slow_subscriber_overflow(monkeypatch) -> None:
+    """A bounded hub queue must fall back to durable events after a slow read."""
+    repo = InMemoryRepository()
+    run_id = await repo.create_run("slow client")
+    await repo.set_status(run_id, "running")
+    hub = EventHub()
+    monkeypatch.setattr(hub, "_QUEUE_MAXSIZE", 2)
+    monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 60.0)
+    monkeypatch.setattr(api, "_REMOTE_STREAM_POLL_SECONDS", 0.001)
+    app = SimpleNamespace(state=SimpleNamespace(repo=repo, live={run_id: hub}))
+
+    stream = api._stream_run_sse(app, run_id)
+    first_read = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+    first = Event(stage="PLANNER", type="info", message="first")
+    hub.publish(first)
+    first_frame = await first_read
+    assert "first" in first_frame
+
+    later = [Event(stage="RESEARCHER", type="info", message=f"later-{i}") for i in range(3)]
+    terminal = Event(stage="ORCHESTRATOR", type="done", message="finished")
+    # Persist after the first live frame to exercise the recovery cursor.
+    await repo.append_events(run_id, [first, *later, terminal])
+    await repo.set_status(run_id, "done")
+    for event in later + [terminal]:
+        hub.publish(event)
+
+    frames = [first_frame]
+    async for frame in stream:
+        frames.append(frame)
+    payload = "".join(frames)
+    assert all(message in payload for message in ("later-0", "later-1", "later-2", "finished"))
+    assert payload.count('"message":"first"') == 1
+
+
 def test_rate_limiter_prunes_stale_entries(monkeypatch) -> None:
     """key 总量超上限时清理窗口外条目（含空条目），内存不无界增长。"""
     limiter = api._RateLimiter(max_calls=2, window_seconds=10.0)
@@ -552,6 +1053,19 @@ def test_rate_limiter_prunes_stale_entries(monkeypatch) -> None:
     assert set(limiter._hits) == {"fresh-ip"}
 
 
+def test_rate_limiter_enforces_key_cap_for_live_clients(monkeypatch) -> None:
+    limiter = api._RateLimiter(max_calls=5, window_seconds=60.0)
+    monkeypatch.setattr(limiter, "_MAX_KEYS", 2)
+    monkeypatch.setattr(api.time, "monotonic", lambda: 1.0)
+
+    assert limiter.check("first") is True
+    assert limiter.check("second") is True
+    assert limiter.check("first") is True  # refresh; second is now least recently used
+    assert limiter.check("third") is True
+
+    assert list(limiter._hits) == ["first", "third"]
+
+
 def _fake_request(headers: dict[str, str] | None = None, host: str = "10.0.0.9"):
     return SimpleNamespace(headers=headers or {}, client=SimpleNamespace(host=host))
 
@@ -562,11 +1076,206 @@ def test_rate_limit_key_ignores_forwarded_header_by_default(monkeypatch) -> None
     assert api._rate_limit_key(req) == "10.0.0.9"  # 默认不信任可伪造的头
 
 
-def test_rate_limit_key_uses_first_forwarded_hop_when_trusted(monkeypatch) -> None:
+def test_rate_limit_key_uses_proxy_overwritten_client_ip_when_trusted(monkeypatch) -> None:
     monkeypatch.setenv("APP_TRUST_PROXY", "1")
-    req = _fake_request({"x-forwarded-for": "1.2.3.4, 10.0.0.1"})
-    assert api._rate_limit_key(req) == "1.2.3.4"  # 第一跳＝真实客户端
+    req = _fake_request(
+        {
+            "x-real-ip": "1.2.3.4",
+            "x-forwarded-for": "spoofed, 10.0.0.1",
+        }
+    )
+    assert api._rate_limit_key(req) == "1.2.3.4"
+    forwarded_only = _fake_request({"x-forwarded-for": "2.3.4.5, 10.0.0.1"})
+    assert api._rate_limit_key(forwarded_only) == "2.3.4.5"
     assert api._rate_limit_key(_fake_request({})) == "10.0.0.9"  # 无头回退直连 IP
+
+
+def test_run_admission_rejects_when_active_and_queue_are_full() -> None:
+    admission = api.RunAdmission(max_active_runs=1, max_queued_runs=0)
+    active = admission.acquire()
+    with pytest.raises(api.RunAdmissionLimit):
+        admission.acquire()
+    active.release()
+    assert admission.active == 0
+
+
+@pytest.mark.asyncio
+async def test_run_admission_queued_lease_activates_and_releases() -> None:
+    admission = api.RunAdmission(max_active_runs=1, max_queued_runs=1)
+    active = admission.acquire()
+    queued = admission.acquire()
+    assert admission.active == 1
+    assert admission.queued == 1
+
+    waiting = asyncio.create_task(queued.wait())
+    await asyncio.sleep(0)
+    active.release()
+    await waiting
+    assert admission.active == 1
+    assert admission.queued == 0
+    queued.release()
+    assert admission.active == 0
+
+
+@pytest.mark.asyncio
+async def test_run_admission_cancelled_waiter_returns_queue_capacity() -> None:
+    admission = api.RunAdmission(max_active_runs=1, max_queued_runs=1)
+    active = admission.acquire()
+    queued = admission.acquire()
+    waiting = asyncio.create_task(queued.wait())
+    await asyncio.sleep(0)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    assert admission.queued == 0
+    active.release()
+    assert admission.active == 0
+
+
+@pytest.mark.asyncio
+async def test_queued_run_renews_durable_lease_until_admitted(monkeypatch) -> None:
+    admission = api.RunAdmission(max_active_runs=1, max_queued_runs=1)
+    blocker = admission.acquire()
+    queued = admission.acquire()
+    renewals: list[tuple[str, str]] = []
+    renewed_once = asyncio.Event()
+    executed = asyncio.Event()
+
+    class Repo:
+        async def renew_lease(self, run_id, owner):  # type: ignore[no-untyped-def]
+            renewals.append((run_id, owner))
+            renewed_once.set()
+            return True
+
+    app = SimpleNamespace(state=SimpleNamespace(repo=Repo()))
+
+    async def fake_execute(*args, **kwargs):  # type: ignore[no-untyped-def]
+        executed.set()
+
+    monkeypatch.setattr(api, "_execute", fake_execute)
+    monkeypatch.setattr(api, "_LEASE_RENEW_INTERVAL_SECONDS", 0.001)
+    task = asyncio.create_task(
+        api._execute_with_admission(queued, app, "run-1", "query", Settings(), None, None, "owner")
+    )
+    await asyncio.wait_for(renewed_once.wait(), timeout=1)
+    assert renewals and set(renewals) == {("run-1", "owner")}
+    blocker.release()
+    await asyncio.wait_for(task, timeout=1)
+    assert executed.is_set()
+    assert admission.active == 0
+
+
+@pytest.mark.asyncio
+async def test_queued_run_losing_lease_drops_local_live_state(monkeypatch) -> None:
+    admission = api.RunAdmission(max_active_runs=1, max_queued_runs=1)
+    blocker = admission.acquire()
+    queued = admission.acquire()
+    run_id = "lost-while-queued"
+    hub = EventHub()
+
+    class Repo:
+        async def renew_lease(self, run_id, owner):  # type: ignore[no-untyped-def]
+            return False
+
+    app = SimpleNamespace(state=SimpleNamespace(repo=Repo(), live={run_id: hub}))
+    executed = False
+
+    async def fake_execute(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal executed
+        executed = True
+
+    monkeypatch.setattr(api, "_execute", fake_execute)
+    monkeypatch.setattr(api, "_LEASE_RENEW_INTERVAL_SECONDS", 0.001)
+    await api._execute_with_admission(
+        queued, app, run_id, "query", Settings(), None, None, "old-owner"
+    )
+
+    assert executed is False
+    assert run_id not in app.state.live
+    assert admission.queued == 0
+    blocker.release()
+    assert admission.active == 0
+
+
+@pytest.mark.asyncio
+async def test_remotely_cancelled_queued_run_settles_before_execution(monkeypatch) -> None:
+    repo = InMemoryRepository()
+    owner = "queued-owner"
+    run_id = await repo.create_run(
+        "remote cancellation",
+        execution=_recoverable_execution("remote cancellation"),
+        lease_owner=owner,
+    )
+    assert await repo.request_cancel(run_id) == "cancelling"
+    admission = api.RunAdmission(max_active_runs=1, max_queued_runs=1)
+    blocker = admission.acquire()
+    queued = admission.acquire()
+    hub = EventHub()
+    app = SimpleNamespace(state=SimpleNamespace(repo=repo, live={run_id: hub}))
+    executed = False
+
+    async def fake_execute(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal executed
+        executed = True
+
+    monkeypatch.setattr(api, "_execute", fake_execute)
+    monkeypatch.setattr(api, "_CANCEL_POLL_SECONDS", 0.001)
+    await asyncio.wait_for(
+        api._execute_with_admission(
+            queued, app, run_id, "remote cancellation", Settings(), None, None, owner
+        ),
+        timeout=1,
+    )
+
+    assert executed is False
+    assert await repo.get_run_status(run_id) == "cancelled"
+    assert await repo.acquire_lease(run_id, "replacement-worker") is True
+    assert run_id not in app.state.live
+    assert admission.queued == 0
+    blocker.release()
+    assert admission.active == 0
+    events = [event async for event in hub.stream()]
+    assert [event.type for event in events] == ["cancelled"]
+
+
+@pytest.mark.asyncio
+async def test_admitted_run_rechecks_durable_lease_before_execution(monkeypatch) -> None:
+    admission = api.RunAdmission(max_active_runs=1, max_queued_runs=0)
+    slot = admission.acquire()
+    run_id = "lost-at-admission"
+    hub = EventHub()
+    released: list[tuple[str, str]] = []
+
+    class Repo:
+        async def renew_lease(self, run_id, owner):  # type: ignore[no-untyped-def]
+            return False
+
+        async def get_run_status(self, run_id):  # type: ignore[no-untyped-def]
+            return "running"
+
+        async def get_run_attempt(self, run_id):  # type: ignore[no-untyped-def]
+            return 1
+
+        async def release_lease(self, run_id, owner):  # type: ignore[no-untyped-def]
+            released.append((run_id, owner))
+
+    app = SimpleNamespace(state=SimpleNamespace(repo=Repo(), live={run_id: hub}))
+    executed = False
+
+    async def fake_execute(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal executed
+        executed = True
+
+    monkeypatch.setattr(api, "_execute", fake_execute)
+    await api._execute_with_admission(
+        slot, app, run_id, "query", Settings(), None, None, "expired-owner"
+    )
+
+    assert executed is False
+    assert released == [(run_id, "expired-owner")]
+    assert run_id not in app.state.live
+    assert admission.active == 0
+    await _assert_hub_closed(hub)
 
 
 def _recoverable_execution(query: str, *, checkpoint_scratch: dict | None = None):
@@ -610,6 +1319,20 @@ async def test_orphan_recovery_isolates_failures(monkeypatch) -> None:
     await asyncio.gather(*app.state.tasks)
 
     assert starts == [good_run_id]
+
+
+@pytest.mark.asyncio
+async def test_orphan_recovery_leaves_legacy_active_run_without_workflow_untouched() -> None:
+    repo = InMemoryRepository()
+    run_id = await repo.create_run("legacy active")
+    await repo.set_status(run_id, "running")
+    app = SimpleNamespace(
+        state=SimpleNamespace(repo=repo, live={}, tasks=set(), settings=Settings())
+    )
+
+    await api._recover_orphaned_runs(app, app.state.settings)
+
+    assert await repo.get_run_status(run_id) == "running"
 
 
 @pytest.mark.asyncio
@@ -661,6 +1384,52 @@ async def test_lifespan_stops_recovery_before_snapshotting_workers(monkeypatch) 
         await recovery_started.wait()
 
     assert worker_stopped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_drains_cancelled_task_cleanup_before_engine_dispose(monkeypatch) -> None:
+    lease_released = asyncio.Event()
+    run_id = "prestart-shutdown"
+
+    class Repo:
+        async def get_run_status(self, run_id):  # type: ignore[no-untyped-def]
+            return "pending"
+
+        async def get_run_attempt(self, run_id):  # type: ignore[no-untyped-def]
+            return 1
+
+        async def release_lease(self, run_id, owner):  # type: ignore[no-untyped-def]
+            await asyncio.sleep(0)
+            lease_released.set()
+
+    class Engine:
+        async def dispose(self) -> None:
+            assert lease_released.is_set()
+
+    async def noop_recovery(app, settings):  # type: ignore[no-untyped-def]
+        return None
+
+    async def noop_prepare(engine, database_url):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr(api.runtime_config, "load_overrides", lambda: {})
+    monkeypatch.setattr(api, "make_engine", lambda database_url: Engine())
+    monkeypatch.setattr(api, "prepare_sqlite_schema", noop_prepare)
+    monkeypatch.setattr(api, "make_sessionmaker", lambda engine: object())
+    monkeypatch.setattr(api, "SqlRepository", lambda sessionmaker: Repo())
+    monkeypatch.setattr(api, "CatalogRepository", lambda sessionmaker: object())
+    monkeypatch.setattr(api, "_recover_orphaned_runs", noop_recovery)
+    test_app = SimpleNamespace(state=SimpleNamespace())
+    hub = EventHub()
+
+    async with api.lifespan(test_app):
+        test_app.state.live[run_id] = hub
+        worker = asyncio.create_task(asyncio.Event().wait())
+        api._track_run_task(test_app, run_id, worker, lease_owner="owner")
+
+    assert lease_released.is_set()
+    assert run_id not in test_app.state.live
+    await _assert_hub_closed(hub)
 
 
 @pytest.mark.asyncio
@@ -716,6 +1485,72 @@ async def test_orphan_recovery_pages_through_all_candidates(monkeypatch) -> None
     await asyncio.gather(*app.state.tasks)
 
     assert set(starts) == set(run_ids)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_recovery_pages_and_closes_stale_hubs(monkeypatch) -> None:
+    repo = InMemoryRepository()
+    run_ids = [
+        await repo.create_run(query, execution=_recoverable_execution(query))
+        for query in ("cancel-one", "cancel-two", "cancel-three")
+    ]
+    for run_id in run_ids:
+        assert await repo.request_cancel(run_id) == "cancelling"
+    hubs = {run_id: EventHub() for run_id in run_ids}
+    app = SimpleNamespace(
+        state=SimpleNamespace(repo=repo, live=dict(hubs), tasks=set(), settings=Settings())
+    )
+    monkeypatch.setattr(api, "_RECOVERY_PAGE_SIZE", 2)
+
+    await api._recover_orphaned_runs(app, app.state.settings)
+
+    assert [await repo.get_run_status(run_id) for run_id in run_ids] == [
+        "cancelled",
+        "cancelled",
+        "cancelled",
+    ]
+    assert app.state.live == {}
+    for hub in hubs.values():
+        await _assert_hub_closed(hub)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_recovery_isolates_broken_runs() -> None:
+    class PartiallyBrokenRepository(InMemoryRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.broken_run_id = ""
+
+        async def get_run(self, run_id: str):  # type: ignore[no-untyped-def]
+            if run_id == self.broken_run_id:
+                raise RuntimeError("corrupt cancelling run")
+            return await super().get_run(run_id)
+
+    repo = PartiallyBrokenRepository()
+    healthy_id = await repo.create_run(
+        "healthy cancellation", execution=_recoverable_execution("healthy cancellation")
+    )
+    repo.broken_run_id = await repo.create_run(
+        "broken cancellation", execution=_recoverable_execution("broken cancellation")
+    )
+    assert await repo.request_cancel(healthy_id) == "cancelling"
+    assert await repo.request_cancel(repo.broken_run_id) == "cancelling"
+    healthy_hub = EventHub()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            repo=repo,
+            live={healthy_id: healthy_hub},
+            tasks=set(),
+            settings=Settings(),
+        )
+    )
+
+    await api._recover_orphaned_runs(app, app.state.settings)
+
+    assert await repo.get_run_status(healthy_id) == "cancelled"
+    assert await repo.get_run_status(repo.broken_run_id) == "cancelling"
+    assert healthy_id not in app.state.live
+    await _assert_hub_closed(healthy_hub)
 
 
 @pytest.mark.asyncio
@@ -928,6 +1763,43 @@ async def test_execute_cleanup_survives_lease_release_failure(monkeypatch) -> No
     assert search_closed is True
     assert run_id not in app.state.live
     assert [event async for event in hub.stream()] == []
+
+
+@pytest.mark.asyncio
+async def test_execute_persists_user_requested_cancellation(monkeypatch) -> None:
+    repo = InMemoryRepository()
+    execution = _recoverable_execution("cancel")
+    owner = "cancel-owner"
+    run_id = await repo.create_run("cancel", execution=execution, lease_owner=owner)
+    await repo.set_status(run_id, "running", lease_owner=owner)
+    hub = EventHub()
+    started = asyncio.Event()
+
+    class Agent:
+        def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.tracer = Tracer()
+
+        async def run(self, query):  # type: ignore[no-untyped-def]
+            started.set()
+            await asyncio.Event().wait()
+
+        async def aclose(self) -> None:
+            return None
+
+    app = SimpleNamespace(state=SimpleNamespace(repo=repo, catalog=object(), live={run_id: hub}))
+    monkeypatch.setattr(api, "DeepResearchAgent", Agent)
+    monkeypatch.setattr(api, "_build_search_tool", lambda app, settings: asyncio.sleep(0, None))
+
+    task = asyncio.create_task(api._execute(app, run_id, "cancel", Settings(), lease_owner=owner))
+    await started.wait()
+    assert await repo.request_cancel(run_id) == "cancelling"
+    task.cancel()
+    await task
+
+    assert await repo.get_run_status(run_id) == "cancelled"
+    events = await repo.get_events(run_id)
+    assert events[-1].type == "cancelled"
+    assert events[-1].data == {"status": "cancelled"}
 
 
 @pytest.mark.asyncio

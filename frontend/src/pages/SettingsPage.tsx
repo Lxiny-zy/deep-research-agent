@@ -8,7 +8,12 @@ import { useConfig, useUpdateConfig } from '../hooks/useConfig'
 import type { ConfigUpdate, ConfigView } from '../types'
 
 interface NumField {
-  key: 'max_sub_questions' | 'max_rounds' | 'max_concurrency' | 'results_per_search'
+  key:
+    | 'max_sub_questions'
+    | 'max_rounds'
+    | 'max_concurrency'
+    | 'results_per_search'
+    | 'max_run_seconds'
   label: string
   min: number
   max: number
@@ -19,6 +24,7 @@ const NUM_FIELDS: NumField[] = [
   { key: 'max_rounds', label: '反思补洞轮数', min: 0, max: 5 },
   { key: 'max_concurrency', label: '并行检索上限', min: 1, max: 16 },
   { key: 'results_per_search', label: '每问检索来源数', min: 1, max: 15 },
+  { key: 'max_run_seconds', label: '整次运行期限（秒）', min: 1, max: 86400 },
 ]
 
 interface FormState {
@@ -30,6 +36,7 @@ interface FormState {
   max_concurrency: number
   results_per_search: number
   request_timeout: number
+  max_run_seconds: number
   require_corroboration: boolean
 }
 
@@ -43,6 +50,7 @@ function toForm(c: ConfigView): FormState {
     max_concurrency: c.max_concurrency,
     results_per_search: c.results_per_search,
     request_timeout: c.request_timeout,
+    max_run_seconds: c.max_run_seconds,
     require_corroboration: c.require_corroboration ?? false,
   }
 }
@@ -123,6 +131,7 @@ export default function SettingsPage() {
       max_concurrency: form.max_concurrency,
       results_per_search: form.results_per_search,
       request_timeout: form.request_timeout,
+      max_run_seconds: form.max_run_seconds,
       require_corroboration: form.require_corroboration,
     }
     if (editingGlobalKey && form.llm_api_key.trim()) body.llm_api_key = form.llm_api_key.trim()

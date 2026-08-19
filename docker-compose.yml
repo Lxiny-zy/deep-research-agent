@@ -1,16 +1,19 @@
 # 一键起全栈：PostgreSQL + API（含自动迁移）。
 #   docker compose up --build      # 构建并启动，浏览器开 http://127.0.0.1:8000
-#   docker compose down -v         # 停止并清库
+#   docker compose down            # 停止服务并保留数据卷
 # LLM/检索密钥与 POSTGRES_PASSWORD 从项目根 .env 读取（先 cp .env.example .env 填好）；
 # DATABASE_URL 在此固定指向 compose 内的 db 服务，覆盖 .env 里的本地默认值。
 
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: dr
       # 必填：在 .env 中设置 POSTGRES_PASSWORD（不再提供弱口令默认值）
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, set it in .env}
+      # 留空时官方镜像在新库初始化阶段 fail-fast；使用空兜底是为了即使 .env
+      # 遗失，docker compose down/cp/logs 等救援命令仍可执行。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: deep_research
     # 不向宿主机发布 5432：服务间走 compose 内网。本地需要直连调试时
     # 临时取消注释（仅绑回环，不暴露到局域网）：
@@ -22,23 +25,52 @@ services:
       test: ["CMD-SHELL", "pg_isready -U dr -d deep_research"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      start_period: 30s
+      retries: 12
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   api:
     build: .
     environment:
+      # 启用生产配置校验：强制 API 鉴权、PostgreSQL 与 Catalog 加密。
+      APP_ENV: production
       # 指向 compose 内的 Postgres（async 驱动）
       DATABASE_URL: postgresql+asyncpg://dr@db:5432/deep_research
       # 避免把含 @、:、/ 等字符的密码直接拼进 URL；asyncpg 会读取标准 libpq 环境变量。
-      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, set it in .env}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-}
       # 以下从根目录 .env 自动插值（缺省时用兜底值，仍可启动但调用真实 LLM 会报缺 key）
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      LLM_USER_AGENT: ${LLM_USER_AGENT:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      ALLOW_PRIVATE_PROVIDER_URLS: ${ALLOW_PRIVATE_PROVIDER_URLS:-false}
+      MAX_SUB_QUESTIONS: ${MAX_SUB_QUESTIONS:-5}
+      MAX_ROUNDS: ${MAX_ROUNDS:-2}
+      MAX_CONCURRENCY: ${MAX_CONCURRENCY:-4}
+      RESULTS_PER_SEARCH: ${RESULTS_PER_SEARCH:-5}
+      MAX_TOKENS: ${MAX_TOKENS:-100000}
+      MAX_REPLANS: ${MAX_REPLANS:-1}
+      REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-60}
+      MAX_RUN_SECONDS: ${MAX_RUN_SECONDS:-3600}
+      MAX_ACTIVE_RUNS: ${MAX_ACTIVE_RUNS:-8}
+      MAX_QUEUED_RUNS: ${MAX_QUEUED_RUNS:-32}
       REQUIRE_CORROBORATION: ${REQUIRE_CORROBORATION:-false}
-      # API 认证（强烈建议生产设置；空则所有 /api 端点无认证开放）
+      INTENT_ENABLED: ${INTENT_ENABLED:-true}
+      INTENT_LLM_FALLBACK: ${INTENT_LLM_FALLBACK:-true}
+      INTENT_SOURCE_SCREENING: ${INTENT_SOURCE_SCREENING:-true}
+      # Production mode fails fast unless authentication and catalog encryption are configured.
       API_KEY: ${API_KEY:-}
+      CATALOG_ENCRYPTION_KEY: ${CATALOG_ENCRYPTION_KEY:-}
+      PROVIDER_HOST_ALLOWLIST: ${PROVIDER_HOST_ALLOWLIST:-}
+      # 经可信反向代理访问时启用，按代理覆盖写入的客户端 IP 分配限流额度。
+      APP_TRUST_PROXY: ${APP_TRUST_PROXY:-false}
+      # Uvicorn 对 X-Forwarded-* 的独立信任边界；经宿主机反代时按 README 配置。
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
       # 前端设置中心写入的运行时配置持久化到独立数据卷，容器重建不丢失
       RUNTIME_CONFIG_PATH: /app/data/runtime_config.json
     # 仅绑回环：对外访问应经反向代理（nginx/caddy）做 TLS 与速率限制
@@ -49,8 +81,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz').status==200 else 1)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
     restart: unless-stopped
     stop_grace_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 volumes:
   pgdata:

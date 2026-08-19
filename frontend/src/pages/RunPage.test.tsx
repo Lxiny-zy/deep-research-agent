@@ -13,7 +13,10 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => navigateMock }
 })
 vi.mock('../hooks/useResearchStream', () => ({ useResearchStream: vi.fn() }))
-vi.mock('../hooks/useRuns', () => ({ useRunDetail: vi.fn() }))
+vi.mock('../hooks/useRuns', () => ({
+  useRunDetail: vi.fn(),
+  useCancelRun: () => ({ mutate: vi.fn(), isPending: false }),
+}))
 vi.mock('../components/DagView', () => ({ default: () => null }))
 vi.mock('../components/EventTimeline', () => ({ default: () => null }))
 vi.mock('../components/OrchestrationPipeline', () => ({ default: () => null }))

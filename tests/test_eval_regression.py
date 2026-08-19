@@ -56,9 +56,7 @@ def test_absolute_quality_gates_pass() -> None:
 
 
 def test_absolute_quality_gates_report_all_failures() -> None:
-    report = evaluate_regression(
-        _payload(_row(coverage=0.5, total=10, supported=7, conflicted=2))
-    )
+    report = evaluate_regression(_payload(_row(coverage=0.5, total=10, supported=7, conflicted=2)))
     metrics = {failure.metric for failure in report.failures}
     assert metrics == {
         "citation_snapshot_coverage",

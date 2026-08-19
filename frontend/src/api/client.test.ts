@@ -67,7 +67,7 @@ describe('streamRun', () => {
       expect.objectContaining({
         headers: {
           Accept: 'text/event-stream',
-          'X-API-Key': 'secret/@:key',
+          Authorization: 'Bearer secret/@:key',
         },
       }),
     )

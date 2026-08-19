@@ -129,9 +129,7 @@ async def run_comparison(
             else:
                 execution = create_initial_execution(case.query, wf, run_settings)
                 run_id = await repository.create_run(case.query, execution=execution)
-                agent = persistent_agent_factory(
-                    run_settings, wf, repository, run_id, execution
-                )
+                agent = persistent_agent_factory(run_settings, wf, repository, run_id, execution)
             try:
                 started = time.monotonic()
                 report = await agent.run(case.query)
@@ -239,8 +237,7 @@ def _delta_lines(
             continue
         s, t, w = summary[wf]
         lines.append(
-            f"对照：{wf} 相对 {base} → 质量 {_pct(s, bs)}，"
-            f"token {_pct(t, bt)}，耗时 {_pct(w, bw)}"
+            f"对照：{wf} 相对 {base} → 质量 {_pct(s, bs)}，token {_pct(t, bt)}，耗时 {_pct(w, bw)}"
         )
     return lines
 
@@ -315,9 +312,7 @@ def format_markdown(
         verified_rate = f"{metrics.verified_finding_rate:.1%}" if metrics else "n/a"
         supported_rate = f"{metrics.supported_finding_rate:.1%}" if metrics else "n/a"
         eligible_rate = f"{metrics.eligible_finding_rate:.1%}" if metrics else "n/a"
-        snapshot_coverage = (
-            f"{metrics.cited_source_snapshot_coverage:.1%}" if metrics else "n/a"
-        )
+        snapshot_coverage = f"{metrics.cited_source_snapshot_coverage:.1%}" if metrics else "n/a"
         md.append(
             f"| {r.case_id} | {r.workflow} | {r.run_id or '-'} | {s.coverage} "
             f"| {s.groundedness} | {s.depth} | {s.coherence} | {s.average} "
@@ -488,9 +483,7 @@ async def _amain() -> None:
         help="把每个 benchmark cell 持久化并关联 run_id（默认开启）",
     )
     parser.add_argument("--baseline", type=Path, help="与历史 benchmark JSON 比较并执行回归门禁")
-    parser.add_argument(
-        "--min-citation-coverage", type=float, default=0.95, metavar="RATE"
-    )
+    parser.add_argument("--min-citation-coverage", type=float, default=0.95, metavar="RATE")
     parser.add_argument("--max-unsupported-rate", type=float, default=0.05, metavar="RATE")
     parser.add_argument("--max-conflict-rate", type=float, default=0.10, metavar="RATE")
     parser.add_argument("--max-score-drop", type=float, default=0.25, metavar="POINTS")
@@ -520,8 +513,7 @@ async def _amain() -> None:
             repository, engine = await _open_benchmark_repository(settings)
         budget_text = str(args.budget) if args.budget is not None else "不限"
         print(
-            f"▶ 对照工作流：{', '.join(workflow_names)}"
-            f"（{len(CASES)} 用例，预算 {budget_text}）…"
+            f"▶ 对照工作流：{', '.join(workflow_names)}（{len(CASES)} 用例，预算 {budget_text}）…"
         )
         rows = await run_comparison(
             settings,
@@ -535,9 +527,7 @@ async def _amain() -> None:
         print("\n" + format_comparison(rows, workflow_names))
         payload = benchmark_payload(rows, workflow_names, cases=CASES, budget=args.budget)
         if args.output is not None:
-            markdown = format_markdown(
-                rows, workflow_names, cases=CASES, budget=args.budget
-            )
+            markdown = format_markdown(rows, workflow_names, cases=CASES, budget=args.budget)
             target = write_results(_resolve_output_path(args.output), markdown)
             json_target = write_json_results(target.with_suffix(".json"), payload)
             print(f"\n✔ 结果已写入 {target} 与 {json_target}")
@@ -549,9 +539,7 @@ async def _amain() -> None:
                 max_judge_score_drop=args.max_score_drop,
                 max_token_increase_rate=args.max_token_increase,
             )
-            regression = evaluate_regression(
-                payload, load_benchmark(args.baseline), policy=policy
-            )
+            regression = evaluate_regression(payload, load_benchmark(args.baseline), policy=policy)
             print("\n" + format_regression(regression))
             if not regression.passed:
                 raise SystemExit(2)

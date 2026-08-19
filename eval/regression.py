@@ -95,10 +95,9 @@ def evaluate_regression(
 
     if baseline is not None and policy.require_same_dataset:
         report.checks += 1
-        if (
-            candidate.get("dataset") != baseline.get("dataset")
-            or candidate.get("dataset_sha256") != baseline.get("dataset_sha256")
-        ):
+        if candidate.get("dataset") != baseline.get("dataset") or candidate.get(
+            "dataset_sha256"
+        ) != baseline.get("dataset_sha256"):
             report.failures.append(
                 RegressionFailure(
                     scope="benchmark",
@@ -209,9 +208,7 @@ def evaluate_regression(
                     scope=scope,
                     metric="token_increase_rate",
                     actual=(
-                        "infinite"
-                        if token_increase == float("inf")
-                        else round(token_increase, 4)
+                        "infinite" if token_increase == float("inf") else round(token_increase, 4)
                     ),
                     expected=policy.max_token_increase_rate,
                     message="token use increased beyond tolerance",

@@ -3,7 +3,7 @@ import { streamRun } from '../api/client'
 import type { DagData, Report, ResearchEvent, RunStats } from '../types'
 
 // disconnected：连接中断但运行未到终态——由 RunPage 的详情轮询接管兜底
-export type StreamStatus = 'idle' | 'streaming' | 'disconnected' | 'done' | 'error'
+export type StreamStatus = 'idle' | 'streaming' | 'disconnected' | 'done' | 'error' | 'cancelled'
 
 export interface ResearchStreamState {
   events: ResearchEvent[] // 非 token 事件，喂给时间线
@@ -32,7 +32,10 @@ const INITIAL: ResearchStreamState = {
 // 只有 ORCHESTRATOR 的 done/error 才是运行终态；
 // RESEARCHER 等阶段的 error 是被隔离的单点失败，运行仍在继续。
 export function isTerminal(ev: ResearchEvent): boolean {
-  return ev.stage === 'ORCHESTRATOR' && (ev.type === 'done' || ev.type === 'error')
+  return (
+    ev.stage === 'ORCHESTRATOR' &&
+    (ev.type === 'done' || ev.type === 'error' || ev.type === 'cancelled')
+  )
 }
 
 // 纯归并函数：把一个 SSE 事件并入当前状态（便于单测）。
@@ -42,7 +45,7 @@ export function reduceStream(
 ): ResearchStreamState {
   // A replay buffer can contain events after the orchestrator terminal event.
   // Once terminal, never let stale trailing events overwrite the final state.
-  if (prev.status === 'done' || prev.status === 'error') {
+  if (prev.status === 'done' || prev.status === 'error' || prev.status === 'cancelled') {
     return prev
   }
   // 直播统计：耗时取已见最大值（单调），token 取事件携带的累计值（缺省沿用旧值）。
@@ -82,6 +85,11 @@ export function reduceStream(
         return { ...base, events: [...base.events, ev] }
       }
       return { ...base, status: 'error', events: [...base.events, ev] }
+    case 'cancelled':
+      if (!isTerminal(ev)) {
+        return { ...base, events: [...base.events, ev] }
+      }
+      return { ...base, status: 'cancelled', events: [...base.events, ev] }
     case 'info': {
       const dag = (ev.data as { dag?: DagData } | null)?.dag
       return { ...base, dag: dag ?? base.dag, events: [...base.events, ev] }
@@ -96,8 +104,7 @@ export function reduceStream(
  * 订阅某次研究的 SSE 事件流。后端 /api/runs/{id}/stream 自动二选一：
  * 进行中实时推送，已结束则从库回放（回放也包含 done/error 事件）。
  *
- * 连接中断（网络抖动、后端重启）时不自动重连——后端重连会全量重放 buffer，
- * 事件会重复；改为置 'disconnected'，由 RunPage 的详情轮询兜底拿到最终报告。
+ * 连接中断时携带 Last-Event-ID 有界重连；多次失败后由详情轮询兜底。
  */
 export function useResearchStream(runId: string | null): ResearchStreamState {
   const [state, setState] = useState<ResearchStreamState>(INITIAL)
@@ -111,8 +118,9 @@ export function useResearchStream(runId: string | null): ResearchStreamState {
     const controller = new AbortController()
     let disposed = false
     let terminal = false
+    let lastEventId: string | undefined
 
-    const onMessage = (data: string) => {
+    const onMessage = (data: string, eventId?: string) => {
       // streamRun may dispatch several already-buffered SSE events
       // synchronously. Abort stops future reads, but not callbacks already
       // queued in the current buffer.
@@ -123,6 +131,7 @@ export function useResearchStream(runId: string | null): ResearchStreamState {
       } catch {
         return
       }
+      if (eventId) lastEventId = eventId
       setState((prev) => reduceStream(prev, ev))
       if (isTerminal(ev)) {
         terminal = true
@@ -130,21 +139,30 @@ export function useResearchStream(runId: string | null): ResearchStreamState {
       }
     }
 
-    void streamRun(runId, onMessage, controller.signal)
-      .then(() => {
-        if (!disposed && !terminal) {
-          setState((prev) =>
-            prev.status === 'streaming' ? { ...prev, status: 'disconnected' } : prev,
-          )
+    void (async () => {
+      const maxReconnects = 5
+      for (let retry = 0; retry <= maxReconnects && !disposed && !terminal; retry += 1) {
+        try {
+          await streamRun(runId, onMessage, controller.signal, lastEventId)
+        } catch (error: unknown) {
+          if (
+            disposed ||
+            terminal ||
+            (error instanceof DOMException && error.name === 'AbortError')
+          ) {
+            return
+          }
         }
-      })
-      .catch((error: unknown) => {
-        if (disposed || terminal || (error instanceof DOMException && error.name === 'AbortError')) return
-        // 未到终态的网络或鉴权错误交给详情轮询兜底。
+        if (disposed || terminal) return
+        if (retry === maxReconnects) break
+        await new Promise((resolve) => window.setTimeout(resolve, Math.min(4000, 250 * 2 ** retry)))
+      }
+      if (!disposed && !terminal) {
         setState((prev) =>
           prev.status === 'streaming' ? { ...prev, status: 'disconnected' } : prev,
         )
-      })
+      }
+    })()
 
     return () => {
       disposed = true

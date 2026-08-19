@@ -3,12 +3,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import ClarifyDialog from '../components/ClarifyDialog'
 import SettingsPanel from '../components/SettingsPanel'
-import { BUILTIN_TEMPLATE_META } from '../components/BuiltinTemplateGallery'
 import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { useConfig } from '../hooks/useConfig'
 import { assessIntent, createRun, listWorkflows } from '../api/client'
 import { advance, emptySlots, isSkip, type ClarifyState } from '../lib/clarification'
 import { clearThread, loadThread } from '../lib/conversation'
+import { BUILTIN_TEMPLATE_META } from '../lib/workflowTemplates'
 import type { ConversationTurn, ResearchParams, WorkflowInfo } from '../types'
 
 const DEFAULT_QUERY = '2026 年主流 AI Agent 框架有哪些？各自的设计取舍是什么？'
@@ -195,14 +195,22 @@ export default function NewResearchPage() {
     <div className="stack page-stack" ref={pageRef}>
       <header className="page-intro composer-intro page-intro-compact intro-unveil">
         <div>
-          <span className="eyebrow"><AppIcon name="sparkles" size={14} aria-hidden="true" /> STUDIO / NEW RESEARCH</span>
-          <h1>把一个问题，<em>研究透彻。</em></h1>
-          <p>交给一组会规划、检索、反思和写作的 Agent。你提供问题，系统负责把证据组织成可复核的报告。</p>
+          <span className="eyebrow">
+            <AppIcon name="sparkles" size={14} aria-hidden="true" /> STUDIO / NEW RESEARCH
+          </span>
+          <h1>
+            把一个问题，<em>研究透彻。</em>
+          </h1>
+          <p>
+            交给一组会规划、检索、反思和写作的 Agent。你提供问题，系统负责把证据组织成可复核的报告。
+          </p>
         </div>
         <div className="intro-orbit" aria-hidden="true">
           <span className="intro-orbit-ring ring-one" />
           <span className="intro-orbit-ring ring-two" />
-          <span className="intro-orbit-core"><AppIcon name="network" size={20} /></span>
+          <span className="intro-orbit-core">
+            <AppIcon name="network" size={20} />
+          </span>
         </div>
       </header>
 
@@ -222,7 +230,8 @@ export default function NewResearchPage() {
                   「为什么它答的是另一个东西」将无从解释。 */}
               <div className="field-label thread-heading">
                 <span>
-                  <AppIcon name="history" size={14} aria-hidden="true" /> 追问上下文（{thread.length} 轮）
+                  <AppIcon name="history" size={14} aria-hidden="true" /> 追问上下文（
+                  {thread.length} 轮）
                 </span>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={dropThread}>
                   开始新话题
@@ -244,14 +253,31 @@ export default function NewResearchPage() {
 
           <label className="field-label research-query-label" htmlFor="query">
             研究问题
-            <textarea id="query" className="input textarea research-query-input" rows={4} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={thread.length > 0 ? '接着上文追问，例如「那第二个呢」…' : '输入一个值得深挖的问题…'} />
+            <textarea
+              id="query"
+              className="input textarea research-query-input"
+              rows={4}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={
+                thread.length > 0 ? '接着上文追问，例如「那第二个呢」…' : '输入一个值得深挖的问题…'
+              }
+            />
           </label>
 
           <div className="sample-block">
-            <div className="field-label sample-heading"><span>快捷示例</span><span className="muted small">点击载入</span></div>
+            <div className="field-label sample-heading">
+              <span>快捷示例</span>
+              <span className="muted small">点击载入</span>
+            </div>
             <div className="sample-grid">
               {SAMPLES.map((sample, index) => (
-                <button type="button" key={sample} className="sample-card" onClick={() => setQuery(sample)}>
+                <button
+                  type="button"
+                  key={sample}
+                  className="sample-card"
+                  onClick={() => setQuery(sample)}
+                >
                   <span className="sample-number">0{index + 1}</span>
                   <span>{sample}</span>
                   <AppIcon name="arrow-up-right" size={15} aria-hidden="true" />
@@ -265,11 +291,21 @@ export default function NewResearchPage() {
               研究流程
               <span className="select-with-icon">
                 <AppIcon name="workflow" size={15} aria-hidden="true" />
-                <select id="workflow" className="input" value={workflow} onChange={(event) => setWorkflow(event.target.value)}>
+                <select
+                  id="workflow"
+                  className="input"
+                  value={workflow}
+                  onChange={(event) => setWorkflow(event.target.value)}
+                >
                   {workflows.map((item) => {
                     const title = BUILTIN_TEMPLATE_META[item.name]?.title
                     const label = title ? `${title} · ${item.name}` : item.name
-                    return <option key={item.name} value={item.name}>{label}{item.default === 'True' ? '（默认）' : ''}</option>
+                    return (
+                      <option key={item.name} value={item.name}>
+                        {label}
+                        {item.default === 'True' ? '（默认）' : ''}
+                      </option>
+                    )
                   })}
                 </select>
               </span>
@@ -299,13 +335,28 @@ export default function NewResearchPage() {
               <AppIcon name="help" size={17} aria-hidden="true" />
               <p>提交后创建可持久化研究任务，全程实时推送，可在「研究历史」回放。</p>
             </div>
-            <button className="btn btn-primary btn-lg submit-button" onClick={start} disabled={submitting || !query.trim() || clarify !== null} type="button">
-              <AppIcon name={submitting ? 'loader' : 'arrow-right'} size={17} aria-hidden="true" className={submitting ? 'spin' : ''} />
+            <button
+              className="btn btn-primary btn-lg submit-button"
+              onClick={start}
+              disabled={submitting || !query.trim() || clarify !== null}
+              type="button"
+            >
+              <AppIcon
+                name={submitting ? 'loader' : 'arrow-right'}
+                size={17}
+                aria-hidden="true"
+                className={submitting ? 'spin' : ''}
+              />
               {submitting ? '提交中…' : '开始研究'}
             </button>
           </div>
 
-          {error && <div className="badge error form-error"><AppIcon name="circle-x" size={15} aria-hidden="true" />{error}</div>}
+          {error && (
+            <div className="badge error form-error">
+              <AppIcon name="circle-x" size={15} aria-hidden="true" />
+              {error}
+            </div>
+          )}
         </div>
       </section>
     </div>

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from typing import Literal
 
 from pydantic import BaseModel
@@ -21,10 +21,38 @@ from pydantic import BaseModel
 # 无需改动本文件。下列常量是内置角色的约定值，仅供参考与类型提示，不构成校验白名单。
 Stage = str
 BUILTIN_STAGES = ("PLANNER", "RESEARCHER", "REFLECTOR", "SYNTHESIZER", "ORCHESTRATOR")
-EventType = Literal["start", "info", "finding", "round", "token", "report", "done", "error"]
+EventType = Literal[
+    "start",
+    "info",
+    "finding",
+    "round",
+    "token",
+    "report",
+    "done",
+    "error",
+    "cancelled",
+]
+
+
+class EventStreamGap(RuntimeError):
+    """The in-memory event window no longer covers a subscriber's cursor.
+
+    Callers must resume from the durable event store.  This is intentionally a
+    distinct exception instead of silently dropping events: a reconnecting SSE
+    client can then continue with its ``Last-Event-ID`` cursor.
+    """
+
+
+class _SubscriberOverflow:
+    """Private queue marker used to wake a slow subscriber without blocking publish."""
 
 
 class Event(BaseModel):
+    # Tracers may create events without knowing storage state.  EventHub assigns
+    # a provisional durable-compatible id for live delivery; the repository
+    # reconciles it when the event is appended.
+    seq: int | None = None
+    attempt: int = 1
     stage: Stage
     type: EventType
     message: str = ""
@@ -130,23 +158,49 @@ class EventHub:
 
     def __init__(self) -> None:
         self._buffer: list[Event] = []
-        self._subscribers: set[asyncio.Queue[Event | None]] = set()
+        self._subscribers: set[asyncio.Queue[Event | None | _SubscriberOverflow]] = set()
         self._closed = False
+        self._next_seq = 0
 
     # 单订阅者队列上界：慢消费者（TCP 缓冲满、移动网络）不再无界堆积内存。
     # 满时优先丢 token 增量（前端可经 report 事件全量恢复正文）。
     _QUEUE_MAXSIZE = 1024
+    # 进程内历史也必须有界。超出这段窗口的 SSE 断点由 API 从持久化事件表补齐。
+    _BUFFER_MAXSIZE = 4096
+
+    def prime_sequence(self, events: Iterable[Event]) -> None:
+        """Advance live ids past events already persisted for this run.
+
+        Resume attempts retain the previous attempt's append-only history.  A
+        resumed hub must see the old terminal event's sequence even when that
+        event is intentionally not replayed to subscribers.
+        """
+        for event in events:
+            if event.type != "token" and event.seq is not None:
+                self._next_seq = max(self._next_seq, event.seq + 1)
 
     def publish(self, event: Event) -> None:
         if event.type != "token":
+            if event.seq is None:
+                event.seq = self._next_seq
+            self._next_seq = max(self._next_seq, event.seq + 1)
             self._buffer.append(event)  # 仅缓冲非 token 事件供回放
+            if len(self._buffer) > self._BUFFER_MAXSIZE:
+                del self._buffer[: len(self._buffer) - self._BUFFER_MAXSIZE]
         for q in list(self._subscribers):
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
-                # 慢消费者：丢弃本条。非 token 事件该订阅者会缺失，但 run 详情
-                # 接口仍可兜底；阻塞 publish 会拖垮整个 run，不可取
-                pass
+                # Never block the producer on a network client.  Remove this
+                # subscriber and wake it with an explicit gap signal; the API
+                # then switches to the durable event log using its last cursor.
+                self._subscribers.discard(q)
+                while True:
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                q.put_nowait(_SubscriberOverflow())
 
     def close(self) -> None:
         """run 结束：通知所有在线订阅者收尾（None 哨兵）。"""
@@ -158,12 +212,27 @@ class EventHub:
                 q.get_nowait()  # 腾出一格，保证哨兵必达，订阅者不会永久挂起
                 q.put_nowait(None)
 
-    async def stream(self) -> AsyncIterator[Event]:
+    async def stream(self, *, after_seq: int = 0) -> AsyncIterator[Event]:
         """订阅：先回放已发生的非 token 事件，再续收实时事件，直到 run 结束。"""
-        q: asyncio.Queue[Event | None] = asyncio.Queue(maxsize=self._QUEUE_MAXSIZE)
-        # 回放历史（上述 for/add 均同步，与 publish 无交错）；极端长 run 截尾保留最新，
-        # 并给 None 哨兵留一格，保证 put_nowait 不会因满而抛
-        for buffered in self._buffer[-(self._QUEUE_MAXSIZE - 1) :]:
+        q: asyncio.Queue[Event | None | _SubscriberOverflow] = asyncio.Queue(
+            maxsize=self._QUEUE_MAXSIZE
+        )
+        # 回放历史（上述 for/add 均同步，与 publish 无交错）。如果游标已经
+        # 落在内存窗口之前，显式报告缺口，让调用方从持久化日志补齐；不能
+        # 静默截尾，否则 SSE 恢复会产生不可检测的数据丢失。
+        first_seq = self._buffer[0].seq if self._buffer else None
+        if first_seq is not None and after_seq < first_seq:
+            raise EventStreamGap(
+                f"event cursor {after_seq} is older than in-memory window starting at {first_seq}"
+            )
+        replay = [
+            buffered
+            for buffered in self._buffer
+            if buffered.seq is None or buffered.seq >= after_seq
+        ]
+        if len(replay) > self._QUEUE_MAXSIZE - 1:
+            raise EventStreamGap("subscriber replay exceeds the in-memory queue window")
+        for buffered in replay:
             q.put_nowait(buffered)
         if self._closed:
             q.put_nowait(None)
@@ -173,6 +242,8 @@ class EventHub:
                 ev = await q.get()
                 if ev is None:
                     break
+                if isinstance(ev, _SubscriberOverflow):
+                    raise EventStreamGap("subscriber queue overflowed")
                 yield ev
         finally:
             self._subscribers.discard(q)

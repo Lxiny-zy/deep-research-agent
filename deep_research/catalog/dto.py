@@ -56,7 +56,6 @@ class AgentCardView(BaseModel):
     model_profile_name: str | None = None  # 便于前端卡片直接显示绑定模型名
 
 
-
 class AgentCardSnapshot(BaseModel):
     """Non-secret role semantics persisted with a recoverable run."""
 
@@ -122,7 +121,6 @@ class AgentCardUpdate(BaseModel):
     icon: str | None = Field(None, max_length=16)
     enabled: bool | None = None
     model_profile_id: str | None = None  # 显式传 None 不区分清空——用 set_unset 语义处理
-
 
     @field_validator(
         "display_name",

@@ -97,8 +97,7 @@ async def test_existing_graph_with_nonterminal_synthesizer_fails(settings) -> No
     with pytest.raises(ValueError, match="Synthesizer"):
         await agent.run("测试问题")
     assert any(
-        event.stage == "ORCHESTRATOR" and event.type == "error"
-        for event in agent.tracer.events
+        event.stage == "ORCHESTRATOR" and event.type == "error" for event in agent.tracer.events
     )
 
 

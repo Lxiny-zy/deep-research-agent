@@ -1,8 +1,35 @@
+[build-system]
+requires = ["setuptools>=77,<83"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "deep-research-agent"
 version = "0.1.0"
 description = "多 Agent 深度研究系统（Planner / Researcher / Reflector / Synthesizer）"
+readme = "README.md"
 requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+deep-research = "deep_research.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["deep_research*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+deep_research = ["py.typed"]
+"deep_research.intent" = ["models/*.json"]
+
+[tool.setuptools.data-files]
+"share/deep-research-agent" = ["alembic.ini"]
+"share/deep-research-agent/alembic" = ["alembic/env.py", "alembic/script.py.mako"]
+"share/deep-research-agent/alembic/versions" = ["alembic/versions/*.py"]
+"share/deep-research-agent/frontend" = ["frontend/dist/index.html"]
+"share/deep-research-agent/frontend/assets" = ["frontend/dist/assets/*"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
 
 [tool.ruff]
 line-length = 100

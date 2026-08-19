@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from ..persistence import orm
+from ..security import SecretCipher
 from .dto import (
     AgentCardCreate,
     AgentCardUpdate,
@@ -35,7 +36,8 @@ def mask(secret: str) -> str:
     return f"…{tail}"
 
 
-def _profile_view(r: orm.ModelProfileRow) -> ModelProfileView:
+def _profile_view(r: orm.ModelProfileRow, cipher: SecretCipher) -> ModelProfileView:
+    secret = cipher.decrypt(r.api_key)
     return ModelProfileView(
         id=r.id,
         name=r.name,
@@ -45,17 +47,17 @@ def _profile_view(r: orm.ModelProfileRow) -> ModelProfileView:
         parameter_mode=r.parameter_mode,
         reasoning_effort=r.reasoning_effort,
         is_default=bool(r.is_default),
-        api_key_set=bool(r.api_key),
-        api_key_hint=mask(r.api_key),
+        api_key_set=bool(secret),
+        api_key_hint=mask(secret),
     )
 
 
-def _profile_full(r: orm.ModelProfileRow) -> ModelProfileFull:
+def _profile_full(r: orm.ModelProfileRow, cipher: SecretCipher) -> ModelProfileFull:
     return ModelProfileFull(
         id=r.id,
         name=r.name,
         base_url=r.base_url,
-        api_key=r.api_key,
+        api_key=cipher.decrypt(r.api_key),
         model=r.model,
         temperature=r.temperature,
         parameter_mode=r.parameter_mode,
@@ -79,13 +81,13 @@ def _agent_view(r: orm.AgentCardRow) -> AgentCardView:
     )
 
 
-def _key_view(r: orm.SearchKeyRow) -> SearchKeyView:
+def _key_view(r: orm.SearchKeyRow, cipher: SecretCipher) -> SearchKeyView:
     return SearchKeyView(
         id=r.id,
         label=r.label,
         priority=r.priority,
         enabled=bool(r.enabled),
-        api_key_hint=mask(r.api_key),
+        api_key_hint=mask(cipher.decrypt(r.api_key)),
     )
 
 
@@ -105,27 +107,61 @@ def _workflow_view(r: orm.WorkflowDefRow) -> WorkflowDefView:
 
 
 class CatalogRepository:
-    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        sessionmaker: async_sessionmaker[AsyncSession],
+        *,
+        secret_cipher: SecretCipher | None = None,
+    ) -> None:
         self._sm = sessionmaker
+        self._cipher = secret_cipher or SecretCipher.from_env()
+
+    async def encrypt_legacy_secrets(self) -> int:
+        """Encrypt legacy plaintext rows in place and verify encrypted rows."""
+        if not self._cipher.enabled:
+            return 0
+        changed = 0
+        async with self._sm() as s, s.begin():
+            profiles = (await s.scalars(select(orm.ModelProfileRow))).all()
+            keys = (await s.scalars(select(orm.SearchKeyRow))).all()
+            for profile in profiles:
+                if not profile.api_key:
+                    continue
+                # Decrypt first so a wrong deployment key fails at startup.
+                plaintext = self._cipher.decrypt(profile.api_key)
+                encrypted = self._cipher.encrypt(plaintext)
+                if encrypted != profile.api_key:
+                    profile.api_key = encrypted
+                    changed += 1
+            for key in keys:
+                if not key.api_key:
+                    continue
+                # Decrypt first so a wrong deployment key fails at startup.
+                plaintext = self._cipher.decrypt(key.api_key)
+                encrypted = self._cipher.encrypt(plaintext)
+                if encrypted != key.api_key:
+                    key.api_key = encrypted
+                    changed += 1
+        return changed
 
     # ── 模型档案 ────────────────────────────────────────────────────────
     async def list_profiles(self) -> list[ModelProfileView]:
         async with self._sm() as s:
             stmt = select(orm.ModelProfileRow).order_by(orm.ModelProfileRow.name)
             rows = (await s.scalars(stmt)).all()
-            return [_profile_view(r) for r in rows]
+            return [_profile_view(r, self._cipher) for r in rows]
 
     async def get_default_profile(self) -> ModelProfileFull | None:
         async with self._sm() as s:
             row = await s.scalar(
                 select(orm.ModelProfileRow).where(orm.ModelProfileRow.is_default == 1)
             )
-            return _profile_full(row) if row else None
+            return _profile_full(row, self._cipher) if row else None
 
     async def get_profile_full(self, profile_id: str) -> ModelProfileFull | None:
         async with self._sm() as s:
             row = await s.get(orm.ModelProfileRow, profile_id)
-            return _profile_full(row) if row else None
+            return _profile_full(row, self._cipher) if row else None
 
     async def create_profile(
         self,
@@ -145,7 +181,7 @@ class CatalogRepository:
             row = orm.ModelProfileRow(
                 name=name,
                 base_url=base_url or None,
-                api_key=api_key,
+                api_key=self._cipher.encrypt(api_key),
                 model=model,
                 temperature=temperature,
                 parameter_mode=parameter_mode,
@@ -154,7 +190,7 @@ class CatalogRepository:
             )
             s.add(row)
             await s.flush()
-            return _profile_view(row)
+            return _profile_view(row, self._cipher)
 
     async def update_profile(self, profile_id: str, fields: dict) -> ModelProfileView | None:
         async with self._sm() as s, s.begin():
@@ -168,12 +204,14 @@ class CatalogRepository:
                     row.is_default = bool(v)
                 elif k == "api_key" and not v:
                     continue  # 空＝保持不变（脱敏表单不清空）
+                elif k == "api_key":
+                    row.api_key = self._cipher.encrypt(str(v))
                 elif k == "base_url":
                     row.base_url = v or None
                 else:
                     setattr(row, k, v)
             await s.flush()
-            return _profile_view(row)
+            return _profile_view(row, self._cipher)
 
     async def delete_profile(self, profile_id: str) -> bool:
         async with self._sm() as s, s.begin():
@@ -254,13 +292,13 @@ class CatalogRepository:
                     )
                 )
             ).all()
-            return [_key_view(r) for r in rows]
+            return [_key_view(r, self._cipher) for r in rows]
 
     async def get_key_secret(self, key_id: str) -> str | None:
         """按 id 取明文 key（供「测试连接」单点验证）。不存在返回 None。"""
         async with self._sm() as s:
             row = await s.get(orm.SearchKeyRow, key_id)
-            return row.api_key if row else None
+            return self._cipher.decrypt(row.api_key) if row else None
 
     async def active_keys(self) -> list[str]:
         """按优先级升序返回启用的明文 key（供检索池故障转移）。"""
@@ -272,18 +310,21 @@ class CatalogRepository:
                     .order_by(orm.SearchKeyRow.priority, orm.SearchKeyRow.created_at)
                 )
             ).all()
-            return [r.api_key for r in rows if r.api_key]
+            return [self._cipher.decrypt(r.api_key) for r in rows if r.api_key]
 
     async def create_key(
         self, *, label: str, api_key: str, priority: int, enabled: bool
     ) -> SearchKeyView:
         async with self._sm() as s, s.begin():
             row = orm.SearchKeyRow(
-                label=label, api_key=api_key, priority=priority, enabled=1 if enabled else 0
+                label=label,
+                api_key=self._cipher.encrypt(api_key),
+                priority=priority,
+                enabled=1 if enabled else 0,
             )
             s.add(row)
             await s.flush()
-            return _key_view(row)
+            return _key_view(row, self._cipher)
 
     async def update_key(self, key_id: str, fields: dict) -> SearchKeyView | None:
         async with self._sm() as s, s.begin():
@@ -295,10 +336,12 @@ class CatalogRepository:
                     row.enabled = bool(v)
                 elif k == "api_key" and not v:
                     continue  # 空＝保持不变
+                elif k == "api_key":
+                    row.api_key = self._cipher.encrypt(str(v))
                 else:
                     setattr(row, k, v)
             await s.flush()
-            return _key_view(row)
+            return _key_view(row, self._cipher)
 
     async def delete_key(self, key_id: str) -> bool:
         async with self._sm() as s, s.begin():
@@ -355,8 +398,7 @@ class CatalogRepository:
             if expected_version is None:
                 expected_version = row.version
             values = {
-                key: (bool(value) if key == "enabled" else value)
-                for key, value in fields.items()
+                key: (bool(value) if key == "enabled" else value) for key, value in fields.items()
             }
             values["version"] = expected_version + 1
             result = await s.execute(

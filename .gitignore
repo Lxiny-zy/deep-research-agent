@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .env
 .venv/
+.wheel-smoke/
+.ci-wheel-venv/
+.ci-wheel-venv-final*/
 venv/
 research_report.md
 runtime_config.json
@@ -12,6 +15,8 @@ runtime_config.json
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+coverage.xml
 .idea/
 .vscode/
 
@@ -20,6 +25,8 @@ runtime_config.json
 *.pid
 *.backup-*
 /dist/
+/sbom/
+/backups/
 /dr-*.png
 
 # 前端

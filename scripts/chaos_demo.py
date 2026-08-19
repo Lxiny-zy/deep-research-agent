@@ -131,9 +131,7 @@ class ApiServer:
 
 def sse_events(client: httpx.Client, url: str, *, timeout: float):
     """迭代 SSE 事件（dict）。忽略心跳注释行；读超时由调用方兜底。"""
-    with client.stream(
-        "GET", url, timeout=httpx.Timeout(10.0, read=timeout)
-    ) as resp:
+    with client.stream("GET", url, timeout=httpx.Timeout(10.0, read=timeout)) as resp:
         resp.raise_for_status()
         for line in resp.iter_lines():
             if not line or not line.startswith("data: "):
@@ -265,9 +263,7 @@ def main() -> int:
         _log(f"阶段 2/4：提交 chaos run，将在节点 {args.kill_node} 开始时硬杀进程…")
         t_created = time.perf_counter()
         chaos_id = create_run(client, server.base, args.query, args.workflow)
-        pre_kill, kill_at = watch_until_kill(
-            client, server.base, chaos_id, args.kill_node, server
-        )
+        pre_kill, kill_at = watch_until_kill(client, server.base, chaos_id, args.kill_node, server)
         _log(
             f"已 kill（run 启动后 {kill_at - t_created:.1f}s）；断点前已完成节点："
             f"{pre_kill.completed_nodes}，checkpoint 已保留 token {pre_kill.last_checkpoint_tokens}"
@@ -309,13 +305,18 @@ def main() -> int:
         print("=" * 72)
         print("Chaos 恢复演示报告（全程离线假后端，token 为按调用计量的模拟值）")
         print("=" * 72)
-        print(f"run_id            : {chaos_id}"
-              f"（工作流 {args.workflow}，共 {len(steps)} 个节点记录）")
-        print(f"kill 时刻          : run 启动后 {kill_at - t_created:.1f}s，"
-              f"节点 {args.kill_node} 刚开始执行（硬杀，等价 kill -9）")
+        print(
+            f"run_id            : {chaos_id}（工作流 {args.workflow}，共 {len(steps)} 个节点记录）"
+        )
+        print(
+            f"kill 时刻          : run 启动后 {kill_at - t_created:.1f}s，"
+            f"节点 {args.kill_node} 刚开始执行（硬杀，等价 kill -9）"
+        )
         print(f"租约 fencing 窗    : {LEASE_TTL_SECONDS:.0f}s TTL（崩溃检测窗口，非恢复耗时）")
-        print(f"恢复接管耗时       : 重启进程 → workflow.resumed 事件 {takeover_from_start:.1f}s"
-              f"（其中服务就绪后 {takeover_from_health:.1f}s）")
+        print(
+            f"恢复接管耗时       : 重启进程 → workflow.resumed 事件 {takeover_from_start:.1f}s"
+            f"（其中服务就绪后 {takeover_from_health:.1f}s）"
+        )
         print(f"续跑节点           : 跳过 {skipped}（断点前已完成，直接复用 checkpoint）")
         print(f"                    重执行 {sorted(reexecuted)}（断点处及其后节点）")
         print("节点明细：")
@@ -325,12 +326,16 @@ def main() -> int:
                 f"  - {s.get('node_id'):8s} {s.get('label', ''):8s} "
                 f"status={s.get('status'):9s} attempt={s.get('attempt')}  [{mark}]"
             )
-        print(f"token 账目         : 完整跑一遍（对照）= {control.done_tokens}；"
-              f"断点 checkpoint 保留 = {pre_kill.last_checkpoint_tokens}；"
-              f"恢复后新增 = {attempt2_tokens}；最终累计 = {resumed.done_tokens}")
+        print(
+            f"token 账目         : 完整跑一遍（对照）= {control.done_tokens}；"
+            f"断点 checkpoint 保留 = {pre_kill.last_checkpoint_tokens}；"
+            f"恢复后新增 = {attempt2_tokens}；最终累计 = {resumed.done_tokens}"
+        )
         print(f"断点续跑节省       : {saved_tokens} token（占完整重跑的 {saved_pct:.1f}%）")
-        print(f"最终状态           : {detail.get('status')}"
-              "（报告已生成，前端 RunPage 可回放事件时间线）")
+        print(
+            f"最终状态           : {detail.get('status')}"
+            "（报告已生成，前端 RunPage 可回放事件时间线）"
+        )
         print("=" * 72)
         return 0
     finally:

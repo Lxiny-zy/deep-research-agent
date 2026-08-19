@@ -1,4 +1,4 @@
-# 自动维护依赖更新：GitHub Actions tag、npm、pip 三个生态每周检查
+# 自动维护依赖更新：GitHub Actions、npm、pip、Docker 四个生态每周检查
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -10,6 +10,10 @@ updates:
     schedule:
       interval: weekly
   - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly

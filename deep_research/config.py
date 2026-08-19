@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 
@@ -12,8 +13,8 @@ def _int_env(name: str, default: int) -> int:
         return default
     try:
         return int(raw)
-    except ValueError:
-        return default
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
 
 
 def _int_env_opt(name: str) -> int | None:
@@ -23,8 +24,8 @@ def _int_env_opt(name: str) -> int | None:
         return None
     try:
         return int(raw)
-    except ValueError:
-        return None
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer or unset, got {raw!r}") from exc
 
 
 def _float_env(name: str, default: float) -> float:
@@ -33,8 +34,8 @@ def _float_env(name: str, default: float) -> float:
         return default
     try:
         return float(raw)
-    except ValueError:
-        return default
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number, got {raw!r}") from exc
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -46,7 +47,11 @@ def _bool_env(name: str, default: bool) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    return default
+    raise ValueError(f"{name} must be one of 1/0, true/false, yes/no, or on/off; got {raw!r}")
+
+
+def _csv_env(name: str) -> tuple[str, ...]:
+    return tuple(item.strip().lower() for item in os.getenv(name, "").split(",") if item.strip())
 
 
 # 部分中转/网关前置 Cloudflare 等 WAF，会按 User-Agent 拦截 openai SDK 默认的
@@ -60,6 +65,15 @@ _DEFAULT_LLM_UA = (
 
 @dataclass
 class Settings:
+    # --- deployment posture ---
+    app_env: str = field(default_factory=lambda: os.getenv("APP_ENV", "development"))
+    allow_private_provider_urls: bool = field(
+        default_factory=lambda: _bool_env("ALLOW_PRIVATE_PROVIDER_URLS", False)
+    )
+    provider_host_allowlist: tuple[str, ...] = field(
+        default_factory=lambda: _csv_env("PROVIDER_HOST_ALLOWLIST")
+    )
+
     # --- LLM（任意 OpenAI 兼容端点）---
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
     llm_base_url: str | None = field(default_factory=lambda: os.getenv("LLM_BASE_URL") or None)
@@ -71,7 +85,7 @@ class Settings:
     # --- 检索 ---
     tavily_api_key: str = field(default_factory=lambda: os.getenv("TAVILY_API_KEY", ""))
 
-    # --- API 认证（设置后所有 /api 端点要求 X-API-Key 头或 ?api_key= 参数；空则不启用）---
+    # --- API 认证（支持 Authorization: Bearer 与 X-API-Key；不接受 URL 查询参数）---
     api_key: str = field(default_factory=lambda: os.getenv("API_KEY", ""))
 
     # --- 持久化（默认本地 SQLite；生产经 DATABASE_URL 注入 PostgreSQL）---
@@ -110,9 +124,20 @@ class Settings:
 
     # --- 网络 ---
     request_timeout: float = field(default_factory=lambda: _float_env("REQUEST_TIMEOUT", 60.0))
+    # Wall-clock deadline for one complete research run.  This is separate
+    # from per-request timeouts because a workflow can make many provider calls.
+    max_run_seconds: int = field(default_factory=lambda: _int_env("MAX_RUN_SECONDS", 3600))
+    # Process-local admission limits for background research executions.  The
+    # queue is intentionally bounded so overload is observable instead of
+    # turning into an unbounded collection of asyncio tasks.
+    max_active_runs: int = field(default_factory=lambda: _int_env("MAX_ACTIVE_RUNS", 8))
+    max_queued_runs: int = field(default_factory=lambda: _int_env("MAX_QUEUED_RUNS", 32))
 
     def __post_init__(self) -> None:
         """范围校验：非法配置尽早失败（含 per-run 覆盖经 dataclasses.replace 时）。"""
+        self.app_env = self.app_env.strip().lower()
+        if self.app_env not in {"development", "test", "production"}:
+            raise ValueError("app_env 必须是 development、test 或 production")
         if self.max_sub_questions < 1:
             raise ValueError("max_sub_questions 必须 >= 1")
         if self.max_rounds < 0:
@@ -130,8 +155,32 @@ class Settings:
         for name in ("intent_enabled", "intent_llm_fallback", "intent_source_screening"):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be a boolean")
-        if self.request_timeout <= 0:
+        if not math.isfinite(self.request_timeout) or self.request_timeout <= 0:
             raise ValueError("request_timeout 必须 > 0")
+        if self.max_run_seconds < 1:
+            raise ValueError("max_run_seconds 必须 >= 1")
+        if self.max_active_runs < 1:
+            raise ValueError("max_active_runs must be >= 1")
+        if self.max_queued_runs < 0:
+            raise ValueError("max_queued_runs must be >= 0")
+
+    def validate_deployment(self) -> None:
+        """Fail fast when production is configured with development defaults."""
+        if self.app_env != "production":
+            return
+        if os.getenv("DR_DEMO_FAKE_BACKENDS", "").strip().casefold() in {"1", "true", "yes", "on"}:
+            raise RuntimeError("DR_DEMO_FAKE_BACKENDS must be disabled in production")
+        missing: list[str] = []
+        if not self.api_key.strip():
+            missing.append("API_KEY")
+        if not self.database_url.startswith("postgresql+"):
+            missing.append("PostgreSQL DATABASE_URL")
+        from .security import SecretCipher
+
+        if not SecretCipher.from_env().enabled:
+            missing.append("CATALOG_ENCRYPTION_KEY")
+        if missing:
+            raise RuntimeError("生产配置缺失：" + ", ".join(missing))
 
     def validate_llm(self) -> None:
         """Validate only the credentials needed to construct the default LLM."""

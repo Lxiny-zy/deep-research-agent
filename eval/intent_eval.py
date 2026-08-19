@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 from deep_research.intent.cascade import IntentCascade
 from deep_research.intent.dataset import QUERY_INTENT_DATA, RISK_EVAL_DATA
@@ -105,9 +106,7 @@ async def evaluate_risk(cascade: IntentCascade) -> dict:
         "wrong_label": wrong_label,
         "should_pass": len(should_pass),
         "false_positives": false_positives,
-        "false_positive_rate": (
-            len(false_positives) / len(should_pass) if should_pass else 0.0
-        ),
+        "false_positive_rate": (len(false_positives) / len(should_pass) if should_pass else 0.0),
     }
 
 
@@ -120,9 +119,7 @@ def format_report(task: dict, risk: dict, *, model_loaded: bool) -> str:
     lines: list[str] = []
     lines.append("# 意图识别离线评测")
     lines.append("")
-    lines.append(
-        "离线评测：L1 规则 + L2 本地模型两级（未调用真实 LLM，L3 兜底能力不在本表内）。"
-    )
+    lines.append("离线评测：L1 规则 + L2 本地模型两级（未调用真实 LLM，L3 兜底能力不在本表内）。")
     if not model_loaded:
         lines.append("")
         lines.append("> **警告**：未加载到 L2 模型文件，本次仅评测 L1 规则层。")
@@ -133,14 +130,14 @@ def format_report(task: dict, risk: dict, *, model_loaded: bool) -> str:
     lines.append(f"- 样本数：{task['total']}")
     lines.append(f"- 准确率：{task['accuracy']:.1%}（{task['correct']}/{task['total']}）")
     lines.append(
-        f"- 路由覆盖率：{task['route_coverage']:.1%}"
-        f"（{task['routed']} 条给出了明确的工作流建议）"
+        f"- 路由覆盖率：{task['route_coverage']:.1%}（{task['routed']} 条给出了明确的工作流建议）"
     )
     lines.append("")
 
-    labels = sorted({key for key in task["confusion"]} | {
-        pred for row in task["confusion"].values() for pred in row
-    })
+    labels = sorted(
+        {key for key in task["confusion"]}
+        | {pred for row in task["confusion"].values() for pred in row}
+    )
     lines.append("### 混淆矩阵（行=真实，列=预测）")
     lines.append("")
     lines.append("| 真实 \\ 预测 | " + " | ".join(labels) + " |")
@@ -165,10 +162,7 @@ def format_report(task: dict, risk: dict, *, model_loaded: bool) -> str:
         lines.append(f"- {tier_names[tier]}：{count} 条（{count / total:.1%}）")
     zero_cost = task["tiers"].get("rule", 0) + task["tiers"].get("model", 0)
     lines.append("")
-    lines.append(
-        f"**{zero_cost / total:.1%} 的请求在零 token 成本下完成意图判定**，"
-        "无需调用 LLM。"
-    )
+    lines.append(f"**{zero_cost / total:.1%} 的请求在零 token 成本下完成意图判定**，无需调用 LLM。")
     lines.append("")
 
     if task["errors"]:
@@ -222,6 +216,12 @@ def format_report(task: dict, risk: dict, *, model_loaded: bool) -> str:
     return "\n".join(lines)
 
 
+def _write_report(path: Path, report: str) -> None:
+    """同步文件 I/O 的小边界，避免阻塞异步评测主循环。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report, encoding="utf-8")
+
+
 async def main_async(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="意图识别离线评测")
     parser.add_argument("--output", nargs="?", const="eval/results/intent-eval.md", default=None)
@@ -237,11 +237,8 @@ async def main_async(argv: list[str] | None = None) -> int:
     print(report)
 
     if args.output:
-        from pathlib import Path
-
         path = Path(args.output)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(report, encoding="utf-8")
+        await asyncio.to_thread(_write_report, path, report)
         print(f"\n已写入 {path}")
 
     # 退出码用于 CI 守门：漏拦截或误伤都视为失败。

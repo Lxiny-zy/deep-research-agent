@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, useNavigate } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { appendTurn } from '../lib/conversation'
 import type { AssessResponse, WorkflowInfo } from '../types'
 import NewResearchPage from './NewResearchPage'
@@ -87,9 +87,7 @@ describe('NewResearchPage workflow list race', () => {
   it('ignores a late response from a superseded listWorkflows request', async () => {
     const first = deferred<WorkflowInfo[]>()
     const second = deferred<WorkflowInfo[]>()
-    mocks.listWorkflows
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise)
+    mocks.listWorkflows.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
 
     render(
       <MemoryRouter initialEntries={['/']}>
@@ -147,9 +145,7 @@ describe('NewResearchPage workflow list race', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /高级设置/ }))
 
-    expect(
-      screen.getByRole('switch', { name: '本次研究启用严格双源门禁' }),
-    ).toBeChecked()
+    expect(screen.getByRole('switch', { name: '本次研究启用严格双源门禁' })).toBeChecked()
   })
 })
 
@@ -172,7 +168,13 @@ describe('NewResearchPage 追问上下文', () => {
     appendTurn({
       query: '对比 Milvus 和 Qdrant',
       intent: 'comparative',
-      slots: { entities: ['Milvus', 'Qdrant'], time_range: '', domain: '', language: '', aspects: [] },
+      slots: {
+        entities: ['Milvus', 'Qdrant'],
+        time_range: '',
+        domain: '',
+        language: '',
+        aspects: [],
+      },
     })
   }
 
@@ -192,7 +194,9 @@ describe('NewResearchPage 追问上下文', () => {
       expect(mocks.createRun).toHaveBeenCalledWith(
         expect.objectContaining({
           query: '那第二个呢',
-          history: [expect.objectContaining({ query: '对比 Milvus 和 Qdrant', intent: 'comparative' })],
+          history: [
+            expect.objectContaining({ query: '对比 Milvus 和 Qdrant', intent: 'comparative' }),
+          ],
         }),
       ),
     )
@@ -269,14 +273,27 @@ describe('NewResearchPage 澄清循环', () => {
   function renderPage() {
     return render(
       <MemoryRouter initialEntries={['/']}>
-        <NewResearchPage />
+        <Routes>
+          <Route path="/" element={<NewResearchPage />} />
+          <Route path="/runs/:runId" element={<div>研究已创建</div>} />
+        </Routes>
       </MemoryRouter>,
     )
   }
 
   async function ask(text: string) {
-    fireEvent.change(screen.getByLabelText(/研究问题/), { target: { value: text } })
-    fireEvent.click(screen.getByRole('button', { name: '开始研究' }))
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(/研究问题/), { target: { value: text } })
+      fireEvent.click(screen.getByRole('button', { name: '开始研究' }))
+      await Promise.resolve()
+    })
+  }
+
+  async function clickButton(name: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name }))
+      await Promise.resolve()
+    })
   }
 
   it('信息不全时展示追问，且**不**创建研究', async () => {
@@ -315,7 +332,7 @@ describe('NewResearchPage 澄清循环', () => {
     // entities 类的 gap 不给候选项（名字是开放集合，模板只能是空话），
     // 因此用户走自由输入。
     fireEvent.change(screen.getByLabelText(/请补充/), { target: { value: 'Kafka 和 RabbitMQ' } })
-    fireEvent.click(screen.getByRole('button', { name: '确定' }))
+    await clickButton('确定')
 
     await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(1))
     // 第二轮必须带上累积的答案与递增的轮次，否则服务端每轮看到的都是最初那句残句。
@@ -353,7 +370,7 @@ describe('NewResearchPage 澄清循环', () => {
       intent: 'unknown',
       reason: '用户选择跳过追问',
     })
-    fireEvent.click(screen.getByRole('button', { name: '直接研究' }))
+    await clickButton('直接研究')
 
     await waitFor(() =>
       expect(mocks.createRun).toHaveBeenCalledWith(
@@ -364,16 +381,14 @@ describe('NewResearchPage 澄清循环', () => {
   })
 
   it('跳过时 assess 挂了也能建 run，不把用户锁在追问里', async () => {
-    mocks.assessIntent.mockResolvedValueOnce(
-      asking('想研究什么方向？', ['某项技术的原理与机制']),
-    )
+    mocks.assessIntent.mockResolvedValueOnce(asking('想研究什么方向？', ['某项技术的原理与机制']))
 
     renderPage()
     await ask('帮我看看')
     await waitFor(() => expect(screen.getByText('想研究什么方向？')).toBeInTheDocument())
 
     mocks.assessIntent.mockRejectedValue(new Error('boom'))
-    fireEvent.click(screen.getByRole('button', { name: '直接研究' }))
+    await clickButton('直接研究')
 
     await waitFor(() =>
       expect(mocks.createRun).toHaveBeenCalledWith(

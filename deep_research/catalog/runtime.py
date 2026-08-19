@@ -18,6 +18,7 @@ from ..config import Settings
 from ..llm import LLM
 from ..observability import Tracer
 from ..registry import create as registry_create
+from ..security import validate_provider_url_resolved
 from .dto import (
     AgentCardSnapshot,
     AgentCardView,
@@ -40,13 +41,22 @@ class CatalogSource(Protocol):
 _BUILTIN_TERMINAL_ROLES = {"synthesizer", "aggregator"}
 
 
+async def _validate_profile_endpoints(
+    profiles: Iterable[ModelProfileFull], settings: Settings
+) -> None:
+    for profile in profiles:
+        await validate_provider_url_resolved(
+            profile.base_url,
+            allow_private=settings.allow_private_provider_urls,
+            allowlist=settings.provider_host_allowlist,
+        )
+
+
 def terminal_roles_for_cards(cards: Iterable[AgentCardView]) -> set[str]:
     """Return report-producing names after enabled catalog cards override built-ins."""
     overrides = {card.name: card for card in cards if card.enabled}
     terminals = _BUILTIN_TERMINAL_ROLES - overrides.keys()
-    terminals.update(
-        card.name for card in overrides.values() if card.behavior == "synthesize"
-    )
+    terminals.update(card.name for card in overrides.values() if card.behavior == "synthesize")
     return terminals
 
 
@@ -89,9 +99,7 @@ async def create_catalog_runtime_snapshot(
         ],
         profiles=[_profile_snapshot(profile) for profile in profiles],
         default_profile_id=default_profile.id if default_profile is not None else None,
-        terminal_roles=sorted(
-            terminal_roles.intersection(required | _BUILTIN_TERMINAL_ROLES)
-        ),
+        terminal_roles=sorted(terminal_roles.intersection(required | _BUILTIN_TERMINAL_ROLES)),
     )
 
 
@@ -147,10 +155,7 @@ class CatalogRuntime:
                 for name, card in sorted(self._cards.items())
                 if name in required
             ],
-            profiles=[
-                _profile_snapshot(profile)
-                for _, profile in sorted(self._profiles.items())
-            ]
+            profiles=[_profile_snapshot(profile) for _, profile in sorted(self._profiles.items())]
             + (
                 [_profile_snapshot(self._default_profile)]
                 if self._default_profile is not None
@@ -197,6 +202,7 @@ class CatalogRuntime:
             temperature=profile.temperature,
             parameter_mode=profile.parameter_mode,
             reasoning_effort=profile.reasoning_effort,
+            allow_private_provider_urls=self._settings.allow_private_provider_urls,
         )
         self._llm_cache[profile.id] = llm
         return llm
@@ -235,9 +241,7 @@ async def load_catalog_runtime(
             )
             for card in snapshot.cards
         ]
-        profile_ids = {
-            card.model_profile_id for card in snapshot.cards if card.model_profile_id
-        }
+        profile_ids = {card.model_profile_id for card in snapshot.cards if card.model_profile_id}
         if snapshot.default_profile_id:
             profile_ids.add(snapshot.default_profile_id)
         frozen_profiles = {profile.id: profile for profile in snapshot.profiles}
@@ -257,6 +261,7 @@ async def load_catalog_runtime(
             if snapshot.default_profile_id is not None
             else None
         )
+        await _validate_profile_endpoints(snapshot_profiles.values(), settings)
         return CatalogRuntime(
             cards=cards,
             profiles=snapshot_profiles,
@@ -275,10 +280,14 @@ async def load_catalog_runtime(
     # 收集所有被引用的档案 + 默认档案
     profiles: dict[str, ModelProfileFull] = {}
     for c in cards:
-        if c.model_profile_id and c.model_profile_id not in profiles:
+        if c.enabled and c.model_profile_id and c.model_profile_id not in profiles:
             full = await catalog_repo.get_profile_full(c.model_profile_id)
             if full is not None:
                 profiles[full.id] = full
+    validation_profiles = list(profiles.values())
+    if default_profile is not None and default_profile.id not in profiles:
+        validation_profiles.append(default_profile)
+    await _validate_profile_endpoints(validation_profiles, settings)
     return CatalogRuntime(
         cards=cards,
         profiles=profiles,

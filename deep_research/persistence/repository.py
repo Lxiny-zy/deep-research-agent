@@ -34,6 +34,14 @@ class LeaseLostError(RuntimeError):
     """Raised when a worker tries to persist after losing its execution lease."""
 
 
+class IdempotencyConflictError(RuntimeError):
+    """The same idempotency key was reused with a different request payload."""
+
+
+RUN_ACTIVE_STATUSES = frozenset({"pending", "running", "cancelling"})
+RUN_TERMINAL_STATUSES = frozenset({"cancelled", "done", "error"})
+
+
 @dataclass
 class RunSummary:
     """历史列表行（轻量）。"""
@@ -90,12 +98,32 @@ class ResearchRepository(Protocol):
         lease_owner: str | None = None,
     ) -> str: ...
 
+    async def create_run_once(
+        self,
+        query: str,
+        *,
+        request_hash: str,
+        idempotency_key: str | None = None,
+        execution: WorkflowRun | None = None,
+        lease_owner: str | None = None,
+    ) -> tuple[str, bool]:
+        """Create a run once; return ``(run_id, created)``."""
+        ...
+
+    async def request_cancel(self, run_id: str) -> str | None:
+        """Atomically move an active run to ``cancelling`` and return status."""
+        ...
+
+    async def append_events(
+        self, run_id: str, events: list[Event], *, lease_owner: str | None = None
+    ) -> list[Event]: ...
+
     async def set_status(
         self, run_id: str, status: str, *, lease_owner: str | None = None
     ) -> None: ...
 
-    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> None:
-        """Atomically mark a new attempt active and remove old terminal events."""
+    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> int:
+        """Atomically mark a new attempt active and return its number."""
         ...
 
     async def save_plan(self, run_id: str, plan: ResearchPlan) -> None: ...
@@ -172,4 +200,10 @@ class ResearchRepository(Protocol):
 
     async def get_run_status(self, run_id: str) -> str | None: ...
 
-    async def get_events(self, run_id: str, *, after_seq: int = 0) -> list[Event]: ...
+    async def get_run_attempt(self, run_id: str) -> int | None: ...
+
+    async def get_events(
+        self, run_id: str, *, after_seq: int = 0, limit: int | None = None
+    ) -> list[Event]: ...
+
+    async def healthcheck(self) -> bool: ...

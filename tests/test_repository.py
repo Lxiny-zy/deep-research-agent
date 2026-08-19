@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
+from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 from sqlalchemy import event as sa_event
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
@@ -36,7 +39,7 @@ from deep_research.persistence.db import (
 )
 from deep_research.persistence.memory_repository import InMemoryRepository
 from deep_research.persistence.orm import Base
-from deep_research.persistence.repository import LeaseLostError
+from deep_research.persistence.repository import IdempotencyConflictError, LeaseLostError
 from deep_research.persistence.sql_repository import SqlRepository
 
 
@@ -166,6 +169,7 @@ async def test_crud_roundtrip(repo):
     events = await repo.get_events(run_id)
     assert len(events) == 2
     assert await repo.get_events(run_id, after_seq=1) == events[1:]
+    assert await repo.get_events(run_id, limit=1) == events[:1]
 
     summaries = await repo.list_runs()
     assert summaries[0].id == run_id
@@ -288,7 +292,7 @@ async def test_lease_fences_writes_after_ownership_changes(repo):
 
 
 @pytest.mark.asyncio
-async def test_prepare_resume_atomically_reopens_run_and_removes_old_terminal(repo):
+async def test_prepare_resume_reopens_run_and_preserves_attempt_audit(repo):
     runtime = OrchestrationRuntime()
     execution = runtime.start("deep", {"query": "resume"})
     runtime.save_checkpoint(
@@ -307,13 +311,96 @@ async def test_prepare_resume_atomically_reopens_run_and_removes_old_terminal(re
         lease_owner=owner,
     )
 
-    await repo.prepare_resume(run_id, lease_owner=owner)
+    attempt = await repo.prepare_resume(run_id, lease_owner=owner)
 
     assert await repo.get_run_status(run_id) == "running"
     events = await repo.get_events(run_id)
-    assert [(event.stage, event.type, event.message) for event in events] == [
-        ("PLANNER", "info", "keep")
+    assert attempt == 2
+    assert [(event.attempt, event.stage, event.type, event.message) for event in events] == [
+        (1, "PLANNER", "info", "keep"),
+        (1, "ORCHESTRATOR", "error", "old terminal"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_create_run_once_is_idempotent_and_rejects_payload_reuse(repo):
+    first_id, first_created = await repo.create_run_once(
+        "same", request_hash="hash-a", idempotency_key="request-1"
+    )
+    replay_id, replay_created = await repo.create_run_once(
+        "same", request_hash="hash-a", idempotency_key="request-1"
+    )
+
+    assert first_created is True
+    assert replay_created is False
+    assert replay_id == first_id
+    assert len(await repo.list_runs()) == 1
+
+    with pytest.raises(IdempotencyConflictError):
+        await repo.create_run_once("different", request_hash="hash-b", idempotency_key="request-1")
+
+
+@pytest.mark.asyncio
+async def test_append_events_keeps_monotonic_sequence_across_attempts(repo):
+    execution = OrchestrationRuntime().start("deep", {"query": "events"})
+    owner = "event-owner"
+    run_id = await repo.create_run("events", execution=execution, lease_owner=owner)
+
+    first = await repo.append_events(
+        run_id,
+        [
+            Event(stage="PLANNER", type="start"),
+            Event(stage="PLANNER", type="token", message="not durable"),
+            Event(stage="PLANNER", type="info"),
+        ],
+        lease_owner=owner,
+    )
+    await repo.set_status(run_id, "error", lease_owner=owner)
+    execution.attempt = await repo.prepare_resume(run_id, lease_owner=owner)
+    second = await repo.append_events(
+        run_id,
+        [Event(stage="ORCHESTRATOR", type="done")],
+        lease_owner=owner,
+    )
+
+    assert [(event.seq, event.attempt) for event in first + second] == [
+        (0, 1),
+        (1, 1),
+        (2, 2),
+    ]
+    assert [(event.seq, event.attempt) for event in await repo.get_events(run_id)] == [
+        (0, 1),
+        (1, 1),
+        (2, 2),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_save_events_filters_tokens_before_assigning_replay_sequence(repo):
+    run_id = await repo.create_run("durable event sequence")
+    await repo.save_events(
+        run_id,
+        [
+            Event(stage="PLANNER", type="token", message="ignored"),
+            Event(stage="PLANNER", type="start", message="first"),
+            Event(stage="PLANNER", type="token", message="ignored too"),
+            Event(stage="ORCHESTRATOR", type="done", message="second"),
+        ],
+    )
+
+    events = await repo.get_events(run_id)
+    assert [(event.seq, event.message) for event in events] == [(0, "first"), (1, "second")]
+    assert await repo.get_events(run_id, after_seq=1) == events[1:]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_request_wins_over_late_finalize(repo):
+    run_id = await repo.create_run("cancel")
+    assert await repo.request_cancel(run_id) == "cancelling"
+    await repo.finalize(run_id, elapsed=1, total_tokens=2)
+    assert await repo.get_run_status(run_id) == "cancelling"
+    await repo.set_status(run_id, "cancelled")
+    assert await repo.request_cancel(run_id) == "cancelled"
 
 
 async def _create_legacy_research_run_table(engine: AsyncEngine) -> None:
@@ -476,7 +563,7 @@ async def test_prepare_sqlite_schema_accepts_current_create_all_database(tmp_pat
             "corroborates_claim_ids",
             "corroboration_reason",
         } <= columns
-        assert version == "0017"
+        assert version == "0018"
         assert detail is not None
         verification = detail.results[0].findings[0].verification
         assert verification.source_title == "Existing source"
@@ -606,7 +693,7 @@ async def test_prepare_sqlite_schema_repairs_legacy_finding_columns(tmp_path):
 
     async with engine.begin() as conn:
         version = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-    assert version == "0017"
+    assert version == "0018"
     await engine.dispose()
 
 
@@ -733,7 +820,7 @@ async def test_prepare_sqlite_schema_reconciles_falsely_stamped_head(tmp_path):
         set(constraint.get("column_names") or []) == {"run_id", "idx"}
         for constraint in schema["unique"]
     )
-    assert version == "0017"
+    assert version == "0018"
     assert repaired_indexes == [0, 1]
     await engine.dispose()
 
@@ -828,19 +915,106 @@ async def test_list_runs_status_and_query_filter(repo):
     assert {s.id for s in await repo.list_runs(q="深度")} == {b}
 
 
-@pytest.mark.pg
-@pytest.mark.asyncio
-async def test_sql_repository_on_postgres():
-    """真实 PostgreSQL 冒烟测试（CI 用 service container；本地无 PG 时跳过）。"""
+def _postgres_url() -> str:
     url = os.getenv("DATABASE_URL")
     if not url or "postgresql" not in url:
         pytest.skip("未配置 PostgreSQL 的 DATABASE_URL")
-    engine = make_engine(url)
-    await create_all(engine)
+    return url
+
+
+@pytest.mark.pg
+@pytest.mark.asyncio
+async def test_postgres_schema_is_at_alembic_head():
+    """生产数据库必须由迁移建成，不能用 create_all 掩盖漏迁移。"""
+    engine = make_engine(_postgres_url())
+    try:
+        async with engine.connect() as connection:
+            current = await connection.scalar(text("SELECT version_num FROM alembic_version"))
+        head = ScriptDirectory.from_config(AlembicConfig("alembic.ini")).get_current_head()
+        assert current == head
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.pg
+@pytest.mark.asyncio
+async def test_sql_repository_on_postgres():
+    """真实 PostgreSQL 基础读写（CI 用 service container；本地无 PG 时跳过）。"""
+    engine = make_engine(_postgres_url())
     repo = SqlRepository(make_sessionmaker(engine))
-    run_id = await repo.create_run("PG 冒烟")
-    await repo.save_report(run_id, Report(query="PG 冒烟", markdown="# ok", citations=[]))
-    await repo.finalize(run_id, elapsed=0.1, total_tokens=1)
-    detail = await repo.get_run(run_id)
-    assert detail is not None and detail.status == "done"
-    await engine.dispose()
+    run_id: str | None = None
+    try:
+        run_id = await repo.create_run("PG 冒烟")
+        await repo.save_report(run_id, Report(query="PG 冒烟", markdown="# ok", citations=[]))
+        await repo.finalize(run_id, elapsed=0.1, total_tokens=1)
+        detail = await repo.get_run(run_id)
+        assert detail is not None and detail.status == "done"
+    finally:
+        if run_id is not None:
+            await repo.delete_run(run_id)
+        await engine.dispose()
+
+
+@pytest.mark.pg
+@pytest.mark.asyncio
+async def test_postgres_run_delivery_contract():
+    """跨连接验证幂等仲裁、租约 fencing、事件序号与取消原子状态。"""
+    engine = make_engine(_postgres_url())
+    repo = SqlRepository(make_sessionmaker(engine))
+    execution = OrchestrationRuntime().start("deep", {"query": "PG delivery"})
+    owner = f"owner-{uuid4().hex}"
+    idempotency_key = f"pg-delivery-{uuid4().hex}"
+    run_id: str | None = None
+    try:
+        results = await asyncio.gather(
+            *[
+                repo.create_run_once(
+                    "PG delivery",
+                    request_hash="same-request",
+                    idempotency_key=idempotency_key,
+                    execution=execution,
+                    lease_owner=owner,
+                )
+                for _ in range(4)
+            ]
+        )
+        assert len({result[0] for result in results}) == 1
+        assert sum(result[1] for result in results) == 1
+        run_id = results[0][0]
+
+        with pytest.raises(IdempotencyConflictError):
+            await repo.create_run_once(
+                "different",
+                request_hash="different-request",
+                idempotency_key=idempotency_key,
+            )
+
+        assert await repo.acquire_lease(run_id, "competing-owner") is False
+        await repo.set_status(run_id, "running", lease_owner=owner)
+        with pytest.raises(LeaseLostError):
+            await repo.set_status(run_id, "error", lease_owner="competing-owner")
+
+        batches = await asyncio.gather(
+            repo.append_events(
+                run_id,
+                [Event(stage="PLANNER", type="info", message="first")],
+                lease_owner=owner,
+            ),
+            repo.append_events(
+                run_id,
+                [Event(stage="RESEARCHER", type="finding", message="second")],
+                lease_owner=owner,
+            ),
+        )
+        assert sorted(event.seq for batch in batches for event in batch) == [0, 1]
+        assert [event.seq for event in await repo.get_events(run_id)] == [0, 1]
+
+        assert await repo.request_cancel(run_id) == "cancelling"
+        assert await repo.request_cancel(run_id) == "cancelling"
+        await repo.set_status(run_id, "cancelled", lease_owner=owner)
+        assert await repo.get_run_status(run_id) == "cancelled"
+    finally:
+        if run_id is not None:
+            await repo.release_lease(run_id, owner)
+            await repo.delete_run(run_id)
+        await engine.dispose()

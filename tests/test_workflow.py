@@ -100,9 +100,7 @@ def test_validate_workflow_rules_and_custom_terminal():
 
     # 报告角色存在但不收尾：会在研究结果写入前生成空报告
     wrong_order = [Step(agent="synthesizer"), Step(agent="researcher")]
-    assert any(
-        "收尾" in e for e in validate_workflow(wrong_order, avail, max_rounds_cap=2)
-    )
+    assert any("收尾" in e for e in validate_workflow(wrong_order, avail, max_rounds_cap=2))
 
     # 禁止顶层编排原语出现在自建流程里
     assert validate_workflow([Step(kind="compose", agent="coordinator")], avail, max_rounds_cap=2)
@@ -151,9 +149,7 @@ async def test_step_named_orchestrator_error_does_not_use_reserved_stage(setting
 
     tracer = Tracer()
     ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings)
-    engine = WorkflowEngine(
-        ctx, resolver={"orchestrator": BrokenOrchestratorCard()}.__getitem__
-    )
+    engine = WorkflowEngine(ctx, resolver={"orchestrator": BrokenOrchestratorCard()}.__getitem__)
 
     await engine.run(
         Workflow(name="user-card", steps=[Step(agent="orchestrator")]),

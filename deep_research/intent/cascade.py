@@ -331,9 +331,7 @@ class IntentCascade:
                     "none", 0.0, raw_risk, judgment.risk_confidence
                 )
                 signals.append(
-                    IntentSignal(
-                        tier="llm", code="risk_recheck", detail=judgment.reason[:80]
-                    )
+                    IntentSignal(tier="llm", code="risk_recheck", detail=judgment.reason[:80])
                 )
             else:
                 signals.append(
