@@ -16,7 +16,9 @@ export default function ModelProfileCard({ profile: p, onEdit, onDelete }: Props
   return (
     <div className="role-card">
       <div className="role-card-head">
-        <span className="role-icon"><AppIcon name="brain" size={20} aria-hidden="true" /></span>
+        <span className="role-icon">
+          <AppIcon name="brain" size={20} aria-hidden="true" />
+        </span>
         <div className="role-meta">
           <strong>{p.name}</strong>
           <span className="muted small">{p.model}</span>
@@ -29,8 +31,8 @@ export default function ModelProfileCard({ profile: p, onEdit, onDelete }: Props
       </div>
       <p className="role-desc">
         {p.base_url || '官方端点'} ·{' '}
-        {p.parameter_mode === 'reasoning' ? `推理 ${p.reasoning_effort}` : `温度 ${p.temperature}`} ·{' '}
-        {p.api_key_set ? `key ${p.api_key_hint}` : '未设 key'}
+        {p.parameter_mode === 'reasoning' ? `推理 ${p.reasoning_effort}` : `温度 ${p.temperature}`}{' '}
+        · {p.api_key_set ? `key ${p.api_key_hint}` : '未设 key'}
       </p>
 
       {(test.isPending || r || test.isError) && (
@@ -57,7 +59,12 @@ export default function ModelProfileCard({ profile: p, onEdit, onDelete }: Props
           onClick={() => test.mutate(p.id)}
           disabled={test.isPending}
         >
-          <AppIcon name={test.isPending ? 'loader' : 'activity'} size={13} aria-hidden="true" className={test.isPending ? 'spin' : ''} />
+          <AppIcon
+            name={test.isPending ? 'loader' : 'activity'}
+            size={13}
+            aria-hidden="true"
+            className={test.isPending ? 'spin' : ''}
+          />
           测试连接
         </button>
         <div className="row gap-sm">

@@ -108,8 +108,7 @@ export function mergeWorkflowSteps(
     return order.map((key) => latest.get(key)!).filter(Boolean)
   }
 
-  const workflowIsTerminal =
-    execution != null && TERMINAL_WORKFLOW_STATUSES.has(execution.status)
+  const workflowIsTerminal = execution != null && TERMINAL_WORKFLOW_STATUSES.has(execution.status)
   if (workflowIsTerminal && runStatus !== 'running' && runStatus !== 'cancelling') {
     return collapseByNode([...base])
   }
@@ -218,7 +217,7 @@ export function deriveResearchProgress({
           ? '研究任务已取消'
           : runStatus === 'cancelling'
             ? '正在取消研究任务'
-        : activeStep?.label || readyStep?.label || latestActivityLabel(events)
+            : activeStep?.label || readyStep?.label || latestActivityLabel(events)
 
   return {
     percent,

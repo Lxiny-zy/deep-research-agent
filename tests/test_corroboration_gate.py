@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import deep_research.guardrails as guardrails
 from deep_research.agents.synthesizer import Synthesizer
 from deep_research.config import Settings
@@ -279,3 +281,160 @@ def test_default_mode_remains_backward_compatible() -> None:
 
     assert report_eligible(finding)
     assert not report_eligible(finding, require_corroboration=True)
+
+
+# ── 伪双源：同一篇工作 / 同一团队不构成独立印证 ─────────────────────────────
+
+
+def _scholarly(
+    statement: str,
+    url: str,
+    *,
+    doi: str = "",
+    work_id: str = "",
+    title: str = "",
+    authors: list[str] | None = None,
+) -> Finding:
+    """带发布方身份的 finding，模拟 EvidenceVerifier 在验证时刻盖的章。"""
+    from deep_research.models import SourceIdentity
+
+    return Finding(
+        statement=statement,
+        source_url=url,
+        evidence_quote=statement,
+        verification=EvidenceVerification(
+            status="verified",
+            method="normalized_quote",
+            semantic_status="supported",
+            source_identity=SourceIdentity(
+                doi=doi,
+                work_id=work_id,
+                title=title,
+                authors=authors or [],
+                domain=guardrails.publisher_identity(url),
+            ),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_same_work_on_two_domains_is_not_a_double_source():
+    """一篇工作的 arXiv 预印本与期刊正式版是两个域、一篇工作。
+
+    按域名判会得出"已交叉印证"——那个结论本身是假的，而这正是改造前的行为。
+    """
+    findings = [
+        _scholarly("该方法达到 38.36 dB", "https://arxiv.org/abs/2205.10102v3", doi="10.1364/oe.1"),
+        _scholarly(
+            "该方法达到 38.36 dB",
+            "https://opg.optica.org/oe/abstract.cfm?uri=oe-1",
+            doi="https://doi.org/10.1364/OE.1",
+        ),
+    ]
+
+    checked = await ClaimConsistencyVerifier().verify_batch(
+        findings, RelationshipLLM(corroborations=[(0, 1, 0.95)])
+    )
+
+    for finding in checked:
+        assert finding.verification.corroboration_status == "single_source"
+        assert finding.verification.independent_source_count == 1
+        # 必须说明"看到了第二个来源但同源"，否则读者以为系统只找到一个
+        assert "同源来源被驳回" in finding.verification.corroboration_reason
+        assert "same_doi" in finding.verification.corroboration_reason
+    assert not report_eligible(checked[0], require_corroboration=True)
+
+
+@pytest.mark.asyncio
+async def test_two_papers_from_the_same_group_are_not_a_double_source():
+    """本领域课题组高度集中，同组两篇论文互相印证不构成独立验证。"""
+    findings = [
+        _scholarly(
+            "深度展开优于端到端",
+            "https://arxiv.org/abs/1",
+            doi="10.1/mst",
+            authors=["Yuanhao Cai", "Jing Lin"],
+        ),
+        _scholarly(
+            "深度展开优于端到端",
+            "https://openreview.net/forum?id=2",
+            doi="10.2/dauhst",
+            authors=["Y. Cai", "Xiaowan Hu"],
+        ),
+    ]
+
+    checked = await ClaimConsistencyVerifier().verify_batch(
+        findings, RelationshipLLM(corroborations=[(0, 1, 0.95)])
+    )
+
+    assert checked[0].verification.corroboration_status == "single_source"
+    assert "shared_authors" in checked[0].verification.corroboration_reason
+
+
+@pytest.mark.asyncio
+async def test_two_independent_groups_still_corroborate():
+    """门禁不能把一切都合并——真正独立的两个团队必须仍构成双源。"""
+    findings = [
+        _scholarly(
+            "CASSI 可用单次曝光重建光谱",
+            "https://opg.optica.org/oe/1",
+            doi="10.1364/oe.1",
+            title="Single disperser coded aperture snapshot spectral imaging",
+            authors=["Ashwin Wagadarikar", "David Brady"],
+        ),
+        _scholarly(
+            "CASSI 可用单次曝光重建光谱",
+            "https://ieeexplore.ieee.org/document/2",
+            doi="10.1109/cvpr.2",
+            title="Mask-guided spectral-wise transformer for reconstruction",
+            authors=["Yuanhao Cai", "Jing Lin"],
+        ),
+    ]
+
+    checked = await ClaimConsistencyVerifier().verify_batch(
+        findings, RelationshipLLM(corroborations=[(0, 1, 0.95)])
+    )
+
+    for finding in checked:
+        assert finding.verification.corroboration_status == "corroborated"
+        assert finding.verification.independent_source_count == 2
+    assert report_eligible(checked[0], require_corroboration=True)
+
+
+@pytest.mark.asyncio
+async def test_a_third_independent_source_lifts_a_pseudo_double_source():
+    """两个同源 + 一个真独立 = 2 个独立发布方，不是 3 个。"""
+    findings = [
+        _scholarly("论断 X", "https://arxiv.org/abs/1", doi="10.1/same"),
+        _scholarly("论断 X", "https://optica.org/1", doi="10.1/same"),
+        _scholarly(
+            "论断 X",
+            "https://ieee.org/2",
+            doi="10.9/other",
+            title="An entirely unrelated independent study",
+            authors=["Zoe Zhang"],
+        ),
+    ]
+
+    checked = await ClaimConsistencyVerifier().verify_batch(
+        findings, RelationshipLLM(corroborations=[(0, 1, 0.95), (0, 2, 0.95), (1, 2, 0.95)])
+    )
+
+    assert checked[0].verification.corroboration_status == "corroborated"
+    assert checked[0].verification.independent_source_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_findings_keep_the_previous_domain_based_verdict():
+    """旧记录没有 source_identity：判定退回按域名，与改造前逐条一致。"""
+    findings = [
+        _supported("论断 Y", "https://a.example.com/1"),
+        _supported("论断 Y", "https://b.example.org/2"),
+    ]
+
+    checked = await ClaimConsistencyVerifier().verify_batch(
+        findings, RelationshipLLM(corroborations=[(0, 1, 0.95)])
+    )
+
+    assert checked[0].verification.corroboration_status == "corroborated"
+    assert checked[0].verification.independent_source_count == 2

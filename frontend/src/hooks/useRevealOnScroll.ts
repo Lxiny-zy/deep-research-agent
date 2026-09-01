@@ -10,7 +10,10 @@ import { useEffect, type RefObject } from 'react'
  * - 若目标元素是异步渲染的（如等待接口返回后才出现的面板），把触发其
  *   渲染的数据放进 deps，让 hook 重新扫描；已 reveal 的元素保留 class 不回退。
  */
-export function useRevealOnScroll(ref: RefObject<HTMLElement | null>, deps: readonly unknown[] = []) {
+export function useRevealOnScroll(
+  ref: RefObject<HTMLElement | null>,
+  deps: readonly unknown[] = [],
+) {
   useEffect(() => {
     const root = ref.current
     if (!root) return

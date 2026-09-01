@@ -4,9 +4,7 @@ import { clearApiKey, getApiKey, setApiKey } from './api/client'
 import App from './App'
 
 vi.mock('./components/WelcomePage', () => ({
-  default: ({ onEnter }: { onEnter: () => void }) => (
-    <button onClick={onEnter}>open login</button>
-  ),
+  default: ({ onEnter }: { onEnter: () => void }) => <button onClick={onEnter}>open login</button>,
 }))
 
 vi.mock('./components/LoginGate', () => ({

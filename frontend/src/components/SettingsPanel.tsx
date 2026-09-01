@@ -96,9 +96,7 @@ export default function SettingsPanel({
                       : '本次研究已关闭'}
                 </small>
               </span>
-              <span
-                className={`toggle-switch${corroborationOverride == null ? ' inherited' : ''}`}
-              >
+              <span className={`toggle-switch${corroborationOverride == null ? ' inherited' : ''}`}>
                 <input
                   type="checkbox"
                   role="switch"

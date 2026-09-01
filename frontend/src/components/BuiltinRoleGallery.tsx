@@ -28,7 +28,7 @@ export default function BuiltinRoleGallery({ roles }: { roles: RoleInfo[] }) {
       <div className="builtin-rail-head">
         <div>
           <span className="panel-kicker">
-            <AppIcon name="bot" size={12} aria-hidden="true" /> BUILTIN / PIPELINE ORDER
+            <AppIcon name="bot" size={12} aria-hidden="true" /> 内置 / 管线角色
           </span>
           <h3 className="builtin-rail-title">内置角色</h3>
         </div>
@@ -58,7 +58,7 @@ export default function BuiltinRoleGallery({ roles }: { roles: RoleInfo[] }) {
                 </span>
                 <div className="builtin-card-name">
                   <strong>{role.label}</strong>
-                  <code>{role.name}</code>
+                  <code aria-hidden="true">{role.name}</code>
                 </div>
               </div>
               {role.description && <p className="builtin-card-desc">{role.description}</p>}

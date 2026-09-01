@@ -79,6 +79,15 @@ def test_corroboration_gate_setting_is_editable():
     assert merged.require_corroboration is True
 
 
+def test_fulltext_settings_are_editable_and_validated():
+    merged = runtime_config.apply_overrides(
+        Settings(fulltext_enabled=True),
+        {"fulltext_enabled": False, "fulltext_max_chars": 20_000},
+    )
+    assert merged.fulltext_enabled is False
+    assert merged.fulltext_max_chars == 20_000
+
+
 def test_apply_overrides_rejects_invalid():
     with pytest.raises(ValueError):
         runtime_config.apply_overrides(Settings(), {"max_concurrency": 0})

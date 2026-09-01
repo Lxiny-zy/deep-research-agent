@@ -48,14 +48,13 @@ export function nextWorkflowEdgeId(
  * Preserve persisted ids and conditions, repairing only missing or duplicate ids.
  * Parallel edges must remain independent throughout an edit/save round trip.
  */
-export function normalizeWorkflowEdges<T extends WorkflowEdgeLike>(
-  edges: ReadonlyArray<T>,
-): T[] {
+export function normalizeWorkflowEdges<T extends WorkflowEdgeLike>(edges: ReadonlyArray<T>): T[] {
   const normalized: T[] = []
   for (const edge of edges) {
-    const id = edge.id && !normalized.some((item) => item.id === edge.id)
-      ? edge.id
-      : nextWorkflowEdgeId(normalized, edge.source, edge.target)
+    const id =
+      edge.id && !normalized.some((item) => item.id === edge.id)
+        ? edge.id
+        : nextWorkflowEdgeId(normalized, edge.source, edge.target)
     normalized.push({ ...edge, id })
   }
   return normalized
@@ -100,8 +99,7 @@ export function hasSingleTerminalAgent(
   const terminals = terminalNodeKeys(nodeKeys, dependencies)
   const reportAgents = typeof agents === 'string' ? new Set([agents]) : agents
   const matching = nodeKeys.filter(
-    (_key, index) =>
-      steps[index]?.kind === 'agent' && reportAgents.has(steps[index]?.agent ?? ''),
+    (_key, index) => steps[index]?.kind === 'agent' && reportAgents.has(steps[index]?.agent ?? ''),
   )
   return terminals.size === 1 && matching.length === 1 && terminals.has(matching[0])
 }

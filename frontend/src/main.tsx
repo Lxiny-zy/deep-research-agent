@@ -9,6 +9,11 @@ import './run-page-styles.css'
 import './design-system.css'
 import './experience.css'
 import './motion.css'
+import './editorial.css'
+// Screen-only visual hierarchy; keep print overrides last.
+import './clarity.css'
+// Keep print overrides last so they can flatten the screen report layout.
+import './print.css'
 import AgentSquarePage from './pages/AgentSquarePage'
 import HistoryPage from './pages/HistoryPage'
 import LiveTelemetryPreviewPage from './pages/LiveTelemetryPreviewPage'

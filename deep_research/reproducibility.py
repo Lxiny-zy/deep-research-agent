@@ -9,7 +9,8 @@ from datetime import UTC, datetime
 from urllib.parse import urlsplit, urlunsplit
 
 from .guardrails import publisher_identity, report_eligible
-from .models import QualityMetrics, RunManifest, Source
+from .independence import cluster_sources
+from .models import QualityMetrics, RunManifest, Source, SourceIdentity
 from .persistence.repository import LeaseLostError, RunDetail
 from .tools.base import SearchTool
 
@@ -38,7 +39,7 @@ def build_run_manifest(
     query: str,
     workflow_name: str,
     workflow_definition: dict,
-    settings: dict[str, bool | int | float | None],
+    settings: dict[str, bool | int | float | str | None],
     llm_model: str,
     llm_endpoint: str | None,
     search_backend: str,
@@ -120,11 +121,23 @@ def quality_metrics(detail: RunDetail, *, require_corroboration: bool = False) -
     disputed = sum(f.verification.corroboration_status == "disputed" for f in findings)
     citations = set(detail.report.citations if detail.report is not None else [])
     snapshot_urls = {source.url for source in detail.sources}
-    publishers = {
-        publisher_identity(source.url)
-        for source in detail.sources
-        if publisher_identity(source.url)
-    }
+    # 与交叉印证门禁同口径：按"同一篇工作 / 同一团队"聚类，不是按域名去重。
+    # 两处口径不一致会让报告显示"3 个独立发布方"而门禁按 1 个判——自相矛盾的指标
+    # 比没有指标更糟。
+    publishers = cluster_sources(
+        {
+            source.url: SourceIdentity(
+                doi=source.scholarly.doi if source.scholarly else "",
+                work_id=source.scholarly.work_id if source.scholarly else "",
+                title=source.title,
+                authors=list(source.scholarly.authors) if source.scholarly else [],
+                domain=publisher_identity(source.url),
+                retracted=source.scholarly.retracted if source.scholarly else None,
+                section=source.scholarly.section if source.scholarly else "",
+            )
+            for source in detail.sources
+        }
+    ).count([source.url for source in detail.sources])
     blocked = 0
     for event in detail.events:
         if event.data and event.data.get("category") == "source_policy":
@@ -149,7 +162,7 @@ def quality_metrics(detail: RunDetail, *, require_corroboration: bool = False) -
         verified_finding_rate=rate(verified),
         supported_finding_rate=rate(supported),
         eligible_finding_rate=rate(eligible),
-        independent_publishers=len(publishers),
+        independent_publishers=publishers,
         blocked_sources=blocked,
         total_tokens=detail.total_tokens,
         elapsed_seconds=round(detail.elapsed, 3),

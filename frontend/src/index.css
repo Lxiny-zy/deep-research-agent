@@ -30,7 +30,11 @@
   --accent-secondary: #ffe3a3;
   --accent-hover: #c9a227;
   --accent-gradient: linear-gradient(135deg, #ffe3a3 0%, #f5d061 42%, #c9a227 100%);
-  --accent-gradient-soft: linear-gradient(135deg, rgba(255, 227, 163, 0.14), rgba(201, 162, 39, 0.06));
+  --accent-gradient-soft: linear-gradient(
+    135deg,
+    rgba(255, 227, 163, 0.14),
+    rgba(201, 162, 39, 0.06)
+  );
 
   /* —— 语义色（收敛到金/琥珀谱系）—— */
   --success: #f5d061;
@@ -56,9 +60,9 @@
   --shadow-xl: 0 16px 64px rgba(0, 0, 0, 0.7);
 
   /* —— 字体 —— */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-  --font-display: 'Playfair Display', 'Noto Serif SC', Georgia, 'Songti SC', serif;
+  --font-sans: Arial, Helvetica, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --font-display: Georgia, 'Times New Roman', 'Noto Serif SC', 'Songti SC', serif;
 
   /* —— 几何 / 尺寸 —— */
   --radius-none: 0px;
@@ -125,13 +129,21 @@ body::after {
 }
 
 @keyframes grid-drift {
-  0% { transform: translate(0, 0); }
-  100% { transform: translate(60px, 60px); }
+  0% {
+    transform: translate(0, 0);
+  }
+  100% {
+    transform: translate(60px, 60px);
+  }
 }
 
 @keyframes ambient-pulse {
-  0% { opacity: 0.6; }
-  100% { opacity: 1; }
+  0% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 
 ::selection {
@@ -164,7 +176,12 @@ body::after {
 /* ============================================================================
    排版
    ========================================================================== */
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   font-family: var(--font-display);
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -172,9 +189,15 @@ h1, h2, h3, h4, h5, h6 {
   line-height: 1.2;
 }
 
-h1 { font-size: 2.5rem; }
-h2 { font-size: 2rem; }
-h3 { font-size: 1.5rem; }
+h1 {
+  font-size: 2.5rem;
+}
+h2 {
+  font-size: 2rem;
+}
+h3 {
+  font-size: 1.5rem;
+}
 
 a {
   color: var(--accent-primary);
@@ -227,8 +250,14 @@ p {
 }
 
 @keyframes scanline {
-  0%, 100% { transform: translateY(-100%); opacity: 0; }
-  50% { opacity: 0.3; }
+  0%,
+  100% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 /* 品牌区 */
@@ -274,8 +303,12 @@ p {
 }
 
 @keyframes icon-rotate {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .brand-text h1 {
@@ -631,7 +664,7 @@ p {
 
 .btn-primary {
   background: var(--accent-gradient);
-  color: #fff;
+  color: var(--editorial-paper, #f9f8f6);
   border-color: var(--accent-primary);
 }
 
@@ -680,7 +713,9 @@ p {
 /* ============================================================================
    表单元素 - 深色主题强制样式，彻底避免白色框
    ========================================================================== */
-.input, .textarea, select {
+.input,
+.textarea,
+select {
   width: 100%;
   padding: 12px 16px;
   background: var(--surface-2) !important;
@@ -712,11 +747,11 @@ select option {
 }
 
 /* Input 类型特定样式 */
-input[type="text"],
-input[type="password"],
-input[type="email"],
-input[type="number"],
-input[type="search"],
+input[type='text'],
+input[type='password'],
+input[type='email'],
+input[type='number'],
+input[type='search'],
 textarea {
   background-color: var(--surface-2) !important;
   color: var(--text-primary) !important;
@@ -729,8 +764,8 @@ textarea {
 }
 
 /* Checkbox 和 Radio 自定义样式 */
-input[type="checkbox"],
-input[type="radio"] {
+input[type='checkbox'],
+input[type='radio'] {
   width: 18px;
   height: 18px;
   border: 2px solid var(--border-primary) !important;
@@ -743,14 +778,14 @@ input[type="radio"] {
   appearance: none !important;
 }
 
-input[type="checkbox"]:checked,
-input[type="radio"]:checked {
+input[type='checkbox']:checked,
+input[type='radio']:checked {
   background-color: var(--accent-primary) !important;
   border-color: var(--accent-primary) !important;
 }
 
 /* 勾选标记：纯 CSS 绘制（两段边框旋转 45 度），不依赖字符/表情符号 */
-input[type="checkbox"]:checked::after {
+input[type='checkbox']:checked::after {
   content: '';
   position: absolute;
   top: 45%;
@@ -762,11 +797,11 @@ input[type="checkbox"]:checked::after {
   transform: translate(-50%, -50%) rotate(-45deg);
 }
 
-input[type="radio"] {
+input[type='radio'] {
   border-radius: 50%;
 }
 
-input[type="radio"]:checked::after {
+input[type='radio']:checked::after {
   content: '';
   position: absolute;
   top: 50%;
@@ -881,8 +916,15 @@ input:disabled {
 }
 
 @keyframes pulse-dot {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(0.8); }
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.8);
+  }
 }
 
 /* ============================================================================
@@ -975,15 +1017,31 @@ input:disabled {
   color: var(--text-tertiary);
 }
 
-.mt-1 { margin-top: 8px; }
-.mt-2 { margin-top: 16px; }
-.mt-3 { margin-top: 24px; }
-.mt-4 { margin-top: 32px; }
+.mt-1 {
+  margin-top: 8px;
+}
+.mt-2 {
+  margin-top: 16px;
+}
+.mt-3 {
+  margin-top: 24px;
+}
+.mt-4 {
+  margin-top: 32px;
+}
 
-.mb-1 { margin-bottom: 8px; }
-.mb-2 { margin-bottom: 16px; }
-.mb-3 { margin-bottom: 24px; }
-.mb-4 { margin-bottom: 32px; }
+.mb-1 {
+  margin-bottom: 8px;
+}
+.mb-2 {
+  margin-bottom: 16px;
+}
+.mb-3 {
+  margin-bottom: 24px;
+}
+.mb-4 {
+  margin-bottom: 32px;
+}
 
 /* ============================================================================
    响应式

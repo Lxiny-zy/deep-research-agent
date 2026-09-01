@@ -17,7 +17,7 @@ from ..llm import LLM
 from ..observability import Tracer
 from ..registry import available, register
 from ..workflow import GeneratedWorkflow, Step, validate_workflow
-from .base import Blackboard, RunContext
+from .base import Blackboard, RunContext, direct_system_prompt
 
 # 可被 Coordinator 编排的内置角色及其用途（仅白名单内角色会进 prompt；终端须能产出报告）。
 _ROLE_HINTS = {
@@ -58,7 +58,12 @@ class Coordinator:
         self.tracer.emit("COORDINATOR", "start", "按问题自组合研究流程…")
         avail = {n for n in available() if n in _ROLE_HINTS}  # 只暴露可编排的内置角色
         hint = bb.scratch.pop("replan_hint", "")  # 引擎重规划时回灌的修正提示（一次性）
-        steps = await self._compose_steps(bb.query, avail, hint)
+        steps = await self._compose_steps(
+            bb.query,
+            avail,
+            hint,
+            system=ctx.system_prompt(self.system),
+        )
         bb.scratch["composed_workflow"] = GeneratedWorkflow(steps=steps).model_dump()
         self.tracer.emit(
             "COORDINATOR",
@@ -68,7 +73,14 @@ class Coordinator:
         )
         return bb
 
-    async def _compose_steps(self, query: str, avail: set[str], hint: str = "") -> list[Step]:
+    async def _compose_steps(
+        self,
+        query: str,
+        avail: set[str],
+        hint: str = "",
+        *,
+        system: str | None = None,
+    ) -> list[Step]:
         roles = "\n".join(f"- {n}：{_ROLE_HINTS[n]}" for n in sorted(avail))
         user = f"研究问题：{query}\n\n【可用角色】\n{roles}\n\n请输出步骤列表。"
         if hint:  # 引擎重规划：把上次「零产出」的修正提示并入
@@ -76,7 +88,9 @@ class Coordinator:
         cap = self.settings.max_rounds
         for attempt in range(2):  # 一次生成 + 一次自修复
             try:
-                gen = await self.llm.parse(self.system, user, GeneratedWorkflow)
+                gen = await self.llm.parse(
+                    direct_system_prompt(system or self.system), user, GeneratedWorkflow
+                )
             except Exception as e:  # 网络/解析彻底失败：回退默认深度流程，保证仍出报告
                 self.tracer.emit("COORDINATOR", "info", f"生成流程失败（{e}），回退默认深度流程")
                 return self._fallback()

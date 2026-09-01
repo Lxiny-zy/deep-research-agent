@@ -7,8 +7,12 @@ function Harness() {
   useRevealOnScroll(ref)
   return (
     <div ref={ref}>
-      <section data-reveal="1" data-testid="a">A</section>
-      <section data-reveal="2" data-testid="b">B</section>
+      <section data-reveal="1" data-testid="a">
+        A
+      </section>
+      <section data-reveal="2" data-testid="b">
+        B
+      </section>
     </div>
   )
 }

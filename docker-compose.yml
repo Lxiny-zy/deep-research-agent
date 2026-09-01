@@ -1,6 +1,12 @@
 # 一键起全栈：PostgreSQL + API（含自动迁移）。
 #   docker compose up --build      # 构建并启动，浏览器开 http://127.0.0.1:8000
 #   docker compose down            # 停止服务并保留数据卷
+#
+# 执行拓扑（DR_EXECUTION_MODE，默认 inline）：
+#   inline  API 进程自己执行研究任务；单容器即可跑通，worker 服务无需启动。
+#   worker  API 只入队，执行交给独立的 worker 容器，可水平扩展：
+#     DR_EXECUTION_MODE=worker docker compose --profile worker up --build --scale worker=3
+#   两种模式共用同一套租约 fencing 与 checkpoint 恢复，切换不改变任务语义。
 # LLM/检索密钥与 POSTGRES_PASSWORD 从项目根 .env 读取（先 cp .env.example .env 填好）；
 # DATABASE_URL 在此固定指向 compose 内的 db 服务，覆盖 .env 里的本地默认值。
 
@@ -35,7 +41,7 @@ services:
 
   api:
     build: .
-    environment:
+    environment: &app_env
       # 启用生产配置校验：强制 API 鉴权、PostgreSQL 与 Catalog 加密。
       APP_ENV: production
       # 指向 compose 内的 Postgres（async 驱动）
@@ -73,11 +79,35 @@ services:
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
       # 前端设置中心写入的运行时配置持久化到独立数据卷，容器重建不丢失
       RUNTIME_CONFIG_PATH: /app/data/runtime_config.json
+      # inline（默认）＝API 自己执行；worker＝只入队，由 worker 服务执行。
+      DR_EXECUTION_MODE: ${DR_EXECUTION_MODE:-inline}
+      DR_WORKER_POLL_SECONDS: ${DR_WORKER_POLL_SECONDS:-1.0}
+      DR_MAX_CLAIM_ATTEMPTS: ${DR_MAX_CLAIM_ATTEMPTS:-3}
+      # Planner/artifact/runner settings are shared by API and worker so a
+      # plan can be resumed regardless of which process claims the run.
+      DR_ORCHESTRATION_MODE: ${DR_ORCHESTRATION_MODE:-planner-driven}
+      DR_ARTIFACT_ROOT: ${DR_ARTIFACT_ROOT:-/app/artifacts}
+      DR_ARTIFACT_MAX_BYTES: ${DR_ARTIFACT_MAX_BYTES:-104857600}
+      DR_RUNNER_ENABLED: ${DR_RUNNER_ENABLED:-true}
+      DR_RUNNER_DEFAULT_TIMEOUT: ${DR_RUNNER_DEFAULT_TIMEOUT:-300}
+      DR_RUNNER_MAX_OUTPUT_BYTES: ${DR_RUNNER_MAX_OUTPUT_BYTES:-256000}
+      DR_RUNNER_MAX_PROCESSES: ${DR_RUNNER_MAX_PROCESSES:-2}
+      DR_RUNNER_ALLOWED_OPERATIONS: ${DR_RUNNER_ALLOWED_OPERATIONS:-archive.unpack,pdf.convert,latex.compile}
     # 仅绑回环：对外访问应经反向代理（nginx/caddy）做 TLS 与速率限制
     ports:
       - "${APP_BIND:-127.0.0.1}:8000:8000"
     volumes:
       - appdata:/app/data
+      - artifacts:/app/artifacts
+    # The application only needs writable data volumes.  Keep the image and
+    # process namespace read-only and drop ambient capabilities in production.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
     depends_on:
       db:
         condition: service_healthy
@@ -95,6 +125,42 @@ services:
         max-size: "10m"
         max-file: "5"
 
+  # 独立执行进程。仅在 DR_EXECUTION_MODE=worker 时需要（compose profile 控制），
+  # 可任意扩副本：全局并发 = 副本数 × MAX_ACTIVE_RUNS。
+  worker:
+    build: .
+    profiles: ["worker"]
+    command: ["python", "-m", "deep_research.worker"]
+    environment:
+      <<: *app_env
+      DR_EXECUTION_MODE: worker
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - appdata:/app/data
+      - artifacts:/app/artifacts
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    # 镜像自带的 HEALTHCHECK 探的是 :8000，worker 不监听端口，必须显式关掉。
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    # 优雅退出：停止领取新任务并等待在跑的研究结束。超时被强杀也无妨——
+    # 租约到期后另一个 worker 会从 checkpoint 接管续跑。
+    stop_grace_period: 120s
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "5"
+
 volumes:
   pgdata:
   appdata:
+  artifacts:

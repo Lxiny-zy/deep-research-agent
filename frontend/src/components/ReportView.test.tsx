@@ -287,3 +287,55 @@ describe('ReportView 可审计证据链', () => {
     expect(screen.getAllByText('[1]').length).toBeGreaterThan(0)
   })
 })
+
+// 结构化文档把「## 参考来源」从正文剥进独立字段（report/assemble.py 的 _body），
+// 所以屏幕上的来源清单必须由本组件补渲染，否则 run 一完成、/document 一响应，
+// 读者就只剩下角标、没有可平铺核对的来源列表。
+describe('ReportView 参考来源', () => {
+  const BODY_ONLY = '# 结论\n\nGPU 出货量创新高 [1]，但整机功耗持续上升 [2]。'
+
+  it('正文已被剥离参考来源段时，仍按 citations 渲染来源清单', () => {
+    render(
+      <ReportView
+        markdown={BODY_ONLY}
+        streaming={false}
+        findings={FINDINGS}
+        citations={CITATIONS}
+      />,
+    )
+
+    const section = screen.getByRole('region', { name: '参考来源' })
+    expect(within(section).getByRole('link', { name: /a\.example\.com\/report/ })).toHaveAttribute(
+      'href',
+      'https://a.example.com/report',
+    )
+    expect(within(section).getAllByRole('listitem')).toHaveLength(2)
+  })
+
+  it('正文自带参考来源段时不渲染两遍', () => {
+    render(
+      <ReportView
+        markdown={MARKDOWN}
+        streaming={false}
+        findings={FINDINGS}
+        citations={CITATIONS}
+      />,
+    )
+
+    // MARKDOWN 尾部本就有一段「## 参考来源」；剥离后只应剩独立成节的那一个
+    expect(screen.getAllByText('参考来源')).toHaveLength(1)
+  })
+
+  it('流式阶段不渲染来源清单——此时的 citations 是会变的残缺快照', () => {
+    render(
+      <ReportView
+        markdown={BODY_ONLY}
+        streaming={true}
+        findings={FINDINGS}
+        citations={CITATIONS}
+      />,
+    )
+
+    expect(screen.queryByRole('region', { name: '参考来源' })).not.toBeInTheDocument()
+  })
+})

@@ -13,6 +13,7 @@ interface NumField {
     | 'max_rounds'
     | 'max_concurrency'
     | 'results_per_search'
+    | 'fulltext_max_chars'
     | 'max_run_seconds'
   label: string
   min: number
@@ -24,6 +25,7 @@ const NUM_FIELDS: NumField[] = [
   { key: 'max_rounds', label: '反思补洞轮数', min: 0, max: 5 },
   { key: 'max_concurrency', label: '并行检索上限', min: 1, max: 16 },
   { key: 'results_per_search', label: '每问检索来源数', min: 1, max: 15 },
+  { key: 'fulltext_max_chars', label: 'arXiv 全文字符预算', min: 1_000, max: 200_000 },
   { key: 'max_run_seconds', label: '整次运行期限（秒）', min: 1, max: 86400 },
 ]
 
@@ -35,6 +37,8 @@ interface FormState {
   max_rounds: number
   max_concurrency: number
   results_per_search: number
+  fulltext_enabled: boolean
+  fulltext_max_chars: number
   request_timeout: number
   max_run_seconds: number
   require_corroboration: boolean
@@ -49,6 +53,8 @@ function toForm(c: ConfigView): FormState {
     max_rounds: c.max_rounds,
     max_concurrency: c.max_concurrency,
     results_per_search: c.results_per_search,
+    fulltext_enabled: c.fulltext_enabled,
+    fulltext_max_chars: c.fulltext_max_chars,
     request_timeout: c.request_timeout,
     max_run_seconds: c.max_run_seconds,
     require_corroboration: c.require_corroboration ?? false,
@@ -83,7 +89,8 @@ function EffectiveConfig({ config }: { config: ConfigView }) {
         </Link>
       </div>
       <p className="hint" style={{ marginBottom: 14 }}>
-        模型与检索 Key 现统一在角色广场维护。角色绑定的档案 / Key 池优先生效,以下环境变量仅作未配置时的兜底。
+        模型与检索 Key 现统一在角色广场维护。角色绑定的档案 / Key
+        池优先生效,以下环境变量仅作未配置时的兜底。
       </p>
       <div className="list-row">
         <div>
@@ -130,6 +137,8 @@ export default function SettingsPage() {
       max_rounds: form.max_rounds,
       max_concurrency: form.max_concurrency,
       results_per_search: form.results_per_search,
+      fulltext_enabled: form.fulltext_enabled,
+      fulltext_max_chars: form.fulltext_max_chars,
       request_timeout: form.request_timeout,
       max_run_seconds: form.max_run_seconds,
       require_corroboration: form.require_corroboration,
@@ -147,11 +156,17 @@ export default function SettingsPage() {
     <div className="stack page-stack" ref={pageRef}>
       <header className="page-intro settings-intro page-intro-compact intro-unveil">
         <div>
-          <span className="eyebrow"><AppIcon name="settings" size={14} aria-hidden="true" /> SYSTEM / SETTINGS</span>
-          <h1>让研究按照<em>你的规则</em>运行。</h1>
+          <span className="eyebrow">
+            <AppIcon name="settings" size={14} aria-hidden="true" /> SYSTEM / SETTINGS
+          </span>
+          <h1>
+            让研究按照<em>你的规则</em>运行。
+          </h1>
           <p>管理默认模型、并行策略与反思预算。全局设置是长期偏好，单次研究仍可在新建页覆盖。</p>
         </div>
-        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="sliders" size={40} strokeWidth={1.2} /></div>
+        <div className="page-intro-mark" aria-hidden="true">
+          <AppIcon name="sliders" size={40} strokeWidth={1.2} />
+        </div>
       </header>
       {data && <EffectiveConfig config={data} />}
 
@@ -162,7 +177,12 @@ export default function SettingsPage() {
         </p>
 
         {isLoading && <Skeleton rows={6} />}
-        {isError && <p className="error-text"><AppIcon name="circle-x" size={14} aria-hidden="true" />{error instanceof Error ? error.message : '加载失败'}</p>}
+        {isError && (
+          <p className="error-text">
+            <AppIcon name="circle-x" size={14} aria-hidden="true" />
+            {error instanceof Error ? error.message : '加载失败'}
+          </p>
+        )}
 
         {form && data && (
           <div className="stack">
@@ -179,22 +199,60 @@ export default function SettingsPage() {
               <div className="settings-grid global-model-grid">
                 <label className="settings-item">
                   <span className="muted small">默认模型 ID</span>
-                  <input className="input" value={form.llm_model} onChange={(e) => setForm({ ...form, llm_model: e.target.value })} placeholder="gpt-4o-mini" />
+                  <input
+                    className="input"
+                    value={form.llm_model}
+                    onChange={(e) => setForm({ ...form, llm_model: e.target.value })}
+                    placeholder="gpt-4o-mini"
+                  />
                 </label>
                 <label className="settings-item">
                   <span className="muted small">Base URL</span>
-                  <input className="input" value={form.llm_base_url} onChange={(e) => setForm({ ...form, llm_base_url: e.target.value })} placeholder="https://api.openai.com/v1" />
+                  <input
+                    className="input"
+                    value={form.llm_base_url}
+                    onChange={(e) => setForm({ ...form, llm_base_url: e.target.value })}
+                    placeholder="https://api.openai.com/v1"
+                  />
                 </label>
               </div>
               {!editingGlobalKey ? (
                 <div className="saved-credential-row">
-                  <div><strong>全局 API Key</strong><small>密钥不会回显；更新后立即成为全局兜底凭据</small></div>
-                  <button type="button" className="btn ghost small" onClick={() => setEditingGlobalKey(true)}>{data.llm_api_key_set ? '更换密钥' : '设置密钥'}</button>
+                  <div>
+                    <strong>全局 API Key</strong>
+                    <small>密钥不会回显；更新后立即成为全局兜底凭据</small>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn ghost small"
+                    onClick={() => setEditingGlobalKey(true)}
+                  >
+                    {data.llm_api_key_set ? '更换密钥' : '设置密钥'}
+                  </button>
                 </div>
               ) : (
                 <div className="credential-input-row">
-                  <input className="input" type="password" name="global-llm-key-new" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true" value={form.llm_api_key} onChange={(e) => setForm({ ...form, llm_api_key: e.target.value })} placeholder="输入新的全局模型 API Key" />
-                  <button type="button" className="btn ghost small" onClick={() => { setForm({ ...form, llm_api_key: '' }); setEditingGlobalKey(false) }}>取消</button>
+                  <input
+                    className="input"
+                    type="password"
+                    name="global-llm-key-new"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    value={form.llm_api_key}
+                    onChange={(e) => setForm({ ...form, llm_api_key: e.target.value })}
+                    placeholder="输入新的全局模型 API Key"
+                  />
+                  <button
+                    type="button"
+                    className="btn ghost small"
+                    onClick={() => {
+                      setForm({ ...form, llm_api_key: '' })
+                      setEditingGlobalKey(false)
+                    }}
+                  >
+                    取消
+                  </button>
                 </div>
               )}
             </div>
@@ -212,6 +270,30 @@ export default function SettingsPage() {
                   />
                 </label>
               ))}
+              <label className="safety-gate-setting global-gate">
+                <span className="safety-gate-heading">
+                  <AppIcon name="file" size={18} aria-hidden="true" />
+                  <span className="safety-gate-copy">
+                    <strong>启用 arXiv LaTeX 全文</strong>
+                    <small id="global-fulltext-help">
+                      优先获取 e-print 并按章节筛选；下载或解析失败时自动回退到摘要。
+                    </small>
+                  </span>
+                </span>
+                <span className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-label="启用 arXiv LaTeX 全文"
+                    aria-describedby="global-fulltext-help"
+                    checked={form.fulltext_enabled}
+                    onChange={(event) =>
+                      setForm({ ...form, fulltext_enabled: event.target.checked })
+                    }
+                  />
+                  <span className="toggle-track" aria-hidden="true" />
+                </span>
+              </label>
               <label className="settings-item">
                 <span className="muted small">请求超时（秒）</span>
                 <input
@@ -251,12 +333,31 @@ export default function SettingsPage() {
 
             <div className="row between" style={{ marginTop: 18 }}>
               <span className="hint">
-                {update.isSuccess && !update.isPending && <><AppIcon name="check-circle" size={14} aria-hidden="true" />已保存</>}
-                {update.isError &&
-                  <><AppIcon name="circle-x" size={14} aria-hidden="true" />{update.error instanceof Error ? update.error.message : '保存失败'}</>}
+                {update.isSuccess && !update.isPending && (
+                  <>
+                    <AppIcon name="check-circle" size={14} aria-hidden="true" />
+                    已保存
+                  </>
+                )}
+                {update.isError && (
+                  <>
+                    <AppIcon name="circle-x" size={14} aria-hidden="true" />
+                    {update.error instanceof Error ? update.error.message : '保存失败'}
+                  </>
+                )}
               </span>
-              <button className="btn btn-primary" onClick={save} disabled={update.isPending} type="button">
-                <AppIcon name={update.isPending ? 'loader' : 'save'} size={15} aria-hidden="true" className={update.isPending ? 'spin' : ''} />
+              <button
+                className="btn btn-primary"
+                onClick={save}
+                disabled={update.isPending}
+                type="button"
+              >
+                <AppIcon
+                  name={update.isPending ? 'loader' : 'save'}
+                  size={15}
+                  aria-hidden="true"
+                  className={update.isPending ? 'spin' : ''}
+                />
                 {update.isPending ? '保存中…' : '保存设置'}
               </button>
             </div>

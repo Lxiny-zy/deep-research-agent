@@ -23,7 +23,7 @@ DEEP = Workflow(
 # 快速查询：跳过规划与反思，直接研究并综合（适合简单、单点问题，省时省 token）。
 QUICK = Workflow(
     name="quick",
-    description="快速查询：直接检索并综合，省略规划与反思",
+    description="快速查询：规划后直接检索并综合，省略反思补洞",
     steps=[
         Step(agent="planner"),
         Step(agent="researcher"),
@@ -31,13 +31,31 @@ QUICK = Workflow(
     ],
 )
 
-WORKFLOWS: dict[str, Workflow] = {wf.name: wf for wf in (DEEP, QUICK)}
+# 轻量简报：与 quick 共享最短的研究链，但以独立名称暴露给意图路由和前端，
+# 便于后续替换为专门的简报角色而不改变调用方契约。
+BRIEF = Workflow(
+    name="brief",
+    description="轻量研究简报：规划、检索后直接生成短报告，不做反思补洞",
+    steps=[
+        Step(agent="planner"),
+        Step(agent="researcher"),
+        Step(agent="synthesizer"),
+    ],
+)
 
 # 带复核：完整深度研究后追加一个 Critic 角色做批判性复核。
 # 注意：新增这条流程只是在 steps 里多写一行 "critic"——没有改引擎、没有改编排器。
 REVIEWED = Workflow(
     name="reviewed",
     description="深度研究 + 报告复核：在综合后由 Critic 角色批判性复核",
+    steps=[*DEEP.steps, Step(agent="critic")],
+)
+
+# AI4S/HSI literature review keeps the established deep chain and adds the
+# existing critic role as a final audit stage.
+HSI_REVIEW = Workflow(
+    name="hsi_review",
+    description="AI4S/HSI 文献审查：沿用深度证据链并追加批判性复核",
     steps=[*DEEP.steps, Step(agent="critic")],
 )
 
@@ -57,17 +75,80 @@ TEAMS = Workflow(
     steps=[Step(agent="planner"), Step(kind="team_fanout", aggregator="aggregator")],
 )
 
-# 意图门禁（安全主线）：先识别意图与风险，再决定是否研究以及怎么研究。
-# 与其他流程一样，这条只是在 steps 前面多加一个已注册角色——引擎与编排器零改动。
+# 历史兼容流程：全局引擎门禁已经在工作流启动前执行；这里保留
+# ``intent_router`` 仅用于旧 checkpoint/显式调用的兼容，不是公共模板或安全保证。
 GUARDED = Workflow(
     name="guarded",
     description="意图门禁 + 深度研究：先识别任务/风险意图，拒识高危请求，再按意图执行",
     steps=[Step(agent="intent_router"), *DEEP.steps],
 )
 
-WORKFLOWS = {wf.name: wf for wf in (DEEP, QUICK, REVIEWED, AUTO, TEAMS, GUARDED)}
+# 事实核查：保留一轮证据反思，限制补洞成本；最终仍由 Synthesizer 产出可引用报告。
+FACT_CHECK = Workflow(
+    name="fact_check",
+    description="事实核查：规划、检索并进行一轮证据补洞后生成带引用报告",
+    steps=[
+        Step(agent="planner"),
+        Step(agent="researcher"),
+        Step(kind="reflect_loop", reflector="reflector", researcher="researcher", max_rounds=1),
+        Step(agent="synthesizer"),
+    ],
+)
+
+# 动态监测：按规划切分主题后限量并行，避免监测类请求无限扩大团队数量；Aggregator
+# 是 team_fanout 的终端角色，产出与 teams 相同的可引用报告。
+MONITORING = Workflow(
+    name="monitoring",
+    description="动态监测：规划监测面并行检索，最多四个子团队后归并报告",
+    steps=[
+        Step(agent="planner"),
+        Step(kind="team_fanout", aggregator="aggregator", max_teams=4),
+    ],
+)
+
+WORKFLOWS = {
+    wf.name: wf
+    for wf in (
+        DEEP,
+        QUICK,
+        BRIEF,
+        REVIEWED,
+        HSI_REVIEW,
+        AUTO,
+        TEAMS,
+        GUARDED,
+        FACT_CHECK,
+        MONITORING,
+    )
+}
 
 DEFAULT_WORKFLOW = "deep"
+
+# User-facing templates are deliberately small. Users choose a research
+# outcome (or the HSI-specific application), not implementation details such
+# as fan-out, a critic-only pass, or the global safety gate.
+PUBLIC_WORKFLOW_NAMES = ("deep", "quick", "hsi_review")
+PUBLIC_WORKFLOWS = {name: WORKFLOWS[name] for name in PUBLIC_WORKFLOW_NAMES}
+
+
+def is_public_workflow(name: str | None) -> bool:
+    """Return whether ``name`` is a selectable built-in template."""
+
+    return isinstance(name, str) and name in PUBLIC_WORKFLOWS
+
+# ``guarded`` was the original way to opt into the intent gate. The gate is
+# now applied by ``DeepResearchAgent`` before every workflow (including custom
+# and planner-authored workflows), so exposing a second guarded copy only
+# creates two competing concepts in the UI. Keep the complete registry for
+# checkpoint/CLI compatibility, but give product surfaces an explicit small
+# allow-list.
+RESERVED_WORKFLOW_NAMES = frozenset({*WORKFLOWS, "guarded"})
+
+
+def public_workflows() -> dict[str, Workflow]:
+    """Return built-in workflows intended for user selection/template cards."""
+
+    return {name: WORKFLOWS[name] for name in PUBLIC_WORKFLOW_NAMES if name in WORKFLOWS}
 
 
 def get_workflow(name: str | None) -> Workflow:

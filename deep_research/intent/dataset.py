@@ -7,10 +7,10 @@
 数据切分见 ``scripts/train_intent_model.py``：按标签分层、固定随机种子切
 train/dev，保证结果可复现（同一份数据永远得到同一个模型文件）。
 
-注意：``factual_lookup`` / ``exploratory`` 两类没有对应的 L1 规则，
-它们完全由 L2 承担——这正是本地模型存在的意义。而 comparative /
-causal_analysis / temporal_trend 虽然有规则覆盖显式表达，仍需在数据里
-保留其**隐式表达**样本（"选 A 还是 B"、"是什么导致了"），让 L2 兜住规则漏掉的。
+注意：随包分发的兼容模型仍覆盖原有五类；新增标签先由高精度 L1 规则和 L3
+兜底，避免小样本多分类模型未经达标评测就替换线上权重。这里仍保留全部标签的
+训练样本，供后续扩充语料、校准并发布新版 L2。每类都应包含规则难覆盖的隐式表达，
+让通过门槛的新模型真正补规则的漏，而不是重复记忆显式关键词。
 """
 
 from __future__ import annotations
@@ -97,6 +97,48 @@ QUERY_INTENT_DATA: tuple[tuple[str, str], ...] = (
     ("多智能体协作失败通常是哪些因素造成的", "causal_analysis"),
     ("模型对齐税产生的机理", "causal_analysis"),
     ("向量检索召回率上不去，根源可能在哪", "causal_analysis"),
+    # --- definition_explanation：概念/定义解释 ---
+    ("解释一下 RAG 的工作原理", "definition_explanation"),
+    ("什么是 event sourcing", "definition_explanation"),
+    ("define zero trust architecture", "definition_explanation"),
+    ("给我讲讲向量数据库的核心概念", "definition_explanation"),
+    ("attention 机制具体指什么", "definition_explanation"),
+    # --- procedural_guidance：实施/操作步骤 ---
+    ("如何部署一个生产级的 Milvus 集群", "procedural_guidance"),
+    ("怎么给 FastAPI 接入 OpenTelemetry", "procedural_guidance"),
+    ("how to set up a CI pipeline for Python", "procedural_guidance"),
+    ("配置 Kubernetes ingress 的步骤", "procedural_guidance"),
+    ("教我一步步建立一个 RAG 原型", "procedural_guidance"),
+    # --- recommendation：带约束的推荐决策 ---
+    ("帮我推荐适合小团队的向量数据库", "recommendation"),
+    ("企业知识库应该选哪种 embedding 模型", "recommendation"),
+    ("which observability stack would you recommend", "recommendation"),
+    ("预算有限时最值得采用的缓存方案是什么", "recommendation"),
+    ("给这个场景一个明确的技术选型建议", "recommendation"),
+    # --- fact_check：验证具体说法 ---
+    ("核实一下 GPT-4 是否支持一百万上下文", "fact_check"),
+    ("这条关于 Kubernetes 的说法是否属实", "fact_check"),
+    ("fact check the claim that RAG always reduces hallucinations", "fact_check"),
+    ("验证这组统计数据的来源和准确性", "fact_check"),
+    ("帮我查证一篇文章里的关键事实", "fact_check"),
+    # --- summarization：压缩已有主题/材料 ---
+    ("把这份技术报告总结成五个要点", "summarization"),
+    ("概括一下这篇论文的主要结论", "summarization"),
+    ("summarize the main findings of this study", "summarization"),
+    ("给管理层一份简明摘要", "summarization"),
+    ("提炼这组资料的共同观点", "summarization"),
+    # --- multi_hop_research：跨实体、跨来源关联 ---
+    ("从芯片供应链追溯到 AI 模型成本做关联分析", "multi_hop_research"),
+    ("跨领域分析云厂商和开源社区如何共同影响 RAG", "multi_hop_research"),
+    ("trace the chain from regulation to model deployment", "multi_hop_research"),
+    ("把融资、人才和模型发布串联起来研究", "multi_hop_research"),
+    ("做一次端到端的多跳检索分析", "multi_hop_research"),
+    # --- monitoring：持续跟踪最新状态 ---
+    ("持续监测主要大模型厂商的版本变化", "monitoring"),
+    ("跟踪最近一年向量数据库的产品更新", "monitoring"),
+    ("monitor the latest changes in AI regulation", "monitoring"),
+    ("关注这个项目的漏洞和发布动态", "monitoring"),
+    ("给我一份当前市场状态的动态追踪", "monitoring"),
 )
 
 

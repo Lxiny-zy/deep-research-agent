@@ -243,6 +243,31 @@ function EvidenceCard({ finding, allFindings }: { finding: Finding; allFindings:
           <blockquote cite={finding.source_url}>{quote || '未记录原文摘录'}</blockquote>
         </figure>
       )}
+      {(verification.quantity_label ||
+        verification.conditions_label ||
+        (verification.quantity_status && verification.quantity_status !== 'not_applicable')) && (
+        <div className="evidence-structured-facts">
+          {verification.quantity_label && (
+            <p>
+              <strong>数值：</strong>
+              {verification.quantity_label}
+            </p>
+          )}
+          {verification.conditions_label && (
+            <p>
+              <strong>成立条件：</strong>
+              {verification.conditions_label}
+            </p>
+          )}
+          {verification.quantity_status && verification.quantity_status !== 'not_applicable' && (
+            <p className="muted small">
+              <strong>数值校验：</strong>
+              {verification.quantity_status === 'verified' ? '已在原文中核对' : '未通过原文核对'}
+              {verification.quantity_reason && `（${verification.quantity_reason}）`}
+            </p>
+          )}
+        </div>
+      )}
       <VerificationBadges v={verification} />
       {hash && (
         <span className="evidence-hash" title={`检索快照内容哈希：${hash}`}>

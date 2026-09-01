@@ -1,0 +1,517 @@
+/* 打印布局：屏幕上的应用 → 纸上的报告。
+ *
+ * 这不是"把屏幕缩小"，是另一种信息组织。屏幕上证据装置是**按需**的（点 [n] 开侧栏，
+ * 一次只看一条）；纸上没有"按需"，所以装置必须变成尾部附录，一次性全部呈现。
+ *
+ * 必须解掉滚动容器。design-system.css 里 .report-view-body 是 overflow:hidden、
+ * 正文子元素 overflow-y:auto——打印时滚动容器只输出可视区域，不解掉就只印得出第一屏。
+ * 这是本文件存在的首要原因。
+ *
+ * 已知限制（浏览器打印的固有约束，不是没做）：
+ *   1. 自定义页眉页脚做不了。Chrome/Edge 不支持 @page 的 margin box
+ *      （@top-center { content: ... }），position:fixed 也只在首页渲染。页码与日期
+ *      只能用浏览器自带的那套，且用户可在打印对话框里关掉。
+ *   2. 页底脚注做不了（float: footnote 无支持）。证据装置本来就是正文的数倍体积，
+ *      只能走尾注附录，所以这条影响不大。
+ *   3. 分页控制可用且够用：break-inside/break-after 支持良好，<thead> 会自动在
+ *      每页重复——长的 benchmark 表翻页后表头还在。
+ */
+
+@page {
+  size: A4;
+  /* 上下留白略大：浏览器自带的页眉页脚就落在这里，太窄会和正文挤在一起。 */
+  margin: 16mm 14mm 18mm;
+}
+
+@media print {
+  /* --- 纸永远是白的 ------------------------------------------------------ */
+  /* 深色主题在纸上是灾难：大面积墨、反白文字、油墨浸染。强制回明色，
+     不跟随屏幕主题（图表 CSS 里有同源的 @media print 覆盖）。 */
+  :root,
+  :root[data-theme='dark'] {
+    --print-ink: #1c1c1c;
+    --print-ink-2: rgba(28, 28, 28, 0.8);
+    --print-ink-3: rgba(28, 28, 28, 0.6);
+    --print-rule: rgba(28, 28, 28, 0.2);
+    --print-wash: #efeeeb;
+  }
+
+  html,
+  body {
+    background: #f9f8f6 !important;
+    color: var(--print-ink) !important;
+    /* 纸面比屏幕小：正文降到 10.5pt，长报告才不至于翻十几页。 */
+    font-size: 10.5pt;
+    line-height: 1.55;
+  }
+
+  /* 背景色/图默认不打印（浏览器省墨策略）。徽章与表头底纹靠它区分层次，
+     所以显式要求保留——但整体配色已换成浅色，不会吃墨。 */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* --- 只留报告，其余全部隐藏 -------------------------------------------- */
+  /* 应用外壳（导航、时间线、DAG、统计条、按钮）在纸上没有意义：它们是操作入口，
+     而纸不能操作。 */
+  body > header,
+  body > nav,
+  body > footer,
+  .global-header,
+  .app-nav,
+  .app-header,
+  .app-shell > aside,
+  /* 运行头整块：标题、状态徽章、标签、操作按钮。PrintableReport 自带
+     <h1>{query}</h1> 与生成时间/运行号，留着这里会把标题印两遍。 */
+  .run-head,
+  /* 左栏是过程视图（实时活动、DAG）。它的子组件下面已单独隐藏，但面板
+     外壳与 h3 标题仍会占纸，整列隐藏才干净。 */
+  .run-activity-column,
+  /* 报告面板的 "研究报告" 标题栏：纸上标题由 .print-head 承担。 */
+  .report-panel > .panel-head,
+  .report-panel-tools,
+  .report-actions,
+  .report-expand-toggle,
+  /* 交互报告视图整体被 .print-root 替换，而不是"顺便隐藏几个装置"：
+     两者渲染同一份正文，不隐藏它，Ctrl+P 会把正文与概览条各印两遍。
+     PrintableReport 内部不使用 .report-view（它用 .print-body），
+     所以这条不会误伤纸质版。 */
+  .report-view,
+  .evidence-drawer,
+  .structured-document-preview:not(.structured-document-print),
+  .research-live-overview,
+  .stats-bar,
+  .intent-panel,
+  .orchestration-runtime,
+  .orchestration-pipeline,
+  .timeline,
+  .event-timeline,
+  .dag,
+  .dag-view,
+  .skeleton,
+  .cursor {
+    display: none !important;
+  }
+
+  /* 证据侧栏在纸上被**替换**而不是隐藏——它只显示当前点开的那一条，
+     全部证据由 .print-appendix 承载（见 PrintableReport）。 */
+
+  /* --- 解掉所有滚动容器（本文件的首要目的） ------------------------------ */
+  .app-shell,
+  .stack,
+  .grid-2,
+  .run-columns,
+  .panel,
+  .report-panel,
+  .report-view,
+  .report-view-body,
+  .report-view-body > .report,
+  .markdown-content,
+  .print-root,
+  .print-root * {
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+    position: static !important;
+  }
+
+  /* 双栏在 A4 上太窄，报告一栏到底。 */
+  .grid-2,
+  .run-columns {
+    display: block !important;
+  }
+
+  .panel,
+  .report-panel {
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  /* --- 分页控制 ---------------------------------------------------------- */
+  h1,
+  h2,
+  h3,
+  h4 {
+    break-after: avoid-page; /* 标题不与其正文分离 */
+    break-inside: avoid;
+    color: var(--print-ink) !important;
+  }
+
+  h1 {
+    font-size: 17pt;
+  }
+  h2 {
+    font-size: 13pt;
+    margin-top: 14pt;
+  }
+  h3 {
+    font-size: 11.5pt;
+  }
+
+  p,
+  blockquote,
+  li {
+    orphans: 3; /* 段尾不留 1–2 行孤行 */
+    widows: 3;
+  }
+
+  /* 表格、图表、证据卡都是"一个整体"，腰斩后两半都难读。 */
+  table,
+  figure,
+  .dr-chart,
+  .evidence-entry,
+  .print-evidence-card {
+    break-inside: avoid;
+  }
+
+  /* 长表实在放不下时允许跨页，但表头每页重复（thead 的原生行为）。 */
+  .print-appendix table,
+  table.long-table {
+    break-inside: auto;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tfoot {
+    display: table-footer-group;
+  }
+  tr {
+    break-inside: avoid;
+  }
+
+  /* --- 表格 -------------------------------------------------------------- */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9.5pt;
+  }
+  th,
+  td {
+    border: 1px solid var(--print-rule);
+    padding: 4pt 6pt;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--print-wash) !important;
+    font-weight: 600;
+  }
+  /* 数值列右对齐 + 等宽数字：列内数字要能竖着对齐比较。 */
+  td.numeric,
+  th.numeric {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --- 引用角标 ---------------------------------------------------------- */
+  /* 屏幕上 [n] 是按钮（点开侧栏）。纸上它退回成普通文本标记——按钮外观
+     （边框、底色、手型）在纸上是误导，读者会以为能点。 */
+  .cite-ref,
+  button.cite-ref {
+    all: unset !important;
+    font-size: 0.85em;
+    vertical-align: super;
+    color: var(--print-ink) !important;
+    font-weight: 600;
+  }
+
+  /* 正文链接把 URL 展开到括号里——纸上点不了，不展开就等于丢了信息。
+     但引用角标、附录里已显示全 URL 的地方不重复展开。 */
+  .markdown-content a[href^='http']::after {
+    content: ' (' attr(href) ')';
+    font-size: 0.8em;
+    color: var(--print-ink-3) !important;
+    word-break: break-all;
+  }
+  .cite-ref::after,
+  .print-appendix a::after,
+  .print-references a::after {
+    content: none !important;
+  }
+
+  a {
+    color: var(--print-ink) !important;
+    text-decoration: none !important;
+  }
+
+  /* --- 证据附录（屏幕侧栏在纸上的等价物） -------------------------------- */
+  .print-only {
+    display: block !important;
+  }
+
+  /* 报头：标题与正文之间要有可见的分隔，否则 h1 直接压在免责声明上。 */
+  .print-head {
+    margin: 0 0 8pt;
+    padding-bottom: 6pt;
+    border-bottom: 1pt solid var(--print-rule);
+  }
+
+  .print-meta {
+    font-size: 9pt;
+    color: var(--print-ink-3) !important;
+  }
+
+  .print-overview {
+    break-inside: avoid; /* 概览是一个整体，腰斩后两半都不可读 */
+    margin: 0 0 12pt;
+  }
+
+  /* 概览表只有两列，占满版心会让数字离指标名过远。 */
+  .print-overview table {
+    width: auto;
+    min-width: 60mm;
+  }
+
+  .print-appendix {
+    break-before: page; /* 附录另起一页：它是参考材料，不该挤在结论后面 */
+  }
+
+  .print-appendix-group {
+    margin: 0 0 12pt;
+  }
+
+  .print-appendix-group > h3 {
+    font-size: 10pt;
+    word-break: break-word; /* 引用文本含长 DOI，不断行会撑破版心 */
+  }
+
+  .print-evidence-card {
+    margin: 0 0 10pt;
+    padding: 6pt 8pt;
+    border-left: 2pt solid var(--print-rule);
+  }
+
+  .print-claim-text {
+    margin: 0 0 3pt;
+  }
+
+  /* 验证说明/语义理由/印证说明：原先只活在 tooltip 里，纸上是正式内容，
+     但它们是二级信息，用小一号字与正文拉开层次。 */
+  .print-reason {
+    margin: 2pt 0;
+    font-size: 9pt;
+    color: var(--print-ink-2) !important;
+  }
+
+  .print-evidence-card blockquote {
+    margin: 4pt 0;
+    padding: 4pt 6pt;
+    background: var(--print-wash) !important;
+    font-size: 9.5pt;
+  }
+
+  .print-structured-facts {
+    margin: 4pt 0;
+    padding: 3pt 5pt;
+    border-left: 1.5pt solid var(--print-rule);
+    font-size: 9pt;
+    line-height: 1.45;
+  }
+
+  .print-structured-facts p {
+    margin: 1pt 0;
+  }
+
+  .print-evidence-card mark {
+    background: rgba(28, 28, 28, 0.1) !important;
+    color: var(--print-ink) !important;
+  }
+
+  /* 哈希与 claim id 用等宽小字，且允许在任意字符断行——64 位十六进制串
+     不断行会撑破版心。 */
+  .print-hash,
+  .print-claim {
+    font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+    font-size: 8pt;
+    color: var(--print-ink-3) !important;
+    word-break: break-all;
+  }
+
+  /* 徽章在纸上不能只靠颜色——打印常是灰度。用边框 + 文字承载状态。 */
+  .print-badges {
+    margin: 4pt 0 2pt;
+  }
+
+  .print-badge {
+    display: inline-block;
+    margin: 0 4pt 2pt 0;
+    padding: 1pt 4pt;
+    border: 1px solid var(--print-rule);
+    font-size: 8.5pt;
+  }
+
+  /* 图在纸上同样降级为指向源表的一节（PDF 由后端渲染矢量图，这里是浏览器
+     打印路径）。它是说明而非数据本体，不给表格那样的边框。 */
+  .structured-document-chart {
+    break-inside: avoid;
+    margin: 6pt 0;
+    padding-top: 4pt;
+    border-top: 1px solid var(--print-rule);
+  }
+
+  .structured-document-note-ref {
+    margin-left: 1pt;
+  }
+
+  .print-disclaimer {
+    margin: 8pt 0 12pt;
+    padding: 6pt 8pt;
+    border: 1px solid var(--print-rule);
+    background: var(--print-wash) !important;
+    font-size: 9pt;
+    color: var(--print-ink-2) !important;
+  }
+}
+
+/* 屏幕上隐藏纸质专用块。放在 @media print 之外，因为它要在**屏幕**媒体下生效。 */
+@media screen {
+  .print-only {
+    display: none;
+  }
+
+  /* --- 应用内打印预览 ----------------------------------------------------- */
+  /* 在屏幕上按 A4 版心宽度呈现打印布局，让用户在打开打印对话框之前就能看到
+     附录有多长、宽表会不会溢出版心、纸面配色是否可读。
+     诚实说明：这里**不呈现分页**。真实分页由浏览器分页器决定，画一条模拟
+     分页线只会给出一个我们并不掌握的位置断言；要看真实分页请开打印对话框。 */
+  .print-preview {
+    /* A4 版心：210mm 减去 print.css 里 @page 的左右各 14mm。
+       预览可能被放在未展开的报告栏里（窄于 182mm），固定宽会把页面撑出
+       横向滚动，所以取二者较小值——版心是上限而不是硬尺寸。 */
+    max-width: min(182mm, 100%);
+    margin: 0 auto;
+    padding: 12mm 0;
+    background: #f9f8f6;
+    color: #1c1c1c;
+    font-size: 10.5pt;
+    line-height: 1.55;
+  }
+
+  /* 预览容器内强制明色：应用是深色主题，若继承下来预览就完全失真。 */
+  .print-preview,
+  .print-preview * {
+    color: #1c1c1c;
+    background-color: transparent;
+    border-color: rgba(28, 28, 28, 0.2);
+  }
+
+  .print-preview h1 {
+    font-size: 17pt;
+  }
+  .print-preview h2 {
+    font-size: 13pt;
+    margin-top: 14pt;
+  }
+  .print-preview h3 {
+    font-size: 11.5pt;
+  }
+
+  .print-preview table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9.5pt;
+  }
+  .print-preview th,
+  .print-preview td {
+    border: 1px solid rgba(28, 28, 28, 0.2);
+    padding: 4pt 6pt;
+    text-align: left;
+    vertical-align: top;
+  }
+  .print-preview th {
+    background-color: #efeeeb;
+    font-weight: 600;
+  }
+  .print-preview td.numeric,
+  .print-preview th.numeric {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .print-preview blockquote {
+    margin: 4pt 0;
+    padding: 4pt 6pt;
+    background-color: #efeeeb;
+    font-size: 9.5pt;
+  }
+  .print-preview mark {
+    background-color: rgba(28, 28, 28, 0.1);
+  }
+
+  .print-preview .print-disclaimer,
+  .print-preview .print-badge {
+    border: 1px solid rgba(28, 28, 28, 0.2);
+  }
+  .print-preview .print-disclaimer {
+    padding: 6pt 8pt;
+    background-color: #efeeeb;
+    font-size: 9pt;
+  }
+  .print-preview .print-badge {
+    display: inline-block;
+    margin: 0 4pt 2pt 0;
+    padding: 1pt 4pt;
+    font-size: 8.5pt;
+  }
+  .print-preview .print-evidence-card {
+    margin: 0 0 10pt;
+    padding: 6pt 8pt;
+    border-left: 2pt solid rgba(28, 28, 28, 0.2);
+  }
+  .print-preview .print-hash,
+  .print-preview .print-claim {
+    font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+    font-size: 8pt;
+    word-break: break-all;
+  }
+  .print-preview .print-meta {
+    font-size: 9pt;
+  }
+
+  /* 预览要与纸面同构，否则"预览"就名不副实：报头分隔线、徽章行距、
+     二级说明的字号都按 @media print 里的同名规则复刻一遍。 */
+  .print-preview .print-head {
+    margin: 0 0 8pt;
+    padding-bottom: 6pt;
+    border-bottom: 1px solid rgba(28, 28, 28, 0.2);
+  }
+
+  .print-preview .print-badges {
+    margin: 4pt 0 2pt;
+  }
+
+  .print-preview .print-reason {
+    margin: 2pt 0;
+    font-size: 9pt;
+  }
+
+  .print-preview .print-overview table {
+    width: auto;
+    min-width: 60mm;
+  }
+
+  .print-preview .print-appendix-group {
+    margin: 0 0 12pt;
+  }
+
+  .print-preview .print-appendix-group > h3 {
+    font-size: 10pt;
+    word-break: break-word;
+  }
+  /* 预览里也把 [n] 呈现为文本标记，与纸面一致。 */
+  .print-preview .cite-ref {
+    font-size: 0.85em;
+    vertical-align: super;
+    font-weight: 600;
+  }
+
+  /* 宽表在预览里横向滚动，而不是把预览容器整体撑破版心。 */
+  .print-preview .structured-document-table-scroll {
+    overflow-x: auto;
+  }
+}

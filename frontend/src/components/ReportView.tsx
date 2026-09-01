@@ -3,9 +3,12 @@ import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   CITE_HREF_PREFIX,
+  citedSources,
   findingsForUrl,
+  referenceTextFor,
   remarkCitations,
   resolveCitationTargets,
+  stripTrailingReferences,
   summarizeEvidence,
 } from '../lib/evidence'
 import type { Finding } from '../types'
@@ -38,6 +41,14 @@ export default function ReportView({
   const citationTriggerRef = useRef<HTMLButtonElement | null>(null)
   const targets = useMemo(() => resolveCitationTargets(markdown, citations), [markdown, citations])
   const overview = useMemo(() => summarizeEvidence(findings), [findings])
+  // 参考来源列表。结构化文档把「## 参考来源」从正文里剥掉并放进独立的
+  // references 字段（见 report/assemble.py 的 _body），所以正文本身不再带
+  // 这一段——不在这里补渲染，读者就只剩下角标，没有可平铺核对的来源清单。
+  const cited = useMemo(() => citedSources(targets), [targets])
+  // 正文统一剥掉尾部的参考来源段：来源由下面独立成节渲染，两种数据源
+  // （结构化文档已剥离 / 旧 report.markdown 未剥离）因此行为一致，不会有
+  // 一种路径印两遍、另一种路径不印。
+  const body = useMemo(() => stripTrailingReferences(markdown), [markdown])
   const closeEvidence = useCallback(() => {
     setActiveCitation(null)
     citationTriggerRef.current?.focus()
@@ -136,9 +147,25 @@ export default function ReportView({
       <div className="report-view-body">
         <div className="report markdown-content">
           <Markdown remarkPlugins={[remarkGfm, remarkCitations]} components={components}>
-            {markdown}
+            {body}
           </Markdown>
           {streaming && <span className="cursor">▍</span>}
+          {/* 流式阶段不渲染来源节：正文还在写，此时的 citations 是残缺快照，
+              先给出一份会随后变化的清单，比暂时不给更容易误导。 */}
+          {!streaming && cited.length > 0 && (
+            <section className="report-references" aria-label="参考来源">
+              <h2>参考来源</h2>
+              <ol>
+                {cited.map(({ n, url }) => (
+                  <li key={`${n}-${url}`} value={n}>
+                    <a href={url} target="_blank" rel="noreferrer">
+                      {referenceTextFor(findings, url)}
+                    </a>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
         </div>
         {activeCitation != null && activeUrl && (
           <EvidencePanel

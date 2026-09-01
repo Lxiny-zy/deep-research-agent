@@ -41,12 +41,28 @@ class Base(DeclarativeBase):
 
 class ResearchRun(Base):
     __tablename__ = "research_run"
-    __table_args__ = (Index("uq_research_run_idempotency_key", "idempotency_key", unique=True),)
+    __table_args__ = (
+        Index("uq_research_run_idempotency_key", "idempotency_key", unique=True),
+        Index("ix_research_run_claimable", "status", "claimable_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     query: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/running/done/error
+    # 队列语义（``execution_mode=worker``）：
+    #   status=pending 且 claimable_at 非空  → 待领取，**不是孤儿**
+    #   status=running 且租约过期            → 执行者崩溃，走恢复路径续跑
+    #   status=pending 且 claimable_at 为空  → inline 模式的运行中任务，或首个
+    #                                          checkpoint 前崩溃，由恢复扫描判定
+    # 没有这一列就无法区分「从未开始」与「刚崩溃」，前者会被恢复扫描误判为 error。
+    claimable_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    # 被 worker 领取的累计次数。超过 max_claim_attempts 判定为毒任务并置 error，
+    # 避免必然崩溃的任务在 worker 之间无限传递。
+    claim_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
     request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     interpretation: Mapped[str] = mapped_column(Text, default="")
     elapsed: Mapped[float] = mapped_column(Float, default=0.0)
@@ -118,6 +134,8 @@ class FindingRow(Base):
         ForeignKey("research_result.id", ondelete="CASCADE"), index=True
     )
     statement: Mapped[str] = mapped_column(Text)
+    # 对照表的"行"：该论断描述的对象（方法名 / 方案名 / 数据集名）。
+    entity: Mapped[str] = mapped_column(Text, default="")
     source_url: Mapped[str] = mapped_column(Text)
     evidence_quote: Mapped[str] = mapped_column(Text, default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.7)
@@ -125,6 +143,18 @@ class FindingRow(Base):
     verification_method: Mapped[str] = mapped_column(String(32), default="none")
     source_content_hash: Mapped[str] = mapped_column(String(64), default="")
     source_title: Mapped[str] = mapped_column(Text, default="")
+    source_reference: Mapped[str] = mapped_column(Text, default="")
+    # 发布方身份（DOI / work_id / 标题 / 作者 / 域名），供交叉印证判"是否同源"。
+    # 存 JSON：整体来自一次验证、整体被消费，没有按单字段查询的需求。
+    source_identity: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True, default=None
+    )
+    quantity_status: Mapped[str] = mapped_column(String(16), default="not_applicable")
+    quantity_reason: Mapped[str] = mapped_column(Text, default="")
+    # 数值与实验条件整体来自单次抽取、整体被消费，没有按单字段查询的需求，
+    # 拆成十几列只会让每加一个条件字段都要一次迁移。定性论断为 NULL。
+    quantity: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True, default=None)
+    conditions: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True, default=None)
     evidence_context: Mapped[str] = mapped_column(Text, default="")
     verification_reason: Mapped[str] = mapped_column(Text, default="")
     semantic_status: Mapped[str] = mapped_column(String(16), default="not_checked")
@@ -156,6 +186,10 @@ class SourceRow(Base):
     url: Mapped[str] = mapped_column(Text)
     content: Mapped[str] = mapped_column(Text, default="")
     content_hash: Mapped[str] = mapped_column(String(64), default="")
+    # 学术元数据（DOI / 作者 / 机构 / 期刊 / 撤稿标记…）。存成 JSON 而不是拆成十几列：
+    # 它整体来自单个检索后端的一次响应、整体被消费，没有任何按单字段查询的需求，
+    # 而拆列会让每加一个字段都要一次迁移。非学术来源为 NULL。
+    scholarly: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True, default=None)
 
     run: Mapped[ResearchRun] = relationship(back_populates="sources")
 

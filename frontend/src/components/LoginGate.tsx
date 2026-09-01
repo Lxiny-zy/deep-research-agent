@@ -23,7 +23,9 @@ export default function LoginGate({ onClose }: Props) {
         headers: { Authorization: `Bearer ${value}` },
       })
       if (!response.ok) {
-        throw new Error(response.status === 401 ? '管理员凭证无效' : `验证失败（${response.status}）`)
+        throw new Error(
+          response.status === 401 ? '管理员凭证无效' : `验证失败（${response.status}）`,
+        )
       }
       setApiKey(value)
       window.location.reload()
@@ -53,7 +55,12 @@ export default function LoginGate({ onClose }: Props) {
               <AppIcon name="lock" size={19} aria-hidden="true" />
               API 密钥管理
             </div>
-            <button type="button" className="btn btn-ghost btn-sm icon-button" onClick={onClose} aria-label="关闭">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm icon-button"
+              onClick={onClose}
+              aria-label="关闭"
+            >
               <AppIcon name="x" size={15} aria-hidden="true" />
             </button>
           </div>
@@ -69,7 +76,9 @@ export default function LoginGate({ onClose }: Props) {
             </p>
 
             <div>
-              <label className="field-label" htmlFor="api-key-input">API 密钥</label>
+              <label className="field-label" htmlFor="api-key-input">
+                API 密钥
+              </label>
               <input
                 id="api-key-input"
                 className="input"
@@ -98,10 +107,22 @@ export default function LoginGate({ onClose }: Props) {
                   清除密钥
                 </button>
               ) : (
-                <button className="btn btn-ghost" onClick={onClose} type="button">取消</button>
+                <button className="btn btn-ghost" onClick={onClose} type="button">
+                  取消
+                </button>
               )}
-              <button className="btn btn-primary" onClick={() => void save()} disabled={!key.trim() || pending} type="button">
-                <AppIcon name={pending ? 'loader' : 'arrow-right'} size={14} aria-hidden="true" className={pending ? 'spin' : ''} />
+              <button
+                className="btn btn-primary"
+                onClick={() => void save()}
+                disabled={!key.trim() || pending}
+                type="button"
+              >
+                <AppIcon
+                  name={pending ? 'loader' : 'arrow-right'}
+                  size={14}
+                  aria-hidden="true"
+                  className={pending ? 'spin' : ''}
+                />
                 {pending ? '验证中…' : '验证并进入'}
               </button>
             </div>

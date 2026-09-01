@@ -4,6 +4,8 @@ from .aggregator import Aggregator
 from .coordinator import Coordinator
 from .critic import Critic
 from .intent_router import IntentRouter
+from .operation_runner import OperationRunnerAgent
+from .plan_executor import PlanExecutor
 from .planner import Planner
 from .reflector import Reflector
 from .researcher import Researcher
@@ -18,4 +20,6 @@ __all__ = [
     "Coordinator",
     "Aggregator",
     "IntentRouter",
+    "OperationRunnerAgent",
+    "PlanExecutor",
 ]

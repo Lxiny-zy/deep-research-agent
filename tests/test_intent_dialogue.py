@@ -227,11 +227,19 @@ async def test_single_turn_query_costs_nothing_extra() -> None:
     assert llm.calls == [], "常规单轮请求不该有任何 LLM 调用"
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Kafka 和 RabbitMQ 的区别",
+        "推荐适合小团队的向量数据库",
+        "跨领域关联分析芯片和供应链",
+    ],
+)
 @pytest.mark.asyncio
-async def test_only_comparative_pays_for_entity_extraction() -> None:
-    """只有 comparative 需要实体才能拆子问题，其余意图不为此付费。"""
+async def test_entity_dependent_intents_pay_for_entity_extraction(query: str) -> None:
+    """只有下游依赖研究对象的意图才为实体抽取付费。"""
     llm = ScriptedLLM(entities=["Kafka", "RabbitMQ"])
-    await IntentCascade(llm=llm, enable_llm=True).classify("Kafka 和 RabbitMQ 的区别")
+    await IntentCascade(llm=llm, enable_llm=True).classify(query)
     assert llm.calls == ["SlotExtraction"]
 
     other = ScriptedLLM()

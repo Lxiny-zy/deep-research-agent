@@ -80,11 +80,7 @@ describe('OrchestrationPipeline resume state', () => {
       execution.status = 'running'
 
       const { container } = render(
-        <OrchestrationPipeline
-          execution={execution}
-          events={[]}
-          runStatus={runStatus}
-        />,
+        <OrchestrationPipeline execution={execution} events={[]} runStatus={runStatus} />,
       )
 
       expect(container.querySelector('.runtime-status')).toHaveClass(expectedClass)

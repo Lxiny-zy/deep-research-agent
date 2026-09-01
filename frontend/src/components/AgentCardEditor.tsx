@@ -58,7 +58,7 @@ export default function AgentCardEditor({
       >
         <div className="modal-header-row">
           <div>
-            <span className="eyebrow">ROLE / CONFIGURATION</span>
+            <span className="eyebrow">角色 / 配置</span>
             <h3 className="panel-title" id="agent-editor-title">
               {editing ? '编辑角色' : '新建角色'}
             </h3>

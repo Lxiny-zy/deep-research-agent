@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
 const BUILTIN_WORKFLOWS: WorkflowInfo[] = [
   { name: 'deep', description: '完整深度研究', default: 'True', custom: 'False' },
   { name: 'quick', description: '快速查询', default: 'False', custom: 'False' },
+  { name: 'hsi_review', description: 'AI4S / HSI 文献审查', default: 'False', custom: 'False' },
   { name: 'reviewed', description: '深度研究 + 报告复核', default: 'False', custom: 'False' },
   { name: 'auto', description: '自组合', default: 'False', custom: 'False' },
   { name: 'teams', description: '多团队并行', default: 'False', custom: 'False' },
@@ -126,26 +127,23 @@ beforeEach(() => {
 })
 
 describe('WorkflowBuilderPage builtin templates', () => {
-  it('renders the five builtin template cards with the default badge on deep', async () => {
+  it('renders only user-facing builtin template cards with the default badge on deep', async () => {
     const { container } = await renderPage()
 
     const cards = container.querySelectorAll('.builtin-card')
-    expect(cards).toHaveLength(5) // custom="True" 的行不进模板区
+    expect(cards).toHaveLength(3) // 内部编排模板和 custom="True" 不进模板区
     expect([...cards].map((card) => card.querySelector('code')?.textContent)).toEqual([
       'deep',
       'quick',
-      'reviewed',
-      'auto',
-      'teams',
+      'hsi_review',
     ])
     expect(screen.getByText('深度研究')).toBeInTheDocument()
     expect(screen.getAllByText('默认')).toHaveLength(1)
     expect(cards[0]).toHaveTextContent('默认')
     // 迷你流程链：deep 含反思循环
     expect(within(cards[0] as HTMLElement).getByText('反思循环')).toBeInTheDocument()
-    // 运行时编排模板（auto/teams）有标记
-    expect(cards[3]).toHaveTextContent('运行时编排')
-    expect(cards[4]).toHaveTextContent('运行时编排')
+    expect(screen.getByText('HSI 文献审查')).toBeInTheDocument()
+    expect(cards[2]).not.toHaveTextContent('运行时编排')
   })
 
   it('clones deep into a prefilled create session and saves via create with a unique name', async () => {
@@ -167,11 +165,37 @@ describe('WorkflowBuilderPage builtin templates', () => {
     expect(mocks.createMutate.mock.calls[0][0].name).toMatch(/^deep-copy-/)
   })
 
-  it('falls back to a blank studio for runtime-orchestrated templates', async () => {
+  it('clones the HSI review template with its dedicated evidence chain', async () => {
     const { container } = await renderPage()
 
-    fireEvent.click(within(builtinCard(container, 3)).getByRole('button', { name: /克隆为自定义/ }))
-    expect(screen.getByTestId('workflow-editor')).toHaveAttribute('data-workflow', 'new')
+    fireEvent.click(within(builtinCard(container, 2)).getByRole('button', { name: /克隆为自定义/ }))
+    expect(screen.getByTestId('workflow-editor').getAttribute('data-workflow')).toMatch(
+      /^hsi_review-copy-/,
+    )
+  })
+})
+
+describe('WorkflowBuilderPage custom workflow cards', () => {
+  it('uses the fixed catalog-card footprint and keeps the workflow chain visible', async () => {
+    const { container } = await renderPage()
+
+    const grid = container.querySelector('.workflow-custom-grid')
+    expect(grid).toBeInTheDocument()
+    const cards = [...(grid?.querySelectorAll<HTMLElement>('.workflow-custom-card') ?? [])]
+    expect(cards).toHaveLength(2)
+    expect(cards[0]).toHaveAttribute('data-card-size', 'fixed')
+    expect(cards[0]).toHaveAttribute('data-card-index', 'W-01')
+    expect(cards[0].querySelector('.catalog-card-title')).toHaveTextContent('ALPHA')
+    expect(cards[0].querySelector('.catalog-card-chain')).toHaveTextContent('综合')
+    expect(cards[0].querySelectorAll('.catalog-card-foot button')).toHaveLength(3)
+  })
+
+  it('keeps the fixed-card contract for every custom workflow', async () => {
+    const { container } = await renderPage()
+
+    const cards = [...container.querySelectorAll<HTMLElement>('.workflow-custom-card')]
+    expect(cards.every((card) => card.dataset.cardSize === 'fixed')).toBe(true)
+    expect(cards.map((card) => card.dataset.cardIndex)).toEqual(['W-01', 'W-02'])
   })
 })
 

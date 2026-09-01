@@ -8,6 +8,7 @@ __pycache__/
 venv/
 research_report.md
 runtime_config.json
+artifacts/
 *.db
 *.db-shm
 *.db-wal

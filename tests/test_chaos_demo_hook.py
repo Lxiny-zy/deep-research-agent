@@ -1,4 +1,4 @@
-"""Chaos 演示注入钩子（api._build_agent + DR_DEMO_FAKE_BACKENDS）的冒烟测试。
+"""Chaos 演示注入钩子（execution.RunExecutor.build_agent + DR_DEMO_FAKE_BACKENDS）的冒烟测试。
 
 保证两点：
   1. 默认（未设环境变量）钩子完全不生效——生产行为零变化；
@@ -11,20 +11,23 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
-from deep_research import api
 from deep_research.config import Settings
+from deep_research.execution import (
+    ExecutionContext,
+    RunExecutor,
+    demo_fake_backends_enabled,
+)
 
 
 def test_demo_hook_disabled_by_default(monkeypatch) -> None:
     monkeypatch.delenv("DR_DEMO_FAKE_BACKENDS", raising=False)
-    assert api._demo_fake_backends_enabled() is False
+    assert demo_fake_backends_enabled() is False
     for value in ("0", "no", "", "off"):
         monkeypatch.setenv("DR_DEMO_FAKE_BACKENDS", value)
-        assert api._demo_fake_backends_enabled() is False
+        assert demo_fake_backends_enabled() is False
     monkeypatch.setenv("DR_DEMO_FAKE_BACKENDS", "1")
-    assert api._demo_fake_backends_enabled() is True
+    assert demo_fake_backends_enabled() is True
 
 
 async def test_demo_hook_builds_offline_agent_and_counts_tokens(monkeypatch) -> None:
@@ -35,8 +38,8 @@ async def test_demo_hook_builds_offline_agent_and_counts_tokens(monkeypatch) -> 
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
-    app = SimpleNamespace(state=SimpleNamespace(catalog=None))
-    agent, search_tool = await api._build_agent(app, Settings(), workflow="deep")
+    executor = RunExecutor(ExecutionContext(repo=None, catalog=None))  # type: ignore[arg-type]
+    agent, search_tool = await executor.build_agent(Settings(), workflow="deep")
     try:
         report = await agent.run("冒烟测试问题")
     finally:

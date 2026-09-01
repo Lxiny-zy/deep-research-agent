@@ -10,7 +10,7 @@ from ..llm import LLM
 from ..models import Reflection, ResearchResult
 from ..observability import Tracer
 from ..registry import register
-from .base import Blackboard, RunContext
+from .base import Blackboard, RunContext, direct_system_prompt, effective_require_corroboration
 
 SYSTEM = (
     "你是研究质检员。评估现有发现是否足以全面、可靠地回答原始问题。"
@@ -32,17 +32,33 @@ class Reflector:
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         self.llm, self.tracer, self.settings = ctx.llm_for(self.name), ctx.tracer, ctx.settings
-        reflection = await self.run(bb.query, bb.results)
+        self.system = ctx.system_prompt(self.system)
+        reflection = await self.run(
+            bb.query,
+            bb.results,
+            require_corroboration=effective_require_corroboration(bb, ctx.settings),
+        )
         bb.reflections.append(reflection)
         return bb
 
-    async def run(self, query: str, results: list[ResearchResult]) -> Reflection:
+    async def run(
+        self,
+        query: str,
+        results: list[ResearchResult],
+        *,
+        require_corroboration: bool | None = None,
+    ) -> Reflection:
         self.tracer.emit("REFLECTOR", "start", "评估证据是否充分…")
+        corroboration = (
+            self.settings.require_corroboration
+            if require_corroboration is None
+            else require_corroboration
+        )
         reflection = await self.llm.parse(
-            self.system,
+            direct_system_prompt(self.system),
             (
                 f"原始问题：{query}\n\n现有发现：\n"
-                f"{_digest(results, require_corroboration=self.settings.require_corroboration)}"
+                f"{_digest(results, require_corroboration=corroboration)}"
             ),
             Reflection,
         )

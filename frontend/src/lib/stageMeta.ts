@@ -9,19 +9,26 @@ export interface StageMeta {
   icon: AppIconName
 }
 
+// Editorial is intentionally monochrome. Opacity provides the small amount of
+// hierarchy needed by the timeline without introducing semantic accent hues.
+const INK = 'var(--editorial-ink, #1C1C1C)'
+const INK_80 = 'var(--editorial-ink-80, rgba(28, 28, 28, 0.8))'
+const INK_60 = 'var(--editorial-ink-60, rgba(28, 28, 28, 0.6))'
+const INK_40 = 'var(--editorial-ink-40, rgba(28, 28, 28, 0.4))'
+
 export const STAGE_META: Record<string, StageMeta> = {
-  INTENT: { label: '意图', color: 'var(--stage-intent)', icon: 'target' },
-  PLANNER: { label: '规划', color: 'var(--stage-planner)', icon: 'route' },
-  RESEARCHER: { label: '检索', color: 'var(--stage-researcher)', icon: 'search-code' },
-  REFLECTOR: { label: '反思', color: 'var(--stage-reflector)', icon: 'refresh' },
-  SYNTHESIZER: { label: '综合', color: 'var(--stage-synthesizer)', icon: 'file' },
-  ORCHESTRATOR: { label: '编排', color: 'var(--stage-orchestrator)', icon: 'workflow' },
-  COORDINATOR: { label: '协调', color: 'var(--stage-coordinator)', icon: 'waypoints' },
+  INTENT: { label: '意图', color: INK_60, icon: 'target' },
+  PLANNER: { label: '规划', color: INK_80, icon: 'route' },
+  RESEARCHER: { label: '检索', color: INK_60, icon: 'search-code' },
+  REFLECTOR: { label: '反思', color: INK_60, icon: 'refresh' },
+  SYNTHESIZER: { label: '综合', color: INK, icon: 'file' },
+  ORCHESTRATOR: { label: '编排', color: INK_40, icon: 'workflow' },
+  COORDINATOR: { label: '协调', color: INK_60, icon: 'waypoints' },
 }
 
 const FALLBACK_META: StageMeta = {
   label: '执行',
-  color: 'var(--stage-orchestrator)',
+  color: INK_40,
   icon: 'activity',
 }
 

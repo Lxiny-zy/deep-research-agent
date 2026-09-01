@@ -1,5 +1,6 @@
 """Core runtime models for observable, resumable multi-agent orchestration."""
 
+from .compiler import CompiledPlan, PlanCompileError, PlanCompiler, compile_plan
 from .conditions import evaluate_condition, resolve_path
 from .graph import (
     WorkflowEdge,
@@ -10,11 +11,55 @@ from .graph import (
     graph_topological_steps,
     steps_to_graph,
 )
+from .plan import (
+    ArtifactRef,
+    ArtifactSpec,
+    ExecutionPlan,
+    GpuKind,
+    NetworkProfile,
+    OperationSpec,
+    PlanStatus,
+    PlanStep,
+    PlanStepStatus,
+    PlanValidationError,
+    ResourcePlan,
+    ResourceSpec,
+    load_plan,
+    normalize_plan_payload,
+    parse_execution_plan,
+    parse_legacy_plan,
+    parse_plan,
+    validate_plan,
+    validate_plan_json,
+)
 from .runtime import OrchestrationRuntime
 from .types import RunStatus, StepRun, StepStatus, WorkflowRun
 
 __all__ = [
     "OrchestrationRuntime",
+    "CompiledPlan",
+    "PlanCompileError",
+    "PlanCompiler",
+    "compile_plan",
+    "ArtifactRef",
+    "ArtifactSpec",
+    "ExecutionPlan",
+    "GpuKind",
+    "NetworkProfile",
+    "OperationSpec",
+    "PlanStatus",
+    "PlanStep",
+    "PlanStepStatus",
+    "PlanValidationError",
+    "ResourcePlan",
+    "ResourceSpec",
+    "load_plan",
+    "normalize_plan_payload",
+    "parse_execution_plan",
+    "parse_legacy_plan",
+    "parse_plan",
+    "validate_plan",
+    "validate_plan_json",
     "RunStatus",
     "StepRun",
     "StepStatus",

@@ -3,7 +3,7 @@ import { AppIcon } from './AppIcon'
 import { getStageMeta } from '../lib/stageMeta'
 import type { ResearchEvent } from '../types'
 
-// 时间线：每条事件按 stage 着色圆点；进行中时最后一条脉冲；新事件自动滚到底。
+// Keep the live event feed pinned to the newest entry as events arrive.
 export default function EventTimeline({
   events,
   streaming = false,
@@ -15,7 +15,11 @@ export default function EventTimeline({
   useEffect(() => {
     const node = timelineRef.current
     if (!node) return
-    node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
+    const reduceMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    node.scrollTo({ top: node.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' })
   }, [events.length])
 
   if (events.length === 0) {

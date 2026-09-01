@@ -12,7 +12,7 @@
 
 运行：
   python -m eval.run_eval                                        # 默认对比 deep vs auto
-  python -m eval.run_eval --workflows deep,quick,reviewed,auto,teams --output
+  python -m eval.run_eval --workflows deep,quick,reviewed,auto,teams --output  # 评估公共模板与内部编排策略
   python -m eval.run_eval --workflows deep --budget 30000 --output eval/results/deep-30k.md
 """
 

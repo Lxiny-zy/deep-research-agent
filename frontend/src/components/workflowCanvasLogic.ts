@@ -142,10 +142,7 @@ export function assignEdgeRouting(
   positions: Record<string, CanvasPosition>,
 ): Record<string, EdgeRouting> {
   const routing = Object.fromEntries(
-    edges.map((edge) => [
-      edge.id,
-      { sourceOffset: 0, targetOffset: 0, laneOffset: 0 },
-    ]),
+    edges.map((edge) => [edge.id, { sourceOffset: 0, targetOffset: 0, laneOffset: 0 }]),
   ) as Record<string, EdgeRouting>
 
   const outgoing = new Map<string, RoutableEdge[]>()
@@ -181,7 +178,7 @@ export function assignEdgeRouting(
   for (const edge of edges) {
     const source = nodeCenter(positions[edge.source])
     const target = nodeCenter(positions[edge.target])
-    const band = Math.round(((source.y + target.y) / 2) / 90)
+    const band = Math.round((source.y + target.y) / 2 / 90)
     bands.set(band, [...(bands.get(band) ?? []), edge])
   }
 
@@ -212,7 +209,8 @@ type Point = { x: number; y: number }
 
 function compactOrthogonalPoints(points: Point[]): Point[] {
   const distinct = points.filter(
-    (point, index) => index === 0 || point.x !== points[index - 1].x || point.y !== points[index - 1].y,
+    (point, index) =>
+      index === 0 || point.x !== points[index - 1].x || point.y !== points[index - 1].y,
   )
   return distinct.filter((point, index) => {
     if (index === 0 || index === distinct.length - 1) return true
@@ -239,8 +237,12 @@ function roundedOrthogonalPath(points: Point[], radius = 10): string {
     const outgoing = Math.abs(next.x - current.x) + Math.abs(next.y - current.y)
     const bend = Math.min(radius, incoming / 2, outgoing / 2)
     const before = {
-      x: current.x + Math.sign(previous.x - current.x) * Math.min(bend, Math.abs(previous.x - current.x)),
-      y: current.y + Math.sign(previous.y - current.y) * Math.min(bend, Math.abs(previous.y - current.y)),
+      x:
+        current.x +
+        Math.sign(previous.x - current.x) * Math.min(bend, Math.abs(previous.x - current.x)),
+      y:
+        current.y +
+        Math.sign(previous.y - current.y) * Math.min(bend, Math.abs(previous.y - current.y)),
     }
     const after = {
       x: current.x + Math.sign(next.x - current.x) * Math.min(bend, Math.abs(next.x - current.x)),
@@ -275,10 +277,7 @@ export function buildRoutedEdgePath(input: RoutedPathInput): {
     const margin = Math.min(16, verticalGap / 6)
     const minimumLane = sourceStubY + margin
     const maximumLane = targetStubY - margin
-    const laneY = Math.max(
-      minimumLane,
-      Math.min(maximumLane, (sourceY + targetY) / 2 + laneOffset),
-    )
+    const laneY = Math.max(minimumLane, Math.min(maximumLane, (sourceY + targetY) / 2 + laneOffset))
     const points = [
       { x: sourceX, y: sourceY },
       { x: sourceX, y: sourceStubY },
@@ -301,8 +300,7 @@ export function buildRoutedEdgePath(input: RoutedPathInput): {
 
   const side = sourceX <= targetX ? 1 : -1
   const routeX =
-    (side > 0 ? Math.max(sourceX, targetX) + 72 : Math.min(sourceX, targetX) - 72) +
-    laneOffset
+    (side > 0 ? Math.max(sourceX, targetX) + 72 : Math.min(sourceX, targetX) - 72) + laneOffset
   const points = [
     { x: sourceX, y: sourceY },
     { x: sourceX, y: sourceStubY },
@@ -394,10 +392,13 @@ export function layoutWorkflowNodes(
       const rightParents = dependencies[right] ?? []
       const average = (parents: string[]) =>
         parents.length
-          ? parents.reduce((total, parent) => total + (placedOrder.get(parent) ?? 0), 0) / parents.length
-          : declarationOrder.get(parents[0] ?? '') ?? 0
-      return average(leftParents) - average(rightParents) ||
+          ? parents.reduce((total, parent) => total + (placedOrder.get(parent) ?? 0), 0) /
+            parents.length
+          : (declarationOrder.get(parents[0] ?? '') ?? 0)
+      return (
+        average(leftParents) - average(rightParents) ||
         (declarationOrder.get(left) ?? 0) - (declarationOrder.get(right) ?? 0)
+      )
     })
     keys.forEach((key, index) => placedOrder.set(key, index))
   }

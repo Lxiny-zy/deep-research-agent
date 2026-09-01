@@ -8,7 +8,11 @@ import { useConfig } from '../hooks/useConfig'
 import { assessIntent, createRun, listWorkflows } from '../api/client'
 import { advance, emptySlots, isSkip, type ClarifyState } from '../lib/clarification'
 import { clearThread, loadThread } from '../lib/conversation'
-import { BUILTIN_TEMPLATE_META } from '../lib/workflowTemplates'
+import {
+  BUILTIN_TEMPLATE_META,
+  isDefaultWorkflow,
+  isUserFacingWorkflow,
+} from '../lib/workflowTemplates'
 import type { ConversationTurn, ResearchParams, WorkflowInfo } from '../types'
 
 const DEFAULT_QUERY = '2026 年主流 AI Agent 框架有哪些？各自的设计取舍是什么？'
@@ -44,9 +48,13 @@ export default function NewResearchPage() {
     listWorkflows()
       .then((items) => {
         if (stale) return
-        setWorkflows(items)
-        const match = preferred ? items.find((item) => item.name === preferred) : undefined
-        const defaultWorkflow = match ?? items.find((item) => item.default === 'True') ?? items[0]
+        // The API also exposes runtime policy/coordination workflows. They
+        // remain engine capabilities, but are not standalone choices in the
+        // composer (the intent gate is applied globally by the runtime).
+        const visibleItems = items.filter(isUserFacingWorkflow)
+        setWorkflows(visibleItems)
+        const match = preferred ? visibleItems.find((item) => item.name === preferred) : undefined
+        const defaultWorkflow = match ?? visibleItems.find(isDefaultWorkflow) ?? visibleItems[0]
         if (defaultWorkflow) setWorkflow(defaultWorkflow.name)
       })
       .catch(() => {})
@@ -196,7 +204,7 @@ export default function NewResearchPage() {
       <header className="page-intro composer-intro page-intro-compact intro-unveil">
         <div>
           <span className="eyebrow">
-            <AppIcon name="sparkles" size={14} aria-hidden="true" /> STUDIO / NEW RESEARCH
+            <AppIcon name="sparkles" size={14} aria-hidden="true" /> 研究工作台
           </span>
           <h1>
             把一个问题，<em>研究透彻。</em>
@@ -217,146 +225,170 @@ export default function NewResearchPage() {
       <section className="panel research-composer" data-reveal="1">
         <div className="panel-header">
           <div>
-            <span className="panel-kicker">PROMPT / 01</span>
+            <span className="panel-kicker">问题 / 01</span>
             <h2 className="panel-title">定义研究问题</h2>
           </div>
           <span className="panel-index">01 — 03</span>
         </div>
 
         <div className="panel-body stack">
-          {thread.length > 0 && (
-            <div className="thread-context" data-testid="thread-context">
-              {/* 上下文必须可见且可清除：一段用户看不见的历史会悄悄改变本次判定，
-                  「为什么它答的是另一个东西」将无从解释。 */}
-              <div className="field-label thread-heading">
-                <span>
-                  <AppIcon name="history" size={14} aria-hidden="true" /> 追问上下文（
-                  {thread.length} 轮）
-                </span>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={dropThread}>
-                  开始新话题
-                </button>
+          <div className="composer-workbench">
+            <div className="composer-main">
+              {thread.length > 0 && (
+                <div className="thread-context" data-testid="thread-context">
+                  {/* 上下文必须可见且可清除：一段用户看不见的历史会悄悄改变本次判定，
+                      「为什么它答的是另一个东西」将无从解释。 */}
+                  <div className="field-label thread-heading">
+                    <span>
+                      <AppIcon name="history" size={14} aria-hidden="true" /> 追问上下文（
+                      {thread.length} 轮）
+                    </span>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={dropThread}>
+                      开始新话题
+                    </button>
+                  </div>
+                  <ol className="thread-list">
+                    {thread.map((turn, index) => (
+                      <li key={`${turn.query}-${index}`}>
+                        <span className="thread-index">{index + 1}</span>
+                        <span className="thread-query">{turn.query}</span>
+                      </li>
+                    ))}
+                  </ol>
+                  <p className="hint">
+                    本次提问会带上以上轮次，「那第二个呢」这类追问会先被还原成完整问题再研究。
+                  </p>
+                </div>
+              )}
+
+              <label className="field-label research-query-label" htmlFor="query">
+                研究问题
+                <textarea
+                  id="query"
+                  className="input textarea research-query-input"
+                  rows={4}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={
+                    thread.length > 0
+                      ? '接着上文追问，例如「那第二个呢」…'
+                      : '输入一个值得深挖的问题…'
+                  }
+                />
+              </label>
+
+              <div className="sample-block">
+                <div className="field-label sample-heading">
+                  <span>快捷示例</span>
+                  <span className="muted small">点击载入</span>
+                </div>
+                <div className="sample-grid">
+                  {SAMPLES.map((sample, index) => (
+                    <button
+                      type="button"
+                      key={sample}
+                      className="sample-card"
+                      onClick={() => setQuery(sample)}
+                    >
+                      <span className="sample-number">0{index + 1}</span>
+                      <span>{sample}</span>
+                      <AppIcon name="arrow-up-right" size={15} aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
               </div>
-              <ol className="thread-list">
-                {thread.map((turn, index) => (
-                  <li key={`${turn.query}-${index}`}>
-                    <span className="thread-index">{index + 1}</span>
-                    <span className="thread-query">{turn.query}</span>
-                  </li>
-                ))}
-              </ol>
-              <p className="hint">
-                本次提问会带上以上轮次，「那第二个呢」这类追问会先被还原成完整问题再研究。
-              </p>
             </div>
-          )}
 
-          <label className="field-label research-query-label" htmlFor="query">
-            研究问题
-            <textarea
-              id="query"
-              className="input textarea research-query-input"
-              rows={4}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={
-                thread.length > 0 ? '接着上文追问，例如「那第二个呢」…' : '输入一个值得深挖的问题…'
-              }
-            />
-          </label>
+            <aside className="composer-sidebar" aria-label="研究配置">
+              <div className="composer-section-heading">
+                <span className="panel-kicker">配置 / 02</span>
+                <h3 className="composer-section-title">研究配置</h3>
+              </div>
 
-          <div className="sample-block">
-            <div className="field-label sample-heading">
-              <span>快捷示例</span>
-              <span className="muted small">点击载入</span>
-            </div>
-            <div className="sample-grid">
-              {SAMPLES.map((sample, index) => (
-                <button
-                  type="button"
-                  key={sample}
-                  className="sample-card"
-                  onClick={() => setQuery(sample)}
-                >
-                  <span className="sample-number">0{index + 1}</span>
-                  <span>{sample}</span>
-                  <AppIcon name="arrow-up-right" size={15} aria-hidden="true" />
-                </button>
-              ))}
-            </div>
-          </div>
+              {workflows.length > 0 && (
+                <label className="field-label workflow-select-field" htmlFor="workflow">
+                  研究流程
+                  <span className="select-with-icon">
+                    <AppIcon name="workflow" size={15} aria-hidden="true" />
+                    <select
+                      id="workflow"
+                      className="input"
+                      value={workflow}
+                      onChange={(event) => setWorkflow(event.target.value)}
+                    >
+                      {workflows.map((item) => {
+                        const meta = BUILTIN_TEMPLATE_META[item.name]
+                        const title = meta?.title
+                        // Public builtins use a Chinese product title; internal
+                        // workflow identifiers remain values for the API, not UI
+                        // copy. Custom workflows keep their user-defined name.
+                        const label = title || item.name
+                        return (
+                          <option key={item.name} value={item.name}>
+                            {label}
+                            {isDefaultWorkflow(item) ? '（默认）' : ''}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </span>
+                  {activeWorkflow && (
+                    <span className="hint">
+                      {BUILTIN_TEMPLATE_META[activeWorkflow.name]?.description ??
+                        activeWorkflow.description}
+                    </span>
+                  )}
+                </label>
+              )}
 
-          {workflows.length > 0 && (
-            <label className="field-label workflow-select-field" htmlFor="workflow">
-              研究流程
-              <span className="select-with-icon">
-                <AppIcon name="workflow" size={15} aria-hidden="true" />
-                <select
-                  id="workflow"
-                  className="input"
-                  value={workflow}
-                  onChange={(event) => setWorkflow(event.target.value)}
-                >
-                  {workflows.map((item) => {
-                    const title = BUILTIN_TEMPLATE_META[item.name]?.title
-                    const label = title ? `${title} · ${item.name}` : item.name
-                    return (
-                      <option key={item.name} value={item.name}>
-                        {label}
-                        {item.default === 'True' ? '（默认）' : ''}
-                      </option>
-                    )
-                  })}
-                </select>
-              </span>
-              {activeWorkflow && <span className="hint">{activeWorkflow.description}</span>}
-            </label>
-          )}
-
-          <SettingsPanel
-            value={params}
-            onChange={setParams}
-            globalRequireCorroboration={config?.require_corroboration ?? false}
-          />
-
-          {clarify && (
-            <ClarifyDialog
-              question={clarify.question}
-              options={clarify.options}
-              round={clarify.round}
-              busy={submitting}
-              onAnswer={answerClarification}
-              onSkip={skipClarification}
-            />
-          )}
-
-          <div className="submit-panel research-submit-panel">
-            <div className="submit-context">
-              <AppIcon name="help" size={17} aria-hidden="true" />
-              <p>提交后创建可持久化研究任务，全程实时推送，可在「研究历史」回放。</p>
-            </div>
-            <button
-              className="btn btn-primary btn-lg submit-button"
-              onClick={start}
-              disabled={submitting || !query.trim() || clarify !== null}
-              type="button"
-            >
-              <AppIcon
-                name={submitting ? 'loader' : 'arrow-right'}
-                size={17}
-                aria-hidden="true"
-                className={submitting ? 'spin' : ''}
+              <SettingsPanel
+                value={params}
+                onChange={setParams}
+                globalRequireCorroboration={config?.require_corroboration ?? false}
               />
-              {submitting ? '提交中…' : '开始研究'}
-            </button>
+            </aside>
           </div>
 
-          {error && (
-            <div className="badge error form-error">
-              <AppIcon name="circle-x" size={15} aria-hidden="true" />
-              {error}
+          <div className="composer-action-column">
+            {clarify && (
+              <ClarifyDialog
+                question={clarify.question}
+                options={clarify.options}
+                round={clarify.round}
+                busy={submitting}
+                onAnswer={answerClarification}
+                onSkip={skipClarification}
+              />
+            )}
+
+            <div className="submit-panel research-submit-panel">
+              <div className="submit-context">
+                <AppIcon name="help" size={17} aria-hidden="true" />
+                <p>提交后创建可持久化研究任务，全程实时推送，可在「研究历史」回放。</p>
+              </div>
+              <button
+                className="btn btn-primary btn-lg submit-button"
+                onClick={start}
+                disabled={submitting || !query.trim() || clarify !== null}
+                type="button"
+              >
+                <AppIcon
+                  name={submitting ? 'loader' : 'arrow-right'}
+                  size={17}
+                  aria-hidden="true"
+                  className={submitting ? 'spin' : ''}
+                />
+                {submitting ? '提交中…' : '开始研究'}
+              </button>
             </div>
-          )}
+
+            {error && (
+              <div className="badge error form-error">
+                <AppIcon name="circle-x" size={15} aria-hidden="true" />
+                {error}
+              </div>
+            )}
+          </div>
         </div>
       </section>
     </div>

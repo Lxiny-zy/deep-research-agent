@@ -1,11 +1,5 @@
 import type { RunDetail } from '../types'
-import {
-  MAX_THREAD_TURNS,
-  appendTurn,
-  clearThread,
-  loadThread,
-  turnFromRun,
-} from './conversation'
+import { MAX_THREAD_TURNS, appendTurn, clearThread, loadThread, turnFromRun } from './conversation'
 
 // 追问上下文由客户端保管，因此它的**健壮性**就是多轮功能的下限：
 // 存储不可用、内容被手工改坏、历史无限增长，任何一项处理不好都会让

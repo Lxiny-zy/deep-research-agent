@@ -14,14 +14,18 @@ export default function WelcomeTelemetrySection() {
           <h2 id="welcome-telemetry-title">研究不是黑箱，过程实时可见。</h2>
         </div>
         <p>
-          从工作流阶段、累计 Token 到实际耗时，运行状态通过 SSE 持续更新；
-          下面是零 API 消耗的自动循环演示。
+          从工作流阶段、累计 Token 到实际耗时，运行状态通过 SSE 持续更新； 下面是零 API
+          消耗的自动循环演示。
         </p>
       </header>
 
       <div className="welcome-telemetry-demo">
         <StatsBar
-          stats={demo.done ? { elapsed: 26, total_tokens: 6384, sources: 12, tokens_estimated: false } : null}
+          stats={
+            demo.done
+              ? { elapsed: 26, total_tokens: 6384, sources: 12, tokens_estimated: false }
+              : null
+          }
           detail={null}
           progress={demo.progress}
           live={{ elapsed: demo.elapsed, tokens: demo.tokens, findings: demo.findings }}
@@ -29,13 +33,23 @@ export default function WelcomeTelemetrySection() {
           connectionStatus={demo.done ? 'done' : 'streaming'}
           tokensEstimated={!demo.done}
         />
-        <OrchestrationPipeline execution={demo.execution} events={demo.events} runStatus={demo.runStatus} />
+        <OrchestrationPipeline
+          execution={demo.execution}
+          events={demo.events}
+          runStatus={demo.runStatus}
+        />
       </div>
 
       <footer className="welcome-telemetry-caption">
-        <span><AppIcon name="activity" size={13} aria-hidden="true" /> 实时阶段进度</span>
-        <span><AppIcon name="braces" size={13} aria-hidden="true" /> Token 用量校准</span>
-        <span><AppIcon name="refresh" size={13} aria-hidden="true" /> 断线轮询兜底</span>
+        <span>
+          <AppIcon name="activity" size={13} aria-hidden="true" /> 实时阶段进度
+        </span>
+        <span>
+          <AppIcon name="braces" size={13} aria-hidden="true" /> Token 用量校准
+        </span>
+        <span>
+          <AppIcon name="refresh" size={13} aria-hidden="true" /> 断线轮询兜底
+        </span>
       </footer>
     </section>
   )

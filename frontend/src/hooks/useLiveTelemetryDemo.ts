@@ -81,19 +81,31 @@ export function useLiveTelemetryDemo(autoReplay = false) {
   }
   const events: ResearchEvent[] = [
     {
-      stage: 'ORCHESTRATOR', type: 'info', message: '研究流程已就绪，共 4 个阶段', elapsed: 0,
+      stage: 'ORCHESTRATOR',
+      type: 'info',
+      message: '研究流程已就绪，共 4 个阶段',
+      elapsed: 0,
       data: { event_name: 'workflow.plan', total_steps: STEP_DEFS.length },
     },
-    ...steps.filter((step) => step.status !== 'pending').map((step) => ({
-      stage: step.agent.toUpperCase(),
-      type: 'info' as const,
-      message: step.status === 'succeeded' ? `${step.label}已完成` : telemetryStageMessage(elapsed),
-      elapsed,
-      data: {
-        event_name: `step.${step.status}`, step_run_id: step.id, node_id: step.node_id,
-        label: step.label, kind: step.kind, agent: step.agent, status: step.status, attempt: step.attempt,
-      },
-    })),
+    ...steps
+      .filter((step) => step.status !== 'pending')
+      .map((step) => ({
+        stage: step.agent.toUpperCase(),
+        type: 'info' as const,
+        message:
+          step.status === 'succeeded' ? `${step.label}已完成` : telemetryStageMessage(elapsed),
+        elapsed,
+        data: {
+          event_name: `step.${step.status}`,
+          step_run_id: step.id,
+          node_id: step.node_id,
+          label: step.label,
+          kind: step.kind,
+          agent: step.agent,
+          status: step.status,
+          attempt: step.attempt,
+        },
+      })),
   ]
 
   return {

@@ -65,7 +65,14 @@ async def test_create_list_and_merge_into_workflows(cat_app):
         merged = (await c.get("/api/workflows")).json()
         mine = [w for w in merged if w["name"] == "my-deep"]
         assert mine and mine[0]["custom"] == "True"  # 标记为自定义
-        assert any(w["name"] == "deep" for w in merged)  # 内置仍在
+        # Public product surfaces expose outcomes, not implementation-only
+        # orchestration aliases.  ``guarded`` is the historical intent-gate
+        # workflow; the gate now runs globally and must not appear as a
+        # competing template.  The same applies to the internal fan-out and
+        # review variants.
+        builtin_names = {w["name"] for w in merged if w["custom"] == "False"}
+        assert builtin_names == {"deep", "quick", "hsi_review"}
+        assert {w["name"] for w in merged if w["custom"] == "True"} >= {"my-deep"}
 
 
 @pytest.mark.asyncio
@@ -231,9 +238,10 @@ async def test_create_rejects_graph_with_nonterminal_synthesizer(cat_app):
 
 
 @pytest.mark.asyncio
-async def test_create_rejects_builtin_name(cat_app):
+@pytest.mark.parametrize("name", ["deep", "DEEP", " Deep ", "Guarded", "HSi_Review"])
+async def test_create_rejects_builtin_name_case_insensitively(cat_app, name):
     async with _client() as c:
-        r = await c.post("/api/workflows/custom", json={"name": "deep", "steps": _VALID})
+        r = await c.post("/api/workflows/custom", json={"name": name, "steps": _VALID})
         assert r.status_code == 422  # 与内置流程同名
 
 

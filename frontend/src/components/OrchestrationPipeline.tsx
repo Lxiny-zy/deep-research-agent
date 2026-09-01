@@ -41,37 +41,52 @@ export default function OrchestrationPipeline({ execution, events = [], runStatu
           ? 'failed'
           : runStatus === 'cancelled'
             ? 'cancelled'
-          : execution?.status ?? runStatus
+            : (execution?.status ?? runStatus)
 
   return (
     <div className="orchestration-runtime">
       <div className="orchestration-runtime-head">
         <div>
-          <span className="workflow-kicker">WORKFLOW RUNTIME</span>
+          <span className="workflow-kicker">工作流运行时</span>
           <strong>{execution?.workflow_name ?? '实时编排'}</strong>
           <small className="runtime-current-step">{progress.currentLabel}</small>
         </div>
-        <span className={`runtime-status ${runtimeStatus}`}>
-          {RUN_STATUS_LABEL[runtimeStatus]}
-        </span>
+        <span className={`runtime-status ${runtimeStatus}`}>{RUN_STATUS_LABEL[runtimeStatus]}</span>
       </div>
       <div className="runtime-header-progress" aria-hidden>
         <span style={{ transform: `scaleX(${progress.percent / 100})` }} />
       </div>
       <div className="runtime-pipeline-scroll">
-        <div className="runtime-terminal"><AppIcon name="play" size={13} aria-hidden="true" /> INPUT</div>
+        <div className="runtime-terminal">
+          <AppIcon name="play" size={13} aria-hidden="true" /> 输入
+        </div>
         {steps.map((step, index) => (
           <div className="runtime-step-wrap" key={step.id}>
-            <span className="runtime-edge" aria-hidden="true"><AppIcon name="arrow-right" size={16} /></span>
+            <span className="runtime-edge" aria-hidden="true">
+              <AppIcon name="arrow-right" size={16} />
+            </span>
             <div className={`runtime-step ${step.status}`} title={step.error ?? undefined}>
-              <span>{step.status === 'succeeded' ? <AppIcon name="check" size={12} aria-hidden="true" /> : index + 1}</span>
-              <div><strong>{step.label}</strong><small>{step.agent || step.kind}</small></div>
+              <span>
+                {step.status === 'succeeded' ? (
+                  <AppIcon name="check" size={12} aria-hidden="true" />
+                ) : (
+                  index + 1
+                )}
+              </span>
+              <div>
+                <strong>{step.label}</strong>
+                <small>{step.agent || step.kind}</small>
+              </div>
               <i>{STEP_STATUS_LABEL[step.status]}</i>
             </div>
           </div>
         ))}
-        <span className="runtime-edge" aria-hidden="true"><AppIcon name="arrow-right" size={16} /></span>
-        <div className={`runtime-terminal output${runStatus === 'done' ? ' completed' : ''}`}><AppIcon name="check-circle" size={13} aria-hidden="true" /> OUTPUT</div>
+        <span className="runtime-edge" aria-hidden="true">
+          <AppIcon name="arrow-right" size={16} />
+        </span>
+        <div className={`runtime-terminal output${runStatus === 'done' ? ' completed' : ''}`}>
+          <AppIcon name="check-circle" size={13} aria-hidden="true" /> 输出
+        </div>
       </div>
     </div>
   )

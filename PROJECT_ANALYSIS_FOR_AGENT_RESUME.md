@@ -191,7 +191,7 @@ RunContext 向角色提供默认 LLM、搜索工具、Tracer、Settings 和按�
 
 Catalog Runtime 优先用已启用的数据库卡片覆盖同名内置角色；没有覆盖时回退代码 Registry。模型按角色解析，同一模型档案在一次运行中复用 LLM Client，结束时统一关闭。
 
-这里的“自定义 Agent”是对五种内置行为模板的参数化复用，并不是允许用户上传任意 Python 代码或任意工具插件。这个边界需要在简历和面试中明确。
+这里的“自定义 Agent”是对有限内置行为契约（`plan`、`research`、`reflect`、`synthesize`、`critique`）的 Prompt/模型参数化复用，并不是允许用户上传任意 Python 代码或任意工具插件。行为契约与公共工作流模板是两层概念，不能混写；这个边界需要在简历和面试中明确。
 
 ---
 
@@ -299,15 +299,18 @@ Synthesizer 在送入 LLM 前，先由代码遍历 Findings，为真实 URL 建�
 
 ---
 
-## 7. 五种内置工作流
+## 7. 公共模板与内部兼容工作流
 
-| 工作流 | 当前真实流程 | 适用场景 | 需要说明的边界 |
+产品界面只展示三种公共模板：`deep`、`quick` 和 `hsi_review`。下表中的其余流程仍保留在注册表，供旧 checkpoint、CLI、意图策略和评估器兼容使用，但不作为模板卡或安全门禁开关；全局意图/风险门禁在所有流程启动前执行。
+
+| 工作流 | 当前真实流程 | 对外定位/适用场景 | 需要说明的边界 |
 |---|---|---|---|
 | `deep` | Planner -> Researcher -> Reflect Loop -> Synthesizer | 默认深度研究 | 以覆盖和深度优先为设计目标，搜索和 Token 成本通常更高 |
 | `quick` | Planner -> Researcher -> Synthesizer | 简单问题、低延迟场景 | 仍然执行 Planner，只省略 Reflector |
-| `reviewed` | `deep` 全流程 -> Critic | 需要额外审阅意见 | Critic 只写入 critique，不自动重写报告 |
-| `auto` | Coordinator 生成受限步骤 -> 引擎递归执行 | 问题类型差异较大 | 生成非法会修复/回退；并非任意代码执行 |
-| `teams` | Planner -> Team Fan-out -> Aggregator | 可拆成多个独立主题的大问题 | 子团队隔离执行，最终由 Aggregator 归并 |
+| `hsi_review` | `deep` 全流程 -> Critic | AI4S / HSI 文献审查 | 保留批判性复核，面向明确的学术应用场景 |
+| `reviewed` | `deep` 全流程 -> Critic | 内部兼容审阅策略 | 不在公共模板选择器展示；Critic 只写入 critique，不自动重写报告 |
+| `auto` | Coordinator 生成受限步骤 -> 引擎递归执行 | 内部动态编排策略 | 不在公共模板选择器展示；生成非法会修复/回退，并非任意代码执行 |
+| `teams` | Planner -> Team Fan-out -> Aggregator | 内部多团队并行策略 | 不在公共模板选择器展示；子团队隔离执行，最终由 Aggregator 归并 |
 
 除了内置预置，系统还支持数据库保存的自定义线性工作流和 DAG 工作流。工作流定义可以由前端画布编辑，并在新建研究时直接选择。
 
@@ -825,7 +828,7 @@ Judge 使用独立 Tracer，避免污染被评估 Agent 的 Token 统计。它�
 | “分布式 Agent 平台” | 当前为进程内后台执行，具备数据库 Checkpoint 和多实例恢复租约 |
 | “exactly-once 执行” | 步骤/图层边界 at-least-once 恢复，崩溃窗口可能重复外部调用 |
 | “严格 Token 上限” | 步骤边界软预算，报告节点允许尽力完成并可能超限 |
-| “支持任意自定义 Agent” | 支持五种内置 behavior 的 Prompt/模型参数化，以及代码注册新角色 |
+| “支持任意自定义 Agent” | 支持有限内置 behavior 契约的 Prompt/模型参数化，以及代码注册新角色；公共模板仍仅有 `deep`、`quick`、`hsi_review` |
 | “LLM 可自主选择任意工具” | 当前由 Researcher 确定性调用 SearchTool，不是通用 Function Calling/工具自治框架 |
 | “具备跨会话长期记忆” | Blackboard 和 Checkpoint 保存单次运行状态，不是向量知识库或跨会话用户记忆 |
 | “实时事件绝不丢失” | 有界队列优先保证主任务，慢消费者可能漏中间事件，最终详情可兜底 |

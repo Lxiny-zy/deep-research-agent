@@ -17,7 +17,17 @@ from urllib.parse import unquote, unquote_plus, urlsplit
 import tldextract
 from pydantic import BaseModel, Field
 
-from .models import EvidenceVerification, Finding, ResearchResult, Source
+from .citation import format_reference
+from .independence import cluster_sources
+from .models import (
+    EvidenceVerification,
+    Finding,
+    ResearchResult,
+    Source,
+    SourceIdentity,
+)
+from .prompting import compose_system_prompt, load_global_rules
+from .quantities import comparison_supported, measurement_supported
 
 PolicyVerdict = Literal["allow", "quarantine", "deny"]
 # Use the bundled PSL snapshot without touching a shared cache or the network.
@@ -224,13 +234,26 @@ class EvidenceVerifier:
         quote_start, quote_end = quote_span
         matched_quote = source.content[quote_start:quote_end].strip()
         content_hash = hashlib.sha256(source.content.encode("utf-8")).hexdigest()
+        quantity_status, quantity_reason = self._verify_quantity(
+            finding,
+            matched_quote,
+            section=source.scholarly.section if source.scholarly else "",
+        )
         verification = EvidenceVerification(
             status="verified",
             method="normalized_quote",
             source_content_hash=content_hash,
             source_title=source.title,
+            source_reference=format_reference(source.url, source.scholarly, title=source.title),
             evidence_context=_evidence_context(source.content, quote_start, quote_end),
-            reason="quote_found_in_source",
+            reason=(
+                "source_retracted"
+                if source.scholarly and source.scholarly.retracted is True
+                else "quote_found_in_source"
+            ),
+            quantity_status=quantity_status,
+            quantity_reason=quantity_reason,
+            source_identity=_source_identity(source),
         )
         return EvidenceCheck(
             True,
@@ -239,6 +262,44 @@ class EvidenceVerifier:
                 update={"evidence_quote": matched_quote, "verification": verification}, deep=True
             ),
         )
+
+    @staticmethod
+    def _verify_quantity(finding: Finding, quote: str, *, section: str = "") -> tuple[str, str]:
+        """确定性数值校验：声明的数值+单位必须真的出现在证据原文里。
+
+        逐字匹配回答"这句话在不在原文里"，回答不了"句子里的数字有没有被抄错一位"
+        或"这个数字是不是属于另一个指标"——被改的是数值与单位的对应关系，不是措辞。
+        所以这一步单独做，且**纯代码**：判定器被操控也不会让原文里不存在的数字进报告。
+
+        没有声明数值时返回 ``not_applicable``——绝大多数定性论断如此，不该因此被拦。
+        """
+        quantity = finding.quantity
+        if quantity is None or quantity.value is None:
+            return ("not_applicable", "")
+        normalized_section = section.strip().casefold()
+        if normalized_section in {"abstract", "introduction", "method", "conclusion"}:
+            return (
+                "unsupported",
+                f"quantity_section_not_allowed:{normalized_section}",
+            )
+        comparator_ok, comparator_reason = comparison_supported(
+            quantity.comparator,
+            quote,
+            value=quantity.value,
+            unit=quantity.unit,
+            rendered=quantity.rendered,
+            metric=quantity.metric,
+        )
+        if not comparator_ok:
+            return ("unsupported", comparator_reason)
+        supported, reason = measurement_supported(
+            value=quantity.value,
+            unit=quantity.unit,
+            rendered=quantity.rendered,
+            evidence=quote,
+            metric=quantity.metric,
+        )
+        return ("verified" if supported else "unsupported", reason)
 
 
 class SemanticEvidenceDecision(BaseModel):
@@ -284,7 +345,7 @@ class SemanticEvidenceVerifier:
         )
         try:
             response = await llm.parse(
-                self._SYSTEM,
+                compose_system_prompt(self._SYSTEM, load_global_rules()),
                 user,
                 SemanticEvidenceDecisionList,
                 temperature=0.0,
@@ -390,7 +451,7 @@ class ClaimConsistencyVerifier:
         )
         try:
             response = await llm.parse(
-                self._SYSTEM,
+                compose_system_prompt(self._SYSTEM, load_global_rules()),
                 user,
                 ClaimConsistencyReport,
                 temperature=0.0,
@@ -423,10 +484,15 @@ class ClaimConsistencyVerifier:
         conflicted_claim_ids = {
             claim_id for claim_id, claim_conflicts in conflicts.items() if claim_conflicts
         }
-        source_domains = {
-            claim_id: _registrable_domain(finding.source_url) for claim_id, finding in by_id.items()
-        }
+        # 发布方独立性：按"同一篇工作 / 同一团队"聚类，而不是按域名。
+        # 一篇 CASSI 工作常同时存在 arXiv + 期刊 + 机构库三个域，按域名判会造出伪双源。
+        independence = cluster_sources(
+            {claim_id: _identity_for(finding) for claim_id, finding in by_id.items()}
+        )
         corroborations: dict[str, list[tuple[str, str]]] = {claim_id: [] for claim_id in by_id}
+        # 因"非独立发布方"被驳回的印证对。不记下来的话，一条伪双源会静默显示为
+        # "单一来源"，读者无从知道系统其实看到了两个来源、只是判定它们同源。
+        non_independent: dict[str, list[str]] = {claim_id: [] for claim_id in by_id}
         for pair in response.corroborations:
             if pair.confidence < self.min_confidence:
                 continue
@@ -438,9 +504,14 @@ class ClaimConsistencyVerifier:
                 continue
             if left in conflicted_claim_ids or right in conflicted_claim_ids:
                 continue
-            left_domain = source_domains[left]
-            right_domain = source_domains[right]
-            if not left_domain or not right_domain or left_domain == right_domain:
+            # 身份不可识别的来源不能参与印证（沿用"域名解析不出来就不印证"的语义）。
+            if left in independence.unidentifiable or right in independence.unidentifiable:
+                continue
+            # 同一篇工作或同一团队 → 不是独立印证。
+            if independence.same_publisher(left, right):
+                why = independence.explain(left, right) or "same_publisher_cluster"
+                non_independent[left].append(why)
+                non_independent[right].append(why)
                 continue
             corroborations[left].append((right, pair.reason))
             corroborations[right].append((left, pair.reason))
@@ -461,12 +532,9 @@ class ClaimConsistencyVerifier:
 
             claim_corroborations = corroborations[claim_id]
             corroborates = sorted({other for other, _ in claim_corroborations})
-            independent_domains = {
-                domain
-                for corroborated_id in [claim_id, *corroborates]
-                if (domain := source_domains[corroborated_id])
-            }
-            independent_source_count = max(1, len(independent_domains))
+            # 独立来源数＝这条论断及其佐证覆盖了多少个**独立发布方簇**。
+            # 同一篇工作的预印本与期刊版、同一团队的两篇论文都只算一个。
+            independent_source_count = max(1, independence.count([claim_id, *corroborates]))
             corroboration_reason = "; ".join(
                 dict.fromkeys(reason for _, reason in claim_corroborations if reason).keys()
             )
@@ -482,7 +550,15 @@ class ClaimConsistencyVerifier:
                 )
             else:
                 corroboration_status = "single_source"
-                corroboration_reason = "no_independent_corroboration"
+                # 区分两种"单一来源"：从头到尾只有一个来源，与"有第二个来源但它与
+                # 第一个同源"。后者正是本次改动要暴露的伪双源——读者必须能看到系统
+                # 其实看到了两个来源、只是判定它们不独立。
+                rejected = list(dict.fromkeys(non_independent[claim_id]))
+                corroboration_reason = (
+                    "no_independent_corroboration:同源来源被驳回(" + "; ".join(rejected) + ")"
+                    if rejected
+                    else "no_independent_corroboration"
+                )
             updated[claim_id] = _with_corroboration(
                 consistency_checked,
                 corroboration_status,
@@ -526,7 +602,11 @@ async def screen_source_intent(
 
     from .intent.cascade import IntentCascade
 
-    engine = cascade if cascade is not None else IntentCascade()
+    engine = (
+        cascade
+        if cascade is not None
+        else IntentCascade(global_rules=load_global_rules())
+    )
     text = "\n".join([source.title, source.content])
     verdict = await engine.classify_source(text, use_llm=use_llm)
     if verdict.intent in ("instructional_override", "credential_harvest"):
@@ -546,6 +626,16 @@ async def screen_source_intent(
 def report_eligible(finding: Finding, *, require_corroboration: bool = False) -> bool:
     verification = finding.verification
     if verification.status != "verified" or verification.semantic_status != "supported":
+        return False
+    if verification.source_identity is not None and verification.source_identity.retracted is True:
+        return False
+    # 声明了数值却在原文里找不到 = 编造的数字。一张带假数字的对照表比一句假话
+    # 危险得多，因为它看起来是"数据"。旧数据可能缺少 quantity_status，因此只有
+    # 当 finding 明确带数值时，默认的 ``not_applicable`` 也必须拒绝。
+    if finding.quantity is not None and finding.quantity.value is not None:
+        if verification.quantity_status != "verified":
+            return False
+    elif verification.quantity_status == "unsupported":
         return False
     if not require_corroboration:
         return True
@@ -720,6 +810,40 @@ def publisher_identity(url: str) -> str:
 
 def _registrable_domain(url: str) -> str:
     return publisher_identity(url)
+
+
+def _source_identity(source: Source) -> SourceIdentity:
+    """在验证时刻抓取发布方身份。
+
+    这是唯一同时握有 Finding 与 Source 的时刻；交叉印证判定发生在之后、跨全部
+    子问题的阶段，那时只剩 Finding。``domain`` 始终填充，因此没有学术元数据的
+    通用网页来源退化为改造前的按域名判定。
+    """
+    scholarly = source.scholarly
+    return SourceIdentity(
+        doi=scholarly.doi if scholarly else "",
+        work_id=scholarly.work_id if scholarly else "",
+        title=source.title,
+        authors=list(scholarly.authors) if scholarly else [],
+        domain=publisher_identity(source.url),
+        peer_reviewed=scholarly.peer_reviewed if scholarly else None,
+        retracted=scholarly.retracted if scholarly else None,
+        section=scholarly.section if scholarly else "",
+    )
+
+
+def _identity_for(finding: Finding) -> SourceIdentity:
+    """取 finding 的发布方身份；历史记录退回**只按 URL 域名**。
+
+    退回路径刻意只填 ``domain``，不借用 ``source_title`` 去补标题判据：那样会让
+    旧 run 重新判定时得出与已落库结论不同的独立来源数。本项目把"一次运行的判定
+    可从其存下来的输入复现"当作硬性质（run manifest 就是为此存在），所以宁可让
+    旧数据保持旧口径，也不做局部升级。
+    """
+    identity = finding.verification.source_identity
+    if identity is not None and not identity.is_empty():
+        return identity
+    return SourceIdentity(domain=publisher_identity(finding.source_url))
 
 
 def _claim_id(finding: Finding) -> str:

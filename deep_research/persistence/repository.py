@@ -87,6 +87,26 @@ class TagCount:
     count: int
 
 
+@dataclass
+class ClaimedRun:
+    """一次成功领取的结果（``execution_mode=worker``）。
+
+    领取成功意味着调用方已持有该 run 的执行租约，并且 run 状态已置 ``running``。
+    调用方负责在执行结束后释放租约；崩溃时租约自然过期，交给下一个 worker。
+    """
+
+    run_id: str
+    query: str
+    lease_owner: str
+    execution: WorkflowRun
+    attempt: int
+    # 该 run 累计被领取的次数（含本次）。worker 用它做毒任务熔断。
+    claim_attempts: int
+    # True 表示这是对一个已有 checkpoint 的接管（断点续跑），
+    # False 表示首次执行。二者的事件重放语义不同。
+    resumed: bool
+
+
 class ResearchRepository(Protocol):
     """研究运行的持久化仓储。两个实现结构化满足本协议（无需显式继承）。"""
 
@@ -106,8 +126,41 @@ class ResearchRepository(Protocol):
         idempotency_key: str | None = None,
         execution: WorkflowRun | None = None,
         lease_owner: str | None = None,
+        claimable: bool = False,
     ) -> tuple[str, bool]:
-        """Create a run once; return ``(run_id, created)``."""
+        """Create a run once; return ``(run_id, created)``.
+
+        ``claimable`` marks the run as queued for an external worker.  It is
+        the only durable signal that separates "enqueued, never started" from
+        "crashed before the first checkpoint", which otherwise look identical.
+        """
+        ...
+
+    async def enqueue_run(self, run_id: str) -> bool:
+        """Mark an existing active run as claimable; return ``False`` if absent.
+
+        Used by ``resume`` in worker mode: the API hands the run back to the
+        queue instead of executing it in the request process.
+        """
+        ...
+
+    async def requeue_failed_run(self, run_id: str) -> bool:
+        """Atomically requeue a failed checkpointed run for worker recovery.
+
+        Implementations must reject runs without a checkpoint and runs whose
+        workflow lease is still active.  Success changes the run back to
+        ``running`` and marks it claimable without broadening the global set of
+        active statuses.
+        """
+        ...
+
+    async def claim_next_run(self, owner: str, *, lease_seconds: int = 120) -> ClaimedRun | None:
+        """Atomically claim one queued or abandoned run, or return ``None``.
+
+        The workflow lease is the cross-process arbiter, exactly as it is for
+        crash recovery; candidate selection is only an optimization.  Runs whose
+        lease is still live are never returned.
+        """
         ...
 
     async def request_cancel(self, run_id: str) -> str | None:

@@ -18,7 +18,7 @@ from deep_research.intent.model import (
     load_bundled_model,
     normalize,
 )
-from deep_research.intent.routing import MIN_ROUTING_CONFIDENCE, plan_route
+from deep_research.intent.routing import MIN_ROUTING_CONFIDENCE, plan_route, preroute_workflow
 from deep_research.intent.types import IntentDecision
 
 
@@ -65,6 +65,20 @@ def test_extract_features_covers_cjk_and_ascii() -> None:
 
 
 # --- L1 规则层 ---
+
+
+@pytest.mark.asyncio
+async def test_preroute_uses_safe_fallback_when_recommended_workflow_is_unavailable() -> None:
+    workflow, decision, plan = await preroute_workflow(
+        "survey the landscape of agent orchestration frameworks",
+        requested_workflow=None,
+        available_workflows={"deep", "quick"},
+    )
+    assert decision is not None and decision.intent == "exploratory"
+    assert plan.reason_code == "workflow_unavailable"
+    assert plan.applied is False
+    assert plan.fallback_workflow == "deep"
+    assert workflow == "deep"
 
 
 @pytest.mark.parametrize(

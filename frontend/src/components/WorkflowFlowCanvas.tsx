@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import {
-  Background,
-  BackgroundVariant,
   BaseEdge,
   Controls,
   EdgeLabelRenderer,
@@ -107,7 +105,11 @@ function EditableWorkflowEdge({
   data,
   selected,
 }: EdgeProps<WorkflowCanvasEdge>) {
-  const { path: edgePath, labelX, labelY } = buildRoutedEdgePath({
+  const {
+    path: edgePath,
+    labelX,
+    labelY,
+  } = buildRoutedEdgePath({
     sourceX,
     sourceY,
     targetX,
@@ -174,7 +176,10 @@ interface Props {
 
 export default function WorkflowFlowCanvas(props: Props) {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
-  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<Node<CanvasNodeData>, Edge> | null>(null)
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<
+    Node<CanvasNodeData>,
+    Edge
+  > | null>(null)
   const previousNodeKeys = useRef(new Set(props.nodeKeys))
   const {
     nodeKeys,
@@ -328,8 +333,7 @@ export default function WorkflowFlowCanvas(props: Props) {
     () =>
       props.workflowEdges
         .filter(
-          (edge) =>
-            props.nodeKeys.includes(edge.source) && props.nodeKeys.includes(edge.target),
+          (edge) => props.nodeKeys.includes(edge.source) && props.nodeKeys.includes(edge.target),
         )
         .map((edge) => {
           const related = relatedNodeKeys.has(edge.source) && relatedNodeKeys.has(edge.target)
@@ -342,8 +346,14 @@ export default function WorkflowFlowCanvas(props: Props) {
             animated: !!edge.condition,
             className: [
               edge.condition ? 'conditional-edge' : '',
-              props.selectedNodeId ? (related ? 'workflow-edge-related' : 'workflow-edge-muted') : '',
-            ].filter(Boolean).join(' '),
+              props.selectedNodeId
+                ? related
+                  ? 'workflow-edge-related'
+                  : 'workflow-edge-muted'
+                : '',
+            ]
+              .filter(Boolean)
+              .join(' '),
             selected: selectedEdgeId === edge.id,
             selectable: true,
             deletable: true,
@@ -354,7 +364,7 @@ export default function WorkflowFlowCanvas(props: Props) {
               width: 17,
               height: 17,
               markerUnits: 'userSpaceOnUse',
-              color: edge.condition ? '#d8ff4f' : '#f7f2e8',
+              color: edge.condition ? 'rgba(28, 28, 28, 0.6)' : '#1C1C1C',
             },
             data: { onDelete: props.onDisconnect },
             ariaLabel: `依赖线：${edge.source} 到 ${edge.target}`,
@@ -370,14 +380,19 @@ export default function WorkflowFlowCanvas(props: Props) {
     ],
   )
 
-  const workflowEdgeIds = useMemo(() => new Set(workflowEdges.map((edge) => edge.id)), [workflowEdges])
+  const workflowEdgeIds = useMemo(
+    () => new Set(workflowEdges.map((edge) => edge.id)),
+    [workflowEdges],
+  )
 
   useEffect(() => {
     if (selectedEdgeId && !workflowEdgeIds.has(selectedEdgeId)) setSelectedEdgeId(null)
   }, [selectedEdgeId, workflowEdgeIds])
 
   const roots = props.nodeKeys.filter(
-    (key) => primaryKeys.has(key) && !(props.dependencies[key] ?? []).some((source) => primaryKeys.has(source)),
+    (key) =>
+      primaryKeys.has(key) &&
+      !(props.dependencies[key] ?? []).some((source) => primaryKeys.has(source)),
   )
   const primaryParents = new Set(
     Object.entries(props.dependencies).flatMap(([target, sources]) =>
@@ -397,7 +412,13 @@ export default function WorkflowFlowCanvas(props: Props) {
       selectable: false,
       deletable: false,
       focusable: false,
-      markerEnd: { type: MarkerType.ArrowClosed, width: 13, height: 13, markerUnits: 'userSpaceOnUse', color: '#d8ff4f' },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 13,
+        height: 13,
+        markerUnits: 'userSpaceOnUse',
+        color: 'rgba(28, 28, 28, 0.6)',
+      },
       data: { semantic: true },
       zIndex: 0,
       ariaLabel: `自动入口：用户输入到 ${target}`,
@@ -411,7 +432,13 @@ export default function WorkflowFlowCanvas(props: Props) {
       selectable: false,
       deletable: false,
       focusable: false,
-      markerEnd: { type: MarkerType.ArrowClosed, width: 13, height: 13, markerUnits: 'userSpaceOnUse', color: '#d8ff4f' },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 13,
+        height: 13,
+        markerUnits: 'userSpaceOnUse',
+        color: 'rgba(28, 28, 28, 0.6)',
+      },
       data: { semantic: true },
       zIndex: 0,
       ariaLabel: `自动出口：${source} 到结论输出`,
@@ -467,7 +494,9 @@ export default function WorkflowFlowCanvas(props: Props) {
     const arranged = layoutWorkflowNodes(nodeKeys, dependencies, positions)
     const arrangedPositions = Object.values(arranged)
     if (!arrangedPositions.length) return
-    const centerX = arrangedPositions.reduce((total, position) => total + position.x, 0) / arrangedPositions.length
+    const centerX =
+      arrangedPositions.reduce((total, position) => total + position.x, 0) /
+      arrangedPositions.length
     const minimumY = Math.min(...arrangedPositions.map((position) => position.y))
     const maximumY = Math.max(...arrangedPositions.map((position) => position.y))
     onPositionsChange({
@@ -552,19 +581,27 @@ export default function WorkflowFlowCanvas(props: Props) {
       connectionRadius={28}
       proOptions={{ hideAttribution: true }}
     >
-      <Background
-        variant={BackgroundVariant.Dots}
-        gap={22}
-        size={1}
-        color="rgba(128,160,180,.18)"
-      />
       <Panel position="top-left" className="flow-canvas-legend">
-        <span><i className="legend-line dependency" />可编辑依赖</span>
-        <span><i className="legend-line semantic" />自动入口 / 出口</span>
-        <span><i className="legend-node orphan" />未连接节点</span>
+        <span>
+          <i className="legend-line dependency" />
+          可编辑依赖
+        </span>
+        <span>
+          <i className="legend-line semantic" />
+          自动入口 / 出口
+        </span>
+        <span>
+          <i className="legend-node orphan" />
+          未连接节点
+        </span>
       </Panel>
       <Panel position="top-right" className="flow-canvas-actions">
-        <button type="button" className="route-action" onClick={handleAutoLayout} title="按执行层级整理节点并减少连线交叉">
+        <button
+          type="button"
+          className="route-action"
+          onClick={handleAutoLayout}
+          title="按执行层级整理节点并减少连线交叉"
+        >
           自动整理
         </button>
         {selectedEdgeId ? (
@@ -588,11 +625,15 @@ export default function WorkflowFlowCanvas(props: Props) {
         zoomable
         position="bottom-right"
         nodeColor={(node) =>
-          node.data.orphan ? '#ff6b45' : node.data.kind === 'reflect_loop' ? '#8f78b8' : '#4fae9d'
+          node.data.orphan
+            ? 'rgba(28, 28, 28, 0.4)'
+            : node.data.kind === 'reflect_loop'
+              ? 'rgba(28, 28, 28, 0.6)'
+              : 'rgba(28, 28, 28, 0.8)'
         }
-        nodeStrokeColor="#b8d8d2"
+        nodeStrokeColor="#1C1C1C"
         nodeStrokeWidth={1}
-        maskColor="rgba(5, 9, 14, 0.72)"
+        maskColor="rgba(28, 28, 28, 0.10)"
         ariaLabel="工作流缩略导航图"
       />
     </ReactFlow>

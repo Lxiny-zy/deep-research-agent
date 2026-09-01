@@ -12,7 +12,7 @@ from deep_research.agents.intent_router import (
     INTENT_SLOTS_KEY,
     IntentRouter,
 )
-from deep_research.intent.types import IntentDecision, IntentSlots
+from deep_research.intent.types import ContextResolution, IntentDecision, IntentSlots
 from deep_research.observability import Tracer
 from deep_research.registry import available, create
 from deep_research.workflow import (
@@ -354,6 +354,13 @@ async def test_recheck_preserves_the_resolution_trace(settings) -> None:
         tier="fallback",
         context_resolved=True,
         resolved_query="对比 Milvus 和 Qdrant",
+        context_resolution=ContextResolution(
+            raw_query="那第二个呢",
+            resolved_query="对比 Milvus 和 Qdrant",
+            context_resolved=True,
+            resolver_tier="llm",
+            reason="上下文已由 LLM 消解",
+        ),
     ).model_dump(mode="json")
 
     async def _classify(query: str) -> IntentDecision:
@@ -366,6 +373,8 @@ async def test_recheck_preserves_the_resolution_trace(settings) -> None:
     assert cached["intent"] == "comparative"
     assert cached["context_resolved"] is True
     assert cached["resolved_query"] == "对比 Milvus 和 Qdrant"
+    assert cached["context_resolution"]["raw_query"] == "那第二个呢"
+    assert cached["context_resolution"]["resolver_tier"] == "llm"
 
 
 @pytest.mark.asyncio
@@ -543,7 +552,7 @@ async def test_router_completes_entities_on_the_resolved_query(settings) -> None
 
 @pytest.mark.asyncio
 async def test_router_does_not_extract_entities_for_other_intents(settings) -> None:
-    """只有 comparative 的下游需要实体，其余意图不为此付费。"""
+    """只有实体依赖型意图的下游需要实体，其余意图不为此付费。"""
     llm = FakeLLM()
     bb = Blackboard(query="大模型推理成本的发展趋势")
     bb.scratch[INTENT_SCRATCH_KEY] = IntentDecision(

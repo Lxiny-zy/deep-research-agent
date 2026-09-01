@@ -20,6 +20,7 @@ from ..config import Settings
 from ..llm import LLM
 from ..models import Reflection, Report, ResearchPlan, ResearchResult
 from ..observability import Tracer
+from ..prompting import compose_system_prompt, load_global_rules
 from ..tools.base import SearchTool
 
 
@@ -41,6 +42,19 @@ class Blackboard(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
+def effective_require_corroboration(bb: Blackboard, settings: Settings) -> bool:
+    """Resolve the effective corroboration gate without widening run settings.
+
+    Intent policies are optional checkpoint metadata. A policy may require
+    stricter evidence, but it can never turn off an explicit user/deployment
+    requirement or mutate the shared ``Settings`` object.
+    """
+    if settings.require_corroboration:
+        return True
+    raw = bb.scratch.get("intent_execution_policy")
+    return isinstance(raw, dict) and raw.get("requires_corroboration") is True
+
+
 class RunContext:
     """跨角色共享的运行期依赖（替代旧版散落在各角色构造函数里的重复参数）。
 
@@ -56,12 +70,32 @@ class RunContext:
         tracer: Tracer,
         settings: Settings,
         llm_resolver: Callable[[str], LLM | None] | None = None,
+        # Optional execution capabilities are injected by the runner.  They
+        # stay typed as ``Any`` here to avoid importing filesystem/process
+        # adapters into every agent (and to keep the legacy constructor intact).
+        artifact_store: Any | None = None,
+        command_runner: Any | None = None,
+        skill_resolver: Any | None = None,
+        resource_policy: Any | None = None,
+        run_id: str | None = None,
+        artifact_slug: str | None = None,
+        global_rules: str | None = None,
     ) -> None:
         self.llm = llm
         self.search_tool = search_tool
         self.tracer = tracer
         self.settings = settings
         self._llm_resolver = llm_resolver
+        self.artifact_store = artifact_store
+        self.command_runner = command_runner
+        self.skill_resolver = skill_resolver
+        self.resource_policy = resource_policy
+        self.run_id = run_id
+        self.artifact_slug = artifact_slug
+        # ``None`` preserves the lightweight direct-agent API used by tests
+        # and integrations. The orchestrator supplies the repository-wide
+        # Vela rules for real runs.
+        self.global_rules = global_rules
 
     def llm_for(self, agent_name: str) -> LLM:
         """取某角色应使用的 LLM：有专属档案则用之，否则回退默认。"""
@@ -70,6 +104,24 @@ class RunContext:
             if resolved is not None:
                 return resolved
         return self.llm
+
+    def system_prompt(self, role_prompt: str) -> str:
+        """Render a role prompt with the run-wide orchestration rules."""
+
+        return compose_system_prompt(role_prompt, self.global_rules)
+
+
+def direct_system_prompt(role_prompt: str) -> str:
+    """Render the shared policy for legacy direct-agent entry points.
+
+    The workflow engine passes a :class:`RunContext` to ``step`` and therefore
+    already uses ``RunContext.system_prompt``.  The compatibility ``run``
+    methods remain public for CLI/evaluation callers, though, and do not have a
+    context object.  Keeping this helper here gives those calls the same
+    repository-wide Vela rules without mutating a role's custom prompt.
+    """
+
+    return compose_system_prompt(role_prompt, load_global_rules())
 
 
 @runtime_checkable

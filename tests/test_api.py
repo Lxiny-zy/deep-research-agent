@@ -12,7 +12,9 @@ import pytest
 from httpx import ASGITransport
 
 from deep_research import api
+from deep_research import execution as execution_module
 from deep_research.config import Settings
+from deep_research.http import sse as sse_module
 from deep_research.models import Report, ResearchPlan, SubQuestion
 from deep_research.observability import Event, EventHub, Tracer
 from deep_research.orchestration import OrchestrationRuntime
@@ -362,9 +364,9 @@ async def test_remote_stream_waits_for_durable_terminal_events(repo, monkeypatch
         [Event(stage="ORCHESTRATOR", type="error", message="old attempt")],
     )
     remote_app = SimpleNamespace(state=SimpleNamespace(repo=repo, live={}))
-    monkeypatch.setattr(api, "_REMOTE_STREAM_POLL_SECONDS", 0.001)
-    monkeypatch.setattr(api, "_REMOTE_STREAM_TERMINAL_GRACE_SECONDS", 0.1)
-    monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 60.0)
+    monkeypatch.setattr(sse_module, "_REMOTE_STREAM_POLL_SECONDS", 0.001)
+    monkeypatch.setattr(sse_module, "_REMOTE_STREAM_TERMINAL_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(sse_module, "_SSE_HEARTBEAT_SECONDS", 60.0)
 
     async def consume() -> list[str]:
         return [chunk async for chunk in api._stream_run_sse(remote_app, run_id)]
@@ -396,8 +398,8 @@ async def test_remote_stream_synthesizes_missing_terminal_event(repo, monkeypatc
     run_id = await repo.create_run("failed remotely")
     await repo.set_status(run_id, "error")
     remote_app = SimpleNamespace(state=SimpleNamespace(repo=repo, live={}))
-    monkeypatch.setattr(api, "_REMOTE_STREAM_POLL_SECONDS", 0.001)
-    monkeypatch.setattr(api, "_REMOTE_STREAM_TERMINAL_GRACE_SECONDS", 0.005)
+    monkeypatch.setattr(sse_module, "_REMOTE_STREAM_POLL_SECONDS", 0.001)
+    monkeypatch.setattr(sse_module, "_REMOTE_STREAM_TERMINAL_GRACE_SECONDS", 0.005)
 
     payload = "".join([chunk async for chunk in api._stream_run_sse(remote_app, run_id)])
 
@@ -419,8 +421,8 @@ async def test_remote_stream_drains_all_pages_before_terminal_grace(repo, monkey
     )
     await repo.finalize(run_id, elapsed=1.0, total_tokens=1)
     remote_app = SimpleNamespace(state=SimpleNamespace(repo=repo, live={}))
-    monkeypatch.setattr(api, "_REMOTE_STREAM_POLL_SECONDS", 0.0)
-    monkeypatch.setattr(api, "_REMOTE_STREAM_TERMINAL_GRACE_SECONDS", 0.0)
+    monkeypatch.setattr(sse_module, "_REMOTE_STREAM_POLL_SECONDS", 0.0)
+    monkeypatch.setattr(sse_module, "_REMOTE_STREAM_TERMINAL_GRACE_SECONDS", 0.0)
 
     payload = "".join([chunk async for chunk in api._stream_run_sse(remote_app, run_id)])
 
@@ -459,9 +461,9 @@ async def test_remote_stream_does_not_replay_same_type_terminal_from_old_attempt
         lease_owner=owner,
     )
     remote_app = SimpleNamespace(state=SimpleNamespace(repo=repo, live={}))
-    monkeypatch.setattr(api, "_REMOTE_STREAM_POLL_SECONDS", 0.001)
-    monkeypatch.setattr(api, "_REMOTE_STREAM_TERMINAL_GRACE_SECONDS", 0.1)
-    monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 60.0)
+    monkeypatch.setattr(sse_module, "_REMOTE_STREAM_POLL_SECONDS", 0.001)
+    monkeypatch.setattr(sse_module, "_REMOTE_STREAM_TERMINAL_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(sse_module, "_SSE_HEARTBEAT_SECONDS", 60.0)
 
     async def consume() -> str:
         return "".join([chunk async for chunk in api._stream_run_sse(remote_app, run_id)])
@@ -556,7 +558,7 @@ async def test_build_agent_uses_search_key_pool(repo, monkeypatch):
         async def aclose(self):
             return None
 
-    monkeypatch.setattr(api, "DeepResearchAgent", FakeAgent)
+    monkeypatch.setattr(execution_module, "DeepResearchAgent", FakeAgent)
     agent, search_tool = await api._build_agent(api.app, api.app.state.settings)
     try:
         assert isinstance(search_tool, TavilyKeyPoolSearch)
@@ -686,6 +688,8 @@ async def test_config_get_masks_secrets(repo):
     assert body["llm_api_key_set"] is True
     assert body["llm_api_key_hint"] == "…1234"
     assert body["require_corroboration"] is False
+    assert body["fulltext_enabled"] is True
+    assert body["fulltext_max_chars"] == 12_000
     assert "sk-aaaa1234" not in resp.text
 
 
@@ -721,6 +725,25 @@ async def test_config_put_persists_corroboration_gate(repo, tmp_path, monkeypatc
     assert resp.json()["require_corroboration"] is True
     assert api.app.state.settings.require_corroboration is True
     assert json.loads(cfg.read_text(encoding="utf-8"))["require_corroboration"] is True
+
+
+@pytest.mark.asyncio
+async def test_config_put_persists_fulltext_settings(repo, tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setenv("RUNTIME_CONFIG_PATH", str(cfg))
+    async with _client() as c:
+        resp = await c.put(
+            "/api/config",
+            json={"fulltext_enabled": False, "fulltext_max_chars": 20_000},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["fulltext_enabled"] is False
+    assert resp.json()["fulltext_max_chars"] == 20_000
+    assert api.app.state.settings.fulltext_enabled is False
+    assert api.app.state.settings.fulltext_max_chars == 20_000
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert saved["fulltext_enabled"] is False
+    assert saved["fulltext_max_chars"] == 20_000
 
 
 @pytest.mark.asyncio
@@ -987,7 +1010,7 @@ async def test_live_stream_emits_heartbeat_during_silence(monkeypatch) -> None:
     run_id = "live-heartbeat"
     hub = EventHub()
     app = SimpleNamespace(state=SimpleNamespace(repo=InMemoryRepository(), live={run_id: hub}))
-    monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 0.01)
+    monkeypatch.setattr(sse_module, "_SSE_HEARTBEAT_SECONDS", 0.01)
     chunks: list[str] = []
 
     async def consume() -> None:
@@ -1011,8 +1034,8 @@ async def test_live_stream_recovers_from_slow_subscriber_overflow(monkeypatch) -
     await repo.set_status(run_id, "running")
     hub = EventHub()
     monkeypatch.setattr(hub, "_QUEUE_MAXSIZE", 2)
-    monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 60.0)
-    monkeypatch.setattr(api, "_REMOTE_STREAM_POLL_SECONDS", 0.001)
+    monkeypatch.setattr(sse_module, "_SSE_HEARTBEAT_SECONDS", 60.0)
+    monkeypatch.setattr(sse_module, "_REMOTE_STREAM_POLL_SECONDS", 0.001)
     app = SimpleNamespace(state=SimpleNamespace(repo=repo, live={run_id: hub}))
 
     stream = api._stream_run_sse(app, run_id)
@@ -1754,8 +1777,12 @@ async def test_execute_cleanup_survives_lease_release_failure(monkeypatch) -> No
             agent_closed = True
 
     app = SimpleNamespace(state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub}))
-    monkeypatch.setattr(api, "DeepResearchAgent", Agent)
-    monkeypatch.setattr(api, "_build_search_tool", lambda app, settings: asyncio.sleep(0, Search()))
+    monkeypatch.setattr(execution_module, "DeepResearchAgent", Agent)
+    monkeypatch.setattr(
+        execution_module.RunExecutor,
+        "build_search_tool",
+        lambda self, settings: asyncio.sleep(0, Search()),
+    )
 
     await api._execute(app, run_id, "Q", Settings(), lease_owner="lease")
 
@@ -1787,8 +1814,12 @@ async def test_execute_persists_user_requested_cancellation(monkeypatch) -> None
             return None
 
     app = SimpleNamespace(state=SimpleNamespace(repo=repo, catalog=object(), live={run_id: hub}))
-    monkeypatch.setattr(api, "DeepResearchAgent", Agent)
-    monkeypatch.setattr(api, "_build_search_tool", lambda app, settings: asyncio.sleep(0, None))
+    monkeypatch.setattr(execution_module, "DeepResearchAgent", Agent)
+    monkeypatch.setattr(
+        execution_module.RunExecutor,
+        "build_search_tool",
+        lambda self, settings: asyncio.sleep(0, None),
+    )
 
     task = asyncio.create_task(api._execute(app, run_id, "cancel", Settings(), lease_owner=owner))
     await started.wait()
@@ -1829,8 +1860,12 @@ async def test_resume_does_not_replay_previous_terminal_event(monkeypatch) -> No
             return None
 
     app = SimpleNamespace(state=SimpleNamespace(repo=repo, catalog=object(), live={run_id: hub}))
-    monkeypatch.setattr(api, "DeepResearchAgent", Agent)
-    monkeypatch.setattr(api, "_build_search_tool", lambda app, settings: asyncio.sleep(0, None))
+    monkeypatch.setattr(execution_module, "DeepResearchAgent", Agent)
+    monkeypatch.setattr(
+        execution_module.RunExecutor,
+        "build_search_tool",
+        lambda self, settings: asyncio.sleep(0, None),
+    )
 
     await api._execute(
         app,
@@ -1876,8 +1911,12 @@ async def test_lease_renewal_failure_cancels_execution(monkeypatch) -> None:
 
     app = SimpleNamespace(state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub}))
     monkeypatch.setattr(api, "_LEASE_RENEW_INTERVAL_SECONDS", 0.001)
-    monkeypatch.setattr(api, "DeepResearchAgent", Agent)
-    monkeypatch.setattr(api, "_build_search_tool", lambda app, settings: asyncio.sleep(0, None))
+    monkeypatch.setattr(execution_module, "DeepResearchAgent", Agent)
+    monkeypatch.setattr(
+        execution_module.RunExecutor,
+        "build_search_tool",
+        lambda self, settings: asyncio.sleep(0, None),
+    )
 
     with pytest.raises(asyncio.CancelledError):
         await api._execute(app, run_id, "Q", Settings(), lease_owner="lease")
@@ -1922,12 +1961,12 @@ async def test_execute_cleanup_survives_second_cancellation(monkeypatch) -> None
 
     search = Search()
     app = SimpleNamespace(state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub}))
-    monkeypatch.setattr(api, "DeepResearchAgent", Agent)
+    monkeypatch.setattr(execution_module, "DeepResearchAgent", Agent)
 
-    async def build_search(app, settings):  # type: ignore[no-untyped-def]
+    async def build_search(self, settings):  # type: ignore[no-untyped-def]
         return search
 
-    monkeypatch.setattr(api, "_build_search_tool", build_search)
+    monkeypatch.setattr(execution_module.RunExecutor, "build_search_tool", build_search)
     task = asyncio.create_task(api._execute(app, run_id, "Q", Settings()))
     await run_started.wait()
     task.cancel()
@@ -1969,8 +2008,12 @@ async def test_cancelled_execution_remains_recoverable(monkeypatch) -> None:
     first_app = SimpleNamespace(
         state=SimpleNamespace(repo=repo, catalog=object(), live={run_id: hub})
     )
-    monkeypatch.setattr(api, "DeepResearchAgent", Agent)
-    monkeypatch.setattr(api, "_build_search_tool", lambda app, settings: asyncio.sleep(0, None))
+    monkeypatch.setattr(execution_module, "DeepResearchAgent", Agent)
+    monkeypatch.setattr(
+        execution_module.RunExecutor,
+        "build_search_tool",
+        lambda self, settings: asyncio.sleep(0, None),
+    )
 
     task = asyncio.create_task(
         api._execute(
@@ -2005,3 +2048,387 @@ async def test_cancelled_execution_remains_recoverable(monkeypatch) -> None:
     await asyncio.gather(*second_app.state.tasks)
 
     assert resumed == [run_id]
+
+
+@pytest.mark.asyncio
+async def test_report_document_endpoint_delivers_the_evidence_apparatus(repo):
+    """结构化文档端点：证据装置随报告一起交付，不再只存在于前端的即时 join。
+
+    这是 Markdown / HTML / 打印三种导出的共同数据源，所以它必须自带引用、
+    证据附录与概览——否则每个导出出口都要自己再 join 一遍。
+    """
+    from deep_research.models import EvidenceVerification, Finding, ResearchResult
+
+    run_id = await repo.create_run("CASSI 重建方法对比")
+    url = "https://doi.org/10.1364/oe.1"
+    finding = Finding(
+        statement="该方法达到 38.36 dB",
+        source_url=url,
+        evidence_quote="38.36 dB",
+        verification=EvidenceVerification(
+            status="verified",
+            method="normalized_quote",
+            source_content_hash="ab" * 32,
+            source_reference="Cai 等. DAUHST. NeurIPS, 2022. " + url,
+            evidence_context="Our method achieves 38.36 dB on KAIST.",
+            reason="quote_found_in_source",
+            semantic_status="supported",
+            semantic_confidence=0.9,
+            claim_id="C-1",
+        ),
+    )
+    await repo.save_result(run_id, ResearchResult(sub_question="精度如何", findings=[finding]))
+    await repo.save_report(
+        run_id,
+        Report(
+            query="CASSI 重建方法对比",
+            markdown="正文引用 [1]。\n\n## 参考来源\n[1] " + url + "\n",
+            citations=[url],
+        ),
+    )
+    await repo.append_events(
+        run_id,
+        [Event(stage="RESEARCHER", type="info", data={"category": "source_policy", "blocked": 2})],
+    )
+
+    async with _client() as c:
+        resp = await c.get(f"/api/runs/{run_id}/document")
+
+    assert resp.status_code == 200
+    doc = resp.json()
+    # 正文里 Synthesizer 追加的参考来源段落已剥掉，由结构化字段承载
+    assert doc["blocks"][0]["markdown"] == "正文引用 [1]。"
+    assert doc["references"] == [
+        {"index": 1, "url": url, "reference": "Cai 等. DAUHST. NeurIPS, 2022. " + url}
+    ]
+    assert doc["evidence"][0]["citation"] == 1
+    assert doc["evidence"][0]["content_hash"] == "ab" * 32
+    assert doc["overview"]["blocked_sources"] == 2
+    assert "不保证论断在开放世界为真" in doc["disclaimer"]
+
+
+@pytest.mark.asyncio
+async def test_report_document_endpoint_404s_for_an_unknown_run(repo):
+    async with _client() as c:
+        resp = await c.get("/api/runs/does-not-exist/document")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_report_document_endpoint_works_before_a_report_exists(repo):
+    """流式中途/失败的 run 也要能取文档，否则打印预览在这些状态下会崩。"""
+    run_id = await repo.create_run("尚未产出报告")
+
+    async with _client() as c:
+        resp = await c.get(f"/api/runs/{run_id}/document")
+
+    assert resp.status_code == 200
+    doc = resp.json()
+    assert doc["blocks"] == []
+    assert doc["references"] == []
+    assert doc["overview"]["blocked_sources"] is None
+
+
+@pytest.mark.asyncio
+async def test_report_markdown_endpoint_carries_the_evidence_apparatus(repo):
+    """.md 下载与 report.markdown 不是同一份字节。
+
+    前者是结构化文档的投影，带逐字引文、验证状态与快照哈希；后者只有综合者写的
+    正文。这个端点存在的全部理由就是这个差别，所以断言必须落在差别上，而不是
+    "返回了 200"。
+    """
+    from deep_research.models import EvidenceVerification, Finding, ResearchResult
+
+    run_id = await repo.create_run("CASSI 重建方法对比")
+    url = "https://doi.org/10.1364/oe.2"
+    finding = Finding(
+        statement="该方法达到 38.36 dB",
+        source_url=url,
+        evidence_quote="38.36 dB",
+        verification=EvidenceVerification(
+            status="verified",
+            method="normalized_quote",
+            source_content_hash="cd" * 32,
+            source_reference="Cai 等. DAUHST. NeurIPS, 2022. " + url,
+            evidence_context="Our method achieves 38.36 dB on KAIST.",
+            reason="quote_found_in_source",
+            semantic_status="supported",
+            semantic_confidence=0.9,
+            claim_id="C-1",
+        ),
+    )
+    await repo.save_result(run_id, ResearchResult(sub_question="精度如何", findings=[finding]))
+    await repo.save_report(
+        run_id,
+        Report(
+            query="CASSI 重建方法对比",
+            markdown="正文引用 [1]。\n\n## 参考来源\n[1] " + url + "\n",
+            citations=[url],
+        ),
+    )
+
+    async with _client() as c:
+        resp = await c.get(f"/api/runs/{run_id}/document.md")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/markdown")
+    assert resp.headers["content-disposition"].endswith(f'research-{run_id}.md"')
+    body = resp.text
+    # 正文在
+    assert "正文引用 [1]" in body
+    # 证据装置也在——这几项在 report.markdown 里一个都没有
+    assert "cd" * 32 in body
+    assert "38.36 dB" in body
+    assert "Cai 等. DAUHST. NeurIPS, 2022." in body
+    assert "不保证论断在开放世界为真" in body
+
+
+@pytest.mark.asyncio
+async def test_report_markdown_endpoint_works_before_a_report_exists(repo):
+    """流式中途的 run 也要能导出，与 /document、.csv 的降级口径一致。"""
+    run_id = await repo.create_run("尚未产出报告")
+
+    async with _client() as c:
+        resp = await c.get(f"/api/runs/{run_id}/document.md")
+
+    assert resp.status_code == 200
+    assert "不保证论断在开放世界为真" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_report_markdown_endpoint_404s_for_an_unknown_run(repo):
+    async with _client() as c:
+        resp = await c.get("/api/runs/does-not-exist/document.md")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_report_csv_endpoint_returns_an_empty_download_before_a_table_exists(repo):
+    run_id = await repo.create_run("尚未产出表格")
+
+    async with _client() as c:
+        resp = await c.get(f"/api/runs/{run_id}/document.csv")
+
+    assert resp.status_code == 200
+    assert resp.text == ""
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert resp.headers["content-disposition"].endswith(f'research-{run_id}.csv"')
+
+
+@pytest.mark.asyncio
+async def test_report_csv_endpoint_404s_for_an_unknown_run(repo):
+    async with _client() as c:
+        resp = await c.get("/api/runs/does-not-exist/document.csv")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_report_xlsx_endpoint_returns_an_openable_download_before_a_table_exists(repo):
+    """The optional exporter still returns a valid workbook for a streaming run."""
+    run_id = await repo.create_run("尚未产出表格")
+
+    async with _client() as c:
+        resp = await c.get(f"/api/runs/{run_id}/document.xlsx")
+
+    assert resp.status_code == 200
+    assert resp.content[:4] == b"PK\x03\x04"
+    assert resp.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert resp.headers["content-disposition"].endswith(f'research-{run_id}.xlsx"')
+
+
+@pytest.mark.asyncio
+async def test_report_xlsx_endpoint_404s_for_an_unknown_run(repo):
+    async with _client() as c:
+        resp = await c.get("/api/runs/does-not-exist/document.xlsx")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_report_xlsx_endpoint_returns_501_when_optional_dependency_is_missing(
+    repo, monkeypatch
+):
+    run_id = await repo.create_run("需要可选依赖")
+
+    def _missing_dependency(*args, **kwargs):
+        raise api.XlsxDependencyError("install the xlsx extra")
+
+    monkeypatch.setattr(api, "render_xlsx", _missing_dependency)
+    async with _client() as c:
+        resp = await c.get(f"/api/runs/{run_id}/document.xlsx")
+
+    assert resp.status_code == 501
+    assert "xlsx extra" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_report_pdf_endpoint_returns_optional_dependency_status(repo, monkeypatch):
+    run_id = await repo.create_run("server pdf optional")
+    import sys
+
+    monkeypatch.setitem(sys.modules, "weasyprint", None)
+    async with _client() as c:
+        resp = await c.get(f"/api/runs/{run_id}/document.pdf")
+    assert resp.status_code == 501
+    assert "optional 'pdf' extra" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_report_pdf_endpoint_404s_for_an_unknown_run(repo):
+    async with _client() as c:
+        resp = await c.get("/api/runs/does-not-exist/document.pdf")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_report_export_endpoints_forward_hsi_and_table_selection(repo, monkeypatch):
+    """All document exports must assemble the same opt-in HSI document."""
+    from deep_research.report import ReportDocument, TableBlock
+
+    run_id = await repo.create_run("HSI export parameters")
+    document = ReportDocument(
+        query="HSI export parameters",
+        blocks=[TableBlock(id="hsi_reconstruction", columns=[], rows=[])],
+    )
+    assembled: list[dict[str, object]] = []
+
+    def fake_assemble(*args, **kwargs):  # type: ignore[no-untyped-def]
+        assembled.append(kwargs)
+        return document
+
+    monkeypatch.setattr(api, "assemble_document", fake_assemble)
+    csv_calls: list[str | None] = []
+    xlsx_calls: list[str | None] = []
+    pdf_calls: list[ReportDocument] = []
+
+    def fake_csv(value, *, table_id=None):  # type: ignore[no-untyped-def]
+        assert value is document
+        csv_calls.append(table_id)
+        return "object\r\n"
+
+    def fake_xlsx(value, *, table_id=None):  # type: ignore[no-untyped-def]
+        assert value is document
+        xlsx_calls.append(table_id)
+        return b"xlsx"
+
+    def fake_pdf(value):  # type: ignore[no-untyped-def]
+        pdf_calls.append(value)
+        return b"%PDF"
+
+    monkeypatch.setattr(api, "render_csv", fake_csv)
+    monkeypatch.setattr(api, "render_xlsx", fake_xlsx)
+    monkeypatch.setattr(api, "render_pdf", fake_pdf)
+
+    async with _client() as c:
+        document_response = await c.get(f"/api/runs/{run_id}/document?include_hsi_tables=true")
+        csv_response = await c.get(
+            f"/api/runs/{run_id}/document.csv?include_hsi_tables=true&table_id=hsi_reconstruction"
+        )
+        xlsx_response = await c.get(
+            f"/api/runs/{run_id}/document.xlsx?include_hsi_tables=true&table_id=hsi_reconstruction"
+        )
+        pdf_response = await c.get(f"/api/runs/{run_id}/document.pdf?include_hsi_tables=true")
+
+    assert document_response.status_code == 200
+    assert csv_response.status_code == 200
+    assert xlsx_response.status_code == 200
+    assert pdf_response.status_code == 200
+    assert [kwargs["include_hsi_tables"] for kwargs in assembled] == [True] * 4
+    assert csv_calls == ["hsi_reconstruction"]
+    assert xlsx_calls == ["hsi_reconstruction"]
+    assert pdf_calls == [document]
+
+
+@pytest.mark.asyncio
+async def test_report_exports_forward_persisted_corroboration_gate(repo, monkeypatch):
+    """Strict runs must keep the corroboration gate in every export path."""
+    from deep_research.report import ReportDocument
+
+    execution = OrchestrationRuntime().start("deep", {"query": "strict export"})
+    execution.checkpoint = {
+        "scratch": {
+            RUN_SETTINGS_CHECKPOINT_KEY: {"require_corroboration": True},
+        }
+    }
+    run_id = await repo.create_run("strict export", execution=execution)
+    assembled: list[dict[str, object]] = []
+
+    def fake_assemble(*args, **kwargs):  # type: ignore[no-untyped-def]
+        assembled.append(kwargs)
+        return ReportDocument(query="strict export")
+
+    monkeypatch.setattr(api, "assemble_document", fake_assemble)
+    monkeypatch.setattr(api, "render_csv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(api, "render_xlsx", lambda *args, **kwargs: b"xlsx")
+    monkeypatch.setattr(api, "render_pdf", lambda *args, **kwargs: b"%PDF")
+
+    async with _client() as c:
+        responses = await asyncio.gather(
+            c.get(f"/api/runs/{run_id}/document"),
+            c.get(f"/api/runs/{run_id}/document.csv"),
+            c.get(f"/api/runs/{run_id}/document.xlsx"),
+            c.get(f"/api/runs/{run_id}/document.pdf"),
+        )
+
+    assert all(response.status_code == 200 for response in responses)
+    assert len(assembled) == 4
+    assert all(kwargs["require_corroboration"] is True for kwargs in assembled)
+
+
+@pytest.mark.asyncio
+async def test_report_table_export_maps_selection_errors(repo, monkeypatch):
+    from deep_research.report import (
+        CsvTableNotFoundError,
+        CsvTableSelectionError,
+        XlsxTableNotFoundError,
+        XlsxTableSelectionError,
+    )
+
+    run_id = await repo.create_run("invalid table selection")
+
+    async with _client() as c:
+        monkeypatch.setattr(
+            api,
+            "render_csv",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                CsvTableSelectionError("table_id is required")
+            ),
+        )
+        csv_ambiguous = await c.get(f"/api/runs/{run_id}/document.csv")
+
+        monkeypatch.setattr(
+            api,
+            "render_csv",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                CsvTableNotFoundError("table not found: missing")
+            ),
+        )
+        csv_missing = await c.get(f"/api/runs/{run_id}/document.csv?table_id=missing")
+
+        monkeypatch.setattr(
+            api,
+            "render_xlsx",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                XlsxTableSelectionError("table_id is required")
+            ),
+        )
+        xlsx_ambiguous = await c.get(f"/api/runs/{run_id}/document.xlsx")
+
+        monkeypatch.setattr(
+            api,
+            "render_xlsx",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                XlsxTableNotFoundError("table not found: missing")
+            ),
+        )
+        xlsx_missing = await c.get(f"/api/runs/{run_id}/document.xlsx?table_id=missing")
+
+    assert csv_ambiguous.status_code == 400
+    assert csv_missing.status_code == 404
+    assert xlsx_ambiguous.status_code == 400
+    assert xlsx_missing.status_code == 404

@@ -28,10 +28,19 @@ RUN pip install --require-hashes -r requirements.lock
 COPY deep_research ./deep_research
 COPY alembic ./alembic
 COPY alembic.ini ./
+# Explicit framework contracts used by every planner-driven run.  Keep the
+# global rules beside the skill contracts so the image uses the same policy as
+# the source checkout.
+COPY framework/06_global_rules.md ./framework/06_global_rules.md
+COPY framework/skills ./framework/skills
 # 前端：只拷 Vite 构建产物（api.py 优先加载 frontend/dist/index.html）
 COPY --from=frontend /fe/dist ./frontend/dist
 COPY docker/entrypoint.sh ./docker/entrypoint.sh
-RUN chmod +x docker/entrypoint.sh && mkdir -p /app/data
+# Create both writable mount points in the image before dropping privileges.
+# Docker copies the ownership of an image directory into a fresh named volume;
+# without the artifact directory here, the first mounted volume can be root-owned
+# and planner-driven workers would fail on their first handoff write.
+RUN chmod +x docker/entrypoint.sh && mkdir -p /app/data /app/artifacts
 
 # 非 root 运行：应用层被攻破时不直接获得容器 root。
 # chown /app：entrypoint 跑 alembic，且 SQLite 默认库（无 DATABASE_URL 时）写在 /app 下

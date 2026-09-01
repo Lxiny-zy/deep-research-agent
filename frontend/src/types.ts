@@ -49,6 +49,12 @@ export interface SubQuestion {
   depends_on: number[]
 }
 
+/**
+ * 数值校验三态，与后端 ``EvidenceVerification.quantity_status`` 对齐。
+ * ``not_applicable`` 表示该论断没有结构化数值，不是"没通过校验"。
+ */
+export type QuantityStatus = 'not_applicable' | 'verified' | 'unsupported'
+
 export interface Finding {
   statement: string
   source_url: string
@@ -59,7 +65,16 @@ export interface Finding {
     method: 'none' | 'normalized_quote'
     source_content_hash: string
     source_title?: string
+    // 学术引用文本（作者/标题/期刊/年/DOI）。由后端在证据验证时刻渲染；
+    // 通用网页来源为空串，历史 run 可能完全没有该字段，故为可选。
+    source_reference?: string
     evidence_context?: string
+    // Structured-document-only fields. Legacy RunDetail findings do not carry
+    // them, so they remain optional at this compatibility boundary.
+    quantity_label?: string
+    conditions_label?: string
+    quantity_status?: QuantityStatus
+    quantity_reason?: string
     reason: string
     semantic_status: 'not_checked' | 'supported' | 'unsupported' | 'uncertain'
     semantic_confidence: number
@@ -84,6 +99,114 @@ export interface Report {
   query: string
   markdown: string
   citations: string[]
+}
+
+/** Structured report wire contract returned by GET /api/runs/{id}/document. */
+export interface ReportDocument {
+  schema_version: number
+  query: string
+  blocks: ReportBlock[]
+  references: ReportReference[]
+  evidence: ReportEvidence[]
+  overview: ReportOverview
+  disclaimer: string
+}
+
+export type ReportBlock = ProseBlock | TableBlock | ChartBlock
+
+export interface ProseBlock {
+  kind: 'prose'
+  markdown: string
+}
+
+export interface TableColumn {
+  key: string
+  label: string
+  unit: string
+  align: 'left' | 'right'
+  numeric: boolean
+  note_ref: number | null
+}
+
+export interface TableCell {
+  value: string
+  numeric: number | null
+  citations: number[]
+  note_ref: number | null
+  disputed: boolean
+}
+
+export interface TableRow {
+  label: string
+  citation: number | null
+  cells: Record<string, TableCell>
+}
+
+export interface TableBlock {
+  kind: 'table'
+  id: string
+  title: string
+  columns: TableColumn[]
+  rows: TableRow[]
+  notes: string[]
+  caption: string
+}
+
+export type ChartForm = 'bar' | 'dot' | 'grouped_bar' | 'scatter' | 'line'
+
+export interface ChartBlock {
+  kind: 'chart'
+  id: string
+  title: string
+  form: ChartForm
+  source_table: string
+  value_columns: string[]
+  x_column: string
+  emphasis: string
+  y_label: string
+  caption: string
+}
+
+export interface ReportReference {
+  index: number
+  url: string
+  reference: string
+}
+
+export interface ReportEvidence {
+  citation: number
+  claim_id: string
+  statement: string
+  quote: string
+  context: string
+  source_url: string
+  reference: string
+  source_section: string
+  content_hash: string
+  verbatim_verified: boolean
+  verification_reason: string
+  semantic_status: string
+  semantic_confidence: number
+  semantic_reason: string
+  consistency_status: string
+  contradicts_claim_ids: string[]
+  contradiction_reason: string
+  corroboration_status: string
+  independent_source_count: number
+  corroboration_reason: string
+  quantity_label: string
+  conditions_label: string
+  quantity_status: string
+  quantity_reason: string
+}
+
+export interface ReportOverview {
+  records: number
+  verbatim_matched: number
+  semantically_supported: number
+  corroborated: number
+  conflicted: number
+  blocked_sources: number | null
 }
 
 export interface SourceSnapshot {
@@ -149,11 +272,30 @@ export interface ClarificationRequest {
   reason: string
 }
 
+/** Persisted routing policy included with newer intent decisions. */
+export interface IntentExecutionPolicy {
+  workflow?: string | null
+  answer_mode?: string | null
+  max_sub_questions?: number | null
+  max_rounds?: number | null
+  parallelism?: number | null
+  requires_reflection?: boolean
+  requires_corroboration?: boolean
+  freshness?: string
+  source_strategy?: string
+  rationale?: string
+}
+
 export interface IntentDecision {
   intent: string
   confidence: number
   tier: IntentTier
-  risk: 'none' | 'prompt_injection' | 'system_prompt_probe' | 'off_task_instruction' | 'unsafe_content'
+  risk:
+    | 'none'
+    | 'prompt_injection'
+    | 'system_prompt_probe'
+    | 'off_task_instruction'
+    | 'unsafe_content'
   risk_confidence: number
   signals: IntentSignal[]
   escalated: boolean
@@ -163,6 +305,7 @@ export interface IntentDecision {
   context_resolved: boolean
   resolved_query: string
   clarification: ClarificationRequest | null
+  execution_policy?: IntentExecutionPolicy | null
 }
 
 export interface RunDetail extends RunSummary {
@@ -206,6 +349,10 @@ export interface WorkflowRun {
   id: string
   workflow_name: string
   status: WorkflowRunStatus
+  // 恢复次数。后端 prepare_resume 在返回 202 之前就把它 +1，因此它是
+  // 「新一次尝试已经开始」的权威信号——比 status 可靠：一次立刻再失败的
+  // 恢复会让 status 停在 error，看不出与恢复前的区别。
+  attempt?: number
   input: Record<string, unknown>
   output: Record<string, unknown>
   definition?: Record<string, unknown>
@@ -236,8 +383,8 @@ export interface ResearchParams {
 export interface WorkflowInfo {
   name: string
   description: string
-  default: string
-  custom?: string // "True"＝自定义工作流（构建器创建），"False"/缺省＝内置预置
+  default: string | boolean // 兼容后端 "True"/"False" 与原生布尔值
+  custom?: string | boolean // 兼容后端 "True"/"False" 与原生布尔值
 }
 
 // 自定义工作流的一个步骤（与后端 Step 对齐，顺序即数组序）
@@ -383,6 +530,8 @@ export interface ConfigView {
   max_rounds: number
   max_concurrency: number
   results_per_search: number
+  fulltext_enabled: boolean
+  fulltext_max_chars: number
   request_timeout: number
   max_run_seconds: number
   require_corroboration: boolean
@@ -398,6 +547,8 @@ export interface ConfigUpdate {
   max_rounds?: number
   max_concurrency?: number
   results_per_search?: number
+  fulltext_enabled?: boolean
+  fulltext_max_chars?: number
   request_timeout?: number
   max_run_seconds?: number
   require_corroboration?: boolean

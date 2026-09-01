@@ -32,6 +32,7 @@ from .orchestration import (
     WorkflowRun,
 )
 from .persistence.repository import LeaseLostError
+from .prompting import load_global_rules
 from .registry import available, create
 
 if TYPE_CHECKING:
@@ -61,6 +62,10 @@ class Step(BaseModel):
     retry_backoff: float = Field(0.5, ge=0, le=60)
     failure_policy: Literal["continue", "fail_fast"] = "continue"
     fallback_agent: str | None = None
+    # Planner-driven adapters can carry declarative operation metadata without
+    # changing the legacy agent fields.  The workflow engine treats this as
+    # opaque data and never executes values from it as shell text.
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Workflow(BaseModel):
@@ -85,10 +90,29 @@ _TERMINAL_ROLES = {"synthesizer", "aggregator"}
 # 之前必须自行产出 bb.report，否则 require_report 会判定运行失败。
 HALT_SCRATCH_KEY = "_halt"
 HALT_REASON_KEY = "_halt_reason"
+# Intent routing writes a serializable execution policy into the checkpoint.  The
+# engine deliberately treats this as an optional, duck-typed contract so old
+# checkpoints and custom callers remain valid even when the intent package is
+# disabled or unavailable.
+INTENT_POLICY_SCRATCH_KEY = "intent_execution_policy"
 # 子团队默认内部流程：在隔离子黑板上对其 focus 做一次检索（可被 SubTask.steps 覆盖）。
 _DEFAULT_TEAM_STEPS = [Step(kind="agent", agent="researcher")]
 _INCOMING_CONDITIONS_SKIP_REASON = "incoming conditions not matched"
 _MISSING = object()
+
+
+def _policy_limit(bb: Blackboard, field: str, default: int) -> int:
+    """Return a policy limit that can only tighten the caller's default."""
+    raw = bb.scratch.get(INTENT_POLICY_SCRATCH_KEY)
+    if not isinstance(raw, dict):
+        return default
+    value = raw.get(field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    candidate = int(value)
+    if candidate < 0:
+        return default
+    return min(default, candidate)
 
 
 def _merge_parallel_value(base: Any, current: Any, branch: Any) -> Any:
@@ -232,7 +256,7 @@ def validate_workflow_graph_terminal(
         step = Step.model_validate(node.step)
         if node.id not in outgoing:
             terminal_steps.append(step)
-        if step.kind == "agent" and step.agent in terminals:
+        if _step_produces_report(step, terminals):
             report_steps.append((node.id, step))
     if len(terminal_steps) == 1 and len(report_steps) == 1 and report_steps[0][0] not in outgoing:
         return []
@@ -244,13 +268,34 @@ def validate_workflow_steps_terminal(
 ) -> list[str]:
     terminals = terminal_roles if terminal_roles is not None else _TERMINAL_ROLES
     report_indexes = [
-        index
-        for index, step in enumerate(steps)
-        if step.kind == "agent" and step.agent in terminals
+        index for index, step in enumerate(steps) if _step_produces_report(step, terminals)
     ]
     if report_indexes == [len(steps) - 1]:
         return []
     return ["流程必须由唯一的终端角色（如 synthesizer）收尾"]
+
+
+def _step_produces_report(step: Step, terminal_roles: set[str]) -> bool:
+    """Return whether a step owns the report-producing terminal role.
+
+    ``team_fanout`` invokes its aggregator after merging child blackboards, so the
+    control step is terminal when that aggregator is a configured terminal role.
+    Treating it like an explicit terminal agent keeps validation and budget
+    exhaustion semantics consistent for both ``teams`` and bounded fan-out
+    templates such as ``monitoring``.
+    """
+    if step.kind == "agent":
+        # Generic external-plan executors are only report producers on the
+        # authored terminal step.  Earlier steps use the same role name but
+        # must remain subject to the normal budget/skip rules.
+        if step.agent in {"plan_executor", "operation_runner"} and step.metadata.get(
+            "is_terminal"
+        ) is False:
+            return False
+        return step.agent in terminal_roles
+    if step.kind == "team_fanout":
+        return step.aggregator in terminal_roles
+    return False
 
 
 def validate_workflow(
@@ -382,6 +427,11 @@ class WorkflowEngine:
 
     def _emit_runtime_event(self, name: str, data: dict) -> None:
         """把统一运行时生命周期桥接到已有 SSE/持久化事件流。"""
+        if name == "checkpoint.saved":
+            # Event.tokens 顶层字段不落库（见 observability.Event），跨进程回放一律读到 0。
+            # 断点处的累计 token 是「续跑省了多少」的唯一依据，必须放进会持久化的 data，
+            # 否则 execution_mode=worker 下这个数字永远无法审计。
+            data = {**data, "total_tokens": self.ctx.tracer.total_tokens}
         self.ctx.tracer.emit("ORCHESTRATOR", "info", name, data={"event_name": name, **data})
 
     def _emit_workflow_plan(self, wf: Workflow) -> None:
@@ -405,17 +455,40 @@ class WorkflowEngine:
     async def _invoke_step(
         self, step: Step, bb: Blackboard, *, agent_override: str | None = None
     ) -> Blackboard:
-        if agent_override is not None:
-            return await self._resolve(agent_override).step(bb, self.ctx)
-        if step.kind == "reflect_loop":
-            await self._reflect_loop(step, bb)
-        elif step.kind == "compose":
-            await self._compose(step, bb)
-        elif step.kind == "team_fanout":
-            await self._team_fanout(step, bb)
-        else:
-            bb = await self._resolve(step.agent).step(bb, self.ctx)
-        return bb
+        # A planner-driven operation adapter reads this short-lived envelope
+        # from the blackboard.  Keeping it on the candidate blackboard makes
+        # parallel branches isolated; it is removed before the candidate is
+        # committed so arbitrary planner metadata cannot accumulate forever.
+        metadata_key = "_active_step_metadata"
+        previous_metadata = bb.scratch.get(metadata_key, _MISSING)
+        if step.metadata:
+            bb.scratch[metadata_key] = deepcopy(step.metadata)
+        result = bb
+        try:
+            if agent_override is not None:
+                result = await self._resolve(agent_override).step(bb, self.ctx)
+            elif step.kind == "reflect_loop":
+                await self._reflect_loop(step, bb)
+            elif step.kind == "compose":
+                await self._compose(step, bb)
+            elif step.kind == "team_fanout":
+                await self._team_fanout(step, bb)
+            else:
+                result = await self._resolve(step.agent).step(bb, self.ctx)
+            return result
+        finally:
+            # An agent is allowed to return a replacement Blackboard.  Clean
+            # the transient metadata envelope on both objects; otherwise a
+            # returned candidate could leak the previous step's prompt into a
+            # checkpoint or a parallel branch.
+            if previous_metadata is _MISSING:
+                bb.scratch.pop(metadata_key, None)
+                if result is not bb:
+                    result.scratch.pop(metadata_key, None)
+            else:
+                bb.scratch[metadata_key] = previous_metadata
+                if result is not bb:
+                    result.scratch[metadata_key] = previous_metadata
 
     async def _invoke_with_timeout(
         self, step: Step, bb: Blackboard, *, agent_override: str | None = None
@@ -480,7 +553,7 @@ class WorkflowEngine:
 
     def _is_terminal(self, step: Step) -> bool:
         """能产出报告的终端步骤：预算耗尽时仍执行，保证尽力而为的报告。"""
-        return step.kind == "agent" and step.agent in self._terminal_roles
+        return _step_produces_report(step, self._terminal_roles)
 
     @staticmethod
     def _halted(bb: Blackboard) -> bool:
@@ -523,13 +596,23 @@ class WorkflowEngine:
         return "ENGINE"
 
     async def run(self, wf: Workflow, bb: Blackboard) -> Blackboard:
+        # Every engine entry point gets the same Vela-derived rules. The
+        # orchestrator supplies this eagerly for normal runs; lazy injection
+        # keeps direct WorkflowEngine integrations consistent as well.
+        if getattr(self.ctx, "global_rules", None) is None:
+            self.ctx.global_rules = load_global_rules()
         # run 级共享限流：并行图的 K 个检索型节点 / 多团队并行若各自建
         # Semaphore(max_concurrency)，总并发会被放大为 K×max_concurrency。
         # 引擎在 run 入口把信号量挂到 ctx 上（已存在则沿用，嵌套子流程共用同一把），
         # 角色未被注入时才自建，保证单测可脱离引擎独立运行。
         if getattr(self.ctx, "run_semaphore", None) is None:
+            # A routed intent may request a narrower parallelism budget (for
+            # example, fact checking should avoid a wide fan-out).  It can
+            # never widen the user/run setting; the checkpoint value is
+            # validated defensively because it may come from an older version.
+            concurrency = _policy_limit(bb, "parallelism", self.ctx.settings.max_concurrency)
             self.ctx.run_semaphore = asyncio.Semaphore(  # type: ignore[attr-defined]
-                self.ctx.settings.max_concurrency
+                max(1, concurrency)
             )
         if wf.nodes:
             return await self._run_graph(wf, bb)
@@ -917,9 +1000,22 @@ class WorkflowEngine:
         """
         from .agents.base import Blackboard as BB  # 运行期才导入，避免顶层循环导入
 
+        if self._exhausted():
+            self.ctx.tracer.emit(
+                "ORCHESTRATOR",
+                "info",
+                "token 预算耗尽，跳过团队检索并直接执行归并终端",
+            )
+            await self._resolve(step.aggregator).step(bb, self.ctx)
+            return
+
         subtasks = self._collect_subtasks(bb, step.max_teams)
         if not subtasks:
-            self.ctx.tracer.emit("ORCHESTRATOR", "info", "无子任务可分派，跳过多团队")
+            self.ctx.tracer.emit("ORCHESTRATOR", "info", "无子任务可分派，直接生成归并报告")
+            # team_fanout 的 aggregator 是声明上的报告终端。即使 Planner
+            # 返回空计划或前序步骤因预算被跳过，也必须实际执行终端角色，
+            # 让 require_report 得到一份说明性而非直接失败的结果。
+            await self._resolve(step.aggregator).step(bb, self.ctx)
             return
         self.ctx.tracer.emit(
             "ORCHESTRATOR",
@@ -934,6 +1030,11 @@ class WorkflowEngine:
         # 团队数 ≥ max_concurrency 时将互相等待形成死锁。
         async def _run_team(idx: int, task: SubTask) -> Blackboard | None:
             child = BB(query=task.focus)
+            # Team children are isolated for data writes, but execution policy
+            # is a run-level contract and must follow them into nested steps.
+            policy = bb.scratch.get(INTENT_POLICY_SCRATCH_KEY)
+            if isinstance(policy, dict):
+                child.scratch[INTENT_POLICY_SCRATCH_KEY] = deepcopy(policy)
             child.scratch["pending_sub_questions"] = [SubQuestion(question=task.focus)]
             team_steps = task.steps or _DEFAULT_TEAM_STEPS
             try:
@@ -959,7 +1060,10 @@ class WorkflowEngine:
     async def _reflect_loop(self, step: Step, bb: Blackboard) -> None:
         reflector = self._resolve(step.reflector)
         researcher = self._resolve(step.researcher)
-        rounds = step.max_rounds if step.max_rounds is not None else self.ctx.settings.max_rounds
+        configured_rounds = (
+            step.max_rounds if step.max_rounds is not None else self.ctx.settings.max_rounds
+        )
+        rounds = _policy_limit(bb, "max_rounds", configured_rounds)
         for rnd in range(rounds):
             bb = await reflector.step(bb, self.ctx)
             reflection = bb.reflections[-1] if bb.reflections else None

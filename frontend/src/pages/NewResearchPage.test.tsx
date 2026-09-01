@@ -22,8 +22,9 @@ vi.mock('../hooks/useConfig', () => ({
 }))
 
 const WORKFLOWS: WorkflowInfo[] = [
-  { name: 'alpha', description: '内置默认流程', default: 'True' },
+  { name: 'deep', description: '内置默认流程', default: 'True', custom: 'False' },
   { name: 'beta', description: '自定义流程', default: 'False', custom: 'True' },
+  { name: 'guarded', description: '内部安全编排', default: 'False', custom: 'False' },
 ]
 
 function deferred<T>() {
@@ -104,12 +105,35 @@ describe('NewResearchPage workflow list race', () => {
     })
     expect(screen.getByRole('combobox')).toHaveValue('beta')
 
-    // 第一次请求的迟到响应不得把选择弹回默认的 alpha。
+    // 第一次请求的迟到响应不得把选择弹回默认的 deep。
     await act(async () => {
       first.resolve(WORKFLOWS)
       await Promise.resolve()
     })
     expect(screen.getByRole('combobox')).toHaveValue('beta')
+  })
+
+  it('hides the global intent gate and runtime orchestration from the workflow selector', async () => {
+    mocks.listWorkflows.mockResolvedValue([
+      ...WORKFLOWS,
+      { name: 'brief', description: '内部简报', default: 'False', custom: 'False' },
+      { name: 'hsi_review', description: 'HSI 文献审查', default: 'False', custom: 'False' },
+    ])
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+
+    const selector = await screen.findByRole('combobox')
+    expect([...selector.querySelectorAll('option')].map((option) => option.value)).toEqual([
+      'deep',
+      'beta',
+      'hsi_review',
+    ])
+    expect(selector).not.toHaveTextContent('guarded')
+    expect(selector).not.toHaveTextContent('brief')
   })
 
   it('把严格双源门禁的单次覆盖随创建请求提交', async () => {

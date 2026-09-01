@@ -15,7 +15,15 @@ from deep_research.models import Report
 from deep_research.observability import Tracer
 from deep_research.orchestrator import DeepResearchAgent
 from deep_research.registry import available, create
-from deep_research.workflow import Step, Workflow, WorkflowEngine, validate_workflow
+from deep_research.workflow import (
+    Step,
+    Workflow,
+    WorkflowEngine,
+    validate_workflow,
+    validate_workflow_graph_terminal,
+    validate_workflow_steps_terminal,
+)
+from deep_research.workflows import WORKFLOWS, get_workflow
 from tests.fakes import FakeLLM, FakeSearch
 
 
@@ -65,6 +73,59 @@ async def test_reviewed_workflow_runs_new_critic_role(settings):
     assert "CRITIC" in stages  # 开放 Stage 枚举后，新角色能发自己的事件
     critic_done = [e for e in agent.tracer.events if e.stage == "CRITIC" and e.type == "info"]
     assert critic_done and critic_done[-1].data["issues"]
+
+
+@pytest.mark.parametrize(
+    ("name", "kinds", "terminal"),
+    [
+        ("brief", ["agent", "agent", "agent"], "synthesizer"),
+        ("fact_check", ["agent", "agent", "reflect_loop", "agent"], "synthesizer"),
+        ("monitoring", ["agent", "team_fanout"], "aggregator"),
+    ],
+)
+def test_extended_builtin_workflow_templates_are_terminal(name, kinds, terminal):
+    """新增模板必须注册、结构稳定，并由报告角色（或聚合角色）收尾。"""
+    workflow = get_workflow(name)
+    assert WORKFLOWS[name] is workflow
+    assert [step.kind for step in workflow.steps] == kinds
+    last = workflow.steps[-1]
+    if last.kind == "agent":
+        assert last.agent == terminal
+    else:
+        assert last.kind == "team_fanout"
+        assert last.aggregator == terminal
+    # team_fanout 的 aggregator 也属于报告终端，不能被校验器误判为未收尾。
+    assert validate_workflow_steps_terminal(workflow.steps) == []
+
+
+def test_hsi_review_template_reuses_reviewed_chain_and_critic() -> None:
+    workflow = get_workflow("hsi_review")
+    assert WORKFLOWS["hsi_review"] is workflow
+    assert [step.kind for step in workflow.steps] == [
+        "agent",
+        "agent",
+        "reflect_loop",
+        "agent",
+        "agent",
+    ]
+    assert workflow.steps[-1].agent == "critic"
+
+
+def test_monitoring_template_caps_team_fanout_and_keeps_legacy_default():
+    monitoring = get_workflow("monitoring")
+    fanout = monitoring.steps[-1]
+    assert fanout.kind == "team_fanout"
+    assert fanout.max_teams == 4
+    assert get_workflow(None).name == "deep"
+    assert get_workflow("does-not-exist").name == "deep"
+
+
+def test_team_fanout_aggregator_is_a_graph_terminal():
+    node = {
+        "id": "fanout",
+        "step": Step(kind="team_fanout", aggregator="aggregator").model_dump(mode="json"),
+    }
+    assert validate_workflow_graph_terminal([node], []) == []
 
 
 @pytest.mark.asyncio

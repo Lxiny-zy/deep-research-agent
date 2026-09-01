@@ -15,6 +15,7 @@ import type {
   ModelProbeInput,
   ModelDiscoveryResult,
   RoleInfo,
+  ReportDocument,
   RunDetail,
   RunSummary,
   SearchKey,
@@ -25,6 +26,7 @@ import type {
   WorkflowDefInput,
   WorkflowInfo,
 } from '../types'
+import { normalizeReportDocument } from '../lib/reportDocument'
 
 export class ApiError extends Error {
   constructor(
@@ -220,12 +222,113 @@ export function getRun(id: string): Promise<RunDetail> {
   return request<RunDetail>(`/api/runs/${encodeURIComponent(id)}`)
 }
 
+export interface GetRunDocumentOptions {
+  includeHsiTables?: boolean
+}
+
+/** Fetch the server-owned structured report for a persisted run. */
+export function getRunDocument(
+  id: string,
+  options: GetRunDocumentOptions = {},
+): Promise<ReportDocument> {
+  const query = new URLSearchParams()
+  if (options.includeHsiTables) query.set('include_hsi_tables', 'true')
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return request<unknown>(`/api/runs/${encodeURIComponent(id)}/document${suffix}`).then(
+    (payload) => {
+      const document = normalizeReportDocument(payload)
+      if (!document) throw new Error('Invalid structured report response')
+      return document
+    },
+  )
+}
+
+export type RunDocumentFormat = 'md' | 'csv' | 'xlsx' | 'pdf'
+
+export interface RunDocumentExportOptions {
+  includeHsiTables?: boolean
+  tableId?: string
+}
+
+export interface RunDocumentDownload {
+  blob: Blob
+  filename: string
+}
+
+function downloadFilename(header: string | null, fallback: string): string {
+  if (!header) return fallback
+  const encoded = header.match(/filename\*=(?:UTF-8'')?([^;]+)/i)?.[1]
+  const quoted = header.match(/filename="([^"]+)"/i)?.[1]
+  const raw = encoded ?? quoted ?? header.match(/filename=([^;]+)/i)?.[1]
+  if (!raw) return fallback
+  let value = raw.trim().replace(/^"|"$/g, '')
+  if (encoded) {
+    try {
+      value = decodeURIComponent(value)
+    } catch {
+      // Keep the original header value when a server sends malformed escapes.
+    }
+  }
+  const safe = value
+    .replace(/[\\/:*?"<>|\r\n]+/g, '_')
+    .replace(/^\.+/, '')
+    .trim()
+  return safe || fallback
+}
+
+/** Download a server-rendered report export without exposing the API key in a URL. */
+export async function downloadRunDocument(
+  id: string,
+  format: RunDocumentFormat,
+  options: RunDocumentExportOptions = {},
+): Promise<RunDocumentDownload> {
+  const query = new URLSearchParams()
+  if (options.includeHsiTables) query.set('include_hsi_tables', 'true')
+  // 只有单表导出（CSV/XLSX）需要选表。md/pdf 渲染的是整份文档，给它们带
+  // table_id 会让 URL 声明一个该端点并不遵守的约束。用白名单而不是排除法，
+  // 这样将来新增格式默认不带，而不是默认带上。
+  if (options.tableId && (format === 'csv' || format === 'xlsx')) {
+    query.set('table_id', options.tableId)
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  const encodedId = encodeURIComponent(id)
+  const fallback = `research-${id.replace(/[^A-Za-z0-9._-]/g, '_') || 'run'}.${format}`
+  const key = getApiKey()
+  const res = await fetch(`/api/runs/${encodedId}/document.${format}${suffix}`, {
+    headers: {
+      Accept: 'application/octet-stream',
+      ...(key ? { Authorization: `Bearer ${key}` } : {}),
+    },
+  })
+  if (!res.ok) {
+    if (res.status === 401) signalUnauthorized()
+    let detail = res.statusText
+    try {
+      const body = (await res.json()) as { detail?: unknown }
+      if (body.detail != null) detail = formatDetail(body.detail, res.statusText)
+    } catch {
+      // Error responses are allowed to be non-JSON; retain statusText.
+    }
+    throw new ApiError(res.status, detail)
+  }
+  return {
+    blob: await res.blob(),
+    filename: downloadFilename(res.headers.get('Content-Disposition'), fallback),
+  }
+}
+
 export function deleteRun(id: string): Promise<void> {
   return requestVoid(`/api/runs/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 export function cancelRun(id: string): Promise<CancelRunResponse> {
   return request<CancelRunResponse>(`/api/runs/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+  })
+}
+
+export function resumeRun(id: string): Promise<CreateRunResponse> {
+  return request<CreateRunResponse>(`/api/runs/${encodeURIComponent(id)}/resume`, {
     method: 'POST',
   })
 }

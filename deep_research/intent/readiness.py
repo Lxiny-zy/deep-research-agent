@@ -34,6 +34,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from ..prompting import compose_system_prompt, load_global_rules
 from .model import normalize
 from .types import IntentDecision, IntentSlots
 
@@ -200,7 +201,12 @@ async def llm_options(
         f"仍然缺少的信息：{readiness.gap}（{readiness.question}）"
     )
     try:
-        result = await llm.parse(_OPTIONS_SYSTEM, user, ClarifyOptions, temperature=0.0)
+        result = await llm.parse(
+            compose_system_prompt(_OPTIONS_SYSTEM, load_global_rules()),
+            user,
+            ClarifyOptions,
+            temperature=0.0,
+        )
     except Exception as exc:
         logger.debug("clarify option generation failed: %s", exc)
         return None
@@ -257,6 +263,12 @@ def merge_slots_for_assess(answers: IntentSlots, extracted: IntentSlots) -> Inte
         domain=answers.domain or extracted.domain,
         language=answers.language or extracted.language,
         aspects=_union(answers.aspects, extracted.aspects, 6),
+        output_format=answers.output_format or extracted.output_format,
+        audience=answers.audience or extracted.audience,
+        geography=answers.geography or extracted.geography,
+        source_types=_union(answers.source_types, extracted.source_types, 6),
+        freshness=answers.freshness or extracted.freshness,
+        evidence_level=answers.evidence_level or extracted.evidence_level,
     )
 
 
@@ -285,6 +297,12 @@ def compose_query(original: str, slots: IntentSlots) -> str:
         domain=slots.domain,
         language=slots.language,
         aspects=slots.aspects,
+        output_format=slots.output_format,
+        audience=slots.audience,
+        geography=slots.geography,
+        source_types=slots.source_types,
+        freshness=slots.freshness,
+        evidence_level=slots.evidence_level,
     ).describe()
     composed = f"{stem}（{modifiers}）" if modifiers else stem
     return composed[:2000]

@@ -43,7 +43,10 @@ export function useModelMutations() {
     qc.invalidateQueries({ queryKey: ['agents'] }) // 卡片视图带出绑定模型名
   }
   return {
-    create: useMutation({ mutationFn: (b: ModelProfileInput) => createModel(b), onSuccess: invalidate }),
+    create: useMutation({
+      mutationFn: (b: ModelProfileInput) => createModel(b),
+      onSuccess: invalidate,
+    }),
     update: useMutation({
       mutationFn: ({ id, body }: { id: string; body: ModelProfileInput }) => updateModel(id, body),
       onSuccess: invalidate,
@@ -80,7 +83,10 @@ export function useAgentMutations() {
     qc.invalidateQueries({ queryKey: ['roles'] })
   }
   return {
-    create: useMutation({ mutationFn: (b: AgentCardInput) => createAgent(b), onSuccess: invalidate }),
+    create: useMutation({
+      mutationFn: (b: AgentCardInput) => createAgent(b),
+      onSuccess: invalidate,
+    }),
     update: useMutation({
       mutationFn: ({ id, body }: { id: string; body: AgentCardInput }) => updateAgent(id, body),
       onSuccess: invalidate,
@@ -98,7 +104,10 @@ export function useSearchKeyMutations() {
   const qc = useQueryClient()
   const invalidate = () => qc.invalidateQueries({ queryKey: ['search-keys'] })
   return {
-    create: useMutation({ mutationFn: (b: SearchKeyInput) => createSearchKey(b), onSuccess: invalidate }),
+    create: useMutation({
+      mutationFn: (b: SearchKeyInput) => createSearchKey(b),
+      onSuccess: invalidate,
+    }),
     update: useMutation({
       mutationFn: ({ id, body }: { id: string; body: SearchKeyInput }) => updateSearchKey(id, body),
       onSuccess: invalidate,

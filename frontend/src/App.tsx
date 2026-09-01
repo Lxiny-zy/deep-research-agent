@@ -19,7 +19,9 @@ const navigation: { to: string; label: string; end?: boolean; icon: AppIconName 
 export default function App() {
   const navigationId = useId()
   const [showLogin, setShowLogin] = useState(false)
-  const [authStatus, setAuthStatus] = useState<'checking' | 'guest' | 'verified' | 'error'>('checking')
+  const [authStatus, setAuthStatus] = useState<'checking' | 'guest' | 'verified' | 'error'>(
+    'checking',
+  )
   const [authError, setAuthError] = useState('')
   const [authAttempt, setAuthAttempt] = useState(0)
   const [navOpen, setNavOpen] = useState(false)
@@ -81,9 +83,11 @@ export default function App() {
   if (authStatus === 'checking') {
     return (
       <main className="boot-screen">
-        <div className="boot-mark"><AppIcon name="network" size={26} /></div>
+        <div className="boot-mark">
+          <AppIcon name="network" size={26} />
+        </div>
         <div>
-          <span className="boot-kicker">DEEP RESEARCH / SYSTEM CHECK</span>
+          <span className="boot-kicker">Deep Research / 系统检查</span>
           <p>正在连接研究引擎…</p>
         </div>
         <AppIcon name="loader" size={18} className="spin" aria-label="正在连接" />
@@ -94,9 +98,11 @@ export default function App() {
   if (authStatus === 'error') {
     return (
       <main className="boot-screen boot-screen-error" role="alert">
-        <div className="boot-mark"><AppIcon name="circle-x" size={26} /></div>
+        <div className="boot-mark">
+          <AppIcon name="circle-x" size={26} />
+        </div>
         <div>
-          <span className="boot-kicker">CONNECTION INTERRUPTED</span>
+          <span className="boot-kicker">连接中断</span>
           <p>{authError || '无法连接服务端'}</p>
         </div>
         <button className="btn btn-primary" onClick={retryAuth}>
@@ -128,12 +134,6 @@ export default function App() {
 
   return (
     <div className="app-container top-navigation-layout signal-theme">
-      <div className="ambient-stage" aria-hidden="true">
-        <span className="ambient-block block-coral" />
-        <span className="ambient-block block-blue" />
-        <span className="ambient-block block-lime" />
-        <span className="ambient-grid" />
-      </div>
       <header className="global-header">
         <NavLink to="/" className="top-brand" aria-label="Deep Research 首页">
           <span className="brand-icon" aria-hidden="true">
@@ -156,7 +156,11 @@ export default function App() {
           <AppIcon name={navOpen ? 'x' : 'menu'} size={19} aria-hidden="true" />
         </button>
 
-        <nav className={`top-navigation${navOpen ? ' is-open' : ''}`} id={navigationId} aria-label="主导航">
+        <nav
+          className={`top-navigation${navOpen ? ' is-open' : ''}`}
+          id={navigationId}
+          aria-label="主导航"
+        >
           {navigation.map((item) => (
             <NavLink key={item.to} to={item.to} end={item.end} className={linkClass}>
               <AppIcon name={item.icon} size={15} aria-hidden="true" />
@@ -167,8 +171,15 @@ export default function App() {
 
         <div className="global-header-actions">
           <span className="current-page-label">{getPageTitle()}</span>
-          <span className="system-status"><i /><AppIcon name="activity" size={13} aria-hidden="true" />在线</span>
-          <button className="btn btn-ghost btn-sm api-access-button" onClick={() => setShowLogin(true)}>
+          <span className="system-status">
+            <i />
+            <AppIcon name="activity" size={13} aria-hidden="true" />
+            在线
+          </span>
+          <button
+            className="btn btn-ghost btn-sm api-access-button"
+            onClick={() => setShowLogin(true)}
+          >
             <AppIcon name="key" size={14} aria-hidden="true" />
             API 管理
           </button>

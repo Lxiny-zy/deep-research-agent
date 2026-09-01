@@ -5,6 +5,13 @@
 *.md
 LICENSE
 
+# Runtime skill contracts are consumed by SkillResolver inside the image.
+# Re-include this subtree after the broad markdown exclusion above.
+!framework/
+!framework/06_global_rules.md
+!framework/skills/
+!framework/skills/*.md
+
 # Python 缓存与本地产物
 __pycache__/
 *.pyc

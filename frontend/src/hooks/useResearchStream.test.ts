@@ -95,12 +95,18 @@ describe('reduceStream', () => {
     expect(s.elapsed).toBe(0.5)
     expect(s.tokens).toBe(10)
     expect(s.tokensEstimated).toBe(true)
-    s = reduceStream(s, ev({ stage: 'RESEARCHER', type: 'finding', elapsed: 1.2, tokens: 30, data: { count: 4 } }))
+    s = reduceStream(
+      s,
+      ev({ stage: 'RESEARCHER', type: 'finding', elapsed: 1.2, tokens: 30, data: { count: 4 } }),
+    )
     expect(s.elapsed).toBe(1.2)
     expect(s.tokens).toBe(30)
     expect(s.findings).toBe(4)
     // 乱序到达的旧 elapsed 不应回退；缺省 tokens 沿用旧值
-    s = reduceStream(s, ev({ stage: 'RESEARCHER', type: 'finding', elapsed: 0.8, data: { count: 1 } }))
+    s = reduceStream(
+      s,
+      ev({ stage: 'RESEARCHER', type: 'finding', elapsed: 0.8, data: { count: 1 } }),
+    )
     expect(s.elapsed).toBe(1.2)
     expect(s.tokens).toBe(30)
     expect(s.findings).toBe(5)

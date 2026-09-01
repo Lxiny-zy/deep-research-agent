@@ -47,6 +47,10 @@ INTENT_SLOTS_KEY = "intent_slots"
 INTENT_RESOLVED_QUERY_KEY = "intent_resolved_query"
 # 澄清请求。存在即表示本次运行没有执行研究，而是在等用户补充信息。
 INTENT_CLARIFY_KEY = "intent_clarification"
+# Serializable policy snapshot consumed by Planner and WorkflowEngine.  It is
+# intentionally independent from the classifier implementation so old
+# checkpoints can omit it without changing behavior.
+INTENT_POLICY_KEY = "intent_execution_policy"
 
 _BLOCK_MESSAGES = {
     "prompt_injection": "该请求试图覆盖系统指令或绕过安全设定",
@@ -129,6 +133,7 @@ class IntentRouter:
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         self.llm, self.tracer, self.settings = ctx.llm_for(self.name), ctx.tracer, ctx.settings
+        self._global_rules = getattr(ctx, "global_rules", None)
 
         if not self.settings.intent_enabled:
             self.tracer.emit("INTENT", "info", "意图识别已关闭，直接放行")
@@ -168,6 +173,7 @@ class IntentRouter:
                     # 不该把「这次研究的到底是哪句话」洗掉。
                     fresh.resolved_query = decision.resolved_query
                     fresh.context_resolved = decision.context_resolved
+                    fresh.context_resolution = decision.context_resolution
                     decision = fresh
                 elif self._needs_entities(decision):
                     # 预路由同样跳过了实体抽取（延迟敏感）。这里补上——Planner
@@ -242,12 +248,20 @@ class IntentRouter:
             bb.scratch[INTENT_SUB_QUESTION_KEY] = min(
                 route.max_sub_questions, self.settings.max_sub_questions
             )
+        route_policy = route.execution_policy
         bb.scratch[INTENT_ROUTE_KEY] = {
             "applied": route.applied,
             "workflow": route.workflow,
             "max_sub_questions": route.max_sub_questions,
             "reason": route.reason,
+            "strategy": getattr(route, "strategy", ""),
+            "execution_policy": route_policy.model_dump(mode="json") if route_policy else None,
         }
+        # Explicit workflow selection suppresses automatic policy activation;
+        # the decision still carries its policy for audit and UI explanation.
+        policy = route_policy if route.applied else None
+        if policy is not None:
+            bb.scratch[INTENT_POLICY_KEY] = policy.model_dump(mode="json")
         self.tracer.emit(
             "INTENT",
             "info",
@@ -262,6 +276,7 @@ class IntentRouter:
                 "escalated": decision.escalated,
                 "scores": decision.scores,
                 "route": bb.scratch[INTENT_ROUTE_KEY],
+                "execution_policy": bb.scratch.get(INTENT_POLICY_KEY),
                 "slots": decision.slots.model_dump(mode="json"),
                 "context_resolved": decision.context_resolved,
             },
@@ -281,11 +296,10 @@ class IntentRouter:
         return decision.tier == "fallback" and not decision.blocked and not decision.escalated
 
     def _needs_entities(self, decision: IntentDecision) -> bool:
-        """该判定是否还缺 Planner 要用的对比实体？
+        """该判定是否还缺 Planner 要用的研究实体？
 
-        只补 comparative——其余意图的下游不需要实体（见 cascade 的同名判断）。
-        已经抽到实体的不重抽：预路由若跑过（比如调用方显式要求），这里就没必要
-        再花一次。
+        只补 ENTITY_INTENTS 中的意图；已抽到实体的不重抽：预路由若跑过（比如调用方
+        显式要求），这里就没必要再花一次。
         """
         if not self.settings.intent_llm_fallback:
             return False
@@ -308,12 +322,14 @@ class IntentRouter:
 
     async def _classify(self, query: str) -> IntentDecision:
         cascade = self._cascade or IntentCascade(
-            llm=self.llm, enable_llm=self.settings.intent_llm_fallback
+            llm=self.llm,
+            enable_llm=self.settings.intent_llm_fallback,
+            global_rules=getattr(self, "_global_rules", None),
         )
         # 走完整的 classify（含槽位与澄清判定），而不是只跑意图级联。
         # history 不在这里传：多轮消解发生在 API 预路由（那时才有会话上下文），
         # 判定结果连同消解后的问题一起进 checkpoint，本角色只是复用或补判。
-        # 首判（CLI / guarded 无缓存）保留澄清判定——那些入口没有交互式循环，
+        # 首判（CLI / 直接入口无缓存）保留澄清判定——这些入口没有交互式循环，
         # halt 报告是它们唯一的追问方式；对缓存的复判则由调用方清掉澄清
         # （见 step 里的两处 `.clarification = None`）。
         return await cascade.classify(query)

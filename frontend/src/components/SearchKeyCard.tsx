@@ -16,7 +16,9 @@ export default function SearchKeyCard({ k, onToggle, onDelete }: Props) {
   return (
     <div className={`role-card${k.enabled ? '' : ' disabled'}`}>
       <div className="role-card-head">
-        <span className="role-icon"><AppIcon name="key" size={20} aria-hidden="true" /></span>
+        <span className="role-icon">
+          <AppIcon name="key" size={20} aria-hidden="true" />
+        </span>
         <div className="role-meta">
           <strong>{k.label || '(无备注)'}</strong>
           <span className="muted small">key {k.api_key_hint}</span>
@@ -50,7 +52,12 @@ export default function SearchKeyCard({ k, onToggle, onDelete }: Props) {
           onClick={() => test.mutate(k.id)}
           disabled={test.isPending}
         >
-          <AppIcon name={test.isPending ? 'loader' : 'activity'} size={13} aria-hidden="true" className={test.isPending ? 'spin' : ''} />
+          <AppIcon
+            name={test.isPending ? 'loader' : 'activity'}
+            size={13}
+            aria-hidden="true"
+            className={test.isPending ? 'spin' : ''}
+          />
           测试连接
         </button>
         <div className="row gap-sm">

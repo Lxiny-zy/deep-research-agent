@@ -62,11 +62,7 @@ describe('workflow canvas interaction logic', () => {
   })
 
   it('respects a dropped position while moving away from an occupied card', () => {
-    const position = findAvailableNodePosition(
-      [{ x: 500, y: 200 }],
-      undefined,
-      { x: 500, y: 200 },
-    )
+    const position = findAvailableNodePosition([{ x: 500, y: 200 }], undefined, { x: 500, y: 200 })
 
     expect(position).not.toEqual({ x: 500, y: 200 })
     expect(Math.abs(position.x - 500) >= 270 || Math.abs(position.y - 200) >= 132).toBe(true)
@@ -80,20 +76,10 @@ describe('workflow canvas interaction logic', () => {
     const nodeKeys = ['synth', 'research']
 
     expect(
-      hasSingleTerminalAgent(
-        steps,
-        nodeKeys,
-        { synth: [], research: ['synth'] },
-        'synthesizer',
-      ),
+      hasSingleTerminalAgent(steps, nodeKeys, { synth: [], research: ['synth'] }, 'synthesizer'),
     ).toBe(false)
     expect(
-      hasSingleTerminalAgent(
-        steps,
-        nodeKeys,
-        { synth: ['research'], research: [] },
-        'synthesizer',
-      ),
+      hasSingleTerminalAgent(steps, nodeKeys, { synth: ['research'], research: [] }, 'synthesizer'),
     ).toBe(true)
   })
 
@@ -163,9 +149,7 @@ describe('workflow canvas interaction logic', () => {
   })
 
   it('lets explicit capability metadata override the legacy synthesizer fallback', () => {
-    expect(
-      reportAgentNames([{ name: 'synthesizer', produces_report: false }]),
-    ).toEqual(new Set())
+    expect(reportAgentNames([{ name: 'synthesizer', produces_report: false }])).toEqual(new Set())
   })
 
   it('allows parallel connections while still rejecting cycles', () => {
@@ -221,10 +205,12 @@ describe('workflow canvas interaction logic', () => {
   })
 
   it('finds the main component and leaves newly added orphan nodes outside it', () => {
-    const connected = primaryComponentKeys(
-      ['a', 'b', 'c', 'new'],
-      { a: [], b: ['a'], c: ['b'], new: [] },
-    )
+    const connected = primaryComponentKeys(['a', 'b', 'c', 'new'], {
+      a: [],
+      b: ['a'],
+      c: ['b'],
+      new: [],
+    })
 
     expect([...connected]).toEqual(['a', 'b', 'c'])
   })
@@ -315,11 +301,12 @@ describe('workflow canvas interaction logic', () => {
   })
 
   it('keeps only upstream and downstream nodes in the selected workflow path', () => {
-    const related = workflowPathKeys(
-      'b',
-      ['a', 'b', 'c', 'd'],
-      { a: [], b: ['a'], c: ['a'], d: ['b'] },
-    )
+    const related = workflowPathKeys('b', ['a', 'b', 'c', 'd'], {
+      a: [],
+      b: ['a'],
+      c: ['a'],
+      d: ['b'],
+    })
 
     expect([...related].sort()).toEqual(['a', 'b', 'd'])
   })
@@ -342,9 +329,7 @@ describe('workflow canvas interaction logic', () => {
 
   it('merges a single-node drag without touching other persisted positions', () => {
     const positions = { a: { x: 0, y: 0 }, b: { x: 300, y: 0 } }
-    const merged = mergeDraggedNodePositions(positions, [
-      { id: 'b', position: { x: 320, y: 90 } },
-    ])
+    const merged = mergeDraggedNodePositions(positions, [{ id: 'b', position: { x: 320, y: 90 } }])
 
     expect(merged).toEqual({ a: { x: 0, y: 0 }, b: { x: 320, y: 90 } })
     expect(positions.b).toEqual({ x: 300, y: 0 })

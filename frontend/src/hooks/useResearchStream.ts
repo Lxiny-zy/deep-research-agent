@@ -39,10 +39,7 @@ export function isTerminal(ev: ResearchEvent): boolean {
 }
 
 // 纯归并函数：把一个 SSE 事件并入当前状态（便于单测）。
-export function reduceStream(
-  prev: ResearchStreamState,
-  ev: ResearchEvent,
-): ResearchStreamState {
+export function reduceStream(prev: ResearchStreamState, ev: ResearchEvent): ResearchStreamState {
   // A replay buffer can contain events after the orchestrator terminal event.
   // Once terminal, never let stale trailing events overwrite the final state.
   if (prev.status === 'done' || prev.status === 'error' || prev.status === 'cancelled') {
@@ -106,7 +103,7 @@ export function reduceStream(
  *
  * 连接中断时携带 Last-Event-ID 有界重连；多次失败后由详情轮询兜底。
  */
-export function useResearchStream(runId: string | null): ResearchStreamState {
+export function useResearchStream(runId: string | null, restartToken = 0): ResearchStreamState {
   const [state, setState] = useState<ResearchStreamState>(INITIAL)
 
   useEffect(() => {
@@ -168,7 +165,7 @@ export function useResearchStream(runId: string | null): ResearchStreamState {
       disposed = true
       controller.abort()
     }
-  }, [runId])
+  }, [restartToken, runId])
 
   return state
 }

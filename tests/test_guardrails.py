@@ -11,6 +11,7 @@ from deep_research.guardrails import (
     ClaimConsistencyVerifier,
     EvidenceVerifier,
     SemanticEvidenceDecisionList,
+    SemanticEvidenceVerifier,
     SourcePolicy,
 )
 from deep_research.models import (
@@ -21,6 +22,7 @@ from deep_research.models import (
     Source,
 )
 from deep_research.observability import Tracer
+from deep_research.prompting import load_global_rules
 from tests.fakes import FakeLLM, FakeSearch
 
 
@@ -236,6 +238,55 @@ def test_evidence_verifier_rejects_model_paraphrase() -> None:
     assert check.reason == "evidence_quote_not_found"
 
 
+def test_retracted_source_is_not_report_eligible_but_unknown_is_allowed() -> None:
+    from deep_research.guardrails import report_eligible
+    from deep_research.models import SourceIdentity
+
+    retracted = Finding(
+        statement="Retracted claim",
+        source_url="https://doi.org/10.1/retracted",
+        evidence_quote="verbatim quote",
+        verification=EvidenceVerification(
+            status="verified",
+            method="normalized_quote",
+            semantic_status="supported",
+            source_identity=SourceIdentity(doi="10.1/retracted", retracted=True),
+        ),
+    )
+    unknown = retracted.model_copy(
+        update={
+            "verification": retracted.verification.model_copy(
+                update={"source_identity": SourceIdentity(doi="10.1/unknown")}
+            )
+        }
+    )
+
+    assert report_eligible(retracted) is False
+    assert report_eligible(unknown) is True
+
+
+def test_evidence_verifier_propagates_retraction_and_audit_reason() -> None:
+    from deep_research.guardrails import report_eligible
+
+    source = Source(
+        url="https://doi.org/10.1/retracted",
+        content="verbatim quote",
+        scholarly={"doi": "10.1/retracted", "retracted": True},
+    )
+    finding = Finding(
+        statement="Retracted claim", source_url=source.url, evidence_quote="verbatim quote"
+    )
+
+    check = EvidenceVerifier().verify(finding, source)
+
+    assert check.accepted is True
+    assert check.finding is not None
+    assert check.finding.verification.source_identity is not None
+    assert check.finding.verification.source_identity.retracted is True
+    assert check.finding.verification.reason == "source_retracted"
+    assert report_eligible(check.finding) is False
+
+
 @pytest.mark.asyncio
 async def test_researcher_rejects_unverifiable_finding_and_audits_reason(settings) -> None:
     class ParaphrasingLLM(FakeLLM):
@@ -445,3 +496,57 @@ async def test_claim_consistency_verifier_marks_both_sides_conflicted(settings) 
         [ResearchResult(sub_question="Q", findings=checked)]
     )
     assert "Consistency note:" in material
+
+
+@pytest.mark.asyncio
+async def test_model_backed_guardrails_include_global_rules() -> None:
+    class CapturingVerifierLLM:
+        def __init__(self) -> None:
+            self.system_prompts: list[str] = []
+
+        async def parse(self, system, user, schema, **kwargs):  # type: ignore[no-untyped-def]
+            self.system_prompts.append(system)
+            if schema is SemanticEvidenceDecisionList:
+                return SemanticEvidenceDecisionList(
+                    decisions=[
+                        {
+                            "index": 0,
+                            "verdict": "supported",
+                            "confidence": 0.9,
+                            "reason": "supported",
+                        }
+                    ]
+                )
+            assert schema is ClaimConsistencyReport
+            return ClaimConsistencyReport()
+
+    findings = [
+        Finding(
+            statement="A claim.",
+            source_url="https://a.example",
+            evidence_quote="A claim.",
+            verification=EvidenceVerification(
+                status="verified",
+                method="normalized_quote",
+                semantic_status="supported",
+            ),
+        ),
+        Finding(
+            statement="Another claim.",
+            source_url="https://b.example",
+            evidence_quote="Another claim.",
+            verification=EvidenceVerification(
+                status="verified",
+                method="normalized_quote",
+                semantic_status="supported",
+            ),
+        ),
+    ]
+    llm = CapturingVerifierLLM()
+
+    await SemanticEvidenceVerifier().verify_batch(findings[:1], llm)
+    await ClaimConsistencyVerifier().verify_batch(findings, llm)
+
+    rules = load_global_rules()
+    assert len(llm.system_prompts) == 2
+    assert all(rules in prompt for prompt in llm.system_prompts)

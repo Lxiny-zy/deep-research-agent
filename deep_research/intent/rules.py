@@ -212,6 +212,50 @@ _RISK_HINTS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # --- 任务意图规则：仅覆盖模式极稳定的表达，其余弃权 ---
 _QUERY_RULES: tuple[tuple[QueryIntent, str, re.Pattern[str]], ...] = (
     (
+        "literature_review",
+        "hsi_literature_review",
+        re.compile(
+            r"(?:文献综述|文献回顾|文献调研|系统综述)"
+            r"|\b(?:literature|systematic)\s+reviews?\b"
+        ),
+    ),
+    (
+        "method_comparison",
+        "hsi_method_comparison",
+        re.compile(
+            r"(?:方法比较|方法对比|算法比较|算法对比)"
+            r"|\b(?:method|algorithm|approach)\s+comparison\b"
+            r"|\bcompare\s+(?:the\s+)?(?:methods?|algorithms?|approaches?)\b"
+        ),
+    ),
+    (
+        "benchmark_survey",
+        "hsi_benchmark_survey",
+        re.compile(
+            r"(?:基准测试调研|基准综述|基准调查|benchmark调研)"
+            r"|\bbenchmark\s+(?:survey|review)\b"
+        ),
+    ),
+    (
+        "reproducibility_check",
+        "hsi_reproducibility_check",
+        re.compile(
+            r"(?:可复现性|复现性|复现实验|重复实验)"
+            r"|\b(?:reproducibility|replicability)\s+(?:check|study|audit)\b"
+            r"|\b(?:check|audit)\s+(?:the\s+)?(?:reproducibility|replicability)\b"
+            r"|\breproduce\s+(?:the\s+)?(?:results?|experiment)\b"
+        ),
+    ),
+    (
+        "dataset_discovery",
+        "hsi_dataset_discovery",
+        re.compile(
+            r"(?:数据集发现|数据集调研|数据集检索|数据集推荐)"
+            r"|\bdataset\s+(?:discovery|survey)\b"
+            r"|\b(?:find|discover)\s+(?:relevant\s+)?datasets?\b"
+        ),
+    ),
+    (
         "comparative",
         "explicit_comparison",
         re.compile(
@@ -226,6 +270,8 @@ _QUERY_RULES: tuple[tuple[QueryIntent, str, re.Pattern[str]], ...] = (
         re.compile(
             r"(?:为什么|为何|原因是|成因|导致|造成|影响机制|机理)"
             r"|\bwhy\s+(?:do|does|did|is|are|was|were)\b|root\s+cause"
+            r"|\b(?:what\s+causes?|mechanism\s+behind|explain\s+the\s+mechanism)\b"
+            r"|\bhow\s+does\b[^.!?\n]{0,80}\b(?:cause|lead|affect|degrade|impact)\b"
         ),
     ),
     (
@@ -234,6 +280,64 @@ _QUERY_RULES: tuple[tuple[QueryIntent, str, re.Pattern[str]], ...] = (
         re.compile(
             r"(?:趋势|演进|发展历程|未来.{0,4}(?:走向|方向|预测)|最新进展|近年来|历年)"
             r"|\btrend(?:s)?\b|\bevolution\s+of\b|\bover\s+the\s+(?:past|last)\s+\w+\s+years?\b"
+        ),
+    ),
+    (
+        "monitoring",
+        "explicit_monitoring",
+        re.compile(
+            r"(?:持续监测|持续跟踪|动态监测|实时监控|监控一下|最新状态|变化监测)"
+            r"|\b(?:monitor|monitoring|track\s+updates|real[- ]time|latest\s+status)\b"
+        ),
+    ),
+    (
+        "fact_check",
+        "explicit_fact_check",
+        re.compile(
+            r"(?:事实核查|事实核验|核实|核验|验证(?:一下)?|是否属实|真假|真伪|辟谣|查证|可信度)"
+            r"|\b(?:fact[- ]?check|verify|verification|validate|debunk|true\s+or\s+false)\b"
+        ),
+    ),
+    (
+        "recommendation",
+        "explicit_recommendation",
+        re.compile(
+            r"(?:推荐|建议|最佳方案|合适的方案|技术选型建议|明确的选型)"
+            r"|\b(?:recommend|recommendation|which\s+should|best\s+(?:option|choice)|advise)\b"
+            r"|\bshould\s+i\s+(?:use|choose|pick|adopt)\b"
+        ),
+    ),
+    (
+        "procedural_guidance",
+        "explicit_procedure",
+        re.compile(
+            r"(?:怎么做|如何做|怎样做|如何(?:部署|配置|安装|使用|实现|搭建|迁移|接入|落地)"
+            r"|实施步骤|操作步骤|配置方法|部署指南|使用教程|入门指南|实践指南)"
+            r"|\b(?:how\s+to|step[- ]?by[- ]?step|implementation\s+guide|tutorial|setup\s+guide)\b"
+        ),
+    ),
+    (
+        "definition_explanation",
+        "explicit_definition",
+        re.compile(
+            r"(?:什么是|何为|是什么意思|指什么|定义|概念|解释一下|介绍一下|原理概览)"
+            r"|\b(?:what\s+is|define|definition|explain|meaning\s+of|introduction\s+to)\b"
+        ),
+    ),
+    (
+        "summarization",
+        "explicit_summary",
+        re.compile(
+            r"(?:总结|摘要|概括|归纳|提炼要点|梳理重点|简要介绍|简明概述)"
+            r"|\b(?:summari[sz]e|summary|abstract|key\s+takeaways|digest)\b"
+        ),
+    ),
+    (
+        "multi_hop_research",
+        "explicit_multi_hop",
+        re.compile(
+            r"(?:关联分析|交叉分析|跨领域|串联起来|从.+追溯到|端到端链路|多跳检索)"
+            r"|\b(?:multi[- ]?hop|cross[- ]domain|trace\s+from|end[- ]to[- ]end\s+chain)\b"
         ),
     ),
 )

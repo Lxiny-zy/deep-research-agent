@@ -45,6 +45,8 @@ class TavilyKeyPoolSearch(SearchTool):
             self._tracer.emit("RESEARCHER", type_, message)
 
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
+        if max_results <= 0:
+            return []
         # 竞态说明：search 会被多协程并发调用，await 期间其他协程可能已把 _idx
         # 粘滞切换到新 key。若按「入口快照 + 固定偏移」遍历，failover 瞬间的在途
         # 协程会继续按旧起点撞刚被判定耗尽的 key。因此每轮迭代都基于实时 self._idx
@@ -96,7 +98,10 @@ class TavilyKeyPoolSearch(SearchTool):
 
 def _to_sources(resp: dict) -> list[Source]:
     sources: list[Source] = []
-    for item in resp.get("results", []):
+    results = resp.get("results", []) if isinstance(resp, dict) else []
+    for item in results if isinstance(results, list) else []:
+        if not isinstance(item, dict):
+            continue
         url = item.get("url")
         if not url:
             continue

@@ -3,6 +3,10 @@
 // 触发浏览器下载一段文本为文件。
 export function downloadText(filename: string, text: string, mime = 'text/markdown'): void {
   const blob = new Blob([text], { type: `${mime};charset=utf-8` })
+  downloadBlob(filename, blob)
+}
+
+export function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

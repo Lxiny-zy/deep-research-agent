@@ -10,6 +10,7 @@ from deep_research.catalog.dto import AgentCardView, ModelProfileFull
 from deep_research.catalog.runtime import CatalogRuntime
 from deep_research.config import Settings
 from deep_research.observability import Tracer
+from deep_research.prompting import load_global_rules
 from tests.fakes import FakeLLM, FakeSearch
 
 
@@ -50,7 +51,8 @@ async def test_card_agent_uses_custom_prompt_and_named_model():
     bb = await card.step(Blackboard(query="测试"), ctx)
 
     assert bb.plan is not None  # plan 行为产出了计划
-    assert captured["system"] == "用海盗口吻拆解问题"  # 自定义 prompt 生效
+    assert "用海盗口吻拆解问题" in captured["system"]  # 自定义 prompt 生效
+    assert load_global_rules() in captured["system"]  # 全局规则对自定义角色同样生效
     assert special_llm.parse_calls == 1  # 用了专属模型
     assert default_llm.parse_calls == 0  # 没用默认模型
 

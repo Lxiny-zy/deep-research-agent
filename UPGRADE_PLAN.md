@@ -86,7 +86,7 @@ planner/researcher 两层断点续跑跳过,仅重执行后两层,**断点续跑
 **实施步骤**:
 1. `EvalRow` 加墙钟时间(`time.monotonic` 包住 `agent.run`);CLI 加 `--budget` 透传 per-run
    params,跑"同一工作流不同预算下的质量曲线"。
-2. `--workflows deep,quick,reviewed,auto,teams` 全量对照;`eval/dataset.py` 扩到 10+ 用例,
+2. 对公共模板与内部策略做全量对照（例如 `--workflows deep,quick,reviewed,auto,teams`；这些是评估器的对照目标，不是产品模板选择项）；`eval/dataset.py` 扩到 10+ 用例,
    覆盖简单事实 / 复杂多面 / 时效敏感三类问题。
 3. 结果落 `eval/results/<date>.md`(明细表 + 汇总 + 两行结论),README/简历直接引用。
    判分用真实 LLM judge,跑前确认 `runtime_config.json` 模型配置。
@@ -94,7 +94,7 @@ planner/researcher 两层断点续跑跳过,仅重执行后两层,**断点续跑
 **框架已就绪(2026-07-26),产出真实数字的推荐命令**:
 
 ```bash
-# 全量五工作流对照(deep 为基线),结果写入 eval/results/<date>.md
+# 公共模板 + 内部策略对照（deep 为基线），结果写入 eval/results/<date>.md
 python -m eval.run_eval --workflows deep,quick,reviewed,auto,teams --output
 
 # 同一工作流不同预算下的质量对照
@@ -119,6 +119,6 @@ python -m eval.run_eval --output
   - 可审计报告:引用点开即见逐字证据原文 + 程序验证状态 + 矛盾标记;
   - 对抗评测:注入拦截 _%、伪引用拦截 _%、矛盾召回 _%(跑完填数);
   - 可靠性:kill -9 后 _s 自动接管,断点续跑节省 _% token(跑完填数);
-  - 编排取舍:五种工作流 × 质量/成本/耗时对照结论(跑完填数)。
+  - 编排取舍:公共模板与内部策略 × 质量/成本/耗时对照结论（跑完填数）。
 - **不要做**(与项目一撞车):向量库/RAG 检索后端、长期记忆与画像、human-in-the-loop 中断、
   继续堆前端页面。

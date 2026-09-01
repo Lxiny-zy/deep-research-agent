@@ -1,4 +1,12 @@
-# TODO：上下文消解结果可回放
+# 上下文消解结果可回放（已完成 2026-08-20）
+
+> **状态：已落地。** `ContextResolution` 已挂在 `IntentDecision.context_resolution` 上，
+> 由 `intent/context.py` 的 `resolve_followup_detailed()` 直接产出（而不是在 cascade 里
+> 反推），因此 `reason` 是改写器自己给的理由、`history_used` 是 `render_history()` 实际
+> 使用的窗口（共用 `recent_history()`，不再硬编码 `[-3:]`）。
+> 回归测试见 `tests/test_intent_context_replay.py`——四类错误各有一条断言。
+>
+> 下面保留原始设计记录。
 
 ## 背景
 

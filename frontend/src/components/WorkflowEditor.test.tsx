@@ -41,8 +41,18 @@ const initial: WorkflowDef = {
     { kind: 'agent', agent: 'synthesizer' },
   ],
   nodes: [
-    { id: 'a', type: 'step', position: { x: 0, y: 0 }, step: { kind: 'agent', agent: 'researcher' } },
-    { id: 'b', type: 'step', position: { x: 0, y: 190 }, step: { kind: 'agent', agent: 'synthesizer' } },
+    {
+      id: 'a',
+      type: 'step',
+      position: { x: 0, y: 0 },
+      step: { kind: 'agent', agent: 'researcher' },
+    },
+    {
+      id: 'b',
+      type: 'step',
+      position: { x: 0, y: 190 },
+      step: { kind: 'agent', agent: 'synthesizer' },
+    },
   ],
   edges: [
     { id: 'persisted-one', source: 'a', target: 'b', condition: 'state.first' },
@@ -57,16 +67,13 @@ describe('WorkflowEditor persistence', () => {
   it('edits parallel edge conditions independently and submits the current viewport', () => {
     const onSubmit = vi.fn()
     const { container, getByTestId } = render(
-      <WorkflowEditor
-        initial={initial}
-        roles={roles}
-        onSubmit={onSubmit}
-        onCancel={vi.fn()}
-      />,
+      <WorkflowEditor initial={initial} roles={roles} onSubmit={onSubmit} onCancel={vi.fn()} />,
     )
 
     fireEvent.click(getByTestId('select-target'))
-    const conditionInputs = Array.from(container.querySelectorAll<HTMLInputElement>('.dependency-condition'))
+    const conditionInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('.dependency-condition'),
+    )
     expect(conditionInputs).toHaveLength(2)
     fireEvent.change(conditionInputs[0], { target: { value: 'updated.first' } })
     fireEvent.click(getByTestId('change-viewport'))
@@ -85,12 +92,7 @@ describe('WorkflowEditor persistence', () => {
   it('creates another edge for an already connected node pair', () => {
     const onSubmit = vi.fn()
     const { container, getByTestId } = render(
-      <WorkflowEditor
-        initial={initial}
-        roles={roles}
-        onSubmit={onSubmit}
-        onCancel={vi.fn()}
-      />,
+      <WorkflowEditor initial={initial} roles={roles} onSubmit={onSubmit} onCancel={vi.fn()} />,
     )
 
     fireEvent.click(getByTestId('add-parallel'))
@@ -105,12 +107,7 @@ describe('WorkflowEditor persistence', () => {
   it('removes only one parallel edge when a dependency is unchecked', () => {
     const onSubmit = vi.fn()
     const { container, getByTestId } = render(
-      <WorkflowEditor
-        initial={initial}
-        roles={roles}
-        onSubmit={onSubmit}
-        onCancel={vi.fn()}
-      />,
+      <WorkflowEditor initial={initial} roles={roles} onSubmit={onSubmit} onCancel={vi.fn()} />,
     )
 
     fireEvent.click(getByTestId('select-target'))

@@ -10,8 +10,16 @@ readme = "README.md"
 requires-python = ">=3.11"
 dynamic = ["dependencies"]
 
+[project.optional-dependencies]
+# Keep heavyweight document/full-text libraries out of the service startup
+# path.  Install only the export/parser capabilities needed by a deployment.
+pdf = ["weasyprint>=62,<69"]
+xlsx = ["openpyxl>=3.1,<4"]
+fulltext = ["PyMuPDF>=1.24,<2"]
+
 [project.scripts]
 deep-research = "deep_research.cli:main"
+deep-research-worker = "deep_research.worker:main"
 
 [tool.setuptools.packages.find]
 include = ["deep_research*"]
@@ -25,6 +33,7 @@ deep_research = ["py.typed"]
 "share/deep-research-agent" = ["alembic.ini"]
 "share/deep-research-agent/alembic" = ["alembic/env.py", "alembic/script.py.mako"]
 "share/deep-research-agent/alembic/versions" = ["alembic/versions/*.py"]
+"share/deep-research-agent/framework" = ["framework/06_global_rules.md"]
 "share/deep-research-agent/frontend" = ["frontend/dist/index.html"]
 "share/deep-research-agent/frontend/assets" = ["frontend/dist/assets/*"]
 

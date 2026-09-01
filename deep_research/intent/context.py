@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from ..prompting import compose_system_prompt, load_global_rules
 from .model import normalize
 from .types import ConversationTurn, IntentSignal
 
@@ -134,9 +136,18 @@ def detect_context_dependency(text: str) -> IntentSignal | None:
     return None
 
 
+def recent_history(history: list[ConversationTurn]) -> list[ConversationTurn]:
+    """改写器实际会看到的历史窗口。
+
+    ``render_history`` 与消解回放记录必须用同一个口径，否则「当时喂进去的是
+    哪几轮」会随 MAX_HISTORY_TURNS 的改动悄悄失真。
+    """
+    return list(history[-MAX_HISTORY_TURNS:])
+
+
 def render_history(history: list[ConversationTurn]) -> str:
     """把历史轮次渲染成给 LLM 的上下文块（只取最近 MAX_HISTORY_TURNS 轮）。"""
-    recent = history[-MAX_HISTORY_TURNS:]
+    recent = recent_history(history)
     lines: list[str] = []
     for index, turn in enumerate(recent, start=1):
         summary = f"第{index}轮用户提问：{turn.query}"
@@ -149,6 +160,25 @@ def render_history(history: list[ConversationTurn]) -> str:
     return "\n".join(lines)
 
 
+@dataclass
+class FollowupResolution:
+    """一次指代消解的完整过程记录。
+
+    只带回「消解后是什么」不足以定位线上投诉（「系统把刚才那个数据库理解错了」）：
+    必须能区分是 L1 依赖检测没识别出来、还是 L3 改写改错了。因此这里同时记录
+    输入、实际喂给改写器的历史窗口、命中的信号与不改写的原因。
+    """
+
+    query: str
+    signal: IntentSignal | None = None
+    resolved: bool = False
+    # 改写器实际看到的历史窗口。与 render_history 用同一个截断口径——
+    # 如果这里另写一遍 [-3:]，MAX_HISTORY_TURNS 一改，回放记录就会与真实输入不符。
+    history_used: list[ConversationTurn] = field(default_factory=list)
+    tier: Literal["none", "llm", "fallback"] = "none"
+    reason: str = ""
+
+
 async def resolve_followup(
     query: str,
     history: list[ConversationTurn],
@@ -158,6 +188,19 @@ async def resolve_followup(
     """把可能残缺的本轮输入还原成完整问题。
 
     返回 ``(消解后的问题, 命中的信号, 是否真的消解了)``。
+    需要完整过程记录时用 :func:`resolve_followup_detailed`。
+    """
+    outcome = await resolve_followup_detailed(query, history, llm=llm)
+    return outcome.query, outcome.signal, outcome.resolved
+
+
+async def resolve_followup_detailed(
+    query: str,
+    history: list[ConversationTurn],
+    *,
+    llm: Any | None = None,
+) -> FollowupResolution:
+    """``resolve_followup`` 的可回放版本。
 
     三种情况原样返回（不消解、不花钱）：
       1. 没有历史——无上文可依赖；
@@ -165,30 +208,60 @@ async def resolve_followup(
       3. LLM 不可用或调用失败——**残缺的原文好过一个编造的补全**。
     """
     if not history:
-        return query, None, False
+        return FollowupResolution(query=query, reason="无历史轮次，无需消解")
 
+    window = recent_history(history)
     signal = detect_context_dependency(query)
     if signal is None:
-        return query, None, False
+        return FollowupResolution(
+            query=query, history_used=window, reason="本轮输入自足，未检测到上下文依赖"
+        )
 
     if llm is None:
         # 检测到依赖但无法还原：把信号透传出去，让调用方知道这条判定
         # 是在信息不全的情况下做出的（可解释性 > 假装一切正常）。
-        return query, signal, False
+        return FollowupResolution(
+            query=query,
+            signal=signal,
+            history_used=window,
+            tier="fallback",
+            reason="检测到上下文依赖但改写器不可用，沿用原文",
+        )
 
     try:
         result = await llm.parse(
-            _RESOLVE_SYSTEM,
+            compose_system_prompt(_RESOLVE_SYSTEM, load_global_rules()),
             f"历史轮次：\n{render_history(history)}\n\n本轮输入：\n{query}",
             ResolvedQuery,
             temperature=0.0,
         )
     except Exception as exc:
         logger.debug("followup resolution failed: %s", exc)
-        return query, signal, False
+        return FollowupResolution(
+            query=query,
+            signal=signal,
+            history_used=window,
+            tier="fallback",
+            reason=f"改写调用失败，沿用原文：{type(exc).__name__}",
+        )
 
     resolved = (result.resolved or "").strip()
     if not resolved or resolved == query:
-        return query, signal, False
+        return FollowupResolution(
+            query=query,
+            signal=signal,
+            history_used=window,
+            tier="fallback",
+            # 模型自己给的理由比一句「未改写」有用得多：它区分了
+            # 「模型认为无需改写」与「模型没能改写」。
+            reason=(result.reason or "改写器判定无需改写")[:200],
+        )
     # 防御性截断：消解结果会进下游 prompt 与检索式，不能因为模型跑飞而无界膨胀。
-    return resolved[:2000], signal, True
+    return FollowupResolution(
+        query=resolved[:2000],
+        signal=signal,
+        resolved=True,
+        history_used=window,
+        tier="llm",
+        reason=(result.reason or "上下文已由 LLM 消解")[:200],
+    )

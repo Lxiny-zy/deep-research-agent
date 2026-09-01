@@ -145,6 +145,24 @@ describe('AgentSquarePage builtin roles', () => {
   })
 })
 
+describe('AgentSquarePage custom role cards', () => {
+  it('uses the fixed catalog-card layout while keeping all role actions', () => {
+    const { container } = render(<AgentSquarePage />)
+
+    const grid = container.querySelector('.custom-role-grid')
+    expect(grid).toBeInTheDocument()
+    const card = grid?.querySelector<HTMLElement>('.custom-role-card')
+    expect(card).toBeInTheDocument()
+    expect(card).toHaveAttribute('data-card-size', 'fixed')
+    expect(card).toHaveAttribute('data-card-index', 'R-01')
+    expect(card?.querySelector('.catalog-card-top')).toBeInTheDocument()
+    expect(card?.querySelector('.catalog-card-title')).toHaveTextContent('定制检索员')
+    expect(card?.querySelector('.catalog-card-code')).toHaveTextContent('my-researcher')
+    expect(card?.querySelector('.catalog-card-detail')).toHaveTextContent('模型：默认档案')
+    expect(card?.querySelectorAll('.catalog-card-foot button')).toHaveLength(3)
+  })
+})
+
 describe('AgentSquarePage edit sessions', () => {
   beforeEach(() => {
     vi.clearAllMocks()

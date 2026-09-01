@@ -15,7 +15,10 @@ export default function DagView({ dag }: { dag: DagData }) {
                 <span className="dag-node" key={n}>
                   #{n}
                   {deps.length > 0 && (
-                    <span className="dag-dep"><AppIcon name="arrow-left" size={12} aria-hidden="true" /> {deps.map((d) => `#${d}`).join(', ')}</span>
+                    <span className="dag-dep">
+                      <AppIcon name="arrow-left" size={12} aria-hidden="true" />{' '}
+                      {deps.map((d) => `#${d}`).join(', ')}
+                    </span>
                   )}
                 </span>
               )

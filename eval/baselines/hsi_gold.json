@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "name": "hsi-structured-evidence-v1",
+  "description": "Curated draft fixture from the openly available DAUHST arXiv LaTeX source. It is a paper-level smoke fixture, not a production domain gold set.",
+  "cases": [
+    {
+      "case_id": "dauhst-kaist-simulation-001",
+      "annotation_status": "curated_draft",
+      "annotation_note": "A maintainer checked the Results and Experimental Settings sections in the cited source. A second independent annotation pass and additional papers are still required before release scoring.",
+      "condition_evidence_quotes": [
+        "Following the settings of TSA-Net, HDNet, GAP-Net, GSM, and MST, the CAVE dataset is adopted as the training set while 10 scenes from the KAIST dataset are selected for testing.",
+        "Patches with spatial sizes 256x256 and 660x660 are randomly cropped from the 3D HSI cubes with 28 channels as training samples for the simulation and real experiments."
+      ],
+      "quantities": [
+        {
+          "entity": "DAUHST-9stg",
+          "metric": "PSNR",
+          "value": 38.36,
+          "unit": "dB",
+          "rendered": "38.36",
+          "conditions": {
+            "dataset": "KAIST",
+            "split": "10 simulation scenes (S1-S10)",
+            "bands": 28,
+            "spatial_size": "256x256 training patches",
+            "train_data": "CAVE"
+          },
+          "source_url": "https://arxiv.org/abs/2205.10102",
+          "source_doi": "https://doi.org/10.52202/068431-2736",
+          "source_section": "Results",
+          "evidence_quote": "Our best model DAUHST-9stg (9-stage DAUHST) yields very impressive results, i.e., 38.36 dB in PSNR and 0.967 in SSIM."
+        },
+        {
+          "entity": "DAUHST-9stg",
+          "metric": "SSIM",
+          "value": 0.967,
+          "rendered": "0.967",
+          "conditions": {
+            "dataset": "KAIST",
+            "split": "10 simulation scenes (S1-S10)",
+            "bands": 28,
+            "spatial_size": "256x256 training patches",
+            "train_data": "CAVE"
+          },
+          "source_url": "https://arxiv.org/abs/2205.10102",
+          "source_doi": "https://doi.org/10.52202/068431-2736",
+          "source_section": "Results",
+          "evidence_quote": "Our best model DAUHST-9stg (9-stage DAUHST) yields very impressive results, i.e., 38.36 dB in PSNR and 0.967 in SSIM."
+        }
+      ],
+      "required_condition_fields": ["dataset", "split", "bands", "spatial_size"],
+      "source_groups": {
+        "dauhst-arxiv": "dauhst-2205.10102",
+        "dauhst-neurips": "dauhst-2205.10102",
+        "mst-cvpr": "mst-cvpr-2022"
+      },
+      "column_assignments": {
+        "DAUHST-9stg|PSNR": "psnr__1",
+        "DAUHST-9stg|SSIM": "ssim__1"
+      }
+    }
+  ]
+}

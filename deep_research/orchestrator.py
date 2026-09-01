@@ -17,25 +17,45 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel
 
 from .agents import Planner, Reflector, Researcher, Synthesizer  # noqa: F401 触发角色注册
 from .agents.base import Blackboard, RunContext
+from .artifacts import ArtifactStore
 from .config import Settings
 from .llm import LLM
 from .models import Finding, Report, ResearchResult, SubQuestion
 from .observability import Event, Tracer
 from .orchestration import OrchestrationRuntime, WorkflowRun
 from .persistence.repository import LeaseLostError, ResearchRepository
+from .planner_runtime import (
+    ARTIFACT_MANIFEST_SCRATCH_KEY,
+    ARTIFACT_SLUG_SCRATCH_KEY,
+    PLAN_SCRATCH_KEY,
+    build_execution_plan,
+    coerce_execution_plan,
+    load_persisted_plan,
+    persist_blackboard_artifacts,
+    persist_plan,
+    plan_json,
+    project_blackboard,
+    store_plan_in_blackboard,
+    sync_plan_from_workflow,
+)
+from .planning import stable_slug
+from .prompting import load_global_rules
 from .reproducibility import (
     RUN_MANIFEST_CHECKPOINT_KEY,
     RecordingSearchTool,
     build_run_manifest,
 )
+from .runner import CommandRunner
 from .scheduler import research_dag
+from .skills import default_skill_resolver
 from .token_budget import TokenBudget
 from .tools.base import SearchTool
 from .workflow import (
@@ -54,6 +74,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
+# Generic planner steps can produce a useful overall report even when a model
+# refuses or times out on one intermediate step.  Those task-level gaps map to
+# Vela's ``partial`` state.  Failures that clearly belong to the execution
+# substrate (storage, authorization, leasing, or command dispatch) remain
+# ``failed`` so they can trigger retry/alert handling.
+_INFRA_FAILURE_MARKERS = (
+    "artifact",
+    "storage",
+    "permission",
+    "unauthorized",
+    "authentication",
+    "forbidden",
+    "lease",
+    "scheduling",
+    "scheduler",
+    "command runner",
+    "operation runner",
+    "required operation output",
+    "path escapes",
+)
+
+
+def _is_infrastructure_step_failure(error: object) -> bool:
+    message = str(error or "").casefold()
+    return any(marker in message for marker in _INFRA_FAILURE_MARKERS)
+
 
 RUN_SETTINGS_CHECKPOINT_KEY = "_run_settings"
 RUN_METRICS_CHECKPOINT_KEY = "_runtime_metrics"
@@ -63,15 +109,18 @@ _RUN_SETTING_FIELDS = (
     "max_rounds",
     "max_concurrency",
     "results_per_search",
+    "fulltext_enabled",
+    "fulltext_max_chars",
     "require_corroboration",
     "max_tokens",
     "max_replans",
     "request_timeout",
     "max_run_seconds",
+    "orchestration_mode",
 )
 
 
-def checkpoint_settings(settings: Settings) -> dict[str, bool | int | float | None]:
+def checkpoint_settings(settings: Settings) -> dict[str, bool | int | float | str | None]:
     """Serialize non-secret run behavior so recovery keeps the original limits."""
     return {name: getattr(settings, name) for name in _RUN_SETTING_FIELDS}
 
@@ -119,15 +168,36 @@ async def snapshot_catalog_for_execution(
 
 
 def create_initial_execution(
-    query: str, workflow_name: str | None, settings: Settings
+    query: str,
+    workflow_name: str | None,
+    settings: Settings,
+    *,
+    requested_workflow: str | None = None,
+    execution_plan: Any | None = None,
 ) -> WorkflowRun:
     """Create the durable, leased checkpoint used before a background task starts."""
     runtime = OrchestrationRuntime()
     execution = runtime.start(workflow_name or "deep", {"query": query})
-    execution.checkpoint = Blackboard(
-        query=query,
-        scratch={RUN_SETTINGS_CHECKPOINT_KEY: checkpoint_settings(settings)},
-    ).model_dump(mode="json")
+    scratch: dict[str, Any] = {
+        RUN_SETTINGS_CHECKPOINT_KEY: checkpoint_settings(settings),
+    }
+    # Preserve the user's explicit choice across queue admission and worker
+    # recovery.  ``workflow_name`` may instead be an intent-derived route,
+    # which must not be treated as an explicit choice on resume.
+    if requested_workflow:
+        scratch["requested_workflow"] = requested_workflow
+    # Persist the deterministic workspace identity before a worker starts so
+    # a crash between queue admission and the first checkpoint cannot create a
+    # second artifact tree on recovery.
+    if settings.orchestration_mode != "legacy" or execution_plan is not None:
+        scratch[ARTIFACT_SLUG_SCRATCH_KEY] = stable_slug(query)
+    if execution_plan is not None:
+        # Normalize before queue admission so malformed plans fail at request
+        # time and the worker receives a complete, slugged snapshot.
+        normalized_plan = coerce_execution_plan(execution_plan, query=query, initial=True)
+        scratch[PLAN_SCRATCH_KEY] = normalized_plan.model_dump(mode="json")
+        scratch[ARTIFACT_SLUG_SCRATCH_KEY] = normalized_plan.slug
+    execution.checkpoint = Blackboard(query=query, scratch=scratch).model_dump(mode="json")
     if workflow_name is None or workflow_name in WORKFLOWS:
         execution.definition = get_workflow(workflow_name).model_dump(mode="json")
     return execution
@@ -224,6 +294,11 @@ class DeepResearchAgent:
         resume_execution: WorkflowRun | None = None,
         initial_execution: WorkflowRun | None = None,
         lease_owner: str | None = None,
+        artifact_store: ArtifactStore | None = None,
+        command_runner: Any | None = None,
+        skill_resolver: Any | None = None,
+        artifact_slug: str | None = None,
+        execution_plan: Any | None = None,
     ) -> None:
         self.settings = settings
         self.tracer = Tracer()
@@ -239,6 +314,14 @@ class DeepResearchAgent:
         self._resume_execution = resume_execution
         self._initial_execution = initial_execution
         self._lease_owner = lease_owner
+        self._artifact_store = artifact_store
+        self._command_runner = command_runner
+        self._skill_resolver = skill_resolver
+        self._artifact_slug = artifact_slug
+        # Keep the raw value until ``run(query)`` supplies the query-derived
+        # fallback slug.  Validation then happens exactly once at the planner
+        # boundary and the normalized model is persisted in the checkpoint.
+        self._execution_plan_input = execution_plan
         self._persisted_event_count = 0
         existing_execution = resume_execution or initial_execution
         if existing_execution is not None:
@@ -421,18 +504,19 @@ class DeepResearchAgent:
         """在引擎启动前统一执行意图门禁——所有入口的必经之路。
 
         **为什么不做成工作流里的一个步骤**：那样门禁只在编排了 ``intent_router``
-        的流程（``guarded``）里生效，而 ``/api/research`` 快路径与 CLI 都不走那条
-        流程，攻击请求会拿到一份正常报告。把安全属性挂在「用户/路由恰好选中了
-        某条工作流」上，等于让它可被绕过——安全门禁必须在**所有执行路径的交汇点**
-        上，而 ``_run_workflow`` 正是这个点。
+        的流程（历史上的 ``guarded``）里生效，而 ``/api/research`` 快路径、CLI、
+        自定义流程和 planner-authored 流程都可能不走那条流程。把安全属性挂在
+        「用户/路由恰好选中了某条工作流」上，等于让它可被绕过——安全门禁必须在
+        **所有执行路径的交汇点**上，而 ``_run_workflow`` 正是这个点。
 
         **为什么不把 intent_router 插进 wf.steps**：引擎按位置 ``step-{i+1}``
         匹配 checkpoint 做断点续跑，往前面插一步会让所有既有 run 的步骤编号错位，
         恢复时张冠李戴。这里改为在引擎之外跑，通过既有的 halt 原语终止——
         halt 本来就是为「角色请求提前终止」设计的通用机制。
 
-        ``guarded`` 流程仍保留 ``intent_router`` 步骤：它是**显式声明**，
-        且角色见到已有判定会复用而不重判，因此不会双重付费。
+        历史 ``guarded`` 流程仍保留 ``intent_router`` 步骤以兼容旧 checkpoint；它
+        不是安全保证，也不会出现在公共模板或自动路由中。角色见到已有判定会复用
+        而不重判，因此不会双重付费。
         """
         if not self.settings.intent_enabled:
             return
@@ -460,11 +544,81 @@ class DeepResearchAgent:
             else Blackboard(query=query)
         )
         bb.scratch.setdefault(RUN_SETTINGS_CHECKPOINT_KEY, checkpoint_settings(self.settings))
+        # Supplying a plan also upgrades an explicitly legacy deployment to the
+        # planner runtime, keeping the Python/API plan entry point self-contained.
+        planner_mode = (
+            self.settings.orchestration_mode != "legacy"
+            or self._execution_plan_input is not None
+        )
+        provided_plan = None
+        if self._execution_plan_input is not None:
+            provided_plan = coerce_execution_plan(
+                self._execution_plan_input,
+                query=query,
+                initial=True,
+            )
+            # The plan owns the workspace identity.  Reject an explicit slug
+            # mismatch instead of silently writing one run into another tree.
+            if self._artifact_slug is not None and self._artifact_slug != provided_plan.slug:
+                raise ValueError(
+                    "artifact_slug does not match execution_plan.slug"
+                )
+            self._artifact_slug = provided_plan.slug
+            # ``execution_plan`` is an explicit caller contract.  Force the
+            # source marker even when a payload contains an internal-looking
+            # value such as ``workflow_projection``; otherwise it could skip
+            # compilation and silently execute the legacy workflow instead.
+            provided_plan.metadata["source"] = "external"
+        if planner_mode:
+            # Direct/CLI callers may construct DeepResearchAgent without the
+            # RunExecutor factory.  Create the same isolated store lazily so
+            # both entry points obey the artifact-first contract.
+            if self._artifact_store is None:
+                self._artifact_store = ArtifactStore(
+                    Path(self.settings.artifact_root),
+                    max_bytes=self.settings.artifact_max_bytes,
+                )
+            raw_slug = bb.scratch.get(ARTIFACT_SLUG_SCRATCH_KEY)
+            self._artifact_slug = (
+                self._artifact_slug
+                or (raw_slug if isinstance(raw_slug, str) else None)
+                or (provided_plan.slug if provided_plan is not None else None)
+                or stable_slug(query)
+            )
+            bb.scratch[ARTIFACT_SLUG_SCRATCH_KEY] = self._artifact_slug
+            if self._command_runner is None and self.settings.runner_enabled:
+                self._command_runner = CommandRunner(
+                    workspace_root=self._artifact_store.workspace_root,
+                    allowed_operations=self.settings.runner_allowed_operations,
+                    default_timeout_seconds=self.settings.runner_default_timeout,
+                    max_output_bytes=self.settings.runner_max_output_bytes,
+                    max_processes=self.settings.runner_max_processes,
+                )
+            if self._skill_resolver is None:
+                self._skill_resolver = default_skill_resolver(Path.cwd())
+        artifact_slug = self._artifact_slug
+        if planner_mode:
+            # The planner branch always establishes a stable slug above; keep
+            # a local non-optional binding for the persistence helpers.
+            assert artifact_slug is not None
         # 让 IntentRouter 知道用户是否显式选了工作流：显式选择优先于意图路由。
         # 注意用的是 _requested_workflow 而非 _workflow_name——后者可能是意图
         # 预路由推断出来的结果，拿它当「显式选择」会让路由永久自我禁用。
         if self._requested_workflow:
             bb.scratch.setdefault("requested_workflow", self._requested_workflow)
+        elif (
+            existing_execution is None
+            and self._execution_plan_input is None
+            and self._workflow_name not in {None, "guarded"}
+        ):
+            # Direct library/CLI callers do not have the API's separate
+            # ``requested_workflow`` field.  Treat a named workflow as an
+            # explicit choice so a factual query cannot silently replace
+            # ``quick`` (or a catalog workflow) with an inferred route.  The
+            # legacy ``guarded`` alias is intentionally excluded: old callers
+            # used it as an intent-gate entry point, and its compatibility
+            # intent_router step must remain runnable.
+            bb.scratch.setdefault("requested_workflow", self._workflow_name)
         raw_catalog_snapshot = bb.scratch.get(RUN_CATALOG_CHECKPOINT_KEY)
         if raw_catalog_snapshot is not None and not isinstance(raw_catalog_snapshot, dict):
             raise ValueError("catalog checkpoint snapshot must be an object")
@@ -484,13 +638,136 @@ class DeepResearchAgent:
             tracer=self.tracer,
             settings=self.settings,
             llm_resolver=cr.resolve_llm if cr is not None else None,
+            artifact_store=self._artifact_store,
+            command_runner=self._command_runner,
+            skill_resolver=self._skill_resolver,
+            run_id=run_id,
+            artifact_slug=artifact_slug,
+            global_rules=load_global_rules(),
         )
         budget = TokenBudget(max_tokens=self.settings.max_tokens)
+
+        # The API normally performs this preflight before creating the durable
+        # run.  Direct Python/CLI callers do not have that outer request layer,
+        # so the same gate must run before resolving the workflow here.  This
+        # ordering is important: a route discovered after ``wf`` (or after the
+        # planner shadow plan) would only be telemetry and the actual execution
+        # would still follow the default deep workflow.
+        #
+        # Existing checkpoints and caller-authored plans are immutable execution
+        # contracts.  Their cached intent decision is still checked globally,
+        # but neither recovery nor an external plan may be rewritten by a new
+        # automatic route.  ``requested_workflow`` is the explicit-choice
+        # marker used by the API.  A direct ``workflow="guarded"`` call keeps
+        # its legacy compatibility chain (including the intent_router step),
+        # while still recording the inferred route for audit.
+        await self._apply_intent_gate(bb, ctx)
 
         if existing_execution is not None and existing_execution.definition:
             wf = Workflow.model_validate(existing_execution.definition)
         else:
             wf = await self._resolve_workflow()
+
+        if (
+            existing_execution is None
+            and self._execution_plan_input is None
+            and self._requested_workflow is None
+            and self._workflow_name is None
+        ):
+            from .agents.intent_router import INTENT_ROUTE_KEY
+
+            raw_route = bb.scratch.get(INTENT_ROUTE_KEY)
+            if isinstance(raw_route, Mapping) and raw_route.get("applied"):
+                routed_name = raw_route.get("workflow")
+                if isinstance(routed_name, str) and routed_name in WORKFLOWS:
+                    wf = get_workflow(routed_name)
+                    self._workflow_name = routed_name
+                    self.tracer.emit(
+                        "ORCHESTRATOR",
+                        "info",
+                        f"按意图选择工作流：{routed_name}",
+                        data={
+                            "event_name": "workflow.routed",
+                            "workflow": routed_name,
+                            "reason": raw_route.get("reason", ""),
+                        },
+                    )
+
+        # The planner contract is a durable shadow of the existing workflow on
+        # the first migration pass.  A checkpoint-provided plan always wins;
+        # otherwise a persisted control plan is used only for recovery.  This
+        # keeps a brand-new run from accidentally inheriting an old same-query
+        # workspace while still making worker restarts deterministic.
+        runtime_plan = None
+        # External plans are compiled into workflow node IDs.  Keep the
+        # mapping alongside the in-memory plan so checkpoint projection can
+        # associate runtime outcomes by identity rather than by execution
+        # order (DAG layers may complete in a different order than authored
+        # steps).
+        runtime_plan_step_mapping: dict[str, str] = {}
+        if planner_mode:
+            assert artifact_slug is not None
+            # A supplied plan is authoritative for a fresh run.  On recovery,
+            # prefer the fenced checkpoint snapshot so a caller cannot mutate
+            # the plan halfway through execution.
+            raw_plan = bb.scratch.get(PLAN_SCRATCH_KEY)
+            if provided_plan is not None and self._resume_execution is None:
+                runtime_plan = provided_plan
+            elif isinstance(raw_plan, Mapping):
+                runtime_plan = coerce_execution_plan(
+                    raw_plan,
+                    query=query,
+                    initial=False,
+                )
+            elif existing_execution is not None and self._artifact_store is not None:
+                runtime_plan = load_persisted_plan(self._artifact_store, artifact_slug)
+            if runtime_plan is None:
+                runtime_plan = build_execution_plan(
+                    query,
+                    wf,
+                    slug=artifact_slug,
+                    title=wf.description or wf.name,
+                )
+                runtime_plan.metadata["source"] = "workflow_projection"
+            else:
+                if provided_plan is not None:
+                    runtime_plan.metadata.setdefault("source", "external")
+                else:
+                    runtime_plan.metadata.setdefault("source", "workflow_projection")
+            # An explicitly supplied planner plan can become the workflow
+            # source.  Shadow plans produced by this migration carry the
+            # ``workflow_projection`` marker and intentionally keep the
+            # authored legacy workflow (including reflect/team control steps).
+            if (
+                runtime_plan.metadata.get("source") not in {None, "workflow_projection"}
+            ):
+                from .orchestration import compile_plan
+                from .registry import available
+
+                compiled = compile_plan(
+                    runtime_plan,
+                    available_agents=set(available()),
+                    skill_resolver=self._skill_resolver,
+                )
+                wf = compiled.workflow
+                runtime_plan_step_mapping = dict(compiled.step_mapping)
+            store_plan_in_blackboard(bb, runtime_plan)
+            assert self._artifact_store is not None
+            persist_plan(self._artifact_store, runtime_plan)
+            manifest = self._artifact_store.load_manifest(artifact_slug)
+            bb.scratch[ARTIFACT_MANIFEST_SCRATCH_KEY] = manifest.model_dump(mode="json")
+            self.tracer.emit(
+                "ORCHESTRATOR",
+                "info",
+                "execution plan ready",
+                data={
+                    "event_name": "execution.plan",
+                    "slug": artifact_slug,
+                    "step_count": len(runtime_plan.steps),
+                    "steps": [step.id for step in runtime_plan.steps],
+                    "recovered": existing_execution is not None,
+                },
+            )
         if RUN_CATALOG_CHECKPOINT_KEY not in bb.scratch and cr is not None:
             bb.scratch[RUN_CATALOG_CHECKPOINT_KEY] = cr.snapshot(
                 workflow_catalog_roles(wf)
@@ -541,10 +818,120 @@ class DeepResearchAgent:
             self.search_tool.set_error_sink(record_snapshot_error)
 
         async def save_checkpoint(execution):  # type: ignore[no-untyped-def]
+            if planner_mode and runtime_plan is not None:
+                # Mirror in-memory role outputs before persisting the fenced
+                # checkpoint.  A storage error intentionally escapes here and
+                # is classified as infrastructure failure by the outer run.
+                assert self._artifact_store is not None
+                attempt = getattr(execution, "attempt", None)
+                output_paths = persist_blackboard_artifacts(
+                    self._artifact_store,
+                    artifact_slug,
+                    bb,
+                    attempt=attempt,
+                )
+                partial_ids: set[str] = set()
+                runtime_steps = list(getattr(execution, "steps", []))
+                node_to_plan = {
+                    node_id: plan_id for plan_id, node_id in runtime_plan_step_mapping.items()
+                }
+                for runtime_index, runtime_step in enumerate(runtime_steps):
+                    status = getattr(runtime_step.status, "value", runtime_step.status)
+                    if status != "failed":
+                        continue
+                    # Research/reflect stages (and generic external-plan
+                    # executors) can yield useful evidence even when one
+                    # provider/model call is incomplete.  Keep that truthful
+                    # distinction in the planner state; operation, storage,
+                    # auth and scheduling errors remain failed.
+                    role = str(getattr(runtime_step, "agent", ""))
+                    useful_output = bool(
+                        bb.results
+                        or bb.plan is not None
+                        or bb.report is not None
+                        or output_paths
+                    )
+                    if (
+                        role in {"researcher", "reflector", "planner", "plan_executor"}
+                        and useful_output
+                        and not _is_infrastructure_step_failure(runtime_step.error)
+                    ):
+                        plan_id = node_to_plan.get(str(getattr(runtime_step, "node_id", "")))
+                        if plan_id is None and runtime_index < len(runtime_plan.steps):
+                            # Legacy/projection workflows do not have a
+                            # compiler mapping; retain the authored-index
+                            # fallback for those checkpoints.
+                            plan_id = runtime_plan.steps[runtime_index].id
+                        if plan_id is not None:
+                            partial_ids.add(plan_id)
+                output_by_step: dict[str, list[str]] = {}
+                for plan_step in runtime_plan.steps:
+                    stage = str(
+                        plan_step.metadata.get("workflow_agent")
+                        or plan_step.metadata.get("workflow_kind")
+                        or ""
+                    ).lower().replace(" ", "-")
+                    if stage:
+                        output_by_step[plan_step.id] = [
+                            path
+                            for path in output_paths
+                            if f"/{stage}/" in path
+                        ]
+                sync_plan_from_workflow(
+                    runtime_plan,
+                    execution,
+                    step_mapping=runtime_plan_step_mapping or None,
+                    output_paths_by_step=output_by_step,
+                    partial_step_ids={item for item in partial_ids if item},
+                )
+                store_plan_in_blackboard(bb, runtime_plan)
+                persist_plan(self._artifact_store, runtime_plan)
+                # Keep a user-readable copy of the execution contract in the
+                # work tree as well as the private control file.
+                self._artifact_store.write_text(
+                    artifact_slug,
+                    "planner",
+                    "execution-plan.json",
+                    plan_json(runtime_plan),
+                    mime_type="application/json",
+                    attempt=attempt,
+                )
+                snapshot = project_blackboard(
+                    self._artifact_store,
+                    artifact_slug,
+                    query=bb.query,
+                    results_count=len(bb.results),
+                    reflection_count=len(bb.reflections),
+                    report_markdown=bb.report.markdown if bb.report is not None else None,
+                    attempt=attempt,
+                )
+                bb.scratch[ARTIFACT_MANIFEST_SCRATCH_KEY] = snapshot.model_dump(mode="json")
+                # ``execution.checkpoint`` was built before this sink ran;
+                # replace it with the enriched scratch snapshot so the plan
+                # and manifest survive a process restart.
+                execution.checkpoint = bb.model_dump(mode="json")
             if self.repo is not None and run_id is not None:
                 await self.repo.save_orchestration(run_id, execution, lease_owner=self._lease_owner)
                 await self._flush_events(run_id)
 
+        runtime_terminal_roles: set[str] | None = (
+            set(cr.terminal_roles) if cr is not None else None
+        )
+        if (
+            runtime_plan is not None
+            and runtime_plan.metadata.get("source") == "external"
+            and any(
+                step.agent in {"plan_executor", "operation_runner"}
+                for step in (
+                    [Step.model_validate(node["step"]) for node in wf.nodes]
+                    if wf.nodes
+                    else wf.steps
+                )
+            )
+        ):
+            if runtime_terminal_roles is None:
+                runtime_terminal_roles = {"synthesizer", "aggregator"}
+            runtime_terminal_roles.update({"plan_executor", "operation_runner"})
         engine = WorkflowEngine(
             ctx,
             resolver=cr.resolve_agent if cr is not None else None,
@@ -553,24 +940,23 @@ class DeepResearchAgent:
             resume_run=self._resume_execution,
             initial_run=self._initial_execution,
             require_report=True,
-            terminal_roles=cr.terminal_roles if cr is not None else None,
+            terminal_roles=runtime_terminal_roles,
         )
         if wf.nodes:
             errors = validate_workflow_graph_terminal(
                 wf.nodes,
                 wf.edges,
-                terminal_roles=cr.terminal_roles if cr is not None else None,
+                terminal_roles=runtime_terminal_roles,
             )
             if errors:
                 raise ValueError("工作流不合法：" + "；".join(errors))
         elif wf.name not in WORKFLOWS:
             errors = validate_workflow_steps_terminal(
                 wf.steps,
-                terminal_roles=cr.terminal_roles if cr is not None else None,
+                terminal_roles=runtime_terminal_roles,
             )
             if errors:
                 raise ValueError("工作流不合法：" + "；".join(errors))
-        await self._apply_intent_gate(bb, ctx)
         await engine.run(wf, bb)
 
         if bb.report is None:  # WorkflowEngine(require_report=True) should have raised first.

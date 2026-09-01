@@ -1,4 +1,4 @@
-.PHONY: install lock dependency-check audit sbom lint fmt test test-pg package package-smoke compose-check chaos-demo intent-train intent-eval up down down-clean migrate revision run-api run-cli fe-install fe-dev fe-build fe-lint fe-test help
+.PHONY: judge-export judge-calibrate chaos-demo-worker run-worker install lock dependency-check audit sbom lint fmt test test-pg package package-smoke compose-check chaos-demo intent-train intent-eval up down down-clean migrate revision run-api run-cli fe-install fe-dev fe-build fe-lint fe-test help
 
 PYTHON ?= python
 UV ?= uv
@@ -66,14 +66,23 @@ package-smoke: package  ## Verify the wheel in an isolated virtual environment
 compose-check:  ## Render and validate Docker Compose configuration
 	docker compose config --quiet
 
-chaos-demo:  ## kill -9 故障恢复演示（离线假后端，全程约 3 分钟）
-	$(PYTHON) scripts/chaos_demo.py
+chaos-demo:  ## kill -9 故障恢复演示：杀 API 后重启接管（离线假后端，约 3 分钟）
+	$(PYTHON) scripts/chaos_demo.py --target api
+
+chaos-demo-worker:  ## kill -9 故障恢复演示：杀 worker，API 全程存活由另一 worker 接管
+	$(PYTHON) scripts/chaos_demo.py --target worker
 
 intent-train:  ## 训练意图识别 L2 本地模型（TF-IDF + 逻辑回归，纯离线）
 	$(PYTHON) scripts/train_intent_model.py
 
 intent-eval:  ## 意图识别离线评测（准确率 / 混淆矩阵 / 拒识率 / 误伤率 / 级联分流）
 	$(PYTHON) -m eval.intent_eval
+
+judge-export:  ## 从已落库 run 分层抽样，导出语义判定待标注文件
+	$(PYTHON) -m eval.judge_calibration export
+
+judge-calibrate:  ## 用已标注文件计算 judge 与人工的一致率 / Cohen's κ
+	$(PYTHON) -m eval.judge_calibration report eval/calibration/semantic_cases.jsonl
 
 up:  ## docker compose 起全栈（构建并启动）
 	docker compose up --build
@@ -92,6 +101,9 @@ revision:  ## 生成迁移脚本：make revision m="变更说明"
 
 run-api:  ## 本地启动 API（从 .env 加载配置，热重载）
 	$(PYTHON) -m uvicorn --env-file .env --reload deep_research.api:app
+
+run-worker:  ## 本地启动执行 worker（需 DR_EXECUTION_MODE=worker 才有任务可领）
+	$(PYTHON) -m dotenv run -- $(PYTHON) -m deep_research.worker
 
 run-cli:  ## 本地跑 CLI（从 .env 加载配置）：make run-cli q="你的研究问题"
 	$(PYTHON) -m dotenv run -- $(PYTHON) -m deep_research.cli "$(q)"

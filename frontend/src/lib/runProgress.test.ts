@@ -1,19 +1,20 @@
 import type { ResearchEvent, WorkflowRun } from '../types'
 import { deriveResearchProgress, mergeWorkflowSteps } from './runProgress'
 
-function event(
-  status: string,
-  id: string,
-  label = id,
-  attempt = 0,
-  nodeId = id,
-): ResearchEvent {
+function event(status: string, id: string, label = id, attempt = 0, nodeId = id): ResearchEvent {
   return {
     stage: 'ORCHESTRATOR',
     type: 'info',
     message: '',
     elapsed: 1,
-    data: { event_name: `step.${status}`, step_run_id: id, node_id: nodeId, status, label, attempt },
+    data: {
+      event_name: `step.${status}`,
+      step_run_id: id,
+      node_id: nodeId,
+      status,
+      label,
+      attempt,
+    },
   }
 }
 
@@ -37,8 +38,16 @@ describe('runProgress', () => {
       status: 'running',
       steps: [
         {
-          id: 'a', node_id: 'a', label: '规划', kind: 'agent', agent: 'planner',
-          status: 'ready', attempt: 0, error: null, started_at: null, finished_at: null,
+          id: 'a',
+          node_id: 'a',
+          label: '规划',
+          kind: 'agent',
+          agent: 'planner',
+          status: 'ready',
+          attempt: 0,
+          error: null,
+          started_at: null,
+          finished_at: null,
         },
       ],
     } as WorkflowRun
@@ -51,9 +60,16 @@ describe('runProgress', () => {
       status: 'running',
       steps: [
         {
-          id: 'a', node_id: 'a', label: '规划', kind: 'agent', agent: 'planner',
-          status: 'succeeded', attempt: 1, error: null,
-          started_at: '2026-01-01T00:00:00Z', finished_at: '2026-01-01T00:00:01Z',
+          id: 'a',
+          node_id: 'a',
+          label: '规划',
+          kind: 'agent',
+          agent: 'planner',
+          status: 'succeeded',
+          attempt: 1,
+          error: null,
+          started_at: '2026-01-01T00:00:00Z',
+          finished_at: '2026-01-01T00:00:01Z',
         },
       ],
     } as WorkflowRun
@@ -69,9 +85,16 @@ describe('runProgress', () => {
       status: 'running',
       steps: [
         {
-          id: 'a', node_id: 'a', label: 'Retrying', kind: 'agent', agent: 'researcher',
-          status: 'retrying', attempt: 2, error: 'temporary failure',
-          started_at: '2026-01-01T00:00:02Z', finished_at: null,
+          id: 'a',
+          node_id: 'a',
+          label: 'Retrying',
+          kind: 'agent',
+          agent: 'researcher',
+          status: 'retrying',
+          attempt: 2,
+          error: 'temporary failure',
+          started_at: '2026-01-01T00:00:02Z',
+          finished_at: null,
         },
       ],
     } as WorkflowRun
@@ -91,9 +114,16 @@ describe('runProgress', () => {
       status: 'running',
       steps: [
         {
-          id: 'a', node_id: 'a', label: 'Retrying', kind: 'agent', agent: 'researcher',
-          status: 'retrying', attempt: 1, error: 'temporary failure',
-          started_at: '2026-01-01T00:00:01Z', finished_at: null,
+          id: 'a',
+          node_id: 'a',
+          label: 'Retrying',
+          kind: 'agent',
+          agent: 'researcher',
+          status: 'retrying',
+          attempt: 1,
+          error: 'temporary failure',
+          started_at: '2026-01-01T00:00:01Z',
+          finished_at: null,
         },
       ],
     } as WorkflowRun
@@ -112,9 +142,16 @@ describe('runProgress', () => {
       status: 'failed',
       steps: [
         {
-          id: 'a', node_id: 'a', label: '规划', kind: 'agent', agent: 'planner',
-          status: 'failed', attempt: 1, error: 'failed',
-          started_at: null, finished_at: '2026-01-01T00:00:01Z',
+          id: 'a',
+          node_id: 'a',
+          label: '规划',
+          kind: 'agent',
+          agent: 'planner',
+          status: 'failed',
+          attempt: 1,
+          error: 'failed',
+          started_at: null,
+          finished_at: '2026-01-01T00:00:01Z',
         },
       ],
     } as WorkflowRun
@@ -131,9 +168,16 @@ describe('runProgress', () => {
       definition: { nodes: [{ id: 'research', step: { kind: 'agent', agent: 'researcher' } }] },
       steps: [
         {
-          id: 'old-run', node_id: 'research', label: '研究', kind: 'agent', agent: 'researcher',
-          status: 'failed', attempt: 1, error: 'old failure',
-          started_at: '2026-01-01T00:00:00Z', finished_at: '2026-01-01T00:00:01Z',
+          id: 'old-run',
+          node_id: 'research',
+          label: '研究',
+          kind: 'agent',
+          agent: 'researcher',
+          status: 'failed',
+          attempt: 1,
+          error: 'old failure',
+          started_at: '2026-01-01T00:00:00Z',
+          finished_at: '2026-01-01T00:00:01Z',
         },
       ],
     })
@@ -160,16 +204,40 @@ describe('runProgress', () => {
       },
       steps: [
         {
-          id: 'left-old', node_id: 'left', label: '左分支', kind: 'agent', agent: 'researcher',
-          status: 'failed', attempt: 1, error: 'old failure', started_at: null, finished_at: null,
+          id: 'left-old',
+          node_id: 'left',
+          label: '左分支',
+          kind: 'agent',
+          agent: 'researcher',
+          status: 'failed',
+          attempt: 1,
+          error: 'old failure',
+          started_at: null,
+          finished_at: null,
         },
         {
-          id: 'right-run', node_id: 'right', label: '右分支', kind: 'agent', agent: 'critic',
-          status: 'succeeded', attempt: 1, error: null, started_at: null, finished_at: null,
+          id: 'right-run',
+          node_id: 'right',
+          label: '右分支',
+          kind: 'agent',
+          agent: 'critic',
+          status: 'succeeded',
+          attempt: 1,
+          error: null,
+          started_at: null,
+          finished_at: null,
         },
         {
-          id: 'left-new', node_id: 'left', label: '左分支', kind: 'agent', agent: 'researcher',
-          status: 'succeeded', attempt: 1, error: null, started_at: null, finished_at: null,
+          id: 'left-new',
+          node_id: 'left',
+          label: '左分支',
+          kind: 'agent',
+          agent: 'researcher',
+          status: 'succeeded',
+          attempt: 1,
+          error: null,
+          started_at: null,
+          finished_at: null,
         },
       ],
     })
@@ -184,7 +252,10 @@ describe('runProgress', () => {
   it('根据计划总数和步骤终态计算阶段进度', () => {
     const events = [
       {
-        stage: 'ORCHESTRATOR', type: 'info', message: '', elapsed: 0,
+        stage: 'ORCHESTRATOR',
+        type: 'info',
+        message: '',
+        elapsed: 0,
         data: { event_name: 'workflow.plan', total_steps: 4 },
       },
       event('succeeded', 'a'),

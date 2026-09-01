@@ -11,6 +11,8 @@ from ..models import Report, ResearchPlan, ResearchResult, Source, SubQuestion
 from ..observability import Event
 from ..orchestration import WorkflowRun
 from .repository import (
+    RUN_ACTIVE_STATUSES,
+    ClaimedRun,
     IdempotencyConflictError,
     LeaseLostError,
     RunDetail,
@@ -39,6 +41,8 @@ class _RunRecord:
     idempotency_key: str | None = None
     request_hash: str | None = None
     attempt: int = 1
+    claimable_at: datetime | None = None
+    claim_attempts: int = 0
 
 
 class InMemoryRepository:
@@ -72,6 +76,7 @@ class InMemoryRepository:
         idempotency_key: str | None = None,
         execution: WorkflowRun | None = None,
         lease_owner: str | None = None,
+        claimable: bool = False,
     ) -> tuple[str, bool]:
         if idempotency_key:
             existing = self._idempotency.get(idempotency_key)
@@ -89,6 +94,7 @@ class InMemoryRepository:
             idempotency_key=idempotency_key,
             request_hash=request_hash,
             attempt=execution.attempt if execution is not None else 1,
+            claimable_at=datetime.now(UTC) if claimable else None,
         )
         if execution is not None:
             record.orchestration = execution.model_copy(deep=True)
@@ -248,6 +254,68 @@ class InMemoryRepository:
         if rec.lease_owner == owner:
             rec.lease_owner = None
             rec.lease_expires_at = None
+
+    async def enqueue_run(self, run_id: str) -> bool:
+        rec = self._runs.get(run_id)
+        if rec is None or rec.status not in RUN_ACTIVE_STATUSES or rec.claimable_at is not None:
+            return False
+        rec.claimable_at = datetime.now(UTC)
+        return True
+
+    async def requeue_failed_run(self, run_id: str) -> bool:
+        rec = self._runs.get(run_id)
+        if rec is None or rec.status != "error" or rec.orchestration is None:
+            return False
+        if not rec.orchestration.checkpoint:
+            return False
+        now = datetime.now(UTC)
+        lease_active = rec.lease_expires_at is not None and rec.lease_expires_at > now
+        if rec.lease_owner is not None and lease_active:
+            return False
+        rec.status = "running"
+        rec.claimable_at = now
+        rec.lease_owner = None
+        rec.lease_expires_at = None
+        return True
+
+    async def claim_next_run(self, owner: str, *, lease_seconds: int = 120) -> ClaimedRun | None:
+        """Reference implementation of the claim protocol.
+
+        Single-threaded by construction, so the SQL layer's fence-then-reload
+        dance collapses into one pass.  The observable contract is identical:
+        an active lease is never stolen and a claim always advances the
+        attempt counter for a resumed run.
+        """
+        now = datetime.now(UTC)
+        for run_id in self._order:
+            rec = self._runs.get(run_id)
+            if rec is None or rec.orchestration is None:
+                continue
+            if rec.status not in ("pending", "running"):
+                continue
+            if rec.claimable_at is None or rec.claimable_at > now:
+                continue
+            if rec.lease_owner is not None and (
+                rec.lease_expires_at is not None and rec.lease_expires_at > now
+            ):
+                continue
+            resumed = bool(rec.orchestration.checkpoint) and rec.status == "running"
+            rec.lease_owner = owner
+            rec.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            rec.claim_attempts += 1
+            rec.status = "running"
+            if resumed:
+                rec.attempt = rec.orchestration.attempt = max(1, rec.orchestration.attempt) + 1
+            return ClaimedRun(
+                run_id=run_id,
+                query=rec.query,
+                lease_owner=owner,
+                execution=rec.orchestration.model_copy(deep=True),
+                attempt=rec.orchestration.attempt,
+                claim_attempts=rec.claim_attempts,
+                resumed=resumed,
+            )
+        return None
 
     async def finalize(
         self,

@@ -114,11 +114,20 @@ export default function AgentSquarePage() {
     <div className="stack page-stack">
       <header className="page-intro agents-intro page-intro-compact">
         <div>
-          <span className="eyebrow"><AppIcon name="users" size={14} aria-hidden="true" /> PERSONAS / CAPABILITY LAYER</span>
-          <h1>把专业角色，<em>装配成研究团队。</em></h1>
-          <p>管理 Agent 行为模板、模型档案与检索 Key 池，让每条工作流都能调用清晰、稳定、可复用的能力单元。</p>
+          <span className="eyebrow">
+            <AppIcon name="users" size={14} aria-hidden="true" /> 角色 / 能力层
+          </span>
+          <h1>
+            把专业角色，<em>装配成研究团队。</em>
+          </h1>
+          <p>
+            管理 Agent 行为模板、模型档案与检索 Key
+            池，让每条工作流都能调用清晰、稳定、可复用的能力单元。
+          </p>
         </div>
-        <div className="page-intro-mark" aria-hidden="true"><AppIcon name="brain" size={40} strokeWidth={1.2} /></div>
+        <div className="page-intro-mark" aria-hidden="true">
+          <AppIcon name="brain" size={40} strokeWidth={1.2} />
+        </div>
       </header>
 
       <div className="tabs agent-tabs" role="tablist" aria-label="角色广场分类">
@@ -142,7 +151,7 @@ export default function AgentSquarePage() {
         <section className="panel catalog-panel">
           <div className="panel-header">
             <div>
-              <span className="panel-kicker">AGENTS / 01</span>
+              <span className="panel-kicker">角色 / 01</span>
               <h2 className="panel-title">角色</h2>
             </div>
             <button className="btn btn-primary" onClick={() => openAgentEditor(null)}>
@@ -156,7 +165,9 @@ export default function AgentSquarePage() {
 
             <div className="builtin-rail-head custom-follow">
               <div>
-                <span className="panel-kicker"><AppIcon name="user-cog" size={12} aria-hidden="true" /> CUSTOM / AGENTS</span>
+                <span className="panel-kicker">
+                  <AppIcon name="user-cog" size={12} aria-hidden="true" /> 自定义 / 角色
+                </span>
                 <h3 className="builtin-rail-title">自定义角色</h3>
               </div>
             </div>
@@ -165,44 +176,73 @@ export default function AgentSquarePage() {
             </p>
 
             {agents.isLoading && <Skeleton rows={4} />}
-            {agents.isError && <p className="error-text"><AppIcon name="circle-x" size={14} aria-hidden="true" />{errMsg(agents.error)}</p>}
+            {agents.isError && (
+              <p className="error-text">
+                <AppIcon name="circle-x" size={14} aria-hidden="true" />
+                {errMsg(agents.error)}
+              </p>
+            )}
 
-            <div className="card-grid">
-              {agents.data?.map((a) => (
-                <div key={a.id} className={`role-card${a.enabled ? '' : ' disabled'}`}>
-                  <div className="role-card-head">
-                    <span className="role-icon"><AgentGlyph icon={a.icon} behavior={a.behavior} size={20} /></span>
-                    <div className="role-meta">
-                      <strong>{a.display_name || a.name}</strong>
-                      <span className="muted small">{a.name}</span>
-                    </div>
+            <div className="card-grid custom-role-grid">
+              {agents.data?.map((a, index) => (
+                <div
+                  key={a.id}
+                  className={`role-card catalog-card custom-role-card${a.enabled ? '' : ' disabled'}`}
+                  data-card-size="fixed"
+                  data-card-index={`R-${String(index + 1).padStart(2, '0')}`}
+                  data-behavior={a.behavior}
+                  title={a.display_name || a.name}
+                >
+                  <span className="catalog-card-accent" aria-hidden="true" />
+                  <div className="catalog-card-top">
+                    <span className="catalog-card-index">
+                      R-{String(index + 1).padStart(2, '0')}
+                    </span>
                     <span className="badge">{behaviorLabel(a.behavior)}</span>
                   </div>
-                  {a.description && <p className="role-desc">{a.description}</p>}
-                  <div className="row between role-card-foot">
-                    <span className="muted small">模型：{a.model_profile_name ?? '默认档案'}</span>
-                    <div className="row gap-sm">
-                      <button
-                        className="btn ghost small"
-                        onClick={() => agentM.update.mutate({ id: a.id, body: { enabled: !a.enabled } })}
-                      >
-                        <AppIcon name={a.enabled ? 'eye-off' : 'eye'} size={13} aria-hidden="true" />
-                        {a.enabled ? '停用' : '启用'}
-                      </button>
-                      <button className="btn ghost small" onClick={() => openAgentEditor(a)}>
-                        <AppIcon name="edit" size={13} aria-hidden="true" /> 编辑
-                      </button>
-                      <button
-                        className="btn ghost small danger"
-                        onClick={() => {
-                          if (confirm(`删除角色「${a.display_name || a.name}」？`)) {
-                            agentM.remove.mutate(a.id)
-                          }
-                        }}
-                      >
-                        <AppIcon name="trash" size={13} aria-hidden="true" /> 删除
-                      </button>
+                  <div className="catalog-card-title">
+                    <span className="catalog-card-glyph" aria-hidden="true">
+                      <AgentGlyph icon={a.icon} behavior={a.behavior} size={20} />
+                    </span>
+                    <div className="catalog-card-name">
+                      <strong>{a.display_name || a.name}</strong>
+                      <code className="catalog-card-code">{a.name}</code>
                     </div>
+                  </div>
+                  <p className="catalog-card-desc">
+                    {a.description?.trim() || '自定义角色，可在工作流中复用。'}
+                  </p>
+                  <div
+                    className="catalog-card-detail"
+                    title={`模型：${a.model_profile_name ?? '默认档案'}`}
+                  >
+                    <AppIcon name="server" size={13} aria-hidden="true" />
+                    <span>模型：{a.model_profile_name ?? '默认档案'}</span>
+                  </div>
+                  <div className="role-card-foot catalog-card-foot">
+                    <button
+                      className="btn ghost small"
+                      onClick={() =>
+                        agentM.update.mutate({ id: a.id, body: { enabled: !a.enabled } })
+                      }
+                    >
+                      <AppIcon name={a.enabled ? 'eye-off' : 'eye'} size={13} aria-hidden="true" />
+                      {a.enabled ? '停用' : '启用'}
+                    </button>
+                    <button className="btn ghost small" onClick={() => openAgentEditor(a)}>
+                      <AppIcon name="edit" size={13} aria-hidden="true" /> 编辑
+                    </button>
+                    <button
+                      className="btn ghost small danger"
+                      aria-label={`删除 ${a.display_name || a.name}`}
+                      onClick={() => {
+                        if (confirm(`删除角色「${a.display_name || a.name}」？`)) {
+                          agentM.remove.mutate(a.id)
+                        }
+                      }}
+                    >
+                      <AppIcon name="trash" size={13} aria-hidden="true" /> 删除
+                    </button>
                   </div>
                 </div>
               ))}
@@ -216,7 +256,7 @@ export default function AgentSquarePage() {
         <section className="panel catalog-panel">
           <div className="panel-header">
             <div>
-              <span className="panel-kicker">MODELS / 02</span>
+              <span className="panel-kicker">模型 / 02</span>
               <h2 className="panel-title">模型档案</h2>
             </div>
             <button className="btn btn-primary" onClick={() => openModelEditor(null)}>
@@ -226,11 +266,14 @@ export default function AgentSquarePage() {
           </div>
           <div className="panel-body">
             <p className="hint catalog-description">
-              每个档案是一套独立的 base_url / key / 模型，可被不同角色绑定。标为「全局默认」的档案在角色未绑定时生效。
+              每个档案是一套独立的 base_url / key /
+              模型，可被不同角色绑定。标为「全局默认」的档案在角色未绑定时生效。
             </p>
             {models.isLoading && <Skeleton rows={3} />}
             {models.data && models.data.length === 0 && (
-              <p className="muted">还没有模型档案。新建一个并设为「全局默认」，即可替代环境变量兜底。</p>
+              <p className="muted">
+                还没有模型档案。新建一个并设为「全局默认」，即可替代环境变量兜底。
+              </p>
             )}
             <div className="card-grid">
               {models.data?.map((p) => (
@@ -266,7 +309,9 @@ export default function AgentSquarePage() {
             </p>
             {keys.isLoading && <Skeleton rows={2} />}
             {keys.data && keys.data.length === 0 && (
-              <p className="muted">还没有检索 Key。在下方添加一个，即可替代环境变量里的单个 Tavily Key。</p>
+              <p className="muted">
+                还没有检索 Key。在下方添加一个，即可替代环境变量里的单个 Tavily Key。
+              </p>
             )}
             <div className="card-grid">
               {keys.data?.map((k) => (
@@ -311,8 +356,17 @@ export default function AgentSquarePage() {
                   onChange={(e) => setNewKey({ ...newKey, priority: Number(e.target.value) || 0 })}
                 />
               </label>
-              <button className="btn btn-primary key-create-button" onClick={addKey} disabled={keyM.create.isPending}>
-                <AppIcon name={keyM.create.isPending ? 'loader' : 'plus'} size={15} aria-hidden="true" className={keyM.create.isPending ? 'spin' : ''} />
+              <button
+                className="btn btn-primary key-create-button"
+                onClick={addKey}
+                disabled={keyM.create.isPending}
+              >
+                <AppIcon
+                  name={keyM.create.isPending ? 'loader' : 'plus'}
+                  size={15}
+                  aria-hidden="true"
+                  className={keyM.create.isPending ? 'spin' : ''}
+                />
                 添加 Key
               </button>
             </div>

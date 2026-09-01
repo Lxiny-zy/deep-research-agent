@@ -29,7 +29,11 @@ _database_url = config.attributes.get("database_url") or Settings().database_url
 config.set_main_option("sqlalchemy.url", _database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers 默认为 True，会把此刻已存在的 logger 全部禁用。
+    # 迁移不只由 `alembic` CLI 触发：API 启动时的 SQLite schema 准备与
+    # migrate.upgrade_head 都在**进程内**跑 command.upgrade，一旦沿用默认值，
+    # 应用自己的 deep_research.* 日志会在迁移之后集体失声（且毫无提示）。
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = orm.Base.metadata
 

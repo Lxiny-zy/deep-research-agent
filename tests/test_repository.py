@@ -43,6 +43,15 @@ from deep_research.persistence.repository import IdempotencyConflictError, Lease
 from deep_research.persistence.sql_repository import SqlRepository
 
 
+def _alembic_head() -> str:
+    """Resolve the current migration head instead of pinning a revision.
+
+    Pinning made every schema-preparation test fail on the next migration even
+    when the behaviour under test was unchanged.
+    """
+    return ScriptDirectory.from_config(AlembicConfig("alembic.ini")).get_current_head()
+
+
 @pytest.fixture(params=["memory", "sqlite"])
 async def repo(request):
     if request.param == "memory":
@@ -185,6 +194,47 @@ async def test_source_snapshots_preserve_changed_content(repo) -> None:
     assert detail is not None
     assert {source.content for source in detail.sources} == {"version one", "version two"}
     assert len({source.content_hash for source in detail.sources}) == 2
+
+
+@pytest.mark.asyncio
+async def test_save_report_overwrites_existing_report(repo) -> None:
+    """Retries and resumed execution must keep one report per run."""
+    run_id = await repo.create_run("report retry")
+    await repo.save_report(run_id, Report(query="report retry", markdown="# first", citations=[]))
+    await repo.save_report(run_id, Report(query="report retry", markdown="# second", citations=[]))
+
+    detail = await repo.get_run(run_id)
+    assert detail is not None
+    assert detail.report is not None
+    assert detail.report.markdown == "# second"
+
+
+@pytest.mark.asyncio
+async def test_sql_save_report_upsert_is_concurrency_safe(tmp_path) -> None:
+    db_path = tmp_path / "report-upsert.db"
+    database_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
+    engine = make_engine(database_url)
+    await create_all(engine)
+    repo = SqlRepository(make_sessionmaker(engine))
+    run_id = await repo.create_run("concurrent report")
+    try:
+        outcomes = await asyncio.gather(
+            *[
+                repo.save_report(
+                    run_id,
+                    Report(query="concurrent report", markdown=f"# report {index}", citations=[]),
+                )
+                for index in range(10)
+            ],
+            return_exceptions=True,
+        )
+        assert not [outcome for outcome in outcomes if isinstance(outcome, Exception)]
+        detail = await repo.get_run(run_id)
+        assert detail is not None
+        assert detail.report is not None
+        assert detail.report.markdown in {f"# report {index}" for index in range(10)}
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -563,7 +613,7 @@ async def test_prepare_sqlite_schema_accepts_current_create_all_database(tmp_pat
             "corroborates_claim_ids",
             "corroboration_reason",
         } <= columns
-        assert version == "0018"
+        assert version == _alembic_head()
         assert detail is not None
         verification = detail.results[0].findings[0].verification
         assert verification.source_title == "Existing source"
@@ -693,7 +743,7 @@ async def test_prepare_sqlite_schema_repairs_legacy_finding_columns(tmp_path):
 
     async with engine.begin() as conn:
         version = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-    assert version == "0018"
+    assert version == _alembic_head()
     await engine.dispose()
 
 
@@ -820,7 +870,7 @@ async def test_prepare_sqlite_schema_reconciles_falsely_stamped_head(tmp_path):
         set(constraint.get("column_names") or []) == {"run_id", "idx"}
         for constraint in schema["unique"]
     )
-    assert version == "0018"
+    assert version == _alembic_head()
     assert repaired_indexes == [0, 1]
     await engine.dispose()
 
@@ -1016,5 +1066,42 @@ async def test_postgres_run_delivery_contract():
     finally:
         if run_id is not None:
             await repo.release_lease(run_id, owner)
+            await repo.delete_run(run_id)
+        await engine.dispose()
+
+
+@pytest.mark.pg
+@pytest.mark.asyncio
+async def test_postgres_failed_resume_has_one_requeue_winner():
+    """The failed-to-running transition stays atomic across PG connections."""
+    engine = make_engine(_postgres_url())
+    repo = SqlRepository(make_sessionmaker(engine))
+    runtime = OrchestrationRuntime()
+    execution = runtime.start("deep", {"query": "PG failed resume"})
+    runtime.save_checkpoint(
+        {"query": "PG failed resume", "scratch": {}},
+        {"name": "deep", "steps": []},
+    )
+    run_id: str | None = None
+    claimed_owner: str | None = None
+    try:
+        run_id = await repo.create_run("PG failed resume", execution=execution)
+        await repo.set_status(run_id, "error")
+
+        outcomes = await asyncio.gather(
+            repo.requeue_failed_run(run_id),
+            repo.requeue_failed_run(run_id),
+        )
+
+        assert sorted(outcomes) == [False, True]
+        claimed = await repo.claim_next_run("pg-resume-worker")
+        assert claimed is not None
+        claimed_owner = claimed.lease_owner
+        assert claimed.run_id == run_id
+        assert claimed.resumed is True
+    finally:
+        if run_id is not None:
+            if claimed_owner is not None:
+                await repo.release_lease(run_id, claimed_owner)
             await repo.delete_run(run_id)
         await engine.dispose()

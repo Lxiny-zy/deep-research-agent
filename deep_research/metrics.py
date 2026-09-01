@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 
 def _labels_key(labels: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
@@ -46,6 +46,26 @@ class MetricsRegistry:
             if existing is not None and existing != kind:
                 raise ValueError(f"metric {name!r} already registered as {existing}")
             self._types[name] = kind
+
+    def snapshot_counters(self, names: Iterable[str]) -> dict[str, float]:
+        """Return current counter values keyed by ``name{label="value",…}``.
+
+        Exposition text is for scraping; tests and offline comparisons need the
+        numbers without reparsing it.
+        """
+        wanted = set(names)
+        with self._lock:
+            counters = dict(self._counters)
+        out: dict[str, float] = {}
+        for (name, labels), value in counters.items():
+            if name not in wanted:
+                continue
+            if labels:
+                rendered = ",".join(f'{key}="{_escape(val)}"' for key, val in labels)
+                out[f"{name}{{{rendered}}}"] = value
+            else:
+                out[name] = value
+        return out
 
     def render(self) -> str:
         with self._lock:

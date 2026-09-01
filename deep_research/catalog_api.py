@@ -289,7 +289,13 @@ def _reject_builtin_name(name: str) -> None:
     """自定义流程名不得与内置流程同名（否则运行解析时被内置优先级永久屏蔽）。"""
     from .workflows import WORKFLOWS
 
-    if name in WORKFLOWS:
+    # Workflow lookup is intentionally conservative and keeps the authored
+    # identifier as-is, so the catalog boundary must reject every spelling
+    # that would be indistinguishable from a built-in in the product UI.
+    # Without normalization, ``DEEP`` or `` guarded `` could be persisted as
+    # a second template and then surprise callers during route resolution.
+    normalized = name.strip().casefold()
+    if any(normalized == builtin.strip().casefold() for builtin in WORKFLOWS):
         raise HTTPException(status_code=422, detail=f"名称「{name}」与内置流程冲突，请改名")
 
 

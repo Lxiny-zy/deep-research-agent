@@ -12,7 +12,7 @@ from ..config import Settings
 from ..llm import LLM
 from ..observability import Tracer
 from ..registry import register
-from .base import Blackboard, RunContext
+from .base import Blackboard, RunContext, effective_require_corroboration
 from .synthesizer import Synthesizer
 
 SYSTEM = (
@@ -40,6 +40,11 @@ class Aggregator:
         # 复用 Synthesizer 的素材整理 + 引用编号 + 综合（用聚合风格 system 与本角色的 LLM）
         synth = Synthesizer(self.llm, self.tracer, self.settings)
         synth.system = self.system
-        bb.report = await synth.run(bb.query, bb.results)
+        bb.report = await synth.run(
+            bb.query,
+            bb.results,
+            require_corroboration=effective_require_corroboration(bb, ctx.settings),
+            system=ctx.system_prompt(self.system),
+        )
         self.tracer.emit("AGGREGATOR", "info", f"归并完成，引用 {len(bb.report.citations)} 个来源")
         return bb

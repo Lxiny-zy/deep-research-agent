@@ -11,10 +11,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import Any
 
+from ..prompting import load_global_rules
 from .cascade import IntentCascade
-from .types import ConversationTurn, IntentDecision
+from .types import (
+    ConversationTurn,
+    ExecutionPolicy,
+    IntentDecision,
+    execution_policy_for,
+    normalize_query_intent,
+)
 
 # 任务意图 → 建议工作流。映射依据是「该意图是否需要多侧面覆盖与补洞」：
 #   factual_lookup 单点事实，规划与反思纯属浪费 → quick
@@ -22,20 +30,44 @@ from .types import ConversationTurn, IntentDecision
 #   exploratory 面最广，适合多团队并行分头覆盖 → teams
 #   temporal_trend 需要多时间切片的交叉印证 → deep
 _INTENT_WORKFLOW: dict[str, str] = {
+    "literature_review": "hsi_review",
+    "method_comparison": "hsi_review",
+    "benchmark_survey": "hsi_review",
+    "reproducibility_check": "hsi_review",
+    "dataset_discovery": "hsi_review",
     "factual_lookup": "quick",
     "comparative": "deep",
     "exploratory": "teams",
     "temporal_trend": "deep",
     "causal_analysis": "deep",
+    "definition_explanation": "brief",
+    "procedural_guidance": "brief",
+    "recommendation": "deep",
+    "fact_check": "fact_check",
+    "summarization": "brief",
+    "multi_hop_research": "teams",
+    "monitoring": "monitoring",
 }
 
 # 建议的子问题数：单点查询不需要铺开，开放调研需要更宽的覆盖面。
 _INTENT_SUB_QUESTIONS: dict[str, int] = {
+    "literature_review": 8,
+    "method_comparison": 6,
+    "benchmark_survey": 8,
+    "reproducibility_check": 6,
+    "dataset_discovery": 6,
     "factual_lookup": 2,
     "comparative": 4,
     "exploratory": 6,
     "temporal_trend": 5,
     "causal_analysis": 4,
+    "definition_explanation": 2,
+    "procedural_guidance": 3,
+    "recommendation": 5,
+    "fact_check": 4,
+    "summarization": 2,
+    "multi_hop_research": 8,
+    "monitoring": 5,
 }
 
 # 低于此置信度不采纳路由建议：路由错误的代价（跑错流程、烧掉预算）
@@ -51,6 +83,24 @@ class RoutingPlan:
     max_sub_questions: int | None = None
     applied: bool = False
     reason: str = ""
+    execution_policy: ExecutionPolicy | None = None
+    strategy: str = ""
+    # Metadata fields are additive; old callers can continue reading the four
+    # original fields above.
+    intent: str = "unknown"
+    confidence: float = 0.0
+    reason_code: str = ""
+    fallback_workflow: str | None = None
+
+    @property
+    def policy(self) -> ExecutionPolicy | None:
+        return self.execution_policy
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        if self.execution_policy is not None:
+            payload["execution_policy"] = self.execution_policy.model_dump(mode="json")
+        return payload
 
     def describe(self) -> str:
         if not self.applied:
@@ -58,6 +108,8 @@ class RoutingPlan:
         parts = [f"工作流→{self.workflow}"]
         if self.max_sub_questions is not None:
             parts.append(f"子问题上限→{self.max_sub_questions}")
+        if self.strategy:
+            parts.append(f"策略→{self.strategy}")
         return "，".join(parts)
 
 
@@ -74,30 +126,78 @@ def plan_route(
       2. 意图为 unknown 或置信度不足——不猜；
       3. 建议的工作流在本部署里不可用——不能路由到不存在的流程。
     """
+    canonical_intent = normalize_query_intent(decision.intent)
+    policy = decision.execution_policy or execution_policy_for(canonical_intent)
     if requested_workflow:
-        return RoutingPlan(reason=f"用户已显式指定工作流「{requested_workflow}」，不覆盖")
+        return RoutingPlan(
+            reason=f"用户已显式指定工作流「{requested_workflow}」，不覆盖",
+            reason_code="explicit_workflow",
+            intent=canonical_intent,
+            confidence=decision.confidence,
+            execution_policy=policy,
+        )
     if decision.blocked:
-        return RoutingPlan(reason="请求被风险门禁拦截，不进行路由")
-    if decision.intent == "unknown":
-        return RoutingPlan(reason="意图未定，走默认工作流")
+        return RoutingPlan(
+            reason="请求被风险门禁拦截，不进行路由",
+            reason_code="blocked",
+            intent=canonical_intent,
+            confidence=decision.confidence,
+            execution_policy=policy,
+        )
+    if canonical_intent == "unknown":
+        return RoutingPlan(
+            reason="意图未定，走默认工作流",
+            reason_code="unknown_intent",
+            intent=canonical_intent,
+            confidence=decision.confidence,
+            execution_policy=policy,
+        )
     if decision.confidence < MIN_ROUTING_CONFIDENCE:
         return RoutingPlan(
             reason=(
                 f"意图置信度 {decision.confidence:.2f} 低于 {MIN_ROUTING_CONFIDENCE}，走默认工作流"
-            )
+            ),
+            reason_code="low_confidence",
+            intent=canonical_intent,
+            confidence=decision.confidence,
+            execution_policy=policy,
         )
 
-    workflow = _INTENT_WORKFLOW.get(decision.intent)
+    workflow = policy.workflow or _INTENT_WORKFLOW.get(canonical_intent)
     if workflow is None:
-        return RoutingPlan(reason=f"意图「{decision.intent}」无对应路由规则")
+        return RoutingPlan(
+            reason=f"意图「{canonical_intent}」无对应路由规则",
+            reason_code="no_mapping",
+            intent=canonical_intent,
+            confidence=decision.confidence,
+            execution_policy=policy,
+        )
     if available_workflows is not None and workflow not in available_workflows:
-        return RoutingPlan(reason=f"建议工作流「{workflow}」在当前部署不可用，走默认")
+        fallback = "deep" if "deep" in available_workflows else None
+        return RoutingPlan(
+            reason=f"建议工作流「{workflow}」在当前部署不可用，走默认",
+            reason_code="workflow_unavailable",
+            fallback_workflow=fallback,
+            intent=canonical_intent,
+            confidence=decision.confidence,
+            execution_policy=policy,
+        )
 
+    policy = decision.execution_policy or execution_policy_for(decision.intent)
+    # The route's legacy fields remain authoritative for compatibility, while
+    # policy metadata is persisted as an auditable snapshot for the runtime.
+    if policy.workflow and policy.workflow != workflow:
+        policy = policy.model_copy(update={"workflow": workflow})
     return RoutingPlan(
         workflow=workflow,
-        max_sub_questions=_INTENT_SUB_QUESTIONS.get(decision.intent),
+        max_sub_questions=policy.max_sub_questions or _INTENT_SUB_QUESTIONS.get(canonical_intent),
         applied=True,
-        reason=f"意图「{decision.intent}」（{decision.tier} 层，p={decision.confidence:.2f}）",
+        reason=f"意图「{canonical_intent}」（{decision.tier} 层，p={decision.confidence:.2f}）",
+        execution_policy=policy,
+        strategy=policy.source_strategy,
+        intent=canonical_intent,
+        confidence=decision.confidence,
+        reason_code="intent_policy",
     )
 
 
@@ -137,7 +237,11 @@ async def preroute_workflow(
     if not enabled:
         return requested_workflow, None, RoutingPlan(reason="意图识别已关闭")
 
-    cascade = IntentCascade(llm=llm, enable_llm=enable_llm or bool(history))
+    cascade = IntentCascade(
+        llm=llm,
+        enable_llm=enable_llm or bool(history),
+        global_rules=load_global_rules(),
+    )
     # 不在这里抽实体：它只有 Planner 拆子问题时才用得上，而 Planner 跑在异步
     # 执行段。在 HTTP 同步段抽，等于让用户为一件本可以稍后做的事多等一次网络
     # 往返——对多轮追问尤其明显（消解已经花了一次，抽实体会让它翻倍）。
@@ -149,24 +253,45 @@ async def preroute_workflow(
         allow_clarification=allow_clarification,
     )
     if decision.blocked:
-        # 拒识不在这里终止请求：仍然创建 run，交给流程内的 IntentRouter 产出
-        # 说明性报告。这样拒识与正常运行共用同一套落库 / SSE / 回放语义，
-        # 用户也能在历史里看到「这条请求为什么被拒」。
-        # guarded 缺失时保留调用方选择——IntentRouter 一旦被编排进流程就会拦截；
-        # 若该流程根本没有意图角色，拦截由下游护栏兜底，总之不能路由到不存在的流程。
-        target = "guarded" if "guarded" in available_workflows else requested_workflow
-        return target, decision, RoutingPlan(reason=f"风险意图 {decision.risk}，转入门禁流程")
+        # 拒识不在这里终止请求：仍然创建 run，交给全局 IntentRouter 产出
+        # 说明性报告。安全门禁在 orchestrator 的所有入口交汇点执行，
+        # 因而不需要、也不应该通过一个名为 ``guarded`` 的工作流表达。
+        # 保留调用方明确选择的流程（含历史上的 guarded 别名）只影响
+        # checkpoint 展示，不会绕过门禁；自动路由则保持默认流程。
+        return requested_workflow, decision, RoutingPlan(
+            workflow=requested_workflow,
+            reason=f"风险意图 {decision.risk}，由全局门禁拦截",
+            reason_code="blocked",
+            intent=decision.intent,
+            confidence=decision.confidence,
+            execution_policy=decision.execution_policy,
+        )
 
     if decision.needs_clarification:
-        # 需要澄清同样走 guarded：那条流程里的 IntentRouter 会产出澄清报告并终止。
-        # 与拒识复用同一条路径，是因为二者的产品语义一致——都是「不执行研究，
-        # 但要给用户一份可读的说明」。
-        target = "guarded" if "guarded" in available_workflows else requested_workflow
-        return target, decision, RoutingPlan(reason="意图存在歧义，转入澄清流程")
+        # 澄清由 API 在创建 run 前处理；直接/CLI 入口则由同一个全局
+        # IntentRouter 写入说明报告并 halt。这里不再伪造一条 guarded 流程。
+        return (
+            requested_workflow,
+            decision,
+            RoutingPlan(
+                workflow=requested_workflow,
+                reason="意图存在歧义，由全局门禁请求澄清",
+                intent=decision.intent,
+                confidence=decision.confidence,
+                reason_code="needs_clarification",
+                execution_policy=decision.execution_policy,
+            ),
+        )
 
     plan = plan_route(
         decision,
         requested_workflow=requested_workflow,
         available_workflows=available_workflows,
     )
+    # An unavailable intent-specific workflow may have an explicitly computed
+    # safe fallback (currently ``deep`` when it is deployed).  Preserve the
+    # ``applied=False`` audit bit so callers can distinguish a fallback from a
+    # confident intent route, while still executing the available workflow.
+    if plan.reason_code == "workflow_unavailable" and plan.fallback_workflow:
+        return plan.fallback_workflow, decision, plan
     return (plan.workflow if plan.applied else requested_workflow), decision, plan

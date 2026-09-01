@@ -69,13 +69,28 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal editor-modal" role="dialog" aria-modal="true" aria-labelledby="model-editor-title" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal editor-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="model-editor-title"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header-row">
           <div>
             <span className="eyebrow">MODEL / PROFILE</span>
-            <h3 className="panel-title" id="model-editor-title">{editing ? '编辑模型档案' : '新建模型档案'}</h3>
+            <h3 className="panel-title" id="model-editor-title">
+              {editing ? '编辑模型档案' : '新建模型档案'}
+            </h3>
           </div>
-          <button className="btn btn-ghost btn-sm icon-button" onClick={onCancel} type="button" aria-label="关闭"><AppIcon name="x" size={15} aria-hidden="true" /></button>
+          <button
+            className="btn btn-ghost btn-sm icon-button"
+            onClick={onCancel}
+            type="button"
+            aria-label="关闭"
+          >
+            <AppIcon name="x" size={15} aria-hidden="true" />
+          </button>
         </div>
         <div className="stack">
           <label className="field-label">
@@ -103,20 +118,44 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
                 <p className="muted small">使用上方端点与密钥读取可用模型，无需手工输入 ID。</p>
               </div>
               <div className="row gap-sm">
-                <button type="button" className="btn ghost small" onClick={() => setManualModelEntry((value) => !value)}>
-                  <AppIcon name={manualModelEntry ? 'filter' : 'edit'} size={13} aria-hidden="true" />
+                <button
+                  type="button"
+                  className="btn ghost small"
+                  onClick={() => setManualModelEntry((value) => !value)}
+                >
+                  <AppIcon
+                    name={manualModelEntry ? 'filter' : 'edit'}
+                    size={13}
+                    aria-hidden="true"
+                  />
                   {manualModelEntry ? '使用模型列表' : '手动填写 ID'}
                 </button>
-                <button className="btn ghost small" onClick={discover} disabled={probe.discover.isPending}>
-                  <AppIcon name={probe.discover.isPending ? 'loader' : 'download'} size={13} aria-hidden="true" className={probe.discover.isPending ? 'spin' : ''} />
+                <button
+                  className="btn ghost small"
+                  onClick={discover}
+                  disabled={probe.discover.isPending}
+                >
+                  <AppIcon
+                    name={probe.discover.isPending ? 'loader' : 'download'}
+                    size={13}
+                    aria-hidden="true"
+                    className={probe.discover.isPending ? 'spin' : ''}
+                  />
                   {probe.discover.isPending ? '拉取中…' : '拉取模型列表'}
                 </button>
               </div>
             </div>
             {models.length > 0 && (
               <div className="model-search-row">
-                <input className="input" value={modelQuery} onChange={(e) => setModelQuery(e.target.value)} placeholder="按名称搜索模型，例如 gpt / deepseek / qwen" />
-                <span>{filteredModels.length}/{models.length}</span>
+                <input
+                  className="input"
+                  value={modelQuery}
+                  onChange={(e) => setModelQuery(e.target.value)}
+                  placeholder="按名称搜索模型，例如 gpt / deepseek / qwen"
+                />
+                <span>
+                  {filteredModels.length}/{models.length}
+                </span>
               </div>
             )}
             {manualModelEntry ? (
@@ -127,13 +166,35 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
                 placeholder="输入供应商提供的模型 ID，例如 deepseek-v4-pro"
               />
             ) : (
-              <select className="input model-select" value={model} onChange={(e) => setModel(e.target.value)} disabled={!models.length}>
-                {!models.length && <option value={model}>请先拉取模型列表，或切换为手动填写</option>}
-                {filteredModels.map((item) => <option key={item} value={item}>{item}</option>)}
+              <select
+                className="input model-select"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                disabled={!models.length}
+              >
+                {!models.length && (
+                  <option value={model}>请先拉取模型列表，或切换为手动填写</option>
+                )}
+                {filteredModels.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
               </select>
             )}
-            {probe.discover.data && <span className="test-result test-ok"><AppIcon name="check-circle" size={14} aria-hidden="true" />已发现 {probe.discover.data.models.length} 个模型 · {probe.discover.data.latency_ms}ms</span>}
-            {probe.discover.isError && <span className="test-result test-fail"><AppIcon name="circle-x" size={14} aria-hidden="true" />{probe.discover.error.message}</span>}
+            {probe.discover.data && (
+              <span className="test-result test-ok">
+                <AppIcon name="check-circle" size={14} aria-hidden="true" />
+                已发现 {probe.discover.data.models.length} 个模型 · {probe.discover.data.latency_ms}
+                ms
+              </span>
+            )}
+            {probe.discover.isError && (
+              <span className="test-result test-fail">
+                <AppIcon name="circle-x" size={14} aria-hidden="true" />
+                {probe.discover.error.message}
+              </span>
+            )}
           </div>
           <div className="field-label api-key-field">
             <span>API Key</span>
@@ -169,35 +230,58 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
                   data-1p-ignore="true"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={initial?.api_key_set ? '输入新密钥；留空仍使用原密钥' : '输入模型服务 API Key'}
+                  placeholder={
+                    initial?.api_key_set ? '输入新密钥；留空仍使用原密钥' : '输入模型服务 API Key'
+                  }
                 />
                 <button
-                    type="button"
-                    className="btn ghost small"
-                    onClick={() => {
-                      setApiKey('')
-                      setReplacingApiKey(false)
-                    }}
-                  >
-                    {initial?.api_key_set ? '使用原密钥' : '取消输入'}
-                  </button>
+                  type="button"
+                  className="btn ghost small"
+                  onClick={() => {
+                    setApiKey('')
+                    setReplacingApiKey(false)
+                  }}
+                >
+                  {initial?.api_key_set ? '使用原密钥' : '取消输入'}
+                </button>
               </div>
             )}
           </div>
           <div className="parameter-mode-switch">
-            <button className={parameterMode === 'temperature' ? 'active' : ''} onClick={() => setParameterMode('temperature')}>采样温度</button>
-            <button className={parameterMode === 'reasoning' ? 'active' : ''} onClick={() => setParameterMode('reasoning')}>推理强度</button>
+            <button
+              className={parameterMode === 'temperature' ? 'active' : ''}
+              onClick={() => setParameterMode('temperature')}
+            >
+              采样温度
+            </button>
+            <button
+              className={parameterMode === 'reasoning' ? 'active' : ''}
+              onClick={() => setParameterMode('reasoning')}
+            >
+              推理强度
+            </button>
           </div>
           <div className="row gap">
             {parameterMode === 'temperature' ? (
               <label className="settings-item" style={{ flex: 1 }}>
                 <span className="muted small">温度 {temperature.toFixed(2)}</span>
-                <input type="range" min={0} max={2} step={0.05} value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} />
+                <input
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  value={temperature}
+                  onChange={(e) => setTemperature(Number(e.target.value))}
+                />
               </label>
             ) : (
               <label className="field-label" style={{ flex: 1 }}>
                 Reasoning effort
-                <select className="input" value={reasoningEffort} onChange={(e) => setReasoningEffort(e.target.value as 'low' | 'medium' | 'high')}>
+                <select
+                  className="input"
+                  value={reasoningEffort}
+                  onChange={(e) => setReasoningEffort(e.target.value as 'low' | 'medium' | 'high')}
+                >
                   <option value="low">Low · 更快、更省</option>
                   <option value="medium">Medium · 平衡</option>
                   <option value="high">High · 更深入</option>
@@ -214,21 +298,57 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
             </label>
           </div>
 
-          {error && <p className="error-text"><AppIcon name="circle-x" size={14} aria-hidden="true" />{error}</p>}
+          {error && (
+            <p className="error-text">
+              <AppIcon name="circle-x" size={14} aria-hidden="true" />
+              {error}
+            </p>
+          )}
 
           {(probe.test.data || probe.test.isPending || probe.test.isError) && (
-            <p className={`test-result ${probe.test.isPending ? 'test-pending' : probe.test.data?.ok ? 'test-ok' : 'test-fail'}`}>
-              {probe.test.isPending ? '正在测试模型调用…' : probe.test.data?.ok ? `连接可用 · ${probe.test.data.latency_ms}ms` : probe.test.data?.detail || probe.test.error?.message}
+            <p
+              className={`test-result ${probe.test.isPending ? 'test-pending' : probe.test.data?.ok ? 'test-ok' : 'test-fail'}`}
+            >
+              {probe.test.isPending
+                ? '正在测试模型调用…'
+                : probe.test.data?.ok
+                  ? `连接可用 · ${probe.test.data.latency_ms}ms`
+                  : probe.test.data?.detail || probe.test.error?.message}
             </p>
           )}
 
           <div className="row between" style={{ marginTop: 8 }}>
             <div className="row gap-sm">
-              <button className="btn ghost" onClick={onCancel} type="button">取消</button>
-              <button className="btn ghost" onClick={() => probe.test.mutate(probeBody)} disabled={probe.test.isPending || !model} type="button"><AppIcon name={probe.test.isPending ? 'loader' : 'activity'} size={13} aria-hidden="true" className={probe.test.isPending ? 'spin' : ''} />测试当前配置</button>
+              <button className="btn ghost" onClick={onCancel} type="button">
+                取消
+              </button>
+              <button
+                className="btn ghost"
+                onClick={() => probe.test.mutate(probeBody)}
+                disabled={probe.test.isPending || !model}
+                type="button"
+              >
+                <AppIcon
+                  name={probe.test.isPending ? 'loader' : 'activity'}
+                  size={13}
+                  aria-hidden="true"
+                  className={probe.test.isPending ? 'spin' : ''}
+                />
+                测试当前配置
+              </button>
             </div>
-            <button className="btn btn-primary" onClick={submit} disabled={pending || !name.trim()} type="button">
-              <AppIcon name={pending ? 'loader' : 'save'} size={15} aria-hidden="true" className={pending ? 'spin' : ''} />
+            <button
+              className="btn btn-primary"
+              onClick={submit}
+              disabled={pending || !name.trim()}
+              type="button"
+            >
+              <AppIcon
+                name={pending ? 'loader' : 'save'}
+                size={15}
+                aria-hidden="true"
+                className={pending ? 'spin' : ''}
+              />
               {pending ? '保存中…' : '保存'}
             </button>
           </div>

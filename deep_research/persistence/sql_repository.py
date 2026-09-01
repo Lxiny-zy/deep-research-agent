@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from uuid import uuid4
 
 from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy import delete as sa_delete
@@ -20,23 +21,33 @@ from sqlalchemy.orm import selectinload
 
 from ..models import (
     EvidenceVerification,
+    ExperimentConditions,
     Finding,
+    Quantity,
     Report,
     ResearchPlan,
     ResearchResult,
+    ScholarlyMetadata,
     Source,
+    SourceIdentity,
     SubQuestion,
 )
 from ..observability import Event
 from ..orchestration import StepRun, WorkflowRun
 from . import orm
 from .repository import (
+    RUN_ACTIVE_STATUSES,
+    ClaimedRun,
     IdempotencyConflictError,
     LeaseLostError,
     RunDetail,
     RunSummary,
     TagCount,
 )
+
+# 一次 claim 调用最多尝试的候选数。并发 worker 抢同一条时会失败重试，
+# 但不能无界重试——超过上限就返回 None，由 worker 的轮询间隔自然退避。
+_CLAIM_CANDIDATE_LIMIT = 8
 
 
 def _sub_question_row(
@@ -63,6 +74,7 @@ def _research_result_row(run_id: str, result: ResearchResult) -> orm.ResearchRes
     row.findings = [
         orm.FindingRow(
             statement=finding.statement,
+            entity=finding.entity,
             source_url=finding.source_url,
             evidence_quote=finding.evidence_quote,
             confidence=finding.confidence,
@@ -70,6 +82,16 @@ def _research_result_row(run_id: str, result: ResearchResult) -> orm.ResearchRes
             verification_method=finding.verification.method,
             source_content_hash=finding.verification.source_content_hash,
             source_title=finding.verification.source_title,
+            source_reference=finding.verification.source_reference,
+            source_identity=(
+                finding.verification.source_identity.model_dump(mode="json")
+                if finding.verification.source_identity
+                else None
+            ),
+            quantity_status=finding.verification.quantity_status,
+            quantity_reason=finding.verification.quantity_reason,
+            quantity=(finding.quantity.model_dump(mode="json") if finding.quantity else None),
+            conditions=(finding.conditions.model_dump(mode="json") if finding.conditions else None),
             evidence_context=finding.verification.evidence_context,
             verification_reason=finding.verification.reason,
             semantic_status=finding.verification.semantic_status,
@@ -87,6 +109,37 @@ def _research_result_row(run_id: str, result: ResearchResult) -> orm.ResearchRes
         for finding in result.findings
     ]
     return row
+
+
+def _workflow_run(row: orm.WorkflowRunRow) -> WorkflowRun:
+    """ORM → Pydantic，供 run 详情读取与 worker 领取共用。"""
+    return WorkflowRun(
+        id=row.id,
+        workflow_name=row.workflow_name,
+        status=row.status,
+        attempt=row.attempt,
+        input=row.input or {},
+        output=row.output or {},
+        definition=row.definition or {},
+        checkpoint=row.checkpoint or {},
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        steps=[
+            StepRun(
+                id=step.id,
+                node_id=step.node_id,
+                label=step.label,
+                kind=step.kind,
+                agent=step.agent,
+                status=step.status,
+                attempt=step.attempt,
+                error=step.error,
+                started_at=step.started_at,
+                finished_at=step.finished_at,
+            )
+            for step in row.steps
+        ],
+    )
 
 
 class SqlRepository:
@@ -116,6 +169,7 @@ class SqlRepository:
         idempotency_key: str | None = None,
         execution: WorkflowRun | None = None,
         lease_owner: str | None = None,
+        claimable: bool = False,
     ) -> tuple[str, bool]:
         """Insert a run and its initial workflow atomically.
 
@@ -130,6 +184,7 @@ class SqlRepository:
                     status="pending",
                     idempotency_key=idempotency_key,
                     request_hash=request_hash or None,
+                    claimable_at=datetime.now(UTC) if claimable else None,
                 )
                 s.add(run)
                 await s.flush()
@@ -289,6 +344,7 @@ class SqlRepository:
                     orm.FindingRow(
                         result_id=row.id,
                         statement=f.statement,
+                        entity=f.entity,
                         source_url=f.source_url,
                         evidence_quote=f.evidence_quote,
                         confidence=f.confidence,
@@ -296,6 +352,16 @@ class SqlRepository:
                         verification_method=f.verification.method,
                         source_content_hash=f.verification.source_content_hash,
                         source_title=f.verification.source_title,
+                        source_reference=f.verification.source_reference,
+                        source_identity=(
+                            f.verification.source_identity.model_dump(mode="json")
+                            if f.verification.source_identity
+                            else None
+                        ),
+                        quantity_status=f.verification.quantity_status,
+                        quantity_reason=f.verification.quantity_reason,
+                        quantity=(f.quantity.model_dump(mode="json") if f.quantity else None),
+                        conditions=(f.conditions.model_dump(mode="json") if f.conditions else None),
                         evidence_context=f.verification.evidence_context,
                         verification_reason=f.verification.reason,
                         semantic_status=f.verification.semantic_status,
@@ -332,6 +398,11 @@ class SqlRepository:
                         "url": source.url,
                         "content": source.content,
                         "content_hash": content_hash,
+                        "scholarly": (
+                            source.scholarly.model_dump(mode="json")
+                            if source.scholarly is not None
+                            else None
+                        ),
                     }
                 )
             if not values:
@@ -341,15 +412,36 @@ class SqlRepository:
             statement = insert(orm.SourceRow).values(values)
             statement = statement.on_conflict_do_update(
                 index_elements=["run_id", "url", "content_hash"],
-                set_={"title": statement.excluded.title, "content": statement.excluded.content},
+                set_={
+                    "title": statement.excluded.title,
+                    "content": statement.excluded.content,
+                    "scholarly": statement.excluded.scholarly,
+                },
             )
             await s.execute(statement)
 
     async def save_report(self, run_id: str, report: Report) -> None:
         async with self._sm() as s, s.begin():
-            s.add(
-                orm.ReportRow(run_id=run_id, markdown=report.markdown, citations=report.citations)
+            # ``save_report`` is an overwrite operation and may be called by
+            # concurrent retry/resume paths.  A read-then-insert sequence has
+            # a race: both transactions can observe no row, then one loses on
+            # the unique ``report.run_id`` constraint.  Use the database's
+            # atomic conflict arbiter instead.
+            dialect = s.bind.dialect.name if s.bind is not None else ""
+            insert = postgresql_insert if dialect == "postgresql" else sqlite_insert
+            statement = insert(orm.ReportRow).values(
+                run_id=run_id,
+                markdown=report.markdown,
+                citations=report.citations,
             )
+            statement = statement.on_conflict_do_update(
+                index_elements=["run_id"],
+                set_={
+                    "markdown": statement.excluded.markdown,
+                    "citations": statement.excluded.citations,
+                },
+            )
+            await s.execute(statement)
 
     async def replace_artifacts(
         self,
@@ -569,6 +661,155 @@ class SqlRepository:
                 .values(lease_owner=None, lease_expires_at=None)
             )
 
+    async def enqueue_run(self, run_id: str) -> bool:
+        async with self._sm() as s, s.begin():
+            result = await s.execute(
+                update(orm.ResearchRun)
+                .where(
+                    orm.ResearchRun.id == run_id,
+                    orm.ResearchRun.status.in_(tuple(RUN_ACTIVE_STATUSES)),
+                    orm.ResearchRun.claimable_at.is_(None),
+                )
+                .values(claimable_at=datetime.now(UTC))
+            )
+            return bool(cast("CursorResult[Any]", result).rowcount)
+
+    async def requeue_failed_run(self, run_id: str) -> bool:
+        now = datetime.now(UTC)
+        owner = f"resume-{uuid4().hex}"
+        async with self._sm() as s, s.begin():
+            fenced = await s.execute(
+                update(orm.WorkflowRunRow)
+                .where(
+                    orm.WorkflowRunRow.research_run_id == run_id,
+                    or_(
+                        orm.WorkflowRunRow.lease_owner.is_(None),
+                        orm.WorkflowRunRow.lease_expires_at.is_(None),
+                        orm.WorkflowRunRow.lease_expires_at <= now,
+                    ),
+                )
+                .values(lease_owner=owner, lease_expires_at=now + timedelta(seconds=120))
+            )
+            if not cast("CursorResult[Any]", fenced).rowcount:
+                return False
+            workflow = await s.scalar(
+                select(orm.WorkflowRunRow).where(
+                    orm.WorkflowRunRow.research_run_id == run_id,
+                    orm.WorkflowRunRow.lease_owner == owner,
+                )
+            )
+            if workflow is None:
+                return False
+            if not workflow.checkpoint:
+                workflow.lease_owner = None
+                workflow.lease_expires_at = None
+                return False
+            reopened = await s.execute(
+                update(orm.ResearchRun)
+                .where(
+                    orm.ResearchRun.id == run_id,
+                    orm.ResearchRun.status == "error",
+                )
+                .values(status="running", claimable_at=now, finished_at=None)
+            )
+            if not cast("CursorResult[Any]", reopened).rowcount:
+                workflow.lease_owner = None
+                workflow.lease_expires_at = None
+                return False
+            workflow.lease_owner = None
+            workflow.lease_expires_at = None
+            return True
+
+    async def claim_next_run(self, owner: str, *, lease_seconds: int = 120) -> ClaimedRun | None:
+        """Claim the oldest queued or abandoned run whose lease is free.
+
+        Candidate selection and the actual claim are deliberately separate.
+        ``SKIP LOCKED`` only reduces contention between concurrent workers; the
+        conditional lease UPDATE is what actually guarantees single ownership,
+        and it is the same arbiter crash recovery already relies on.  A worker
+        that loses the race simply moves on to the next candidate.
+        """
+        for _ in range(_CLAIM_CANDIDATE_LIMIT):
+            candidate = await self._next_claim_candidate()
+            if candidate is None:
+                return None
+            if not await self.acquire_lease(candidate, owner, seconds=lease_seconds):
+                continue
+            claimed = await self._finish_claim(candidate, owner)
+            if claimed is not None:
+                return claimed
+            # The row changed between selection and fencing (finished,
+            # cancelled, or dequeued).  Give the lease back and look further.
+            await self.release_lease(candidate, owner)
+        return None
+
+    async def _next_claim_candidate(self) -> str | None:
+        now = datetime.now(UTC)
+        async with self._sm() as s, s.begin():
+            stmt = (
+                select(orm.ResearchRun.id)
+                .join(
+                    orm.WorkflowRunRow,
+                    orm.WorkflowRunRow.research_run_id == orm.ResearchRun.id,
+                )
+                .where(
+                    orm.ResearchRun.status.in_(("pending", "running")),
+                    orm.ResearchRun.claimable_at.is_not(None),
+                    orm.ResearchRun.claimable_at <= now,
+                    or_(
+                        orm.WorkflowRunRow.lease_owner.is_(None),
+                        orm.WorkflowRunRow.lease_expires_at.is_(None),
+                        orm.WorkflowRunRow.lease_expires_at <= now,
+                    ),
+                )
+                .order_by(orm.ResearchRun.claimable_at)
+                .limit(1)
+            )
+            if s.get_bind().dialect.name == "postgresql":
+                # SQLite ignores row locking; there the conditional lease UPDATE
+                # below remains the only arbiter, which is sufficient for the
+                # single-node development target.
+                stmt = stmt.with_for_update(skip_locked=True, of=orm.ResearchRun)
+            return await s.scalar(stmt)
+
+    async def _finish_claim(self, run_id: str, owner: str) -> ClaimedRun | None:
+        """Re-read behind the lease, then mark the run as owned by this worker.
+
+        Reloading after fencing is mandatory: the candidate query ran without
+        the lease, so the row may have completed or been cancelled in between.
+        """
+        async with self._sm() as s, s.begin():
+            row = await s.get(orm.ResearchRun, run_id)
+            if row is None or row.status not in ("pending", "running"):
+                return None
+            if row.claimable_at is None:
+                return None
+            workflow = await s.scalar(
+                select(orm.WorkflowRunRow)
+                .where(orm.WorkflowRunRow.research_run_id == run_id)
+                .options(selectinload(orm.WorkflowRunRow.steps))
+            )
+            if workflow is None or workflow.lease_owner != owner:
+                return None
+            resumed = bool(workflow.checkpoint) and row.status == "running"
+            row.claim_attempts = (row.claim_attempts or 0) + 1
+            row.status = "running"
+            if resumed:
+                # Resuming re-emits the run's event stream, so the attempt
+                # counter must advance for SSE to distinguish the new pass.
+                # ``attempt`` lives only on the workflow row (see prepare_resume).
+                workflow.attempt = max(1, workflow.attempt or 1) + 1
+            execution = _workflow_run(workflow)
+            return ClaimedRun(
+                run_id=run_id,
+                query=row.query,
+                lease_owner=owner,
+                execution=execution,
+                attempt=workflow.attempt,
+                claim_attempts=row.claim_attempts,
+                resumed=resumed,
+            )
+
     async def finalize(
         self,
         run_id: str,
@@ -684,14 +925,33 @@ class SqlRepository:
                     findings=[
                         Finding(
                             statement=f.statement,
+                            entity=f.entity or "",
                             source_url=f.source_url,
                             evidence_quote=f.evidence_quote,
                             confidence=f.confidence,
+                            quantity=(
+                                Quantity.model_validate(f.quantity)
+                                if isinstance(f.quantity, dict)
+                                else None
+                            ),
+                            conditions=(
+                                ExperimentConditions.model_validate(f.conditions)
+                                if isinstance(f.conditions, dict)
+                                else None
+                            ),
                             verification=EvidenceVerification(
                                 status=f.verification_status,
                                 method=f.verification_method,
                                 source_content_hash=f.source_content_hash,
                                 source_title=f.source_title,
+                                source_reference=f.source_reference or "",
+                                source_identity=(
+                                    SourceIdentity.model_validate(f.source_identity)
+                                    if isinstance(f.source_identity, dict)
+                                    else None
+                                ),
+                                quantity_status=f.quantity_status or "not_applicable",
+                                quantity_reason=f.quantity_reason or "",
                                 evidence_context=f.evidence_context,
                                 reason=f.verification_reason,
                                 semantic_status=f.semantic_status,
@@ -723,33 +983,7 @@ class SqlRepository:
             )
             orchestration = None
             if run.orchestration is not None:
-                orchestration = WorkflowRun(
-                    id=run.orchestration.id,
-                    workflow_name=run.orchestration.workflow_name,
-                    status=run.orchestration.status,
-                    attempt=run.orchestration.attempt,
-                    input=run.orchestration.input or {},
-                    output=run.orchestration.output or {},
-                    definition=run.orchestration.definition or {},
-                    checkpoint=run.orchestration.checkpoint or {},
-                    started_at=run.orchestration.started_at,
-                    finished_at=run.orchestration.finished_at,
-                    steps=[
-                        StepRun(
-                            id=step.id,
-                            node_id=step.node_id,
-                            label=step.label,
-                            kind=step.kind,
-                            agent=step.agent,
-                            status=step.status,
-                            attempt=step.attempt,
-                            error=step.error,
-                            started_at=step.started_at,
-                            finished_at=step.finished_at,
-                        )
-                        for step in run.orchestration.steps
-                    ],
-                )
+                orchestration = _workflow_run(run.orchestration)
             return RunDetail(
                 id=run.id,
                 query=run.query,
@@ -768,6 +1002,11 @@ class SqlRepository:
                         url=source.url,
                         content=source.content,
                         content_hash=source.content_hash,
+                        scholarly=(
+                            ScholarlyMetadata.model_validate(source.scholarly)
+                            if isinstance(source.scholarly, dict)
+                            else None
+                        ),
                     )
                     for source in run.sources
                 ],

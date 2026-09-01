@@ -19,36 +19,59 @@ from .cascade import (
     classify_source_intent,
 )
 from .clarify import plan_clarification
-from .context import detect_context_dependency, resolve_followup
+from .context import (
+    FollowupResolution,
+    detect_context_dependency,
+    resolve_followup,
+    resolve_followup_detailed,
+)
 from .model import IntentModelBundle, TextClassifier, load_bundled_model
 from .slots import extract_slots, extract_slots_by_rule
 from .types import (
+    QUERY_INTENT_ALIASES,
     QUERY_INTENTS,
+    RISK_INTENT_ALIASES,
     RISK_INTENTS,
+    SOURCE_INTENT_ALIASES,
     SOURCE_INTENTS,
     ClarificationRequest,
+    ContextResolution,
     ConversationTurn,
+    ExecutionPolicy,
     IntentDecision,
+    IntentExecutionPolicy,
+    IntentSignal,
     IntentSlots,
     IntentTier,
     QueryIntent,
     RiskIntent,
     SourceIntent,
+    execution_policy_for,
+    normalize_query_intent,
+    normalize_risk_intent,
+    normalize_source_intent,
 )
 
 __all__ = [
     "ClarificationRequest",
+    "ContextResolution",
     "ConversationTurn",
+    "ExecutionPolicy",
     "IntentCascade",
     "IntentDecision",
+    "IntentExecutionPolicy",
+    "IntentSignal",
     "IntentModelBundle",
     "IntentSlots",
     "IntentTier",
     "QUERY_INTENTS",
+    "QUERY_INTENT_ALIASES",
     "QueryIntent",
     "RISK_INTENTS",
+    "RISK_INTENT_ALIASES",
     "RiskIntent",
     "SOURCE_INTENTS",
+    "SOURCE_INTENT_ALIASES",
     "SourceIntent",
     "TextClassifier",
     "classify_query",
@@ -57,6 +80,12 @@ __all__ = [
     "extract_slots",
     "extract_slots_by_rule",
     "load_bundled_model",
+    "execution_policy_for",
+    "normalize_query_intent",
+    "normalize_risk_intent",
+    "normalize_source_intent",
     "plan_clarification",
+    "FollowupResolution",
     "resolve_followup",
+    "resolve_followup_detailed",
 ]

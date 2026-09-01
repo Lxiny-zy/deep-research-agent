@@ -13,9 +13,14 @@ class TavilySearch(SearchTool):
         self._client = AsyncTavilyClient(api_key=api_key)
 
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
+        if max_results <= 0:
+            return []
         resp = await self._client.search(query, max_results=max_results, search_depth="advanced")
         sources: list[Source] = []
-        for item in resp.get("results", []):
+        results = resp.get("results", []) if isinstance(resp, dict) else []
+        for item in results if isinstance(results, list) else []:
+            if not isinstance(item, dict):
+                continue
             url = item.get("url")
             if not url:
                 continue

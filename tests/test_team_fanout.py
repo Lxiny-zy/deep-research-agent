@@ -17,6 +17,7 @@ from deep_research.guardrails import (
 from deep_research.models import Finding, FindingList, Report, ResearchPlan, Source, SubQuestion
 from deep_research.observability import Tracer
 from deep_research.orchestrator import DeepResearchAgent
+from deep_research.token_budget import TokenBudget
 from deep_research.workflow import Step, Workflow, WorkflowEngine
 from tests.fakes import FakeLLM, FakeSearch
 
@@ -27,6 +28,25 @@ class _CheckpointTeamAgent:
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         bb.scratch[self.name] = True
+        return bb
+
+
+class _EmptyReportAggregator:
+    name = "aggregator"
+
+    async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
+        bb.report = Report(query=bb.query, markdown="无可用子任务", citations=[])
+        return bb
+
+
+class _BudgetProbeAgent:
+    name = "researcher"
+
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
+        self.calls.append(self.name)
         return bb
 
 
@@ -44,6 +64,51 @@ async def test_teams_workflow_fans_out_and_aggregates(settings) -> None:
     # 两个团队各自检索 → 合并后报告有引用
     assert report.citations
     assert len(agent.tracer.events) > 0
+
+
+@pytest.mark.asyncio
+async def test_team_fanout_runs_aggregator_when_plan_is_empty(settings) -> None:
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
+    engine = WorkflowEngine(
+        ctx,
+        resolver={"aggregator": _EmptyReportAggregator()}.__getitem__,
+        require_report=True,
+    )
+    workflow = Workflow(
+        name="empty-teams",
+        steps=[Step(kind="team_fanout", aggregator="aggregator")],
+    )
+
+    bb = await engine.run(workflow, Blackboard(query="Q"))
+
+    assert bb.report is not None
+    assert bb.report.markdown == "无可用子任务"
+
+
+@pytest.mark.asyncio
+async def test_team_fanout_budget_skips_children_but_runs_terminal(settings) -> None:
+    calls: list[str] = []
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
+    agents = {
+        "researcher": _BudgetProbeAgent(calls),
+        "aggregator": _EmptyReportAggregator(),
+    }
+    engine = WorkflowEngine(
+        ctx,
+        resolver=agents.__getitem__,
+        budget=TokenBudget(max_tokens=0),
+        require_report=True,
+    )
+    workflow = Workflow(
+        name="budgeted-teams",
+        steps=[Step(kind="team_fanout", aggregator="aggregator")],
+    )
+    bb = Blackboard(query="Q", scratch={"subtasks": [{"focus": "left"}]})
+
+    await engine.run(workflow, bb)
+
+    assert calls == []
+    assert bb.report is not None
 
 
 class _FailOneFocusSearch(FakeSearch):

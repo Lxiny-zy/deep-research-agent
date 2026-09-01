@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from typing import Any
 
 import pytest
+from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
 from deep_research import migrate
 from deep_research.persistence.db import make_engine
+
+
+def _alembic_head() -> str:
+    """Resolve the migration head rather than pinning a revision in the test."""
+    return ScriptDirectory.from_config(AlembicConfig("alembic.ini")).get_current_head()
 
 
 async def test_upgrade_head_initializes_sqlite(tmp_path) -> None:
@@ -19,7 +27,7 @@ async def test_upgrade_head_initializes_sqlite(tmp_path) -> None:
     try:
         async with engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        assert revision == "0018"
+        assert revision == _alembic_head()
     finally:
         await engine.dispose()
 
@@ -105,3 +113,18 @@ async def test_upgrade_head_waits_for_cancelled_migration_before_unlock(
 
     assert any("pg_advisory_unlock" in statement for statement, _ in engine.connection.calls)
     assert engine.disposed
+
+
+async def test_migration_does_not_disable_application_logging(tmp_path) -> None:
+    """进程内迁移不得让应用日志失声。
+
+    alembic/env.py 的 fileConfig 默认 disable_existing_loggers=True，会禁用此刻
+    已存在的所有 logger。API 启动时就在进程内跑迁移，一旦回归，之后所有
+    deep_research.* 日志都会消失，且没有任何报错提示。
+    """
+    logger = logging.getLogger("deep_research.execution")
+    assert not logger.disabled
+
+    await migrate.upgrade_head(f"sqlite+aiosqlite:///{tmp_path / 'logging.db'}")
+
+    assert not logger.disabled, "迁移之后应用 logger 被禁用了"

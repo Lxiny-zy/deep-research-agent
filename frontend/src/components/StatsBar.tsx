@@ -65,7 +65,13 @@ function formatElapsed(value: number): string {
 
 const numberFormat = new Intl.NumberFormat('zh-CN')
 
-function LiveMetric({ icon, label, value, note, pulsing }: {
+function LiveMetric({
+  icon,
+  label,
+  value,
+  note,
+  pulsing,
+}: {
   icon: React.ReactNode
   label: string
   value: string
@@ -119,7 +125,8 @@ export default function StatsBar({
   const elapsedTarget = liveActive
     ? anchor.current.base + (clock - anchor.current.at) / 1000
     : finalElapsed
-  const tokenTarget = stats?.total_tokens ?? (liveActive ? live?.tokens ?? 0 : detail?.total_tokens ?? 0)
+  const tokenTarget =
+    stats?.total_tokens ?? (liveActive ? (live?.tokens ?? 0) : (detail?.total_tokens ?? 0))
   const sources = stats?.sources ?? detail?.report?.citations.length
   const findingTarget = sources ?? live?.findings ?? 0
   const isEstimate = stats?.tokens_estimated ?? tokensEstimated
@@ -137,15 +144,18 @@ export default function StatsBar({
     connectionStatus === 'cancelled'
       ? '运行已取消'
       : connectionStatus === 'disconnected'
-      ? '连接恢复中'
-      : liveActive
-        ? '实时同步'
-        : progress.percent >= 100
-          ? '统计已确认'
-          : '等待运行'
+        ? '连接恢复中'
+        : liveActive
+          ? '实时同步'
+          : progress.percent >= 100
+            ? '统计已确认'
+            : '等待运行'
 
   return (
-    <section className={`research-live-overview${liveActive ? ' is-live' : ''}`} aria-label="研究实时统计">
+    <section
+      className={`research-live-overview${liveActive ? ' is-live' : ''}`}
+      aria-label="研究实时统计"
+    >
       <div className={`research-progress-summary${progressPulse ? ' is-updating' : ''}`}>
         <div className="research-progress-topline">
           <span className="research-progress-kicker">总体进度</span>
@@ -157,7 +167,8 @@ export default function StatsBar({
 
         <div className="research-progress-main">
           <strong className="research-progress-value">
-            {Math.round(animatedProgress)}<small>%</small>
+            {Math.round(animatedProgress)}
+            <small>%</small>
           </strong>
           <div className="research-progress-context">
             <span>{progress.currentLabel}</span>
@@ -178,7 +189,9 @@ export default function StatsBar({
           aria-valuenow={Math.round(animatedProgress)}
           aria-label="研究总体进度"
         >
-          <span style={{ transform: `scaleX(${Math.max(0, Math.min(100, animatedProgress)) / 100})` }}>
+          <span
+            style={{ transform: `scaleX(${Math.max(0, Math.min(100, animatedProgress)) / 100})` }}
+          >
             <i aria-hidden />
           </span>
         </div>
