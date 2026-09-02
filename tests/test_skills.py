@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import deep_research.skills as skills_module
 from deep_research.skills import (
     SkillContractError,
     SkillError,
@@ -122,3 +123,16 @@ def test_invalid_files_are_ignored_and_default_resolver_uses_project_roots(tmp_p
     _write_skill(project_skill, name="project-skill")
     default = default_skill_resolver(tmp_path)
     assert default.resolve("project-skill").path == project_skill
+
+
+def test_default_resolver_falls_back_to_installed_share_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = tmp_path / "venv"
+    packaged_skill = prefix / "share" / "deep-research-agent" / "framework" / "skills"
+    _write_skill(packaged_skill / "skill_packaged.md")
+    monkeypatch.setattr(skills_module.sys, "prefix", str(prefix))
+
+    resolver = default_skill_resolver(tmp_path / "isolated-project")
+
+    assert resolver.resolve("packaged").path == packaged_skill / "skill_packaged.md"

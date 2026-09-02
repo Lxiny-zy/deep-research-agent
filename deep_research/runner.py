@@ -104,6 +104,35 @@ class _OutputCapture:
         return bytes(self.data).decode("utf-8", errors="ignore")
 
 
+# Operations are trusted adapters, but their executable may be supplied by a
+# separately installed utility.  Inherit only the process settings needed to
+# locate binaries and create temporary files; service credentials and runtime
+# configuration must never be ambient inputs to a child process.  Callers that
+# intentionally need another variable can pass it through ``run(..., env=...)``
+# and that explicit declaration is preserved below.
+_SAFE_INHERITED_ENV_KEYS = frozenset(
+    {
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TMP",
+        "TEMP",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+    }
+)
+
+
+def _minimal_child_environment() -> dict[str, str]:
+    return {
+        key: value for key, value in os.environ.items() if key.upper() in _SAFE_INHERITED_ENV_KEYS
+    }
+
+
 async def _capture_stream(stream: asyncio.StreamReader, capture: _OutputCapture) -> None:
     """Drain a subprocess stream while retaining only a bounded prefix."""
 
@@ -282,9 +311,7 @@ class CommandRunner:
         )
         argv = self._validate_argv(definition.builder(request))
         timeout = (
-            self.default_timeout_seconds
-            if timeout_seconds is None
-            else float(timeout_seconds)
+            self.default_timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         )
         timeout = min(timeout, definition.max_timeout_seconds)
         if timeout <= 0:
@@ -305,7 +332,7 @@ class CommandRunner:
                 outputs=output_names,
             )
 
-        child_env = os.environ.copy()
+        child_env = _minimal_child_environment()
         if env:
             child_env.update({str(key): str(value) for key, value in env.items()})
         # Do not inherit a caller's proxy/network knobs accidentally.  An
@@ -420,8 +447,7 @@ class CommandRunner:
                     None,
                     argv,
                     stdout_capture.text(),
-                    (stderr_capture.text() + "\n" if stderr_capture.text() else "")
-                    + str(exc),
+                    (stderr_capture.text() + "\n" if stderr_capture.text() else "") + str(exc),
                     time.perf_counter() - started,
                     truncated=stdout_capture.truncated or stderr_capture.truncated,
                     outputs=output_names,

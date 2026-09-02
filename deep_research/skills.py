@@ -10,8 +10,10 @@ explicit and auditable.
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
 
@@ -170,9 +172,39 @@ class SkillResolver:
         return "\n".join(f"- {item.name}: read `{item.reference}`" for item in metadata)
 
 
+def _installed_skill_roots() -> tuple[Path, ...]:
+    """Return trusted skill roots for normal and user-site wheel installs."""
+
+    roots: list[Path] = [
+        Path(sys.prefix) / "share" / "deep-research-agent" / "framework" / "skills"
+    ]
+    try:
+        installed = distribution("deep-research-agent")
+    except PackageNotFoundError:
+        installed = None
+    if installed is not None:
+        for entry in installed.files or ():
+            path = entry.as_posix()
+            if "/share/deep-research-agent/framework/skills/" not in f"/{path}":
+                continue
+            roots.append(Path(str(installed.locate_file(entry))).parent)
+            break
+    return tuple(dict.fromkeys(roots))
+
+
 def default_skill_resolver(project_root: str | Path = ".") -> SkillResolver:
     root = Path(project_root).expanduser().resolve()
-    return SkillResolver((root / ".claude" / "skills", root / "framework" / "skills"))
+    # Keep project-local skills first so a checked-out deployment can override
+    # the packaged defaults intentionally.  Installed wheels do not have a
+    # checkout-relative ``framework/skills`` directory, so include the
+    # setuptools data-files location as the final trusted root.
+    return SkillResolver(
+        (
+            root / ".claude" / "skills",
+            root / "framework" / "skills",
+            *_installed_skill_roots(),
+        )
+    )
 
 
 __all__ = [

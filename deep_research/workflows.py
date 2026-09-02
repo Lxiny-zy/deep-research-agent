@@ -136,6 +136,7 @@ def is_public_workflow(name: str | None) -> bool:
 
     return isinstance(name, str) and name in PUBLIC_WORKFLOWS
 
+
 # ``guarded`` was the original way to opt into the intent gate. The gate is
 # now applied by ``DeepResearchAgent`` before every workflow (including custom
 # and planner-authored workflows), so exposing a second guarded copy only

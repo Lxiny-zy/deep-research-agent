@@ -10,6 +10,7 @@ from deep_research.runner import (
     CommandRunner,
     OperationDefinition,
     OperationNotAllowed,
+    _minimal_child_environment,
 )
 
 
@@ -39,6 +40,20 @@ def _require_process_spawn() -> None:
     # paths; keep policy-only tests runnable on every platform.
     if sys.platform == "win32":
         pytest.skip("asyncio subprocess pipes are unavailable in this sandbox")
+
+
+def test_child_environment_does_not_inherit_service_credentials(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "must-not-leak")
+    monkeypatch.setenv("TAVILY_API_KEY", "must-not-leak")
+    monkeypatch.setenv("API_KEY", "must-not-leak")
+    monkeypatch.setenv("PATH", "safe-path")
+
+    child_env = _minimal_child_environment()
+
+    assert child_env["PATH"] == "safe-path"
+    assert "LLM_API_KEY" not in child_env
+    assert "TAVILY_API_KEY" not in child_env
+    assert "API_KEY" not in child_env
 
 
 @pytest.mark.asyncio

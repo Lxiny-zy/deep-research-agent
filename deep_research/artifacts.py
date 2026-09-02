@@ -516,8 +516,14 @@ class ArtifactStore:
     # ---- path helpers -------------------------------------------------
 
     @staticmethod
-    def _area(area: str | None = None, *, root: str | None = None, kind: str | None = None,
-              destination: str | None = None, output: bool | None = None) -> str:
+    def _area(
+        area: str | None = None,
+        *,
+        root: str | None = None,
+        kind: str | None = None,
+        destination: str | None = None,
+        output: bool | None = None,
+    ) -> str:
         values = [value for value in (area, root, kind, destination) if value is not None]
         if output is not None:
             values.append("output" if output else "work")
@@ -526,8 +532,10 @@ class ArtifactStore:
         normalized = str(values[0]).strip().lower()
         aliases = {"intermediate": "work", "final": "output", "out": "output"}
         normalized = aliases.get(normalized, normalized)
-        if any(aliases.get(str(value).strip().lower(), str(value).strip().lower()) != normalized
-               for value in values[1:]):
+        if any(
+            aliases.get(str(value).strip().lower(), str(value).strip().lower()) != normalized
+            for value in values[1:]
+        ):
             raise ArtifactPathError("conflicting artifact roots")
         if normalized not in _AREAS:
             raise ArtifactPathError("artifact root must be 'work' or 'output'")
@@ -632,9 +640,7 @@ class ArtifactStore:
         """
 
         safe_name = _validate_relative_name(name, label="control path")
-        return _contained(
-            self.framework_root / Path(*safe_name.split("/")), self.framework_root
-        )
+        return _contained(self.framework_root / Path(*safe_name.split("/")), self.framework_root)
 
     def write_control_text(
         self,
@@ -651,9 +657,7 @@ class ArtifactStore:
         payload = data.encode(encoding)
         limit = self.max_bytes if max_bytes is None else max_bytes
         if limit is not None and len(payload) > limit:
-            raise ArtifactValidationError(
-                f"control file exceeds maximum size of {limit} bytes"
-            )
+            raise ArtifactValidationError(f"control file exceeds maximum size of {limit} bytes")
         path = self.control_path(name)
         with self._lock:
             try:
@@ -662,9 +666,7 @@ class ArtifactStore:
                 raise ManifestError(f"cannot write control file: {path}") from exc
         return path
 
-    def read_control_text(
-        self, name: str | os.PathLike[str], *, encoding: str = "utf-8"
-    ) -> str:
+    def read_control_text(self, name: str | os.PathLike[str], *, encoding: str = "utf-8") -> str:
         """Read a private control file after applying the same containment check."""
 
         return self.control_path(name).read_text(encoding=encoding)

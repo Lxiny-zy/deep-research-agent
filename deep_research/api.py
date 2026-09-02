@@ -923,6 +923,25 @@ async def security_headers(request: Request, call_next):  # type: ignore[no-unty
             response.headers.setdefault("X-Content-Type-Options", "nosniff")
             response.headers.setdefault("X-Frame-Options", "DENY")
             response.headers.setdefault("Referrer-Policy", "same-origin")
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; "
+                "object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+            )
+            # HSTS is meaningful only after TLS has been established.  A TLS
+            # terminator can add the header at the edge when the app receives
+            # plain HTTP internally.
+            forwarded_proto = request.headers.get("x-forwarded-proto", "")
+            forwarded_https = (
+                os.environ.get("APP_TRUST_PROXY", "").strip().lower() in {"1", "true", "yes"}
+                and forwarded_proto.split(",", 1)[0].strip().casefold() == "https"
+            )
+            if request.url.scheme == "https" or forwarded_https:
+                response.headers.setdefault(
+                    "Strict-Transport-Security",
+                    "max-age=31536000; includeSubDomains",
+                )
 
 
 # 生产同源托管：把 Vite 构建产物的静态资源挂在 /assets/*（须在末尾 catch-all SPA 路由

@@ -152,8 +152,7 @@ class Worker:
         scratch = claimed.execution.checkpoint.get("scratch", {})
         requested_workflow = (
             scratch.get("requested_workflow")
-            if isinstance(scratch, dict)
-            and isinstance(scratch.get("requested_workflow"), str)
+            if isinstance(scratch, dict) and isinstance(scratch.get("requested_workflow"), str)
             else None
         )
         logger.info(

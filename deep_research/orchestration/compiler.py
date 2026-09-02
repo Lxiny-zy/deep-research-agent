@@ -52,9 +52,11 @@ def _operation_payload(step: Any) -> list[dict[str, Any]]:
         # retaining the first item in the canonical singular ``operation``
         # field for compatibility.  Prefer the complete list when present.
         metadata_operations = _raw_metadata(step).get("operations")
-        if isinstance(metadata_operations, Sequence) and not isinstance(
-            metadata_operations, (str, bytes, bytearray)
-        ) and metadata_operations:
+        if (
+            isinstance(metadata_operations, Sequence)
+            and not isinstance(metadata_operations, (str, bytes, bytearray))
+            and metadata_operations
+        ):
             specs = list(metadata_operations)
         else:
             operation = getattr(step, "operation", None)
@@ -183,13 +185,9 @@ class PlanCompiler:
         has_explicit_dependencies = any(_step_dependencies(step) for step in plan.steps)
         if has_explicit_dependencies:
             depended_on = {
-                dependency
-                for step in plan.steps
-                for dependency in _step_dependencies(step)
+                dependency for step in plan.steps for dependency in _step_dependencies(step)
             }
-            terminal_ids = {
-                step.id for step in plan.steps if step.id not in depended_on
-            }
+            terminal_ids = {step.id for step in plan.steps if step.id not in depended_on}
         else:
             # The authored list is linear when no dependency declarations are
             # present, so only its final step owns report-terminal semantics.

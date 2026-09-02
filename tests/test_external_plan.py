@@ -226,9 +226,7 @@ async def test_operation_only_terminal_uses_step_outputs_and_writes_report(tmp_p
 
     assert llm.complete_calls == 0
     assert report.markdown.startswith("## Operation summary")
-    assert runner.calls[0][1]["outputs"] == [
-        "work/operation-terminal/convert/result.txt"
-    ]
+    assert runner.calls[0][1]["outputs"] == ["work/operation-terminal/convert/result.txt"]
     assert (tmp_path / "work/operation-terminal/convert/result.txt").is_file()
     persisted = json.loads(
         (tmp_path / ".framework/plans/operation-terminal.json").read_text(encoding="utf-8")

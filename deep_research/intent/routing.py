@@ -258,13 +258,17 @@ async def preroute_workflow(
         # 因而不需要、也不应该通过一个名为 ``guarded`` 的工作流表达。
         # 保留调用方明确选择的流程（含历史上的 guarded 别名）只影响
         # checkpoint 展示，不会绕过门禁；自动路由则保持默认流程。
-        return requested_workflow, decision, RoutingPlan(
-            workflow=requested_workflow,
-            reason=f"风险意图 {decision.risk}，由全局门禁拦截",
-            reason_code="blocked",
-            intent=decision.intent,
-            confidence=decision.confidence,
-            execution_policy=decision.execution_policy,
+        return (
+            requested_workflow,
+            decision,
+            RoutingPlan(
+                workflow=requested_workflow,
+                reason=f"风险意图 {decision.risk}，由全局门禁拦截",
+                reason_code="blocked",
+                intent=decision.intent,
+                confidence=decision.confidence,
+                execution_policy=decision.execution_policy,
+            ),
         )
 
     if decision.needs_clarification:

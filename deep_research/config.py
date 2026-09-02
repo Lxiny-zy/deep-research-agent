@@ -181,15 +181,11 @@ class Settings:
     orchestration_mode: str = field(
         default_factory=lambda: _str_env("DR_ORCHESTRATION_MODE", "planner-driven")
     )
-    artifact_root: str = field(
-        default_factory=lambda: _str_env("DR_ARTIFACT_ROOT", "./artifacts")
-    )
+    artifact_root: str = field(default_factory=lambda: _str_env("DR_ARTIFACT_ROOT", "./artifacts"))
     artifact_max_bytes: int = field(
         default_factory=lambda: _int_env("DR_ARTIFACT_MAX_BYTES", 100 * 1024 * 1024)
     )
-    runner_enabled: bool = field(
-        default_factory=lambda: _bool_env("DR_RUNNER_ENABLED", True)
-    )
+    runner_enabled: bool = field(default_factory=lambda: _bool_env("DR_RUNNER_ENABLED", True))
     runner_default_timeout: float = field(
         default_factory=lambda: _float_env("DR_RUNNER_DEFAULT_TIMEOUT", 300.0)
     )
@@ -200,8 +196,10 @@ class Settings:
         default_factory=lambda: _int_env("DR_RUNNER_MAX_PROCESSES", 2)
     )
     runner_allowed_operations: tuple[str, ...] = field(
-        default_factory=lambda: _csv_env("DR_RUNNER_ALLOWED_OPERATIONS")
-        or ("archive.unpack", "pdf.convert", "latex.compile")
+        default_factory=lambda: (
+            _csv_env("DR_RUNNER_ALLOWED_OPERATIONS")
+            or ("archive.unpack", "pdf.convert", "latex.compile")
+        )
     )
 
     def __post_init__(self) -> None:

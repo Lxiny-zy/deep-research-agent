@@ -34,6 +34,7 @@ deep_research = ["py.typed"]
 "share/deep-research-agent/alembic" = ["alembic/env.py", "alembic/script.py.mako"]
 "share/deep-research-agent/alembic/versions" = ["alembic/versions/*.py"]
 "share/deep-research-agent/framework" = ["framework/06_global_rules.md"]
+"share/deep-research-agent/framework/skills" = ["framework/skills/*.md"]
 "share/deep-research-agent/frontend" = ["frontend/dist/index.html"]
 "share/deep-research-agent/frontend/assets" = ["frontend/dist/assets/*"]
 

@@ -21,6 +21,7 @@ async def _run() -> None:
     from deep_research.api import _FRONTEND_ASSETS, _FRONTEND_DIST, app, lifespan
     from deep_research.intent.model import QUERY_MODEL_PATH
     from deep_research.persistence.db import _migration_root
+    from deep_research.skills import SkillNotFoundError, default_skill_resolver
 
     source_root = _resolved_path(__file__).parents[1]
     package_path = _resolved_path(str(deep_research.__file__))
@@ -37,9 +38,26 @@ async def _run() -> None:
     migration_root = _migration_root()
     if not (migration_root / "alembic" / "versions").is_dir():
         raise RuntimeError(f"migration resources are missing: {migration_root}")
+    source_migrations = {path.name for path in (source_root / "alembic" / "versions").glob("*.py")}
+    installed_migrations = {
+        path.name for path in (migration_root / "alembic" / "versions").glob("*.py")
+    }
+    missing_migrations = sorted(source_migrations - installed_migrations)
+    if missing_migrations:
+        raise RuntimeError(f"installed package migrations are incomplete: {missing_migrations}")
 
     with tempfile.TemporaryDirectory(prefix="deep-research-wheel-") as directory:
         root = _path(directory)
+        isolated_project = root / "project"
+        isolated_project.mkdir()
+        resolver = default_skill_resolver(isolated_project)
+        for skill_name in ("academic-search-v2", "pdf"):
+            try:
+                resolver.resolve(skill_name)
+            except SkillNotFoundError as exc:
+                raise RuntimeError(
+                    f"installed package skill resource is missing: {skill_name}"
+                ) from exc
         os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{root / 'smoke.db'}"
         os.environ["RUNTIME_CONFIG_PATH"] = str(root / "runtime_config.json")
         async with lifespan(app):

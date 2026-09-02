@@ -602,11 +602,7 @@ async def screen_source_intent(
 
     from .intent.cascade import IntentCascade
 
-    engine = (
-        cascade
-        if cascade is not None
-        else IntentCascade(global_rules=load_global_rules())
-    )
+    engine = cascade if cascade is not None else IntentCascade(global_rules=load_global_rules())
     text = "\n".join([source.title, source.content])
     verdict = await engine.classify_source(text, use_llm=use_llm)
     if verdict.intent in ("instructional_override", "credential_harvest"):

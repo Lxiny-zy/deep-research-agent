@@ -90,10 +90,34 @@ async def test_request_id_and_metrics_endpoint(repo):
         metrics_response = await c.get("/metrics")
 
     assert health.headers["X-Request-ID"] == "test-request-1"
+    assert health.headers["X-Content-Type-Options"] == "nosniff"
+    assert health.headers["X-Frame-Options"] == "DENY"
+    assert health.headers["Referrer-Policy"] == "same-origin"
+    assert "default-src 'self'" in health.headers["Content-Security-Policy"]
+    assert "Strict-Transport-Security" not in health.headers
     assert metrics_response.status_code == 200
     assert metrics_response.headers["content-type"].startswith("text/plain")
     assert "deep_research_http_requests_total" in metrics_response.text
     assert 'route="/healthz"' in metrics_response.text
+
+
+@pytest.mark.asyncio
+async def test_https_responses_include_hsts(repo):
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=api.app), base_url="https://test"
+    ) as c:
+        response = await c.get("/healthz")
+
+    assert response.headers["Strict-Transport-Security"] == ("max-age=31536000; includeSubDomains")
+
+
+@pytest.mark.asyncio
+async def test_trusted_forwarded_https_responses_include_hsts(repo, monkeypatch):
+    monkeypatch.setenv("APP_TRUST_PROXY", "true")
+    async with _client() as c:
+        response = await c.get("/healthz", headers={"X-Forwarded-Proto": "https"})
+
+    assert response.headers["Strict-Transport-Security"] == ("max-age=31536000; includeSubDomains")
 
 
 @pytest.mark.asyncio

@@ -370,9 +370,7 @@ class OperationSpec(BaseModel):
                 # as an extra key so the strict model reports the ambiguity.
                 for alias in aliases:
                     if alias in normalized:
-                        raise ValueError(
-                            f"provide either {canonical} or {alias}, not both"
-                        )
+                        raise ValueError(f"provide either {canonical} or {alias}, not both")
         return normalized
 
     @field_validator("kind")
@@ -671,6 +669,7 @@ Operation: TypeAlias = OperationSpec
 # Legacy Vela boundary
 # ---------------------------------------------------------------------------
 
+
 def _legacy_ascii_identifier(value: Any, *, fallback: str) -> str:
     """Return a deterministic kebab-case identifier for an old Vela value.
 
@@ -958,9 +957,7 @@ def normalize_plan_payload(
         if "resources" in step and "resource" not in step:
             step["resource"] = step.pop("resources")
         if "resource" not in step and any(key in step for key in ("gpu", "gpu_count")):
-            step["resource"] = {
-                key: step.pop(key) for key in ("gpu", "gpu_count") if key in step
-            }
+            step["resource"] = {key: step.pop(key) for key in ("gpu", "gpu_count") if key in step}
 
         # Skills and role selectors were occasionally singular/renamed.
         if "skills" not in step and "skill" in step:
@@ -1008,17 +1005,13 @@ def normalize_plan_payload(
             step["operation"] = normalized_operations[0]
             if len(normalized_operations) > 1:
                 raw_metadata = step.get("metadata")
-                step_metadata = (
-                    dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
-                )
+                step_metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
                 step_metadata.setdefault("operations", normalized_operations)
                 step["metadata"] = step_metadata
 
         if "inputs" in step or "input_paths" in step:
             raw_metadata = step.get("metadata")
-            step_metadata = (
-                dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
-            )
+            step_metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
             source = step.pop("inputs", step.pop("input_paths", []))
             step_metadata.setdefault("inputs", _legacy_artifact_values(source))
             step["metadata"] = step_metadata

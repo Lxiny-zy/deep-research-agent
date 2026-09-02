@@ -92,8 +92,7 @@ def _validate_artifact_scope(
         return
     if path_slug != artifact_slug:
         raise CommandPolicyError(
-            f"{label} artifact slug {path_slug!r} does not match current run "
-            f"slug {artifact_slug!r}"
+            f"{label} artifact slug {path_slug!r} does not match current run slug {artifact_slug!r}"
         )
 
 
@@ -167,9 +166,7 @@ class OperationRunnerAgent:
                 _validate_artifact_scope(path, artifact_slug, label="operation input")
             for path in output_paths:
                 _validate_artifact_scope(path, artifact_slug, label="operation output")
-            required_outputs = {
-                _declared_path(item): _declared_required(item) for item in outputs
-            }
+            required_outputs = {_declared_path(item): _declared_required(item) for item in outputs}
             # If the operation omitted its own output declaration, the
             # step-level contract is authoritative.  This also carries the
             # required flag captured by the compiler above.
@@ -234,8 +231,7 @@ class OperationRunnerAgent:
             lines = ["## Operation summary", ""]
             for audit in audits:
                 lines.append(
-                    f"- `{audit['operation']}`: {audit['status']} "
-                    f"(exit code {audit['exit_code']})"
+                    f"- `{audit['operation']}`: {audit['status']} (exit code {audit['exit_code']})"
                 )
                 outputs = audit.get("outputs") or []
                 if outputs:

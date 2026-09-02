@@ -159,8 +159,7 @@ class PlanExecutor:
         previous = _previous_block(ctx, slug, output_paths)
         skill_text = _skill_block(ctx, skill_names)
         context_parts = [
-            f"Step {metadata.get('plan_step_index', 0) + 1}/"
-            f"{metadata.get('total_steps', 1)}",
+            f"Step {metadata.get('plan_step_index', 0) + 1}/{metadata.get('total_steps', 1)}",
             f"Step ID: {metadata.get('plan_step_id', '')}",
         ]
         system = ctx.system_prompt(SYSTEM) + "\n\n" + "\n".join(context_parts)
@@ -188,9 +187,7 @@ class PlanExecutor:
                 # Every successful step gets a durable handoff, even when the
                 # planner omitted an explicit path.
                 step_id = str(metadata.get("plan_step_id") or "step")
-                output_paths = {
-                    f"work/{slug}/plan-{step_id}/response.md"
-                }
+                output_paths = {f"work/{slug}/plan-{step_id}/response.md"}
             for path in sorted(output_paths):
                 area, stage, name = _split_artifact_path(path, slug)
                 content, mime = _json_or_text(name, response)

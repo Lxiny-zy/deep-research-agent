@@ -288,9 +288,10 @@ def _step_produces_report(step: Step, terminal_roles: set[str]) -> bool:
         # Generic external-plan executors are only report producers on the
         # authored terminal step.  Earlier steps use the same role name but
         # must remain subject to the normal budget/skip rules.
-        if step.agent in {"plan_executor", "operation_runner"} and step.metadata.get(
-            "is_terminal"
-        ) is False:
+        if (
+            step.agent in {"plan_executor", "operation_runner"}
+            and step.metadata.get("is_terminal") is False
+        ):
             return False
         return step.agent in terminal_roles
     if step.kind == "team_fanout":

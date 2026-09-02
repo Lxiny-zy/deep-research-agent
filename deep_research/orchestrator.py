@@ -547,8 +547,7 @@ class DeepResearchAgent:
         # Supplying a plan also upgrades an explicitly legacy deployment to the
         # planner runtime, keeping the Python/API plan entry point self-contained.
         planner_mode = (
-            self.settings.orchestration_mode != "legacy"
-            or self._execution_plan_input is not None
+            self.settings.orchestration_mode != "legacy" or self._execution_plan_input is not None
         )
         provided_plan = None
         if self._execution_plan_input is not None:
@@ -560,9 +559,7 @@ class DeepResearchAgent:
             # The plan owns the workspace identity.  Reject an explicit slug
             # mismatch instead of silently writing one run into another tree.
             if self._artifact_slug is not None and self._artifact_slug != provided_plan.slug:
-                raise ValueError(
-                    "artifact_slug does not match execution_plan.slug"
-                )
+                raise ValueError("artifact_slug does not match execution_plan.slug")
             self._artifact_slug = provided_plan.slug
             # ``execution_plan`` is an explicit caller contract.  Force the
             # source marker even when a payload contains an internal-looking
@@ -738,9 +735,7 @@ class DeepResearchAgent:
             # source.  Shadow plans produced by this migration carry the
             # ``workflow_projection`` marker and intentionally keep the
             # authored legacy workflow (including reflect/team control steps).
-            if (
-                runtime_plan.metadata.get("source") not in {None, "workflow_projection"}
-            ):
+            if runtime_plan.metadata.get("source") not in {None, "workflow_projection"}:
                 from .orchestration import compile_plan
                 from .registry import available
 
@@ -846,10 +841,7 @@ class DeepResearchAgent:
                     # auth and scheduling errors remain failed.
                     role = str(getattr(runtime_step, "agent", ""))
                     useful_output = bool(
-                        bb.results
-                        or bb.plan is not None
-                        or bb.report is not None
-                        or output_paths
+                        bb.results or bb.plan is not None or bb.report is not None or output_paths
                     )
                     if (
                         role in {"researcher", "reflector", "planner", "plan_executor"}
@@ -866,16 +858,18 @@ class DeepResearchAgent:
                             partial_ids.add(plan_id)
                 output_by_step: dict[str, list[str]] = {}
                 for plan_step in runtime_plan.steps:
-                    stage = str(
-                        plan_step.metadata.get("workflow_agent")
-                        or plan_step.metadata.get("workflow_kind")
-                        or ""
-                    ).lower().replace(" ", "-")
+                    stage = (
+                        str(
+                            plan_step.metadata.get("workflow_agent")
+                            or plan_step.metadata.get("workflow_kind")
+                            or ""
+                        )
+                        .lower()
+                        .replace(" ", "-")
+                    )
                     if stage:
                         output_by_step[plan_step.id] = [
-                            path
-                            for path in output_paths
-                            if f"/{stage}/" in path
+                            path for path in output_paths if f"/{stage}/" in path
                         ]
                 sync_plan_from_workflow(
                     runtime_plan,
@@ -914,9 +908,7 @@ class DeepResearchAgent:
                 await self.repo.save_orchestration(run_id, execution, lease_owner=self._lease_owner)
                 await self._flush_events(run_id)
 
-        runtime_terminal_roles: set[str] | None = (
-            set(cr.terminal_roles) if cr is not None else None
-        )
+        runtime_terminal_roles: set[str] | None = set(cr.terminal_roles) if cr is not None else None
         if (
             runtime_plan is not None
             and runtime_plan.metadata.get("source") == "external"
