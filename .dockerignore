@@ -69,4 +69,5 @@ runtime_config.json
 *.jpeg
 *.gif
 *.webp
+!frontend/public/research-field.png
 .tmp-*/
