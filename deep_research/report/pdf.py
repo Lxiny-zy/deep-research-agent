@@ -7,6 +7,7 @@ request for this optional format requires the ``pdf`` extra.
 
 from __future__ import annotations
 
+import re
 from html import escape
 
 from .document import ChartBlock, ProseBlock, ReportDocument, TableBlock
@@ -46,29 +47,66 @@ def render_pdf_html(document: ReportDocument) -> str:
     parts = [
         "<!doctype html><html><head><meta charset='utf-8'>",
         "<style>",
-        "@page { size: A4; margin: 16mm 14mm 18mm; }",
-        "body { font-family: 'Noto Sans CJK SC', 'Noto Sans', sans-serif; "
-        "font-size: 10pt; line-height: 1.45; color: #17212b; }",
-        "h1 { font-size: 20pt; margin: 0 0 10pt; }",
-        "h2 { font-size: 14pt; margin: 18pt 0 7pt; break-after: avoid; }",
-        "h3 { font-size: 11pt; margin: 12pt 0 5pt; break-after: avoid; }",
-        "p { margin: 0 0 7pt; }",
-        "table { width: 100%; border-collapse: collapse; margin: 7pt 0 12pt; break-inside: auto; }",
+        "@page { size: A4; margin: 19mm 18mm 20mm; }",
+        "@page :first { margin-top: 24mm; }",
+        "* { box-sizing: border-box; }",
+        "body { font-family: 'Noto Serif CJK SC', 'Source Han Serif SC', 'Noto Serif SC', "
+        "'Noto Sans CJK SC', 'Microsoft YaHei', 'SimSun', serif; "
+        "font-size: 10.5pt; line-height: 1.7; color: #1f2933; }",
+        ".report-kicker { margin: 0 0 7pt; color: #66717d; font-family: 'Noto Sans CJK SC', "
+        "'Microsoft YaHei', sans-serif; font-size: 8.5pt; letter-spacing: .12em; "
+        "text-transform: uppercase; }",
+        "h1 { max-width: 175mm; font-size: 23pt; line-height: 1.25; margin: 0 0 8pt; "
+        "font-weight: 600; color: #16202a; }",
+        "h2 { font-size: 15pt; line-height: 1.35; margin: 21pt 0 8pt; padding-bottom: 4pt; "
+        "border-bottom: .7pt solid #c7cdd3; break-after: avoid; color: #23313d; }",
+        "h3 { font-size: 11.5pt; line-height: 1.45; margin: 13pt 0 5pt; break-after: avoid; "
+        "color: #2b3945; }",
+        "p { margin: 0 0 8pt; }",
+        ".report-meta { display: flex; gap: 12pt; flex-wrap: wrap; margin: 0 0 14pt; "
+        "padding-bottom: 9pt; border-bottom: 1pt solid #aeb7c0; color: #66717d; "
+        "font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; font-size: 8.5pt; }",
+        ".disclaimer { margin: 0 0 16pt; padding: 8pt 10pt; border-left: 2.5pt solid #7a8794; "
+        "background: #f2f4f5; color: #52616d; font-family: 'Noto Sans CJK SC', "
+        "'Microsoft YaHei', sans-serif; "
+        "font-size: 9pt; line-height: 1.6; }",
+        ".overview { break-inside: avoid; margin: 0 0 16pt; }",
+        ".overview h2 { margin-top: 0; }",
+        "table { width: 100%; border-collapse: collapse; margin: 8pt 0 13pt; break-inside: auto; "
+        "font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; font-size: 9.5pt; }",
         "thead { display: table-header-group; }",
         "tr { break-inside: avoid; }",
-        "th, td { border: 0.5pt solid #aab4bf; padding: 4pt 5pt; vertical-align: top; }",
-        "th { background: #eef2f5; text-align: left; }",
-        ".muted { color: #52616f; }",
-        ".evidence { border-left: 2pt solid #8092a6; padding-left: 7pt; margin: 5pt 0 10pt; }",
-        ".hash { font-family: monospace; font-size: 8pt; overflow-wrap: anywhere; }",
-        ".audit { margin: 4pt 0; }",
-        ".table-notes { margin: 4pt 0 12pt 14pt; padding-left: 10pt; }",
-        "blockquote { margin: 5pt 0; padding-left: 8pt; border-left: 2pt solid #c8d1da; }",
+        "th, td { border-bottom: .6pt solid #c7cdd3; padding: 5pt 6pt; vertical-align: top; }",
+        "th { border-top: 1pt solid #7f8b96; border-bottom: 1pt solid #7f8b96; "
+        "background: #edf0f2; "
+        "text-align: left; font-weight: 600; color: #33414d; }",
+        ".overview table { width: auto; min-width: 68mm; }",
+        ".overview td:last-child, .overview th:last-child { text-align: right; "
+        "font-variant-numeric: tabular-nums; }",
+        ".muted { color: #66717d; font-family: 'Noto Sans CJK SC', "
+        "'Microsoft YaHei', sans-serif; }",
+        ".evidence { border-left: 2pt solid #7a8794; padding: 3pt 0 4pt 9pt; margin: 7pt 0 12pt; "
+        "break-inside: avoid; }",
+        ".evidence h3 { margin-top: 0; }",
+        ".hash { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 7.5pt; "
+        "overflow-wrap: anywhere; "
+        "color: #66717d; }",
+        ".audit { margin: 3pt 0; font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; "
+        "font-size: 9pt; }",
+        ".table-notes { margin: 3pt 0 12pt 14pt; padding-left: 10pt; color: #52616d; "
+        "font-size: 9pt; }",
+        "blockquote { margin: 6pt 0; padding: 5pt 8pt; border-left: 1.5pt solid #b3bdc6; "
+        "background: #f6f7f8; color: #465460; }",
+        ".references { break-before: page; }",
+        ".appendix { break-before: page; }",
+        "ol { margin-top: 4pt; padding-left: 18pt; }",
+        "li { margin: 0 0 4pt; }",
         "</style></head><body>",
     ]
     if document.query:
-        parts.append(f"<h1>{escape(document.query)}</h1>")
-    parts.append(f"<p class='muted'>{escape(document.disclaimer)}</p>")
+        parts.append("<p class='report-kicker'>Deep Research · Evidence Report</p>")
+        parts.append(f"<h1>{escape(_display_title(document.query))}</h1>")
+    parts.append(f"<p class='disclaimer'>{escape(document.disclaimer)}</p>")
     _append_overview(parts, document)
     for block in document.blocks:
         if isinstance(block, ProseBlock):
@@ -100,14 +138,14 @@ def _append_overview(parts: list[str], document: ReportDocument) -> None:
         ),
     ]
     parts.append(
-        "<h2>Evidence overview</h2>"
+        "<section class='overview'><h2>Evidence overview</h2>"
         "<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>"
     )
     parts.extend(
         f"<tr><td>{escape(str(label))}</td><td>{escape(str(value))}</td></tr>"
         for label, value in rows
     )
-    parts.append("</tbody></table>")
+    parts.append("</tbody></table></section>")
 
 
 def _append_prose(parts: list[str], markdown: str) -> None:
@@ -184,18 +222,18 @@ def _cell_value(cell: object) -> str:
 def _append_references(parts: list[str], document: ReportDocument) -> None:
     if not document.references:
         return
-    parts.append("<h2>References</h2><ol>")
+    parts.append("<section class='references'><h2>References</h2><ol>")
     parts.extend(
         f"<li>[{reference.index}] {escape(reference.render())}</li>"
         for reference in document.references
     )
-    parts.append("</ol>")
+    parts.append("</ol></section>")
 
 
 def _append_evidence(parts: list[str], document: ReportDocument) -> None:
     if not document.evidence:
         return
-    parts.append("<h2>Evidence appendix</h2>")
+    parts.append("<section class='appendix'><h2>Evidence appendix</h2>")
     for record in document.evidence:
         parts.append("<section class='evidence'>")
         parts.append(f"<h3>[{record.citation}] {escape(record.statement)}</h3>")
@@ -243,6 +281,13 @@ def _append_evidence(parts: list[str], document: ReportDocument) -> None:
         if record.source_url:
             parts.append(f"<p>Source: {escape(record.source_url)}</p>")
         parts.append("</section>")
+    parts.append("</section>")
+
+
+def _display_title(value: str) -> str:
+    """Remove a Markdown heading marker accidentally included in a run query."""
+
+    return re.sub(r"^\s*#{1,6}\s+", "", value).strip() or "Research report"
 
 
 def _append_audit(parts: list[str], label: str, value: str) -> None:

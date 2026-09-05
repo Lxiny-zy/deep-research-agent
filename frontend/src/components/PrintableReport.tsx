@@ -11,6 +11,7 @@ import {
   stripTrailingReferences,
   summarizeEvidence,
 } from '../lib/evidence'
+import { displayReportTitle } from '../lib/reportTitle'
 import type { Finding, ReportDocument } from '../types'
 
 // 可打印报告：屏幕上的应用 → 纸上的报告。
@@ -226,7 +227,8 @@ export default function PrintableReport({
       aria-label="可打印报告"
     >
       <header className="print-head">
-        <h1>{query || '研究报告'}</h1>
+        <p className="print-kicker">Deep Research · Evidence Report</p>
+        <h1>{displayReportTitle(query)}</h1>
         <p className="print-meta">
           {createdAt && <span>生成时间：{createdAt}</span>}
           {runId && <span> · 运行 {runId}</span>}

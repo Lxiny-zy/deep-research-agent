@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import PrintableReport from './PrintableReport'
+import { displayReportTitle } from '../lib/reportTitle'
 import type { Finding } from '../types'
 
 // 打印布局的性质，不是样式细节：
@@ -53,6 +54,11 @@ function finding(
 const MARKDOWN = '# 报告\n\n正文引用了 [1]。\n\n## 参考来源\n[1] ' + URL_B + '\n'
 
 describe('PrintableReport：屏幕侧栏在纸上的等价物', () => {
+  it('不把查询里的 Markdown 标题标记打印成正文', () => {
+    expect(displayReportTitle('  ## 调研一下  ')).toBe('调研一下')
+    expect(displayReportTitle('')).toBe('研究报告')
+  })
+
   it('把全部证据一次性铺开，而不是像侧栏那样一次只显示一条', () => {
     render(
       <PrintableReport

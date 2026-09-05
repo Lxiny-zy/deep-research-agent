@@ -19,8 +19,12 @@
 
 @page {
   size: A4;
-  /* 上下留白略大：浏览器自带的页眉页脚就落在这里，太窄会和正文挤在一起。 */
-  margin: 16mm 14mm 18mm;
+  /* 与服务端 PDF 保持一致，给浏览器默认页眉页脚留出稳定空间。 */
+  margin: 19mm 18mm 20mm;
+}
+
+@page :first {
+  margin-top: 24mm;
 }
 
 @media print {
@@ -40,9 +44,9 @@
   body {
     background: #f9f8f6 !important;
     color: var(--print-ink) !important;
-    /* 纸面比屏幕小：正文降到 10.5pt，长报告才不至于翻十几页。 */
+    /* 纸面比屏幕小：正文保持 10.5pt，长报告才不至于翻十几页。 */
     font-size: 10.5pt;
-    line-height: 1.55;
+    line-height: 1.7;
   }
 
   /* 背景色/图默认不打印（浏览器省墨策略）。徽章与表头底纹靠它区分层次，
@@ -143,10 +147,12 @@
   }
 
   h1 {
-    font-size: 17pt;
+    font-size: 23pt;
+    line-height: 1.25;
   }
   h2 {
-    font-size: 13pt;
+    font-size: 15pt;
+    line-height: 1.35;
     margin-top: 14pt;
   }
   h3 {
@@ -244,11 +250,39 @@
     display: block !important;
   }
 
+  .print-root,
+  .print-root h1,
+  .print-root h2,
+  .print-root h3,
+  .print-root h4 {
+    font-family: 'Noto Serif CJK SC', 'Source Han Serif SC', 'Noto Serif SC',
+      'Microsoft YaHei', 'SimSun', serif;
+  }
+
+  .print-root .print-kicker,
+  .print-root .print-meta,
+  .print-root table,
+  .print-root .print-reason,
+  .print-root .print-badge,
+  .print-root .print-hash,
+  .print-root .print-claim {
+    font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;
+  }
+
   /* 报头：标题与正文之间要有可见的分隔，否则 h1 直接压在免责声明上。 */
   .print-head {
     margin: 0 0 8pt;
     padding-bottom: 6pt;
     border-bottom: 1pt solid var(--print-rule);
+  }
+
+  .print-kicker {
+    margin: 0 0 7pt;
+    color: var(--print-ink-3) !important;
+    font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;
+    font-size: 8.5pt;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
   }
 
   .print-meta {
@@ -399,10 +433,12 @@
 
   .print-disclaimer {
     margin: 8pt 0 12pt;
-    padding: 6pt 8pt;
-    border: 1px solid var(--print-rule);
+    padding: 8pt 10pt;
+    border: 0;
+    border-left: 2.5pt solid var(--print-ink-3);
     background: var(--print-wash) !important;
     font-size: 9pt;
+    line-height: 1.6;
     color: var(--print-ink-2) !important;
   }
 }
@@ -419,16 +455,18 @@
      诚实说明：这里**不呈现分页**。真实分页由浏览器分页器决定，画一条模拟
      分页线只会给出一个我们并不掌握的位置断言；要看真实分页请开打印对话框。 */
   .print-preview {
-    /* A4 版心：210mm 减去 print.css 里 @page 的左右各 14mm。
-       预览可能被放在未展开的报告栏里（窄于 182mm），固定宽会把页面撑出
+    /* A4 版心：210mm 减去 print.css 里 @page 的左右各 18mm。
+       预览可能被放在未展开的报告栏里（窄于 174mm），固定宽会把页面撑出
        横向滚动，所以取二者较小值——版心是上限而不是硬尺寸。 */
-    max-width: min(182mm, 100%);
+    max-width: min(174mm, 100%);
     margin: 0 auto;
     padding: 12mm 0;
     background: #f9f8f6;
     color: #1c1c1c;
+    font-family: 'Noto Serif CJK SC', 'Source Han Serif SC', 'Noto Serif SC',
+      'Microsoft YaHei', 'SimSun', serif;
     font-size: 10.5pt;
-    line-height: 1.55;
+    line-height: 1.7;
   }
 
   /* 预览容器内强制明色：应用是深色主题，若继承下来预览就完全失真。 */
@@ -440,10 +478,12 @@
   }
 
   .print-preview h1 {
-    font-size: 17pt;
+    font-size: 23pt;
+    line-height: 1.25;
   }
   .print-preview h2 {
-    font-size: 13pt;
+    font-size: 15pt;
+    line-height: 1.35;
     margin-top: 14pt;
   }
   .print-preview h3 {
@@ -487,9 +527,20 @@
     border: 1px solid rgba(28, 28, 28, 0.2);
   }
   .print-preview .print-disclaimer {
-    padding: 6pt 8pt;
+    padding: 8pt 10pt;
+    border: 0;
+    border-left: 2.5pt solid rgba(28, 28, 28, 0.6);
     background-color: #efeeeb;
     font-size: 9pt;
+    line-height: 1.6;
+  }
+  .print-preview .print-kicker {
+    margin: 0 0 7pt;
+    color: rgba(28, 28, 28, 0.6);
+    font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;
+    font-size: 8.5pt;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
   }
   .print-preview .print-badge {
     display: inline-block;

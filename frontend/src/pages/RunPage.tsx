@@ -17,6 +17,7 @@ import { useResearchStream } from '../hooks/useResearchStream'
 import { useCancelRun, useResumeRun, useRunDetail, useRunDocument } from '../hooks/useRuns'
 import { appendTurn, turnFromRun } from '../lib/conversation'
 import { countBlockedSources, flattenFindings, reportEvidenceToFindings } from '../lib/evidence'
+import { displayReportTitle } from '../lib/reportTitle'
 import { deriveResearchProgress } from '../lib/runProgress'
 import type { ReportDocument, RunStatus } from '../types'
 
@@ -128,7 +129,7 @@ export default function RunPage() {
     void refetchDetail()
   }, [refetchDetail, stream.status])
 
-  const query = detail.data?.query ?? ''
+  const query = displayReportTitle(detail.data?.query ?? '')
   const status: RunStatus = dbFinished
     ? (dbStatus as RunStatus)
     : stream.status === 'done'
@@ -266,7 +267,7 @@ export default function RunPage() {
   }
 
   return (
-    <div className="stack run-workbench">
+    <div className={`stack run-workbench${liveActive ? ' is-live' : ''}`}>
       <div className="run-overview">
         <div className={`panel run-head${canFollowUp ? ' has-followup' : ''}`}>
           <div className="run-q">{query || '加载中…'}</div>

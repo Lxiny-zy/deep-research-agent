@@ -17,8 +17,8 @@
     --clarity-surface-muted: #f1f5f7;
     --clarity-ink: #172530;
     --clarity-ink-soft: #3f5260;
-    --clarity-muted: #6d7d88;
-    --clarity-faint: #8e9ba3;
+    --clarity-muted: #60727d;
+    --clarity-faint: #7d8c95;
     --clarity-line: #d7e1e6;
     --clarity-line-strong: #bdccd4;
     --clarity-teal: #0f766e;
@@ -29,27 +29,34 @@
     --editorial-sans:
       'Microsoft YaHei', 'Microsoft YaHei UI', 'Noto Sans SC', 'PingFang SC',
       -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --editorial-serif: var(--editorial-sans);
-    --clarity-shadow-sm: 0 1px 3px rgba(26, 47, 59, 0.08), 0 6px 16px rgba(26, 47, 59, 0.08);
-    --clarity-shadow-md: 0 3px 7px rgba(26, 47, 59, 0.1), 0 14px 30px rgba(26, 47, 59, 0.12);
-    --clarity-shadow-lg: 0 5px 12px rgba(26, 47, 59, 0.1), 0 24px 52px rgba(26, 47, 59, 0.14);
+    --editorial-serif:
+      'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong',
+      'SimSun', serif;
+    --report-serif: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+    --clarity-shadow-sm: 0 1px 2px rgba(26, 47, 59, 0.05), 0 5px 14px rgba(26, 47, 59, 0.05);
+    --clarity-shadow-md:
+      0 2px 6px rgba(26, 47, 59, 0.07), 0 12px 26px rgba(26, 47, 59, 0.09),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    --clarity-shadow-lg:
+      0 4px 10px rgba(26, 47, 59, 0.08), 0 18px 40px rgba(26, 47, 59, 0.1),
+      inset 0 1px 0 rgba(255, 255, 255, 0.88);
     --clarity-radius-sm: 5px;
     --clarity-radius-md: 8px;
     /* A card should read as a deliberate object on the canvas, not as a
      * lightly outlined row.  Keep the radius restrained while giving the
      * surface enough depth to separate it from neighbouring modules. */
-    --clarity-radius-card: 16px;
+    --clarity-radius-card: 8px;
     /* Catalog tiles share one stable footprint.  Keeping the dimensions in
      * tokens makes the desktop and narrow-screen rules agree instead of
      * letting a generic grid declaration resize one surface only. */
     --clarity-catalog-card-width: 280px;
     --clarity-catalog-card-height: 280px;
     --clarity-shadow-card:
-      0 2px 3px rgba(26, 47, 59, 0.07), 0 10px 24px rgba(26, 47, 59, 0.1),
-      0 22px 42px rgba(26, 47, 59, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.94);
+      0 1px 2px rgba(26, 47, 59, 0.05), 0 8px 20px rgba(26, 47, 59, 0.07),
+      inset 0 1px 0 rgba(255, 255, 255, 0.94);
     --clarity-shadow-card-hover:
-      0 4px 8px rgba(26, 47, 59, 0.1), 0 18px 34px rgba(26, 47, 59, 0.16),
-      0 28px 56px rgba(26, 47, 59, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.98);
+      0 3px 7px rgba(26, 47, 59, 0.08), 0 14px 28px rgba(26, 47, 59, 0.1),
+      inset 0 1px 0 rgba(255, 255, 255, 0.98);
 
     /* Keep old component tokens useful for selectors that are not covered
      * below. The aliases also make controls and third-party widgets agree. */
@@ -106,7 +113,7 @@
     font-size: 16px;
     /* 450 is rounded down by most CJK system fonts.  A regular 500 keeps
      * labels and body copy readable without making the interface heavy. */
-    font-weight: 500;
+    font-weight: 400;
     letter-spacing: 0;
   }
 
@@ -143,6 +150,83 @@
     min-height: 100vh;
     color: var(--clarity-ink) !important;
     background: transparent !important;
+  }
+
+  /* Idle atmosphere: a barely visible ruled field gives the workspace a
+   * sense of life without competing with research content. The content layer
+   * stays above both pseudo-elements, so cards and reports remain crisp. */
+  .app-container.signal-theme {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .app-container.signal-theme > .main-content {
+    position: relative;
+    z-index: 1;
+  }
+
+  .app-container.signal-theme::before,
+  .app-container.signal-theme::after {
+    position: fixed;
+    inset: 68px 0 0;
+    z-index: 0;
+    pointer-events: none;
+    content: '';
+  }
+
+  .app-container.signal-theme::before {
+    opacity: 0.58;
+    background-image:
+      linear-gradient(rgba(15, 118, 110, 0.055) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(15, 118, 110, 0.055) 1px, transparent 1px);
+    background-size: 72px 72px;
+    will-change: transform;
+    animation: clarity-idle-grid 42s linear infinite;
+  }
+
+  .app-container.signal-theme::after {
+    inset-inline: -28vw;
+    opacity: 0.32;
+    background: linear-gradient(
+      105deg,
+      transparent 38%,
+      rgba(15, 118, 110, 0.055) 50%,
+      transparent 62%
+    );
+    background-size: 100% 100%;
+    will-change: transform;
+    animation: clarity-idle-sweep 32s ease-in-out infinite;
+  }
+
+  @keyframes clarity-idle-grid {
+    from {
+      transform: translate3d(0, 0, 0);
+    }
+
+    to {
+      transform: translate3d(36px, 36px, 0);
+    }
+  }
+
+  @keyframes clarity-idle-sweep {
+    0%,
+    100% {
+      transform: translate3d(-5%, 0, 0);
+    }
+
+    50% {
+      transform: translate3d(5%, 0, 0);
+    }
+  }
+
+  /* The live-run layer has its own motion language. Keep the idle field
+   * dormant while a stream is active so the two patterns never compete. */
+  @supports selector(.signal-theme:has(.run-workbench.is-live)) {
+    .app-container.signal-theme:has(.run-workbench.is-live)::before,
+    .app-container.signal-theme:has(.run-workbench.is-live)::after {
+      opacity: 0;
+      animation: none;
+    }
   }
 
   .global-header {
@@ -367,11 +451,13 @@
   .builtin-card,
   .sample-card {
     color: var(--clarity-ink) !important;
-    border: 1px solid var(--clarity-line) !important;
+    border: 1px solid #cbd9df !important;
     border-radius: var(--clarity-radius-card) !important;
     background: var(--clarity-surface-soft) !important;
-    background-image: linear-gradient(145deg, rgba(255, 255, 255, 0.7), transparent 42%) !important;
+    background-image:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.42) 34%, transparent 68%) !important;
     box-shadow: var(--clarity-shadow-card) !important;
+    isolation: isolate;
     transition:
       border-color 0.2s ease,
       box-shadow 0.2s ease,
@@ -435,6 +521,26 @@
     line-height: 1.62 !important;
   }
 
+  .card p,
+  .role-card p,
+  .history-run-card p,
+  .model-profile-card p,
+  .builtin-card p,
+  .sample-card p {
+    color: var(--clarity-ink-soft) !important;
+    line-height: 1.65;
+  }
+
+  .card small,
+  .role-card small,
+  .history-run-card small,
+  .model-profile-card small,
+  .builtin-card small,
+  .sample-card small {
+    color: var(--clarity-muted) !important;
+    line-height: 1.5;
+  }
+
   .builtin-chain-node {
     font-size: 0.73rem !important;
     font-weight: 600 !important;
@@ -446,11 +552,17 @@
   .history-run-card:hover,
   .model-profile-card:hover,
   .builtin-card:hover,
-  .sample-card:hover {
+  .sample-card:hover,
+  .card:focus-within,
+  .role-card:focus-within,
+  .history-run-card:focus-within,
+  .model-profile-card:focus-within,
+  .builtin-card:focus-within,
+  .sample-card:focus-within {
     border-color: #9fc8c3 !important;
     background: #f4fbfa !important;
     box-shadow: var(--clarity-shadow-card-hover) !important;
-    transform: translateY(-4px) !important;
+    transform: translateY(-2px) !important;
   }
 
   /* The accent rail is part of the card's hierarchy.  Give it a soft inner
@@ -487,7 +599,7 @@
   }
 
   .builtin-card:hover {
-    transform: translateY(-4px) !important;
+    transform: translateY(-2px) !important;
   }
 
   /* Workflow cards are a scanning surface: keep every tile the same height
@@ -1254,7 +1366,43 @@
   }
 
   .run-workbench {
+    position: relative;
     gap: 24px;
+  }
+
+  /* Runtime motion belongs to the state, not to the whole application. A
+   * nearly invisible ruled grid gives the active research page a sense of
+   * forward motion while leaving reading surfaces untouched. */
+  .run-workbench.is-live {
+    isolation: isolate;
+  }
+
+  .run-workbench.is-live > * {
+    z-index: 1;
+  }
+
+  .run-workbench.is-live::before {
+    position: absolute;
+    z-index: 0;
+    inset: -80px -12vw;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(15, 118, 110, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(15, 118, 110, 0.035) 1px, transparent 1px);
+    background-size: 48px 48px;
+    content: '';
+    will-change: transform;
+    animation: research-grid-drift 22s linear infinite;
+  }
+
+  @keyframes research-grid-drift {
+    from {
+      transform: translate3d(0, 0, 0);
+    }
+
+    to {
+      transform: translate3d(48px, 48px, 0);
+    }
   }
 
   .run-overview {
@@ -1464,6 +1612,21 @@
     background: var(--clarity-teal) !important;
   }
 
+  .research-progress-track > span::after,
+  .runtime-header-progress > span::after {
+    background: linear-gradient(
+      100deg,
+      transparent 22%,
+      rgba(255, 255, 255, 0.62) 50%,
+      transparent 78%
+    ) !important;
+  }
+
+  .live-metric.is-updating {
+    border-color: #b7dcd7 !important;
+    background: #f2faf9 !important;
+  }
+
   .event-row {
     padding: 12px 10px !important;
     border-bottom: 1px solid var(--clarity-line) !important;
@@ -1472,6 +1635,62 @@
 
   .event-row:hover {
     background: #f5f9fa !important;
+  }
+
+  .timeline-shell {
+    min-width: 0;
+  }
+
+  .timeline {
+    overscroll-behavior: contain;
+  }
+
+  .timeline-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 30px;
+    margin: 0 0 8px;
+    padding: 0 2px;
+  }
+
+  .timeline-follow-state {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--clarity-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .timeline-follow-toggle {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 5px;
+    min-height: 28px;
+    padding: 4px 8px;
+    border: 1px solid var(--clarity-line) !important;
+    border-radius: var(--clarity-radius-sm) !important;
+    color: var(--clarity-ink-soft) !important;
+    background: var(--clarity-surface-soft) !important;
+    font-family: var(--editorial-sans) !important;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition:
+      color 0.18s ease,
+      border-color 0.18s ease,
+      background-color 0.18s ease;
+  }
+
+  .timeline-follow-toggle:hover,
+  .timeline-follow-toggle:focus-visible {
+    border-color: #8fc5bf !important;
+    color: var(--clarity-teal-deep) !important;
+    background: #edf8f6 !important;
   }
 
   .dag-node,
@@ -1492,8 +1711,280 @@
     box-shadow: 0 2px 7px rgba(15, 118, 110, 0.12) !important;
   }
 
+  .runtime-step.succeeded,
+  .runtime-status.succeeded {
+    border-color: #a9d5d0 !important;
+    color: var(--clarity-teal-deep) !important;
+    background: #eaf7f5 !important;
+  }
+
+  .runtime-step.failed,
+  .runtime-status.failed {
+    border-color: #e6b5aa !important;
+    color: #9f3f31 !important;
+    background: #fff1ee !important;
+  }
+
+  .runtime-step.retrying,
+  .runtime-status.retrying {
+    border-color: #e4c994 !important;
+    color: #875815 !important;
+    background: #fff8e8 !important;
+  }
+
+  .runtime-step.skipped,
+  .runtime-step.cancelled,
+  .runtime-status.cancelled {
+    border-color: var(--clarity-line-strong) !important;
+    color: var(--clarity-muted) !important;
+    background: var(--clarity-surface-muted) !important;
+  }
+
   .report-view-body > .report {
+    width: min(78ch, 100%);
     max-width: 78ch;
+    margin: 0 auto;
+    padding: 4px 8px 24px;
+    font-family: var(--report-serif) !important;
+    font-size: 16px;
+    line-height: 1.85 !important;
+  }
+
+  .report-view-body > .report h1,
+  .report-view-body > .report h2,
+  .report-view-body > .report h3,
+  .report-view-body > .report h4 {
+    font-family: var(--report-serif) !important;
+    color: var(--clarity-ink) !important;
+    letter-spacing: 0 !important;
+  }
+
+  .report-view-body > .report h1 {
+    margin-top: 0;
+    font-size: 2rem;
+    font-weight: 700 !important;
+    line-height: 1.3;
+  }
+
+  .report-view-body > .report h2 {
+    margin-top: 2.2em;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--clarity-line);
+    font-size: 1.38rem;
+    font-weight: 700 !important;
+    line-height: 1.4;
+  }
+
+  .report-view-body > .report h3 {
+    margin-top: 1.7em;
+    font-size: 1.12rem;
+    font-weight: 700 !important;
+  }
+
+  .report-view-body > .report p,
+  .report-view-body > .report li {
+    color: var(--clarity-ink-soft) !important;
+  }
+
+  .report-view-body > .report blockquote {
+    margin: 1.5em 0;
+    padding: 12px 16px;
+    border-left: 3px solid #9fc8c3;
+    border-radius: 0 var(--clarity-radius-sm) var(--clarity-radius-sm) 0;
+    color: var(--clarity-ink-soft) !important;
+    background: #f2faf9 !important;
+  }
+
+  .report-view-body > .report table {
+    width: 100%;
+    margin: 1.2em 0 1.7em;
+    border-collapse: collapse;
+    font-family: var(--editorial-sans) !important;
+    font-size: 0.9em;
+  }
+
+  .report-view-body > .report th,
+  .report-view-body > .report td {
+    padding: 9px 11px;
+    border-bottom: 1px solid var(--clarity-line);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .report-view-body > .report th {
+    border-top: 1px solid var(--clarity-line-strong);
+    color: var(--clarity-ink) !important;
+    background: var(--clarity-surface-muted);
+    font-weight: 700;
+  }
+
+  .report-view-body > .report .report-references {
+    margin-top: 3.5em;
+    padding-top: 1.2em;
+    border-top: 2px solid var(--clarity-line-strong);
+  }
+
+  .report-view-body > .report .cite-ref {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    padding: 0 5px;
+    border: 1px solid #a9d5d0 !important;
+    border-radius: 4px;
+    color: var(--clarity-teal-deep) !important;
+    background: #eaf7f5 !important;
+    font-family: var(--editorial-sans) !important;
+    font-size: 0.78em;
+    font-weight: 700;
+    line-height: 1.4;
+    vertical-align: baseline;
+  }
+
+  .report-view-body > .report .cite-ref:hover,
+  .report-view-body > .report .cite-ref.active {
+    color: #fff !important;
+    border-color: var(--clarity-teal) !important;
+    background: var(--clarity-teal) !important;
+  }
+
+  /* The evidence strip is a quality summary, so status colour is meaningful
+   * here even though the surrounding report remains neutral. Every state
+   * keeps its text label for grayscale and accessibility contexts. */
+  .evidence-overview {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 0;
+    margin: 0 0 24px;
+    padding: 0;
+    border: 1px solid var(--clarity-line) !important;
+    border-radius: var(--clarity-radius-sm) !important;
+    background: var(--clarity-surface-muted) !important;
+  }
+
+  .evidence-stat,
+  .evidence-note {
+    min-width: 0;
+    min-height: 58px;
+    padding: 10px 12px !important;
+  }
+
+  .evidence-stat {
+    justify-content: flex-start;
+    border-right: 1px solid var(--clarity-line) !important;
+    color: var(--clarity-ink-soft) !important;
+    background: var(--clarity-surface) !important;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .evidence-stat:last-of-type {
+    border-right: 0 !important;
+  }
+
+  .evidence-stat b {
+    font-size: 1.05rem;
+    font-weight: 700;
+  }
+
+  .evidence-stat.verified,
+  .evidence-stat.supported,
+  .evidence-stat.corroborated {
+    color: var(--clarity-teal-deep) !important;
+  }
+
+  .evidence-stat.conflicted,
+  .evidence-stat.blocked {
+    color: #9f3f31 !important;
+  }
+
+  .evidence-note {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--clarity-line) !important;
+    color: var(--clarity-muted) !important;
+    background: transparent !important;
+    font-size: 11px;
+  }
+
+  .structured-document-preview {
+    margin-top: 36px;
+    padding: 24px 0 0;
+    border-top: 2px solid var(--clarity-line-strong);
+  }
+
+  .structured-document-table-scroll {
+    overflow-x: auto;
+    border: 1px solid var(--clarity-line);
+    border-radius: var(--clarity-radius-sm);
+    background: var(--clarity-surface);
+  }
+
+  .structured-document-table table {
+    min-width: 560px;
+    font-family: var(--editorial-sans) !important;
+    font-size: 13px;
+  }
+
+  .structured-document-table th,
+  .structured-document-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--clarity-line);
+  }
+
+  .structured-document-table thead th {
+    color: var(--clarity-ink-soft) !important;
+    background: var(--clarity-surface-muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+
+  .structured-document-table tbody tr:last-child th,
+  .structured-document-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .structured-document-table td[data-disputed='true'] {
+    color: #9f3f31 !important;
+    background: #fff8f6;
+  }
+
+  @media (max-width: 1200px) {
+    .evidence-overview {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .evidence-stat:nth-of-type(3n) {
+      border-right: 0 !important;
+    }
+
+    .evidence-stat:nth-of-type(n + 4) {
+      border-top: 1px solid var(--clarity-line) !important;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .evidence-overview {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .evidence-stat,
+    .evidence-note {
+      min-height: 54px;
+      padding: 9px 10px !important;
+    }
+
+    .evidence-stat:nth-of-type(3n) {
+      border-right: 1px solid var(--clarity-line) !important;
+    }
+
+    .evidence-stat:nth-of-type(2n) {
+      border-right: 0 !important;
+    }
+
+    .evidence-stat:nth-of-type(n + 3) {
+      border-top: 1px solid var(--clarity-line) !important;
+    }
   }
 
   .report pre,

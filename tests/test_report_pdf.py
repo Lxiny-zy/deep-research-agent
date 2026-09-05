@@ -99,6 +99,15 @@ def test_pdf_html_contains_structured_tables_references_and_evidence() -> None:
     assert "Noto Sans CJK SC" in html
 
 
+def test_pdf_title_drops_a_markdown_heading_marker_from_the_query() -> None:
+    document = _document().model_copy(update={"query": "## 调研一下 2026"})
+
+    html = render_pdf_html(document)
+
+    assert "<h1>调研一下 2026</h1>" in html
+    assert "<h1>## 调研一下 2026</h1>" not in html
+
+
 def test_pdf_dependency_is_lazy_and_reports_a_clear_error(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "weasyprint", None)
     with pytest.raises(PdfExportUnavailable, match="optional 'pdf' extra"):
