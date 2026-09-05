@@ -23,6 +23,84 @@
   margin: 19mm 18mm 20mm;
 }
 
+/* Screen preview is a document canvas, not a miniature report sidebar. */
+@media screen {
+  .print-preview {
+    box-sizing: border-box;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 46px clamp(24px, 5vw, 92px) 72px !important;
+    background: #f9f8f6 !important;
+    color: #1c1c1c !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  .print-preview,
+  .print-preview * {
+    writing-mode: horizontal-tb !important;
+    text-orientation: mixed !important;
+    white-space: normal;
+  }
+
+  .print-preview > * {
+    width: min(100%, 1040px) !important;
+    max-width: 1040px !important;
+    margin-inline: auto !important;
+  }
+
+  .print-preview .print-head {
+    padding-bottom: 18px !important;
+    margin-bottom: 22px !important;
+  }
+
+  .print-preview .print-head h1 {
+    max-width: 100% !important;
+    font-size: clamp(2rem, 4vw, 3.2rem) !important;
+    line-height: 1.2 !important;
+    overflow-wrap: anywhere !important;
+    word-break: normal !important;
+  }
+
+  .print-preview .print-body {
+    font-size: 16px !important;
+    line-height: 1.85 !important;
+  }
+
+  .print-preview .print-body h1,
+  .print-preview .print-body h2,
+  .print-preview .print-body h3,
+  .print-preview .print-body h4,
+  .print-preview .print-body p,
+  .print-preview .print-body li,
+  .print-preview .print-body blockquote {
+    max-width: 100% !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  .print-preview .print-overview table {
+    width: min(100%, 560px) !important;
+    min-width: 0 !important;
+  }
+
+  .print-preview .print-appendix {
+    margin-top: 42px !important;
+    padding-top: 28px !important;
+    border-top: 2px solid rgba(28, 28, 28, 0.14) !important;
+  }
+
+  @media (max-width: 760px) {
+    .print-preview {
+      padding: 28px 18px 48px !important;
+    }
+
+    .print-preview .print-head h1 {
+      font-size: 1.9rem !important;
+    }
+  }
+}
+
 @page :first {
   margin-top: 24mm;
 }

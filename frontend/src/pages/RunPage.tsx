@@ -67,7 +67,7 @@ function resumePending(
 export default function RunPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  // 研究报告是核心产出：默认给报告栏更大权重，也允许一键展开全宽阅读。
+  // 保留旧状态以兼容历史数据，屏幕布局由最终样式固定为全宽单栏。
   const [reportExpanded, setReportExpanded] = useState(false)
   // 打印预览：在屏幕上按 A4 版心呈现打印布局，替换掉交互视图。
   const [printPreview, setPrintPreview] = useState(false)
@@ -337,7 +337,7 @@ export default function RunPage() {
       {/* 打印预览按 A4 版心（182mm）排版，塞在约 60% 宽的报告栏里会横向溢出。
           预览期间强制单栏——预览的意义就是看整页纸，左侧过程视图此时无关。 */}
       <div
-        className={`grid-2 run-columns${reportExpanded || printPreview ? ' report-expanded' : ''}`}
+        className={`run-columns${printPreview ? ' is-print-preview' : ''}`}
       >
         <div className="stack run-activity-column">
           <div className="panel">
@@ -351,7 +351,9 @@ export default function RunPage() {
             </div>
           )}
         </div>
-        <div className={`panel report-panel run-report-column${liveActive ? ' is-streaming' : ''}`}>
+        <div
+          className={`panel report-panel run-report-column${liveActive ? ' is-streaming' : ''}${printPreview ? ' is-print-preview' : ''}`}
+        >
           <div className="row between panel-head">
             <h3 className="panel-title">研究报告</h3>
             <div className="row report-panel-tools">

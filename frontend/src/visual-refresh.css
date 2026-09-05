@@ -1065,3 +1065,204 @@
     }
   }
 }
+
+/* Final layout contract: reports are a single reading surface.  This sits
+ * after the legacy screen sheets so the workbench cannot reintroduce a
+ * narrow sticky report column. */
+@media screen {
+  .run-columns {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 28px !important;
+    width: 100% !important;
+  }
+
+  .run-report-column {
+    order: 1 !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    position: static !important;
+    max-height: none !important;
+  }
+
+  .run-activity-column {
+    order: 2 !important;
+    width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .run-columns.is-print-preview {
+    gap: 0 !important;
+  }
+
+  .run-columns.is-print-preview .run-activity-column {
+    display: none !important;
+  }
+
+  .run-report-column.is-print-preview {
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .run-report-column.is-print-preview > .panel-head {
+    display: none !important;
+  }
+
+  .report-view-switch {
+    display: none !important;
+  }
+
+  .report-panel-tools {
+    margin-left: auto !important;
+  }
+
+  /* Welcome surface: a restrained navy field with explicit light ink. */
+  .visitor-welcome.signal-theme {
+    min-height: 100vh !important;
+    color: #f5fbfc !important;
+    background: #081820 !important;
+    background-image:
+      linear-gradient(rgba(104, 205, 196, 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(104, 205, 196, 0.08) 1px, transparent 1px) !important;
+    background-size: 52px 52px !important;
+  }
+
+  .visitor-welcome .welcome-nav,
+  .visitor-welcome .welcome-hero,
+  .visitor-welcome .welcome-capabilities,
+  .visitor-welcome .welcome-telemetry-section {
+    position: relative !important;
+    z-index: 1 !important;
+  }
+
+  .visitor-welcome .welcome-nav {
+    padding-top: 24px !important;
+  }
+
+  .visitor-welcome .welcome-brand,
+  .visitor-welcome .welcome-brand strong {
+    color: #f5fbfc !important;
+  }
+
+  .visitor-welcome .welcome-brand small,
+  .visitor-welcome .welcome-nav-meta,
+  .visitor-welcome .welcome-nav-meta span,
+  .visitor-welcome .welcome-topline {
+    color: #a9c5ca !important;
+  }
+
+  .visitor-welcome .welcome-hero {
+    min-height: auto !important;
+    padding-top: 86px !important;
+    padding-bottom: 72px !important;
+    align-items: start !important;
+  }
+
+  .visitor-welcome .welcome-copy h1,
+  .visitor-welcome .welcome-copy h1 .headline-line-inner {
+    color: #f5fbfc !important;
+    font-size: clamp(3rem, 6.3vw, 6.5rem) !important;
+    line-height: 1.02 !important;
+    letter-spacing: 0 !important;
+  }
+
+  .visitor-welcome .welcome-copy h1 .headline-accent,
+  .visitor-welcome .welcome-kicker {
+    color: #67e1d5 !important;
+  }
+
+  .visitor-welcome .welcome-copy p,
+  .visitor-welcome .welcome-orbit p,
+  .visitor-welcome .welcome-note-list,
+  .visitor-welcome .welcome-signal-line {
+    color: #c7dadd !important;
+    font-size: 1rem !important;
+    line-height: 1.8 !important;
+  }
+
+  .visitor-welcome .welcome-secondary {
+    color: #d9ebed !important;
+    border-color: rgba(217, 235, 237, 0.55) !important;
+    background: transparent !important;
+  }
+
+  .visitor-welcome .welcome-orbit,
+  .visitor-welcome .welcome-capabilities article,
+  .visitor-welcome .welcome-telemetry-section {
+    border-color: rgba(164, 220, 217, 0.36) !important;
+    background: rgba(15, 44, 55, 0.94) !important;
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24) !important;
+  }
+
+  .visitor-welcome .welcome-capabilities {
+    margin-bottom: 54px !important;
+    gap: 12px !important;
+    border: 0 !important;
+    background: transparent !important;
+  }
+
+  .visitor-welcome .welcome-capabilities article {
+    min-height: 190px !important;
+    padding: 26px !important;
+    border: 1px solid rgba(164, 220, 217, 0.36) !important;
+    border-radius: 12px !important;
+  }
+
+  .visitor-welcome .welcome-capabilities b,
+  .visitor-welcome .welcome-capabilities strong,
+  .visitor-welcome .welcome-capabilities p {
+    color: #f0fbfb !important;
+  }
+
+  .visitor-welcome .welcome-capabilities b {
+    color: #67e1d5 !important;
+  }
+
+  .visitor-welcome .welcome-capabilities p {
+    color: #bed4d8 !important;
+    font-size: 0.94rem !important;
+  }
+
+  .visitor-welcome .welcome-telemetry-section {
+    margin-inline: clamp(18px, 7vw, 110px) !important;
+    padding: 34px clamp(24px, 4vw, 54px) 46px !important;
+    border-radius: 12px !important;
+  }
+
+  .visitor-welcome .welcome-telemetry-heading h2,
+  .visitor-welcome .welcome-telemetry-heading p,
+  .visitor-welcome .welcome-telemetry-caption,
+  .visitor-welcome .welcome-telemetry-caption span {
+    color: #f0fbfb !important;
+  }
+
+  .visitor-welcome .welcome-telemetry-heading > div > span,
+  .visitor-welcome .welcome-telemetry-caption span {
+    color: #8edbd4 !important;
+  }
+
+  @media (max-width: 760px) {
+    .visitor-welcome .welcome-hero {
+      grid-template-columns: 1fr !important;
+      padding-top: 72px !important;
+    }
+
+    .visitor-welcome .welcome-orbit {
+      width: min(82vw, 420px) !important;
+      margin-top: 12px !important;
+    }
+
+    .visitor-welcome .welcome-capabilities {
+      grid-template-columns: 1fr !important;
+      margin-inline: 18px !important;
+    }
+
+    .visitor-welcome .welcome-telemetry-section {
+      margin-inline: 18px !important;
+    }
+  }
+}
