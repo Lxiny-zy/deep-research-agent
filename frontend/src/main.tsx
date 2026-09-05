@@ -14,6 +14,8 @@ import './editorial.css'
 import './clarity.css'
 // Final high-contrast research workspace layer.
 import './visual-refresh.css'
+import './welcome.css'
+import './interactions.css'
 // Keep print overrides last so they can flatten the screen report layout.
 import './print.css'
 import AgentSquarePage from './pages/AgentSquarePage'
@@ -37,6 +39,7 @@ const router = createBrowserRouter([
     element: <App />,
     children: [
       { index: true, element: <NewResearchPage /> },
+      { path: 'welcome', element: null },
       { path: 'runs/:id', element: <RunPage /> },
       { path: 'history', element: <HistoryPage /> },
       { path: 'workflows', element: <WorkflowBuilderPage /> },

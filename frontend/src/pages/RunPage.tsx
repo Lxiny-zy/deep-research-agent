@@ -67,8 +67,6 @@ function resumePending(
 export default function RunPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  // 保留旧状态以兼容历史数据，屏幕布局由最终样式固定为全宽单栏。
-  const [reportExpanded, setReportExpanded] = useState(false)
   // 打印预览：在屏幕上按 A4 版心呈现打印布局，替换掉交互视图。
   const [printPreview, setPrintPreview] = useState(false)
   const [streamRestartToken, setStreamRestartToken] = useState(0)
@@ -334,11 +332,8 @@ export default function RunPage() {
         />
       </div>
 
-      {/* 打印预览按 A4 版心（182mm）排版，塞在约 60% 宽的报告栏里会横向溢出。
-          预览期间强制单栏——预览的意义就是看整页纸，左侧过程视图此时无关。 */}
-      <div
-        className={`run-columns${printPreview ? ' is-print-preview' : ''}`}
-      >
+      {/* 打印预览独占阅读区域，屏幕中的运行活动由打印样式隐藏。 */}
+      <div className={`run-columns${printPreview ? ' is-print-preview' : ''}`}>
         <div className="stack run-activity-column">
           <div className="panel">
             <h3 className="panel-title">Agent 实时活动</h3>
@@ -357,30 +352,6 @@ export default function RunPage() {
           <div className="row between panel-head">
             <h3 className="panel-title">研究报告</h3>
             <div className="row report-panel-tools">
-              <div className="report-view-switch" role="group" aria-label="报告阅读布局">
-                <button
-                  type="button"
-                  className={`btn btn-ghost btn-sm report-view-option${!reportExpanded && !printPreview ? ' is-active' : ''}`}
-                  aria-label="双栏视图"
-                  aria-pressed={!reportExpanded && !printPreview}
-                  disabled={printPreview}
-                  onClick={() => setReportExpanded(false)}
-                >
-                  <AppIcon name="panel-close" size={14} aria-hidden="true" />
-                  双栏
-                </button>
-                <button
-                  type="button"
-                  className={`btn btn-ghost btn-sm report-view-option report-expand-toggle${reportExpanded || printPreview ? ' is-active' : ''}`}
-                  aria-label="全宽阅读"
-                  aria-pressed={reportExpanded || printPreview}
-                  disabled={printPreview}
-                  onClick={() => setReportExpanded(true)}
-                >
-                  <AppIcon name="panel-open" size={14} aria-hidden="true" />
-                  全宽
-                </button>
-              </div>
               <ReportActions
                 markdown={markdown}
                 query={query}

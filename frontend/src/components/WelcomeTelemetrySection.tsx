@@ -10,13 +10,10 @@ export default function WelcomeTelemetrySection() {
     <section className="welcome-telemetry-section" aria-labelledby="welcome-telemetry-title">
       <header className="welcome-telemetry-heading">
         <div>
-          <span>OBSERVABLE BY DEFAULT</span>
-          <h2 id="welcome-telemetry-title">研究不是黑箱，过程实时可见。</h2>
+          <span>02 / RESEARCH IN MOTION</span>
+          <h2 id="welcome-telemetry-title">每一步思考，都有迹可循。</h2>
         </div>
-        <p>
-          从工作流阶段、累计 Token 到实际耗时，运行状态通过 SSE 持续更新； 下面是零 API
-          消耗的自动循环演示。
-        </p>
+        <p>研究过程预览 · 演示数据</p>
       </header>
 
       <div className="welcome-telemetry-demo">
@@ -45,10 +42,10 @@ export default function WelcomeTelemetrySection() {
           <AppIcon name="activity" size={13} aria-hidden="true" /> 实时阶段进度
         </span>
         <span>
-          <AppIcon name="braces" size={13} aria-hidden="true" /> Token 用量校准
+          <AppIcon name="braces" size={13} aria-hidden="true" /> 研究用量
         </span>
         <span>
-          <AppIcon name="refresh" size={13} aria-hidden="true" /> 断线轮询兜底
+          <AppIcon name="shield" size={13} aria-hidden="true" /> 可追溯的证据
         </span>
       </footer>
     </section>

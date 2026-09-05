@@ -67,7 +67,7 @@ export default function ReportView({
         }
         const n = Number(link.slice(CITE_HREF_PREFIX.length))
         const url = targets[n - 1]
-        const clickable = findingsForUrl(findings, url).length > 0
+        const clickable = Boolean(url) && (!streaming || findingsForUrl(findings, url).length > 0)
         if (!clickable) {
           // 无证据数据（流式阶段/来源无结构化 findings）：降级为不可点击角标
           return <span className="cite-ref inert">{children}</span>
@@ -91,7 +91,7 @@ export default function ReportView({
         )
       },
     }),
-    [targets, findings],
+    [targets, findings, streaming],
   )
 
   if (!markdown) {
@@ -144,6 +144,22 @@ export default function ReportView({
           )}
         </div>
       )}
+      {!streaming && cited.length > 0 && (
+        <div className="evidence-toolbar">
+          <span>{cited.length} 个引用来源</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={(event) => {
+              citationTriggerRef.current = event.currentTarget
+              setActiveCitation(cited[0].n)
+            }}
+          >
+            <AppIcon name="file-search" size={15} aria-hidden="true" />
+            查看证据
+          </button>
+        </div>
+      )}
       <div className="report-view-body">
         <div className="report markdown-content">
           <Markdown remarkPlugins={[remarkGfm, remarkCitations]} components={components}>
@@ -161,6 +177,18 @@ export default function ReportView({
                     <a href={url} target="_blank" rel="noreferrer">
                       {referenceTextFor(findings, url)}
                     </a>
+                    <button
+                      type="button"
+                      className="reference-evidence-button"
+                      title={`查看来源 ${n} 的证据`}
+                      aria-label={`查看来源 ${n} 的证据`}
+                      onClick={(event) => {
+                        citationTriggerRef.current = event.currentTarget
+                        setActiveCitation(n)
+                      }}
+                    >
+                      <AppIcon name="file-search" size={15} aria-hidden="true" />
+                    </button>
                   </li>
                 ))}
               </ol>
@@ -175,6 +203,8 @@ export default function ReportView({
             findings={activeFindings}
             allFindings={findings}
             onClose={closeEvidence}
+            sources={cited}
+            onSelect={setActiveCitation}
           />
         )}
       </div>

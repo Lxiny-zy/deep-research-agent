@@ -216,7 +216,7 @@ docker compose --profile worker up --build --scale worker=3
 应在代码中新增一个固定的 `OperationDefinition` 并随镜像发布，而不是把命令字符串写进
 planner prompt 或运行时环境变量。
 
-安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问请经反向代理（TLS/限流）。Compose 为 API 设置 `APP_ENV=production`，启动时会强制校验 PostgreSQL、`API_KEY` 与 `CATALOG_ENCRYPTION_KEY`，缺一即失败。所有 `/api` 端点接受 `Authorization: Bearer <key>` 或 `X-API-Key` 请求头，不接受 URL 查询参数。前端 SSE 同样使用请求头，登录凭据只保存在当前标签页的 `sessionStorage`，关闭标签页即清除。
+安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问请经反向代理（TLS/限流）。Compose 为 API 设置 `APP_ENV=production`，启动时会强制校验 PostgreSQL、`API_KEY` 与 `CATALOG_ENCRYPTION_KEY`，缺一即失败。所有 `/api` 端点接受 `Authorization: Bearer <key>` 或 `X-API-Key` 请求头，不接受 URL 查询参数。前端 SSE 同样使用请求头。登录默认勾选「记住此设备」，验证成功后凭据保存在当前站点的 `localStorage`，重新打开浏览器会自动验证并进入；取消勾选则仅保存在当前标签页的 `sessionStorage`。公共设备请取消勾选。清除密钥或服务端返回 401 时会删除两处凭据；网络错误不会清除。浏览器禁用持久存储时会提示降级为会话或当前页面登录。不同域名、协议和端口的存储相互独立。
 
 Nginx 反向代理可从 `docker/nginx.conf.example` 起步。SSE 实时进度要求关闭 `proxy_buffering`，并把读写超时提高到覆盖最长研究任务。宿主机 Nginx 经 Docker bridge 访问 API 时，在 `APP_BIND` 保持 `127.0.0.1` 的前提下同时设置 `APP_TRUST_PROXY=true` 与 `FORWARDED_ALLOW_IPS=*`，分别让应用限流和 Uvicorn 信任代理覆盖的客户端 IP/协议；直接暴露 API 时两项都必须保持收紧，尤其不要把 `FORWARDED_ALLOW_IPS` 设为 `*`。若不用反向代理、明确要直接暴露端口，可在 `.env` 设置 `APP_BIND=0.0.0.0`，但仍应在安全组中限制来源并配置 HTTPS。
 

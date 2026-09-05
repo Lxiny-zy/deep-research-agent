@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import ClarifyDialog from '../components/ClarifyDialog'
 import SettingsPanel from '../components/SettingsPanel'
 import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { useConfig } from '../hooks/useConfig'
+import { useResearchDraft } from '../hooks/useResearchDraft'
 import { assessIntent, createRun, listWorkflows } from '../api/client'
 import { advance, emptySlots, isSkip, type ClarifyState } from '../lib/clarification'
 import { clearThread, loadThread } from '../lib/conversation'
@@ -13,7 +14,7 @@ import {
   isDefaultWorkflow,
   isUserFacingWorkflow,
 } from '../lib/workflowTemplates'
-import type { ConversationTurn, ResearchParams, WorkflowInfo } from '../types'
+import type { ConversationTurn, WorkflowInfo } from '../types'
 
 const DEFAULT_QUERY = '2026 年主流 AI Agent 框架有哪些？各自的设计取舍是什么？'
 const SAMPLES = [
@@ -23,39 +24,44 @@ const SAMPLES = [
 ]
 
 export default function NewResearchPage() {
+  const [searchParams] = useSearchParams()
+  return <ResearchComposer key={searchParams.get('followup') === '1' ? 'followup' : 'new'} />
+}
+
+function ResearchComposer() {
   const navigate = useNavigate()
   const { data: config } = useConfig()
   const pageRef = useRef<HTMLDivElement>(null)
   useRevealOnScroll(pageRef)
   const [searchParams] = useSearchParams()
-  const [query, setQuery] = useState(DEFAULT_QUERY)
-  const [params, setParams] = useState<ResearchParams>({})
-  const [workflows, setWorkflows] = useState<WorkflowInfo[]>([])
-  const [workflow, setWorkflow] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  // 追问上下文来自 sessionStorage，在挂载时读一次即可：本页是唯一的写入方之一，
-  // 而另一个写入方（运行详情页的「继续追问」）跳转过来时组件会重新挂载。
+  const isFollowUp = searchParams.get('followup') === '1'
   const [thread, setThread] = useState<ConversationTurn[]>(() => loadThread())
-  // 澄清循环的临时状态：非 null 表示正在等用户补充信息，研究尚未开始。
-  // 刻意不落 sessionStorage——它是一次提问内部的过程，刷新页面就该重来。
+  const [draftContext] = useState(() => (isFollowUp ? JSON.stringify(thread) : ''))
+  const draft = useResearchDraft(isFollowUp ? '' : DEFAULT_QUERY, draftContext)
+  const { query, params, workflow } = draft
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  const [workflows, setWorkflows] = useState<WorkflowInfo[]>([])
+  const [submitting, setSubmitting] = useState(false)
+  const [phase, setPhase] = useState('')
+  const [error, setError] = useState<string | null>(null)
   const [clarify, setClarify] = useState<ClarifyState | null>(null)
+  const busy = submitting || clarify !== null
 
   useEffect(() => {
-    // stale 标记：连续导航或组件卸载后，旧请求的迟到响应不得覆盖新选择。
     let stale = false
     const preferred = searchParams.get('workflow')
     listWorkflows()
       .then((items) => {
         if (stale) return
-        // The API also exposes runtime policy/coordination workflows. They
-        // remain engine capabilities, but are not standalone choices in the
-        // composer (the intent gate is applied globally by the runtime).
-        const visibleItems = items.filter(isUserFacingWorkflow)
-        setWorkflows(visibleItems)
-        const match = preferred ? visibleItems.find((item) => item.name === preferred) : undefined
-        const defaultWorkflow = match ?? visibleItems.find(isDefaultWorkflow) ?? visibleItems[0]
-        if (defaultWorkflow) setWorkflow(defaultWorkflow.name)
+        const visible = items.filter(isUserFacingWorkflow)
+        setWorkflows(visible)
+        const selected =
+          visible.find((item) => item.name === preferred) ??
+          visible.find((item) => item.name === draftRef.current.workflow) ??
+          visible.find(isDefaultWorkflow) ??
+          visible[0]
+        if (selected) draftRef.current.update({ workflow: selected.name }, false)
       })
       .catch(() => {})
     return () => {
@@ -63,96 +69,72 @@ export default function NewResearchPage() {
     }
   }, [searchParams])
 
-  // 从运行详情页点「继续追问」过来时带 followup=1：此时把默认问题清空，
-  // 否则用户会对着一段与上文无关的示例文案继续追问。
-  useEffect(() => {
-    if (searchParams.get('followup') === '1') setQuery('')
-  }, [searchParams])
-
   function dropThread() {
     clearThread()
     setThread([])
+    if (isFollowUp) {
+      draft.discard()
+      navigate('/', { replace: true })
+    }
   }
 
-  /** 真正创建研究。到这一步意味着信息已经够了（或用户主动跳过了追问）。
-   *
-   * ``clarified`` 表示本次已走过澄清循环（assess 放行或用户点了「直接研究」）：
-   * 服务端见到它就不再复核澄清。没有这个标记，「直接研究」会被 create_run
-   * 的澄清兜底 422 打回——用户刚说完「别问了」，系统回一句「请先补全信息」。
-   */
   async function launch(finalQuery: string, clarified = false) {
+    setPhase('正在创建研究任务')
     const hasParams = Object.values(params).some((item) => item != null)
     const { run_id } = await createRun({
       query: finalQuery,
       params: hasParams ? params : null,
       workflow: workflow || null,
-      // 空数组也照常传：后端把它当作「无上下文」，与不传等价，
-      // 省掉一个仅为省几字节而存在的条件分支。
       history: thread,
       clarified,
     })
-    navigate(`/runs/${run_id}`)
+    draft.discard()
+    navigate('/runs/' + run_id)
   }
 
-  /** 走一轮澄清判定：够了就建 run，不够就把追问渲染出来等用户作答。 */
-  async function step(state: ClarifyState) {
+  async function step(state: ClarifyState, allowFallback = false) {
+    setPhase('正在确认研究范围')
+    // Only assessment failures fall back; failed creation must not trigger another request.
     const verdict = await assessIntent({
       query: state.query,
       answers: state.answers,
       round: state.round,
       history: thread,
+    }).catch((cause: unknown) => {
+      if (!allowFallback) throw cause
+      return null
     })
-    if (verdict.ready) {
-      // blocked 的请求也走这里：它必须照常建 run，把「为什么被拒」
-      // 留成审计记录——拒识是安全事件，不是可以澄清掉的产品交互。
-      setClarify(null)
-      await launch(verdict.resolved_query || state.query, true)
+    if (!verdict || verdict.ready) {
+      await launch(verdict?.resolved_query || state.query, Boolean(verdict))
       return
     }
-    setClarify({
-      ...state,
-      question: verdict.question,
-      options: verdict.options,
-      gap: verdict.gap,
-    })
-    // 追问期间必须解除提交锁：否则用户点了选项也没反应。
+    setClarify({ ...state, question: verdict.question, options: verdict.options, gap: verdict.gap })
+    setSubmitting(false)
+  }
+
+  function failed(cause: unknown) {
+    setError(cause instanceof Error ? cause.message : '提交失败，请重试')
     setSubmitting(false)
   }
 
   async function start() {
     const value = query.trim()
-    if (!value || submitting) return
+    if (!value || busy) return
     setSubmitting(true)
     setError(null)
-    const initial: ClarifyState = {
-      query: value,
-      round: 0,
-      answers: emptySlots(),
-      question: '',
-      options: [],
-      gap: 'none',
-    }
     try {
-      await step(initial)
+      await step(
+        { query: value, round: 0, answers: emptySlots(), question: '', options: [], gap: 'none' },
+        true,
+      )
     } catch (cause) {
-      // 澄清判定挂了（网络/限流/后端版本没有这个端点）不该挡住提问——
-      // 它是增强而非必需。直接按老路建 run。
-      try {
-        setClarify(null)
-        await launch(value)
-      } catch (fallbackCause) {
-        setError(fallbackCause instanceof Error ? fallbackCause.message : '提交失败')
-        setSubmitting(false)
-      }
-      void cause
+      failed(cause)
     }
   }
 
-  /** 用户答了一轮：累积答案后再判一次。 */
   async function answerClarification(answer: string) {
     if (!clarify || submitting) return
     if (isSkip(answer)) {
-      // 服务端生成的候选里也可能带「直接研究」，与底部跳过键同一条路。
       await skipClarification()
       return
     }
@@ -161,8 +143,7 @@ export default function NewResearchPage() {
     try {
       await step(advance(clarify, answer))
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '提交失败')
-      setSubmitting(false)
+      failed(cause)
     }
   }
 
@@ -170,34 +151,30 @@ export default function NewResearchPage() {
     if (!clarify || submitting) return
     setSubmitting(true)
     setError(null)
+    setPhase('正在确认研究范围')
+    const verdict = await assessIntent({
+      query: clarify.query,
+      answers: clarify.answers,
+      round: clarify.round,
+      history: thread,
+      skip: true,
+    }).catch(() => null)
     try {
-      // 跳过 ≠ 丢弃：用户前几轮答过的槽位仍要合成进最终问题。
-      // 曾经这里直接拿最初的残句建 run，第一轮答的「Kafka 和 RabbitMQ」
-      // 在第二轮点「直接研究」时被整个扔掉。合成必须在服务端做
-      // （它才看得到槽位语义），所以带 skip 标记再问一次 assess。
-      const verdict = await assessIntent({
-        query: clarify.query,
-        answers: clarify.answers,
-        round: clarify.round,
-        history: thread,
-        skip: true,
-      })
-      setClarify(null)
-      await launch(verdict.resolved_query || clarify.query, true)
-    } catch {
-      // assess 挂了也不能挡住跳过：退化为拿原句建 run（答案合成不了，
-      // 但「用户想立刻开始」这个意图必须被满足）。
-      try {
-        setClarify(null)
-        await launch(clarify.query, true)
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : '提交失败')
-        setSubmitting(false)
-      }
+      await launch(verdict?.resolved_query || clarify.query, true)
+    } catch (cause) {
+      failed(cause)
     }
   }
 
   const activeWorkflow = workflows.find((item) => item.name === workflow)
+  const draftLabel = {
+    idle: '',
+    restored: '已恢复上次草稿',
+    saving: '正在保存草稿…',
+    saved: '草稿已保存到此浏览器',
+    unavailable: '草稿未能保存，请保持当前页面',
+    cleared: '草稿已清除',
+  }[draft.status]
 
   return (
     <div className="stack page-stack" ref={pageRef}>
@@ -209,35 +186,72 @@ export default function NewResearchPage() {
           <h1>
             把一个问题，<em>研究透彻。</em>
           </h1>
-          <p>
-            交给一组会规划、检索、反思和写作的 Agent。你提供问题，系统负责把证据组织成可复核的报告。
-          </p>
+          <p>从一个值得深挖的问题开始。</p>
         </div>
-        <div className="intro-orbit" aria-hidden="true">
-          <span className="intro-orbit-ring ring-one" />
-          <span className="intro-orbit-ring ring-two" />
-          <span className="intro-orbit-core">
-            <AppIcon name="network" size={20} />
+        <div className="workspace-signature" aria-hidden="true">
+          <AppIcon name="scan-search" size={34} strokeWidth={1.1} />
+          <span>
+            RESEARCH
+            <br />
+            STARTS HERE
           </span>
         </div>
       </header>
-
       <section className="panel research-composer" data-reveal="1">
+        {draft.status !== 'idle' && (
+          <div className={'draft-status ' + draft.status}>
+            <span role="status">
+              <AppIcon
+                name={draft.status === 'unavailable' ? 'alert' : 'save'}
+                size={14}
+                aria-hidden="true"
+              />
+              {draftLabel}
+            </span>
+            <span className="draft-actions">
+              {draft.canUndo && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={busy}
+                  onClick={draft.restore}
+                >
+                  <AppIcon name="undo" size={14} aria-hidden="true" />
+                  撤销清除
+                </button>
+              )}
+              {query.trim() && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm icon-button"
+                  disabled={busy}
+                  title="清除草稿"
+                  aria-label="清除草稿"
+                  onClick={draft.clear}
+                >
+                  <AppIcon name="trash" size={14} aria-hidden="true" />
+                </button>
+              )}
+              {draft.status === 'unavailable' && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={draft.retry}>
+                  重试保存
+                </button>
+              )}
+            </span>
+          </div>
+        )}
         <div className="panel-header">
           <div>
             <span className="panel-kicker">问题 / 01</span>
             <h2 className="panel-title">定义研究问题</h2>
           </div>
-          <span className="panel-index">01 — 03</span>
+          <span className="panel-index">NEW / RESEARCH</span>
         </div>
-
         <div className="panel-body stack">
-          <div className="composer-workbench">
+          <fieldset className="composer-workbench composer-fields" disabled={busy}>
             <div className="composer-main">
               {thread.length > 0 && (
                 <div className="thread-context" data-testid="thread-context">
-                  {/* 上下文必须可见且可清除：一段用户看不见的历史会悄悄改变本次判定，
-                      「为什么它答的是另一个东西」将无从解释。 */}
                   <div className="field-label thread-heading">
                     <span>
                       <AppIcon name="history" size={14} aria-hidden="true" /> 追问上下文（
@@ -249,18 +263,15 @@ export default function NewResearchPage() {
                   </div>
                   <ol className="thread-list">
                     {thread.map((turn, index) => (
-                      <li key={`${turn.query}-${index}`}>
+                      <li key={index}>
                         <span className="thread-index">{index + 1}</span>
                         <span className="thread-query">{turn.query}</span>
                       </li>
                     ))}
                   </ol>
-                  <p className="hint">
-                    本次提问会带上以上轮次，「那第二个呢」这类追问会先被还原成完整问题再研究。
-                  </p>
+                  <p className="hint">本次提问会带上以上轮次。</p>
                 </div>
               )}
-
               <label className="field-label research-query-label" htmlFor="query">
                 研究问题
                 <textarea
@@ -268,19 +279,16 @@ export default function NewResearchPage() {
                   className="input textarea research-query-input"
                   rows={4}
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => draft.update({ query: event.target.value })}
                   placeholder={
-                    thread.length > 0
-                      ? '接着上文追问，例如「那第二个呢」…'
-                      : '输入一个值得深挖的问题…'
+                    thread.length ? '接着上文追问，例如「那第二个呢」…' : '输入一个值得深挖的问题…'
                   }
                 />
               </label>
-
               <div className="sample-block">
                 <div className="field-label sample-heading">
-                  <span>快捷示例</span>
-                  <span className="muted small">点击载入</span>
+                  <span>研究灵感</span>
+                  <AppIcon name="arrow-down" size={13} aria-hidden="true" />
                 </div>
                 <div className="sample-grid">
                   {SAMPLES.map((sample, index) => (
@@ -288,7 +296,7 @@ export default function NewResearchPage() {
                       type="button"
                       key={sample}
                       className="sample-card"
-                      onClick={() => setQuery(sample)}
+                      onClick={() => draft.update({ query: sample })}
                     >
                       <span className="sample-number">0{index + 1}</span>
                       <span>{sample}</span>
@@ -298,13 +306,11 @@ export default function NewResearchPage() {
                 </div>
               </div>
             </div>
-
             <aside className="composer-sidebar" aria-label="研究配置">
               <div className="composer-section-heading">
                 <span className="panel-kicker">配置 / 02</span>
                 <h3 className="composer-section-title">研究配置</h3>
               </div>
-
               {workflows.length > 0 && (
                 <label className="field-label workflow-select-field" htmlFor="workflow">
                   研究流程
@@ -314,22 +320,14 @@ export default function NewResearchPage() {
                       id="workflow"
                       className="input"
                       value={workflow}
-                      onChange={(event) => setWorkflow(event.target.value)}
+                      onChange={(event) => draft.update({ workflow: event.target.value })}
                     >
-                      {workflows.map((item) => {
-                        const meta = BUILTIN_TEMPLATE_META[item.name]
-                        const title = meta?.title
-                        // Public builtins use a Chinese product title; internal
-                        // workflow identifiers remain values for the API, not UI
-                        // copy. Custom workflows keep their user-defined name.
-                        const label = title || item.name
-                        return (
-                          <option key={item.name} value={item.name}>
-                            {label}
-                            {isDefaultWorkflow(item) ? '（默认）' : ''}
-                          </option>
-                        )
-                      })}
+                      {workflows.map((item) => (
+                        <option key={item.name} value={item.name}>
+                          {BUILTIN_TEMPLATE_META[item.name]?.title || item.name}
+                          {isDefaultWorkflow(item) ? '（默认）' : ''}
+                        </option>
+                      ))}
                     </select>
                   </span>
                   {activeWorkflow && (
@@ -340,36 +338,54 @@ export default function NewResearchPage() {
                   )}
                 </label>
               )}
-
               <SettingsPanel
                 value={params}
-                onChange={setParams}
+                onChange={(next) => draft.update({ params: next })}
                 globalRequireCorroboration={config?.require_corroboration ?? false}
               />
             </aside>
-          </div>
-
+          </fieldset>
           <div className="composer-action-column">
             {clarify && (
-              <ClarifyDialog
-                question={clarify.question}
-                options={clarify.options}
-                round={clarify.round}
-                busy={submitting}
-                onAnswer={answerClarification}
-                onSkip={skipClarification}
-              />
+              <>
+                <ClarifyDialog
+                  question={clarify.question}
+                  options={clarify.options}
+                  round={clarify.round}
+                  busy={submitting}
+                  onAnswer={answerClarification}
+                  onSkip={skipClarification}
+                />
+                <button
+                  className="btn btn-ghost btn-sm"
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => {
+                    setClarify(null)
+                    setError(null)
+                    requestAnimationFrame(() => document.getElementById('query')?.focus())
+                  }}
+                >
+                  <AppIcon name="edit" size={14} aria-hidden="true" />
+                  修改问题
+                </button>
+              </>
             )}
-
             <div className="submit-panel research-submit-panel">
-              <div className="submit-context">
-                <AppIcon name="help" size={17} aria-hidden="true" />
-                <p>提交后创建可持久化研究任务，全程实时推送，可在「研究历史」回放。</p>
+              <div className="submit-context" role="status">
+                <AppIcon
+                  name={submitting ? 'activity' : 'circle-dot-dashed'}
+                  size={17}
+                  aria-hidden="true"
+                />
+                <p>
+                  {submitting ? phase : clarify ? '等待补充研究范围' : '准备好，探索下一个问题。'}
+                </p>
               </div>
               <button
                 className="btn btn-primary btn-lg submit-button"
                 onClick={start}
-                disabled={submitting || !query.trim() || clarify !== null}
+                disabled={busy || !query.trim()}
                 type="button"
               >
                 <AppIcon
@@ -381,11 +397,10 @@ export default function NewResearchPage() {
                 {submitting ? '提交中…' : '开始研究'}
               </button>
             </div>
-
             {error && (
-              <div className="badge error form-error">
+              <div className="badge error form-error" role="alert">
                 <AppIcon name="circle-x" size={15} aria-hidden="true" />
-                {error}
+                {error}。输入已保留，可重新提交。
               </div>
             )}
           </div>

@@ -1,9 +1,11 @@
 import { useEffect, useId, useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import LoginGate from './components/LoginGate'
 import WelcomePage from './components/WelcomePage'
+import OnboardingTour from './components/OnboardingTour'
+import { hasSeenTour, markTourSeen } from './lib/onboarding'
 import { AppIcon, type AppIconName } from './components/AppIcon'
-import { clearApiKey, getApiKey } from './api/client'
+import { clearApiKey, getApiKey, getApiKeyStorage } from './api/client'
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   isActive ? 'nav-link active' : 'nav-link'
@@ -25,7 +27,38 @@ export default function App() {
   const [authError, setAuthError] = useState('')
   const [authAttempt, setAuthAttempt] = useState(0)
   const [navOpen, setNavOpen] = useState(false)
+  const [showTour, setShowTour] = useState(() => !hasSeenTour())
   const location = useLocation()
+  const navigate = useNavigate()
+  const closeTour = () => {
+    markTourSeen()
+    setShowTour(false)
+  }
+  const enterWorkspace = () => (authStatus === 'verified' ? navigate('/') : setShowLogin(true))
+  const tour =
+    showTour && !showLogin ? (
+      <OnboardingTour
+        onClose={closeTour}
+        onComplete={() => {
+          closeTour()
+          enterWorkspace()
+        }}
+      />
+    ) : null
+  const keyStatus = {
+    local: '密钥已记住',
+    session: '仅本次会话',
+    memory: '仅当前页面',
+    none: '无需密钥',
+  }[getApiKeyStorage()]
+
+  useEffect(() => {
+    const changed = (event: StorageEvent) => {
+      if (event.key === 'dr_api_key' || event.key === null) setAuthAttempt((attempt) => attempt + 1)
+    }
+    window.addEventListener('storage', changed)
+    return () => window.removeEventListener('storage', changed)
+  }, [])
 
   useEffect(() => {
     setNavOpen(false)
@@ -52,6 +85,7 @@ export default function App() {
       signal: controller.signal,
     })
       .then((response) => {
+        if (controller.signal.aborted) return
         if (response.ok) {
           setAuthError('')
           setAuthStatus('verified')
@@ -61,7 +95,7 @@ export default function App() {
           clearApiKey()
           setAuthError('')
           setAuthStatus('guest')
-          setShowLogin(true)
+          setShowLogin(Boolean(key))
           return
         }
         throw new Error(`无法加载服务配置（HTTP ${response.status}）`)
@@ -78,6 +112,12 @@ export default function App() {
     setAuthError('')
     setAuthStatus('checking')
     setAuthAttempt((attempt) => attempt + 1)
+  }
+
+  const onAuthenticated = () => {
+    setShowLogin(false)
+    if (location.pathname === '/welcome' && getApiKey()) navigate('/')
+    retryAuth()
   }
 
   if (authStatus === 'checking') {
@@ -113,11 +153,14 @@ export default function App() {
     )
   }
 
-  if (authStatus === 'guest') {
+  if (authStatus === 'guest' || location.pathname === '/welcome') {
     return (
       <>
-        <WelcomePage onEnter={() => setShowLogin(true)} />
-        {showLogin && <LoginGate onClose={() => setShowLogin(false)} />}
+        <WelcomePage onEnter={enterWorkspace} onTour={() => setShowTour(true)} />
+        {tour}
+        {showLogin && (
+          <LoginGate onClose={() => setShowLogin(false)} onAuthenticated={onAuthenticated} />
+        )}
       </>
     )
   }
@@ -147,6 +190,16 @@ export default function App() {
 
         <button
           type="button"
+          className="compact-key-status"
+          onClick={() => setShowLogin(true)}
+          title="API 密钥管理"
+        >
+          <AppIcon name="key" size={14} aria-hidden="true" />
+          {keyStatus}
+        </button>
+
+        <button
+          type="button"
           className="mobile-nav-toggle"
           aria-controls={navigationId}
           aria-expanded={navOpen}
@@ -167,21 +220,67 @@ export default function App() {
               {item.label}
             </NavLink>
           ))}
+          <button
+            type="button"
+            className="nav-link compact-nav-action"
+            onClick={() => {
+              setNavOpen(false)
+              setShowTour(true)
+            }}
+          >
+            <AppIcon name="help" size={15} aria-hidden="true" />
+            入门引导
+          </button>
+          <NavLink
+            to="/welcome"
+            className="nav-link compact-nav-action"
+            aria-label="欢迎页"
+            title="欢迎页"
+          >
+            <AppIcon name="orbit" size={15} aria-hidden="true" />
+            <span>欢迎页</span>
+          </NavLink>
+          <button
+            type="button"
+            className="nav-link compact-nav-action"
+            aria-label="API 密钥管理"
+            title="API 密钥管理"
+            onClick={() => {
+              setNavOpen(false)
+              setShowLogin(true)
+            }}
+          >
+            <AppIcon name="key" size={15} aria-hidden="true" />
+            <span>API 密钥管理</span>
+          </button>
         </nav>
 
         <div className="global-header-actions">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm icon-button"
+            onClick={() => setShowTour(true)}
+            title="入门引导"
+            aria-label="入门引导"
+          >
+            <AppIcon name="help" size={17} aria-hidden="true" />
+          </button>
+          <NavLink
+            to="/welcome"
+            className="btn btn-ghost btn-sm icon-button"
+            aria-label="欢迎页"
+            title="欢迎页"
+          >
+            <AppIcon name="orbit" size={17} aria-hidden="true" />
+          </NavLink>
           <span className="current-page-label">{getPageTitle()}</span>
-          <span className="system-status">
-            <i />
-            <AppIcon name="activity" size={13} aria-hidden="true" />
-            在线
-          </span>
           <button
             className="btn btn-ghost btn-sm api-access-button"
             onClick={() => setShowLogin(true)}
+            title="API 密钥管理"
           >
             <AppIcon name="key" size={14} aria-hidden="true" />
-            API 管理
+            {keyStatus}
           </button>
         </div>
       </header>
@@ -192,7 +291,10 @@ export default function App() {
         </div>
       </main>
 
-      {showLogin && <LoginGate onClose={() => setShowLogin(false)} />}
+      {tour}
+      {showLogin && (
+        <LoginGate onClose={() => setShowLogin(false)} onAuthenticated={onAuthenticated} />
+      )}
     </div>
   )
 }

@@ -68,35 +68,71 @@ function formatDetail(detail: unknown, fallback: string): string {
 }
 
 const API_KEY_STORAGE = 'dr_api_key'
+let memoryApiKey: string | null = null
 
-// API keys are tab-scoped in sessionStorage and cleared when the tab closes.
+// Existing tab sessions stay valid; remembered credentials survive reopening the browser.
 export function getApiKey(): string | null {
-  try {
-    return sessionStorage.getItem(API_KEY_STORAGE)
-  } catch {
-    return null
+  for (const storage of ['sessionStorage', 'localStorage'] as const) {
+    try {
+      const key = window[storage].getItem(API_KEY_STORAGE)
+      if (key) return key
+    } catch {
+      // One storage may be blocked while the other remains available.
+    }
   }
+  return memoryApiKey
 }
 
-export function setApiKey(key: string): void {
-  try {
-    sessionStorage.setItem(API_KEY_STORAGE, key)
-  } catch {
-    // sessionStorage 不可用（隐私模式等）：忽略
+export function isApiKeyRemembered(): boolean {
+  return getApiKeyStorage() === 'local'
+}
+
+export function getApiKeyStorage(): 'local' | 'session' | 'memory' | 'none' {
+  for (const storage of ['sessionStorage', 'localStorage'] as const) {
+    try {
+      if (window[storage].getItem(API_KEY_STORAGE))
+        return storage === 'localStorage' ? 'local' : 'session'
+    } catch {
+      /* Try the remaining storage. */
+    }
   }
+  return memoryApiKey ? 'memory' : 'none'
+}
+
+export function setApiKey(key: string, remember = true): 'local' | 'session' | 'memory' {
+  clearApiKey()
+  const value = key.trim()
+  if (!value) return 'memory'
+  const destinations = remember
+    ? (['localStorage', 'sessionStorage'] as const)
+    : (['sessionStorage'] as const)
+  for (const storage of destinations) {
+    try {
+      window[storage].setItem(API_KEY_STORAGE, value)
+      return storage === 'localStorage' ? 'local' : 'session'
+    } catch {
+      // Retain a usable login even when browser storage is disabled.
+    }
+  }
+  memoryApiKey = value
+  return 'memory'
 }
 
 export function clearApiKey(): void {
-  try {
-    sessionStorage.removeItem(API_KEY_STORAGE)
-  } catch {
-    // 忽略
+  memoryApiKey = null
+  for (const storage of ['localStorage', 'sessionStorage'] as const) {
+    try {
+      window[storage].removeItem(API_KEY_STORAGE)
+    } catch {
+      // Storage access can be disabled by browser policy.
+    }
   }
 }
 
 // 收到 401 时广播：App 监听后弹出密钥登录。仅浏览器环境派发。
-function signalUnauthorized(): void {
-  if (typeof window !== 'undefined') {
+function signalUnauthorized(rejectedKey: string | null): void {
+  // A late response from a previous login must not discard a newly verified key.
+  if (typeof window !== 'undefined' && rejectedKey === getApiKey()) {
     window.dispatchEvent(new Event('dr:unauthorized'))
   }
 }
@@ -112,7 +148,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     },
   })
   if (!res.ok) {
-    if (res.status === 401) signalUnauthorized()
+    if (res.status === 401) signalUnauthorized(key)
     let detail = res.statusText
     try {
       const body = (await res.json()) as { detail?: unknown }
@@ -136,7 +172,7 @@ async function requestVoid(url: string, init?: RequestInit): Promise<void> {
     },
   })
   if (!res.ok) {
-    if (res.status === 401) signalUnauthorized()
+    if (res.status === 401) signalUnauthorized(key)
     let detail = res.statusText
     try {
       const body = (await res.json()) as { detail?: unknown }
@@ -301,7 +337,7 @@ export async function downloadRunDocument(
     },
   })
   if (!res.ok) {
-    if (res.status === 401) signalUnauthorized()
+    if (res.status === 401) signalUnauthorized(key)
     let detail = res.statusText
     try {
       const body = (await res.json()) as { detail?: unknown }
@@ -367,7 +403,7 @@ export async function streamRun(
     signal,
   })
   if (!res.ok) {
-    if (res.status === 401) signalUnauthorized()
+    if (res.status === 401) signalUnauthorized(key)
     throw new ApiError(res.status, res.statusText)
   }
   if (!res.body) throw new ApiError(0, 'SSE response has no body')

@@ -215,7 +215,7 @@ describe('RunPage database synchronization', () => {
     } as unknown as ReturnType<typeof useRunDocument>)
   })
 
-  it('keeps the live report bounded when full-width reading is active', () => {
+  it('keeps the full-width report live while streaming', () => {
     useResearchStreamMock.mockReturnValue(makeStream('streaming', '# partial report'))
     useRunDetailMock.mockReturnValue({
       data: makeDetail('running'),
@@ -229,13 +229,9 @@ describe('RunPage database synchronization', () => {
     expect(reportPanel).toHaveClass('is-streaming')
     expect(screen.getByTestId('report-markdown')).toHaveAttribute('data-live', 'true')
 
-    const toggle = container.querySelector<HTMLButtonElement>('.report-expand-toggle')
-    expect(toggle).not.toBeNull()
-    if (!toggle) return
-    fireEvent.click(toggle)
-
-    expect(container.querySelector('.grid-2')).toHaveClass('report-expanded')
-    expect(reportPanel).toHaveClass('is-streaming')
+    expect(reportPanel?.parentElement).toHaveClass('run-columns')
+    expect(reportPanel).toHaveClass('run-report-column')
+    expect(screen.getByTestId('report-markdown')).toHaveTextContent('# partial report')
   })
 
   it('keeps the live report bounded after SSE disconnects while the database run is active', () => {
@@ -252,13 +248,9 @@ describe('RunPage database synchronization', () => {
     expect(reportPanel).toHaveClass('is-streaming')
     expect(screen.getByTestId('report-markdown')).toHaveAttribute('data-live', 'true')
 
-    const toggle = container.querySelector<HTMLButtonElement>('.report-expand-toggle')
-    expect(toggle).not.toBeNull()
-    if (!toggle) return
-    fireEvent.click(toggle)
-
-    expect(container.querySelector('.grid-2')).toHaveClass('report-expanded')
-    expect(reportPanel).toHaveClass('is-streaming')
+    expect(reportPanel?.parentElement).toHaveClass('run-columns')
+    expect(reportPanel).toHaveClass('run-report-column')
+    expect(screen.getByTestId('report-markdown')).toHaveTextContent('partial stream')
   })
 
   afterEach(() => vi.clearAllMocks())
@@ -461,7 +453,7 @@ describe('RunPage database synchronization', () => {
     expect(screen.getByTestId('status')).toHaveTextContent('done')
   })
 
-  it('toggles the report between the weighted two-column and full-width layout', () => {
+  it('keeps a completed report in the full-width reading surface', () => {
     useResearchStreamMock.mockReturnValue(makeStream('idle'))
     useRunDetailMock.mockReturnValue({
       data: makeDetail('done', 'complete'),
@@ -472,23 +464,11 @@ describe('RunPage database synchronization', () => {
 
     const { container } = renderRunPage()
 
-    const grid = container.querySelector('.grid-2')
-    expect(grid).not.toBeNull()
-    expect(grid).not.toHaveClass('report-expanded')
-
-    expect(screen.getByRole('button', { name: '双栏视图' })).toHaveAttribute('aria-pressed', 'true')
-    const toggle = screen.getByRole('button', { name: '全宽阅读' })
-    expect(toggle).toHaveAttribute('aria-pressed', 'false')
-    fireEvent.click(toggle)
-
-    expect(grid).toHaveClass('report-expanded')
-    expect(toggle).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: '双栏视图' })).toHaveAttribute('aria-pressed', 'false')
-
-    fireEvent.click(screen.getByRole('button', { name: '双栏视图' }))
-    expect(grid).not.toHaveClass('report-expanded')
-    expect(screen.getByRole('button', { name: '双栏视图' })).toHaveAttribute('aria-pressed', 'true')
-    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    const report = container.querySelector('.run-report-column')
+    expect(report?.parentElement).toHaveClass('run-columns')
+    expect(report).not.toHaveClass('is-streaming')
+    expect(screen.getByTestId('report-markdown')).toHaveTextContent('complete')
+    expect(screen.queryByRole('group', { name: '报告阅读布局' })).not.toBeInTheDocument()
   })
 })
 

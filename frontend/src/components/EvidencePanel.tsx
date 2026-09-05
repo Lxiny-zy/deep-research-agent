@@ -1,4 +1,6 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { useDialogFocus } from '../hooks/useDialogFocus'
 import { findingByClaimId, shortHash } from '../lib/evidence'
 import type { Finding } from '../types'
 import { AppIcon } from './AppIcon'
@@ -100,7 +102,8 @@ function VerificationBadges({ v }: { v: Finding['verification'] }) {
       </span>
       {v.consistency_status === 'conflicted' && (
         <span className="badge error" title={v.contradiction_reason || undefined}>
-          conflicted
+          存在冲突
+          <span className="sr-only">conflicted</span>
         </span>
       )}
       {v.consistency_status === 'clear' && <span className="badge info">未检测到冲突</span>}
@@ -223,6 +226,17 @@ function EvidenceCard({ finding, allFindings }: { finding: Finding; allFindings:
   const hash = verification.source_content_hash
   const context = verification.evidence_context?.trim() ?? ''
   const quote = finding.evidence_quote.trim()
+  const [copyStatus, setCopyStatus] = useState('')
+  async function copyEvidence() {
+    try {
+      await navigator.clipboard.writeText(
+        [finding.statement, quote, finding.source_url].filter(Boolean).join('\n\n'),
+      )
+      setCopyStatus('已复制证据与来源')
+    } catch {
+      setCopyStatus('复制失败，请重试或手动选择文本')
+    }
+  }
   return (
     <article className="evidence-card">
       <p className="evidence-claim">{finding.statement}</p>
@@ -237,7 +251,7 @@ function EvidenceCard({ finding, allFindings }: { finding: Finding; allFindings:
       ) : (
         <figure className="evidence-context legacy">
           <figcaption>
-            <span>已验证摘录</span>
+            <span>{verification.status === 'verified' ? '已验证摘录' : '未验证摘录'}</span>
             <small>旧记录未保存上下文</small>
           </figcaption>
           <blockquote cite={finding.source_url}>{quote || '未记录原文摘录'}</blockquote>
@@ -269,6 +283,47 @@ function EvidenceCard({ finding, allFindings }: { finding: Finding; allFindings:
         </div>
       )}
       <VerificationBadges v={verification} />
+      <details className="verification-details">
+        <summary>
+          验证详情
+          <AppIcon name="chevron-down" size={14} aria-hidden="true" />
+        </summary>
+        <dl>
+          <dt>原文核对</dt>
+          <dd>
+            {verification.reason ||
+              (verification.status === 'verified'
+                ? '摘录已匹配检索快照，不等同事实已证实。'
+                : '未通过原文核对。')}
+          </dd>
+          <dt>语义判断</dt>
+          <dd>
+            模型结果：{verification.semantic_reason || SEMANTIC_BADGE[verification.semantic_status].label}
+          </dd>
+          {verification.semantic_status !== 'not_checked' && (
+            <>
+              <dt>模型置信度</dt>
+              <dd>{Math.round(verification.semantic_confidence * 100)}%</dd>
+            </>
+          )}
+          <dt>交叉印证</dt>
+          <dd>详情：{corroborationExplanation(verification)}</dd>
+          {verification.contradiction_reason && (
+            <>
+              <dt>一致性说明</dt>
+              <dd>详情：{verification.contradiction_reason}</dd>
+            </>
+          )}
+          {hash && (
+            <>
+              <dt>快照指纹</dt>
+              <dd>
+                <code>{hash}</code>
+              </dd>
+            </>
+          )}
+        </dl>
+      </details>
       {hash && (
         <span className="evidence-hash" title={`检索快照内容哈希：${hash}`}>
           <AppIcon name="braces" size={12} aria-hidden="true" />
@@ -277,6 +332,17 @@ function EvidenceCard({ finding, allFindings }: { finding: Finding; allFindings:
       )}
       <CorroborationLinks finding={finding} allFindings={allFindings} />
       <ConflictLinks finding={finding} allFindings={allFindings} />
+      <div className="evidence-copy-row">
+        <button type="button" className="btn btn-ghost btn-sm" onClick={copyEvidence}>
+          <AppIcon
+            name={copyStatus.startsWith('已') ? 'check' : 'copy'}
+            size={14}
+            aria-hidden="true"
+          />
+          复制证据
+        </button>
+        <span role="status">{copyStatus}</span>
+      </div>
     </article>
   )
 }
@@ -288,6 +354,8 @@ export default function EvidencePanel({
   findings,
   allFindings,
   onClose,
+  sources,
+  onSelect,
 }: {
   id: string
   citation: number
@@ -295,71 +363,117 @@ export default function EvidencePanel({
   findings: Finding[]
   allFindings: Finding[]
   onClose: () => void
+  sources: { n: number; url: string }[]
+  onSelect: (citation: number) => void
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
+  const dialogRef = useDialogFocus(onClose)
+  const sourceIndex = sources.findIndex((source) => source.n === citation)
   const sourceTitle = findings.find((finding) => finding.verification.source_title)?.verification
     .source_title
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = 0
   }, [citation, url])
 
-  return (
-    <aside id={id} className="evidence-drawer" role="dialog" aria-label={`引用 ${citation} 的证据`}>
-      <div className="evidence-drawer-inner">
-        <div className="evidence-drawer-head" aria-live="polite">
-          <div className="evidence-drawer-title">
-            <span className="cite-ref inert">[{citation}]</span>
-            <div className="evidence-source-meta">
-              {sourceTitle && <strong title={sourceTitle}>{sourceTitle}</strong>}
-              <a
-                className="evidence-source"
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                title={url}
-              >
-                {hostOf(url)}
-                <AppIcon name="external" size={12} aria-hidden="true" />
-              </a>
+  return createPortal(
+    <div className="evidence-overlay">
+      <div className="evidence-backdrop" onClick={onClose} aria-hidden="true" />
+      <aside
+        ref={dialogRef}
+        tabIndex={-1}
+        id={id}
+        className="evidence-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`引用 ${citation} 的证据`}
+      >
+        <div className="evidence-drawer-inner">
+          <div className="evidence-drawer-head" aria-live="polite">
+            <div className="evidence-drawer-title">
+              <span className="cite-ref inert">[{citation}]</span>
+              <div className="evidence-source-meta">
+                {sourceTitle && <strong title={sourceTitle}>{sourceTitle}</strong>}
+                <a
+                  className="evidence-source"
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={url}
+                >
+                  {hostOf(url)}
+                  <AppIcon name="external" size={12} aria-hidden="true" />
+                </a>
+              </div>
             </div>
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={onClose}
+              aria-label="关闭证据侧栏"
+              title="关闭证据侧栏"
+            >
+              <AppIcon name="x" size={14} aria-hidden="true" />
+            </button>
           </div>
-          <button
-            type="button"
-            className="btn ghost sm"
-            onClick={onClose}
-            aria-label="关闭证据侧栏"
-          >
-            <AppIcon name="x" size={14} aria-hidden="true" />
-          </button>
+          <div className="evidence-navigation">
+            <button
+              type="button"
+              className="btn btn-ghost icon-button"
+              title="上一个来源"
+              aria-label="上一个来源"
+              disabled={sourceIndex <= 0}
+              onClick={() => onSelect(sources[sourceIndex - 1].n)}
+            >
+              <AppIcon name="arrow-left" size={16} aria-hidden="true" />
+            </button>
+            <select
+              className="input"
+              aria-label="引用来源"
+              value={citation}
+              onChange={(event) => onSelect(Number(event.target.value))}
+            >
+              {sources.map((source) => (
+                <option key={source.n} value={source.n}>
+                  [{source.n}] {hostOf(source.url)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn btn-ghost icon-button"
+              title="下一个来源"
+              aria-label="下一个来源"
+              disabled={sourceIndex >= sources.length - 1}
+              onClick={() => onSelect(sources[sourceIndex + 1].n)}
+            >
+              <AppIcon name="arrow-right" size={16} aria-hidden="true" />
+            </button>
+            <span>
+              {sourceIndex + 1} / {sources.length}
+            </span>
+          </div>
+          <div className="evidence-drawer-body" ref={bodyRef}>
+            <p className="evidence-snapshot-note">
+              展示的是检索服务返回的快照上下文，不等同于完整网页正文或事实已获证实。
+              {findings.length > 1 &&
+                ` 当前引用按来源关联，共 ${findings.length} 条证据记录，尚非正文句子级一一映射。`}
+            </p>
+            {findings.length === 0 ? (
+              <p className="muted small">该来源暂无结构化证据记录。</p>
+            ) : (
+              findings.map((f, i) => (
+                <EvidenceCard
+                  key={f.verification.claim_id || `${f.source_url}-${i}`}
+                  finding={f}
+                  allFindings={allFindings}
+                />
+              ))
+            )}
+          </div>
         </div>
-        <div className="evidence-drawer-body" ref={bodyRef}>
-          <p className="evidence-snapshot-note">
-            展示的是检索服务返回的快照上下文，不等同于完整网页正文或事实已获证实。
-            {findings.length > 1 &&
-              ` 当前引用按来源关联，共 ${findings.length} 条证据记录，尚非正文句子级一一映射。`}
-          </p>
-          {findings.length === 0 ? (
-            <p className="muted small">该来源暂无结构化证据记录。</p>
-          ) : (
-            findings.map((f, i) => (
-              <EvidenceCard
-                key={f.verification.claim_id || `${f.source_url}-${i}`}
-                finding={f}
-                allFindings={allFindings}
-              />
-            ))
-          )}
-        </div>
-      </div>
-    </aside>
+      </aside>
+    </div>,
+    document.body,
   )
 }

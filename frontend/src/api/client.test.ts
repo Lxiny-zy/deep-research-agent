@@ -3,10 +3,101 @@ import {
   createRun,
   downloadRunDocument,
   getRunDocument,
+  getApiKey,
+  isApiKeyRemembered,
   resumeRun,
   setApiKey,
   streamRun,
 } from './client'
+
+describe('API key persistence', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    clearApiKey()
+  })
+
+  it('remembers a verified key after the tab session is discarded', () => {
+    setApiKey('  remembered-key  ')
+    sessionStorage.clear()
+    expect(getApiKey()).toBe('remembered-key')
+    expect(isApiKeyRemembered()).toBe(true)
+  })
+
+  it('removes a remembered key when switching to a session-only login', () => {
+    setApiKey('old-key')
+    setApiKey('temporary-key', false)
+    expect(isApiKeyRemembered()).toBe(false)
+    expect(getApiKey()).toBe('temporary-key')
+    sessionStorage.clear()
+    expect(getApiKey()).toBeNull()
+  })
+
+  it('continues to read existing tab-scoped credentials', () => {
+    sessionStorage.setItem('dr_api_key', 'legacy-key')
+    expect(getApiKey()).toBe('legacy-key')
+    expect(isApiKeyRemembered()).toBe(false)
+  })
+
+  it('clears both storage locations on logout or rejection', () => {
+    localStorage.setItem('dr_api_key', 'persistent-key')
+    sessionStorage.setItem('dr_api_key', 'tab-key')
+    clearApiKey()
+    expect(getApiKey()).toBeNull()
+    expect(localStorage.getItem('dr_api_key')).toBeNull()
+    expect(sessionStorage.getItem('dr_api_key')).toBeNull()
+  })
+
+  it('uses the session when persistent storage is blocked', () => {
+    const setItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      name,
+      value,
+    ) {
+      if (this === localStorage) throw new DOMException('Blocked', 'SecurityError')
+      setItem.call(this, name, value)
+    })
+    expect(setApiKey('fallback-key')).toBe('session')
+    expect(getApiKey()).toBe('fallback-key')
+  })
+
+  it('supports a current-page login when all browser storage is blocked', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('Blocked')
+    })
+    expect(setApiKey('memory-key')).toBe('memory')
+    expect(getApiKey()).toBe('memory-key')
+    clearApiKey()
+    expect(getApiKey()).toBeNull()
+  })
+
+  it('reads remembered credentials even when session storage is unavailable', () => {
+    setApiKey('saved-key')
+    const getItem = Storage.prototype.getItem
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, name) {
+      if (this === sessionStorage) throw new Error('Blocked')
+      return getItem.call(this, name)
+    })
+    expect(getApiKey()).toBe('saved-key')
+  })
+
+  it('does not invalidate a new login when an old request returns 401 late', async () => {
+    let finish!: (response: Response) => void
+    vi.spyOn(globalThis, 'fetch').mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
+    const dispatch = vi.spyOn(window, 'dispatchEvent')
+    setApiKey('old-key')
+    const pending = createRun({ query: 'research question' })
+    setApiKey('new-key')
+    finish(new Response(null, { status: 401 }))
+    await expect(pending).rejects.toThrow()
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(getApiKey()).toBe('new-key')
+  })
+})
 
 describe('request error formatting', () => {
   afterEach(() => {

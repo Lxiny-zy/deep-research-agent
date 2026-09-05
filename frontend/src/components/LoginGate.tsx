@@ -1,132 +1,219 @@
-import { useState } from 'react'
-import { clearApiKey, getApiKey, setApiKey } from '../api/client'
+import { useEffect, useRef, useState } from 'react'
+import { clearApiKey, getApiKey, isApiKeyRemembered, setApiKey } from '../api/client'
 import { AppIcon } from './AppIcon'
 
 interface Props {
   onClose: () => void
+  onAuthenticated: () => void
 }
 
-/** 密钥登录：后端启用 API_KEY 鉴权时，输入密钥后存本地并刷新生效。 */
-export default function LoginGate({ onClose }: Props) {
+export default function LoginGate({ onClose, onAuthenticated }: Props) {
   const existing = getApiKey() ?? ''
   const [key, setKey] = useState(existing)
+  const [remember, setRemember] = useState(existing ? isApiKeyRemembered() : true)
+  const [visible, setVisible] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const [storageNotice, setStorageNotice] = useState('')
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const requestRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    dialogRef.current?.querySelector<HTMLInputElement>('input')?.focus()
+    return () => {
+      requestRef.current?.abort()
+      document.body.style.overflow = previousOverflow
+      previousFocus?.focus()
+    }
+  }, [])
 
   async function save() {
     const value = key.trim()
     if (!value || pending) return
     setPending(true)
     setError('')
+    const controller = new AbortController()
+    requestRef.current = controller
     try {
       const response = await fetch('/api/config', {
         headers: { Authorization: `Bearer ${value}` },
+        signal: controller.signal,
       })
+      if (controller.signal.aborted) return
       if (!response.ok) {
         throw new Error(
-          response.status === 401 ? '管理员凭证无效' : `验证失败（${response.status}）`,
+          response.status === 401
+            ? '访问密钥无效，请检查后重试。'
+            : `验证失败（HTTP ${response.status}）`,
         )
       }
-      setApiKey(value)
-      window.location.reload()
+      const storage = setApiKey(value, remember)
+      if ((remember && storage !== 'local') || storage === 'memory') {
+        setStorageNotice(
+          storage === 'memory'
+            ? '浏览器阻止了存储，本次登录仅在当前页面有效。'
+            : '浏览器阻止了长期存储，本次登录仅在当前标签页有效。',
+        )
+      } else {
+        onAuthenticated()
+      }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '无法验证管理员凭证')
-      setPending(false)
+      if (controller.signal.aborted) return
+      setError(cause instanceof Error ? cause.message : '无法连接服务端，请重试。')
+    } finally {
+      if (!controller.signal.aborted) setPending(false)
     }
-  }
-
-  function logout() {
-    clearApiKey()
-    window.location.reload()
   }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="modal scale-in auth-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="api-key-title"
+        aria-describedby="api-key-description"
         onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onClose()
+          if (event.key !== 'Tab') return
+          const elements = [
+            ...(dialogRef.current?.querySelectorAll<HTMLElement>(
+              'button:not(:disabled), input:not(:disabled)',
+            ) ?? []),
+          ]
+          const first = elements[0]
+          const last = elements[elements.length - 1]
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault()
+            last?.focus()
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault()
+            first?.focus()
+          }
+        }}
       >
         <div className="auth-modal-inner">
-          <div className="modal-header-row">
-            <div className="panel-title" id="api-key-title">
-              <AppIcon name="lock" size={19} aria-hidden="true" />
-              API 密钥管理
-            </div>
+          <div className="auth-topline">
+            <span className="auth-symbol">
+              <AppIcon name="key" size={24} aria-hidden="true" />
+            </span>
+            <span className="panel-kicker">WORKSPACE ACCESS</span>
             <button
               type="button"
-              className="btn btn-ghost btn-sm icon-button"
+              className="btn btn-ghost icon-button"
               onClick={onClose}
               aria-label="关闭"
+              title="关闭"
             >
-              <AppIcon name="x" size={15} aria-hidden="true" />
+              <AppIcon name="x" size={18} aria-hidden="true" />
             </button>
           </div>
-
-          <div className="stack auth-modal-body">
-            <div className="badge warning auth-notice">
-              <AppIcon name="shield" size={14} aria-hidden="true" />
-              本服务已启用密钥鉴权
-            </div>
-
-            <p className="auth-copy">
-              请输入服务端配置的 <code>API_KEY</code>。密钥仅存于本浏览器，不会上传到服务器。
-            </p>
-
-            <div>
-              <label className="field-label" htmlFor="api-key-input">
-                API 密钥
-              </label>
+          <h2 id="api-key-title">连接你的研究工作台</h2>
+          <p className="auth-copy" id="api-key-description">
+            使用服务端的访问密钥（API_KEY）验证身份。这里无需填写模型服务的密钥。
+          </p>
+          <form
+            className="auth-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void save()
+            }}
+          >
+            <label className="field-label" htmlFor="api-key-input">
+              访问密钥
+            </label>
+            <div className="auth-key-input">
               <input
                 id="api-key-input"
                 className="input"
-                type="password"
+                type={visible ? 'text' : 'password'}
                 value={key}
                 onChange={(event) => setKey(event.target.value)}
-                onKeyDown={(event) => event.key === 'Enter' && void save()}
-                placeholder="粘贴服务端 API_KEY"
-                autoFocus
+                placeholder="输入 API_KEY"
                 autoComplete="current-password"
-                style={{ fontFamily: 'var(--font-mono)' }}
+                disabled={pending || Boolean(storageNotice)}
               />
+              <button
+                type="button"
+                className="btn btn-ghost icon-button"
+                onClick={() => setVisible(!visible)}
+                title={visible ? '隐藏密钥' : '显示密钥'}
+                aria-label={visible ? '隐藏密钥' : '显示密钥'}
+                aria-pressed={visible}
+              >
+                <AppIcon name={visible ? 'eye-off' : 'eye'} size={17} aria-hidden="true" />
+              </button>
             </div>
-
+            <label className="auth-remember">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(event) => setRemember(event.target.checked)}
+                disabled={pending || Boolean(storageNotice)}
+              />
+              <span>
+                记住此设备<small>下次自动登录；公共设备请取消勾选。</small>
+              </span>
+            </label>
             {error && (
-              <p className="test-result test-fail">
-                <AppIcon name="circle-x" size={14} aria-hidden="true" />
+              <p className="test-result test-fail" role="alert">
+                <AppIcon name="circle-x" size={16} aria-hidden="true" />
                 {error}
               </p>
             )}
-
-            <div className="auth-actions">
-              {existing ? (
-                <button className="btn btn-secondary" onClick={logout} type="button">
-                  <AppIcon name="logout" size={14} aria-hidden="true" />
-                  清除密钥
-                </button>
-              ) : (
-                <button className="btn btn-ghost" onClick={onClose} type="button">
-                  取消
-                </button>
-              )}
+            {storageNotice && (
+              <p className="auth-storage-notice" role="status">
+                {storageNotice}
+              </p>
+            )}
+            {storageNotice ? (
               <button
-                className="btn btn-primary"
-                onClick={() => void save()}
-                disabled={!key.trim() || pending}
+                className="btn btn-primary auth-submit"
                 type="button"
+                onClick={onAuthenticated}
               >
+                继续进入
+                <AppIcon name="arrow-right" size={17} aria-hidden="true" />
+              </button>
+            ) : (
+              <button
+                className="btn btn-primary auth-submit"
+                type="submit"
+                disabled={!key.trim() || pending}
+              >
+                {pending ? '正在验证' : '验证并进入'}
                 <AppIcon
                   name={pending ? 'loader' : 'arrow-right'}
-                  size={14}
-                  aria-hidden="true"
+                  size={17}
                   className={pending ? 'spin' : ''}
+                  aria-hidden="true"
                 />
-                {pending ? '验证中…' : '验证并进入'}
               </button>
-            </div>
+            )}
+          </form>
+          <div className="auth-footnote">
+            <AppIcon name="shield" size={15} aria-hidden="true" />
+            <p>密钥保存在此浏览器，并随请求发送至当前服务进行验证。</p>
           </div>
+          {existing && (
+            <button
+              className="btn btn-ghost auth-logout"
+              type="button"
+              disabled={pending}
+              onClick={() => {
+                clearApiKey()
+                onAuthenticated()
+              }}
+            >
+              <AppIcon name="logout" size={15} aria-hidden="true" />
+              清除密钥并退出
+            </button>
+          )}
         </div>
       </div>
     </div>

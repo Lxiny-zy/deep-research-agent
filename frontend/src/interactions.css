@@ -1,0 +1,465 @@
+@media screen {
+  .composer-fields {
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+    border: 0;
+  }
+  .composer-fields:disabled .sample-card {
+    cursor: default;
+  }
+  .draft-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 46px;
+    padding: 8px 24px;
+    border-bottom: 1px solid #d9e3da;
+    background: #edf5ef;
+    color: #316345;
+    font-size: 12px;
+  }
+  .draft-status > span,
+  .draft-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .draft-status.unavailable {
+    background: #fff2ed;
+    color: #a93f30;
+  }
+  .draft-status .btn {
+    flex-shrink: 0;
+  }
+  .compact-key-status {
+    display: none;
+  }
+  .global-header .api-access-button {
+    white-space: nowrap;
+  }
+  .global-header .current-page-label {
+    display: none !important;
+  }
+  .welcome-tour-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1500;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgb(13 22 18 / 70%);
+    backdrop-filter: blur(10px);
+  }
+  .welcome-tour {
+    width: min(100%, 490px);
+    max-height: calc(100dvh - 40px);
+    overflow: auto;
+    padding: 26px;
+    border: 1px solid #3c5146;
+    border-radius: 8px;
+    color: #f5f9f6;
+    background: #15231c;
+    box-shadow: 0 26px 100px #0005;
+    animation: interaction-enter 240ms ease-out;
+  }
+  .welcome-tour-topline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font:
+      10px/1.5 Consolas,
+      monospace;
+    color: #b2c8ba;
+  }
+  .tour-icon-button {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    padding: 0;
+    border: 1px solid #4c6254;
+    border-radius: 4px;
+    background: transparent;
+    color: #e7f1ea;
+    cursor: pointer;
+  }
+  .tour-icon-button:hover {
+    background: #2c4536;
+  }
+  .welcome-tour-visual {
+    height: 155px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 20px 0 24px;
+    border-block: 1px solid #405249;
+    color: #b3e2bf;
+  }
+  .tour-number {
+    font:
+      112px/1 Georgia,
+      serif;
+    color: #d7ebde;
+  }
+  .tour-word {
+    position: absolute;
+    bottom: 12px;
+    right: 0;
+    font:
+      10px Consolas,
+      monospace;
+  }
+  .welcome-tour-copy {
+    min-height: 120px;
+  }
+  .welcome-tour .welcome-tour-copy h2 {
+    color: #f5f9f6 !important;
+    font-size: 24px !important;
+    font-weight: 600 !important;
+    line-height: 1.4;
+    margin: 0 0 14px;
+  }
+  .welcome-tour-copy p {
+    color: #bfcfc4;
+    font-size: 14px;
+    line-height: 1.9;
+    margin: 0;
+  }
+  .welcome-tour-progress {
+    display: flex;
+    gap: 6px;
+    margin: 20px 0;
+  }
+  .welcome-tour-progress i {
+    flex: 1;
+    height: 3px;
+    background: #3b4d42;
+    transition: background 200ms;
+  }
+  .welcome-tour-progress i.active {
+    background: #b3e2bf;
+  }
+  .welcome-tour-actions,
+  .welcome-tour-actions > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .welcome-tour .btn-ghost {
+    color: #cfddd3 !important;
+    background: transparent !important;
+  }
+  .welcome-tour .btn-primary {
+    background: #b3e2bf !important;
+    color: #142a1c !important;
+    border-color: #b3e2bf !important;
+  }
+  .welcome-tour button:focus-visible,
+  .evidence-overlay :focus-visible {
+    outline: 2px solid #62ad7b;
+    outline-offset: 3px;
+  }
+  .entry-nav nav .entry-tour-button {
+    padding: 10px;
+  }
+  .evidence-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 2px;
+    border-bottom: 1px solid #dce4dd;
+    font-size: 12px;
+    color: #65726b;
+  }
+  .reference-evidence-button {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    margin-left: 8px;
+    border: 1px solid #d5dfd7;
+    border-radius: 4px;
+    background: #f4f8f4;
+    color: #326446;
+    vertical-align: middle;
+    cursor: pointer;
+  }
+  .reference-evidence-button:hover {
+    background: #dceee1;
+  }
+  .report-view.has-evidence .report-view-body {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .report-view.has-evidence .report {
+    padding-right: 0 !important;
+    margin-right: 0 !important;
+  }
+  .evidence-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1400;
+  }
+  .evidence-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgb(15 25 19 / 26%);
+  }
+  .evidence-overlay .evidence-drawer {
+    position: absolute !important;
+    inset: 0 0 0 auto !important;
+    width: min(540px, 100%) !important;
+    height: 100% !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: -12px 0 50px #17251c20;
+    animation: evidence-arrive 220ms ease-out !important;
+  }
+  .evidence-overlay .evidence-drawer-inner {
+    background: #fff !important;
+    border-radius: 0 !important;
+    overflow: hidden;
+  }
+  .evidence-overlay .evidence-drawer-head {
+    padding: 20px;
+    flex-shrink: 0;
+    background: #f4f8f4;
+  }
+  .evidence-overlay .evidence-source-meta strong {
+    font: 600 15px/1.5 var(--font-sans) !important;
+    max-height: 68px;
+    overflow-y: auto;
+  }
+  .evidence-navigation {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) 32px auto;
+    gap: 8px;
+    align-items: center;
+    padding: 12px 20px;
+    border-bottom: 1px solid #dce4dd;
+    font-size: 11px;
+    color: #63736a;
+  }
+  .evidence-navigation .input {
+    min-width: 0;
+    width: 100%;
+    font-size: 12px;
+  }
+  .evidence-navigation .btn {
+    width: 32px;
+    min-width: 32px;
+    padding: 0;
+  }
+  .evidence-overlay .evidence-drawer-body {
+    padding: 0 20px 24px;
+    gap: 0;
+    overscroll-behavior: contain;
+  }
+  .evidence-overlay .evidence-snapshot-note {
+    padding: 18px 0;
+  }
+  .evidence-overlay .evidence-card {
+    padding: 22px 0;
+    border: 0 !important;
+    border-bottom: 1px solid #dce4dd !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  .evidence-overlay .evidence-claim {
+    font-family: var(--font-sans) !important;
+    font-size: 16px !important;
+    font-weight: 600 !important;
+  }
+  .evidence-overlay .evidence-context {
+    margin: 0;
+    border-radius: 0;
+  }
+  .evidence-overlay .evidence-context blockquote {
+    background: #f4f7f3 !important;
+    border-left: 2px solid #87aa8b !important;
+    padding: 14px !important;
+    color: #293b30 !important;
+  }
+  .evidence-overlay .evidence-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .verification-details {
+    margin-top: 12px;
+    font-size: 12px;
+  }
+  .verification-details summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    cursor: pointer;
+    color: #365b43;
+    list-style: none;
+  }
+  .verification-details summary::-webkit-details-marker {
+    display: none;
+  }
+  .verification-details[open] summary svg {
+    transform: rotate(180deg);
+  }
+  .verification-details dl {
+    margin: 0 0 12px;
+    padding: 12px;
+    border-left: 2px solid #d5e2d7;
+    background: #f7f9f6;
+  }
+  .verification-details dt {
+    font-weight: 600;
+    margin: 12px 0 4px;
+  }
+  .verification-details dt:first-child {
+    margin-top: 0;
+  }
+  .verification-details dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: #536459;
+    line-height: 1.7;
+  }
+  .verification-details code {
+    word-break: break-all;
+    font-size: 11px;
+  }
+  .evidence-copy-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .evidence-copy-row [role='status'] {
+    font-size: 11px;
+    color: #526d59;
+  }
+  @keyframes interaction-enter {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes evidence-arrive {
+    from {
+      opacity: 0;
+      transform: translateX(30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @media (max-width: 1100px) {
+    .compact-key-status {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      border: 0;
+      padding: 6px 0;
+      margin-left: auto;
+      font-size: 11px;
+      background: transparent;
+      color: #c4ddcb;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .global-header .mobile-nav-toggle {
+      margin-left: 0 !important;
+    }
+  }
+  @media (max-width: 600px) {
+    .draft-status {
+      padding: 8px 14px;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .welcome-tour-backdrop {
+      padding: 12px;
+    }
+    .welcome-tour {
+      padding: 20px;
+      max-height: calc(100dvh - 24px);
+    }
+    .welcome-tour .welcome-tour-copy h2 {
+      font-size: 21px !important;
+    }
+    .welcome-tour-visual {
+      height: 125px;
+      margin: 14px 0 20px;
+    }
+    .tour-number {
+      font-size: 90px;
+    }
+    .welcome-tour-copy {
+      min-height: 132px;
+    }
+    .evidence-overlay .evidence-drawer {
+      inset: 5dvh 0 0 !important;
+      height: 95dvh !important;
+      width: 100% !important;
+    }
+    .evidence-overlay .evidence-drawer-inner {
+      border-radius: 8px 8px 0 0 !important;
+    }
+    .evidence-overlay .evidence-drawer-head {
+      padding: 14px 16px;
+    }
+    .evidence-navigation {
+      padding: 10px 16px;
+      gap: 6px;
+    }
+    .evidence-overlay .evidence-drawer-body {
+      padding-inline: 16px;
+    }
+  }
+  @media (max-width: 360px) {
+    .global-header .top-brand-copy strong {
+      font-size: 13px !important;
+    }
+    .global-header .top-brand-copy small {
+      display: none;
+    }
+    .global-header {
+      gap: 8px !important;
+      padding-inline: 12px !important;
+    }
+    .global-header .brand-icon {
+      width: 28px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .welcome-tour,
+    .evidence-overlay .evidence-drawer {
+      animation: none !important;
+    }
+    .welcome-tour-progress i {
+      transition: none;
+    }
+  }
+}
+@media print {
+  .welcome-tour-backdrop,
+  .evidence-overlay,
+  .evidence-toolbar,
+  .reference-evidence-button,
+  .draft-status {
+    display: none !important;
+  }
+}

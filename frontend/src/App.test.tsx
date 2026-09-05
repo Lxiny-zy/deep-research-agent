@@ -54,6 +54,32 @@ describe('App authentication bootstrap', () => {
     expect(getApiKey()).toBeNull()
   })
 
+  it('shows the welcome page without an automatic dialog on a first visit', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 401 }))
+    renderApp()
+    expect(await screen.findByRole('button', { name: 'open login' })).toBeInTheDocument()
+    expect(screen.queryByTestId('login-gate')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'open login' }))
+    expect(screen.getByTestId('login-gate')).toBeInTheDocument()
+  })
+
+  it('automatically authenticates a remembered key in a new tab session', async () => {
+    setApiKey('remembered-key')
+    sessionStorage.clear()
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 200 }))
+    renderApp()
+    expect(await screen.findByTestId('console')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/config',
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer remembered-key' },
+      }),
+    )
+    expect(screen.queryByTestId('login-gate')).not.toBeInTheDocument()
+  })
+
   it('keeps the key on a server error and allows the config check to be retried', async () => {
     setApiKey('still-valid')
     const fetchMock = vi
