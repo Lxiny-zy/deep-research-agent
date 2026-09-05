@@ -1155,7 +1155,14 @@
   }
 
   .run-report-column.is-print-preview > .panel-head {
-    display: none !important;
+    display: flex !important;
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    min-height: 52px !important;
+    margin: 0 !important;
+    padding: 10px 0 12px !important;
+    background: var(--visual-canvas) !important;
   }
 
   .report-view-switch {

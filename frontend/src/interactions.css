@@ -1,4 +1,4 @@
-@media screen {
+﻿@media screen {
   .composer-fields {
     min-width: 0;
     padding: 0;
@@ -452,6 +452,199 @@
     .welcome-tour-progress i {
       transition: none;
     }
+  }
+}
+
+@media screen {
+  /* The legacy layers set SVGs to zero size in a few compact button variants. */
+  .app-icon {
+    display: inline-block !important;
+    visibility: visible !important;
+    flex: 0 0 auto !important;
+  }
+
+  .welcome-tour-actions .icon-button .app-icon,
+  .runtime-edge .app-icon,
+  .runtime-step > span .app-icon {
+    width: 17px !important;
+    height: 17px !important;
+    color: currentColor !important;
+    stroke: currentColor !important;
+  }
+
+  .run-overview > .research-live-overview,
+  .run-overview > .intent-panel,
+  .run-overview > .orchestration-runtime {
+    overflow: hidden;
+    border: 1px solid #cbd9ce !important;
+    border-radius: 8px !important;
+    background: #fff !important;
+  }
+
+  .run-overview > .research-live-overview {
+    box-shadow: 0 10px 28px rgb(31 70 46 / 6%) !important;
+  }
+
+  .run-overview > .intent-panel {
+    padding: 0 !important;
+  }
+
+  .intent-panel > .panel-head {
+    margin: 0 !important;
+    padding: 18px 24px 14px !important;
+    border: 0 !important;
+    background: #173126 !important;
+  }
+
+  .intent-panel > .panel-head .panel-title {
+    color: #eef8f0 !important;
+  }
+
+  .intent-panel > .panel-head .app-icon {
+    color: #a9dab1 !important;
+  }
+
+  .intent-tier-chip {
+    border-color: #669b75 !important;
+    background: #274d36 !important;
+    color: #d9f2dd !important;
+  }
+
+  .intent-panel > :not(.panel-head) {
+    margin-inline: 24px;
+  }
+
+  .intent-panel > .intent-verdicts {
+    margin-top: 18px;
+  }
+
+  .intent-verdict {
+    padding: 16px !important;
+    border: 1px solid #d2ded4 !important;
+    border-radius: 6px !important;
+    background: #f4f8f4 !important;
+  }
+
+  .intent-verdict.is-risk {
+    border-color: #e8c7b8 !important;
+    background: #fff5ef !important;
+  }
+
+  .intent-verdict-value {
+    font-size: 1.25rem !important;
+  }
+
+  .intent-panel .intent-score-track {
+    height: 7px !important;
+    border: 1px solid #cad8cc !important;
+    border-radius: 99px !important;
+    background: #eaf1eb !important;
+  }
+
+  .intent-panel .intent-score-track i {
+    border-radius: 99px !important;
+    background: linear-gradient(90deg, #347854, #9bcaa3) !important;
+  }
+
+  .intent-panel .intent-signals li,
+  .intent-panel .intent-slots li {
+    padding-block: 8px !important;
+    border-bottom: 1px solid #e1e9e2 !important;
+  }
+
+  .run-overview > .orchestration-runtime {
+    padding: 0 !important;
+    border-color: #304a3b !important;
+    background: #14251c !important;
+    color: #e5f1e7 !important;
+  }
+
+  .orchestration-runtime .orchestration-runtime-head {
+    padding: 20px 24px !important;
+    border-color: #355140 !important;
+  }
+
+  .orchestration-runtime .workflow-kicker,
+  .orchestration-runtime .runtime-current-step {
+    color: #9bbca3 !important;
+  }
+
+  .orchestration-runtime .orchestration-runtime-head strong {
+    color: #f0f8f1 !important;
+    font-family: var(--visual-font-sans) !important;
+    font-weight: 650 !important;
+  }
+
+  .orchestration-runtime .runtime-status {
+    border-color: #6f9e7a !important;
+    color: #cde8d2 !important;
+    background: #254632 !important;
+  }
+
+  .orchestration-runtime .runtime-header-progress {
+    height: 6px !important;
+    margin: 0 24px;
+    border: 0 !important;
+    background: #2a4334 !important;
+  }
+
+  .orchestration-runtime .runtime-header-progress > span {
+    background: #9bcaa3 !important;
+    box-shadow: none !important;
+  }
+
+  .orchestration-runtime .runtime-pipeline-scroll {
+    padding: 24px !important;
+  }
+
+  .orchestration-runtime .runtime-edge {
+    color: #8ab697 !important;
+  }
+
+  .orchestration-runtime .runtime-terminal {
+    border-color: #52735b !important;
+    color: #c8e0cc !important;
+    background: #20382a !important;
+  }
+
+  .orchestration-runtime .runtime-terminal.output.completed {
+    border-color: #b1dcb8 !important;
+    color: #173126 !important;
+    background: #b1dcb8 !important;
+  }
+
+  .orchestration-runtime .runtime-step {
+    min-height: 78px !important;
+    border-color: #44664e !important;
+    border-radius: 6px !important;
+    background: #20382a !important;
+  }
+
+  .orchestration-runtime .runtime-step > span {
+    border-color: #5b8665 !important;
+    background: #294934 !important;
+    color: #d4ecd7 !important;
+  }
+
+  .orchestration-runtime .runtime-step strong {
+    color: #eef8f0 !important;
+    font-family: var(--visual-font-sans) !important;
+    font-weight: 650 !important;
+  }
+
+  .orchestration-runtime .runtime-step small,
+  .orchestration-runtime .runtime-step i {
+    color: #a5c7ab !important;
+  }
+
+  .orchestration-runtime .runtime-step.succeeded {
+    border-color: #79b785 !important;
+    background: #254735 !important;
+  }
+
+  .orchestration-runtime .runtime-step.failed {
+    border-color: #cf8b7b !important;
+    background: #432b28 !important;
   }
 }
 @media print {
