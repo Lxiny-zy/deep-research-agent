@@ -289,10 +289,15 @@ export default function PrintableReport({
       {cited.length > 0 && (
         <section className="print-references">
           <h2>参考来源</h2>
-          <ol>
+          <ol className="print-reference-list">
             {cited.map(({ n, url }) => (
-              <li key={`${n}-${url}`} value={n}>
-                {referenceTextFor(findings, url)}
+              <li
+                key={`${n}-${url}`}
+                value={n}
+                className="print-reference-item"
+                data-reference-index={n}
+              >
+                <span className="print-reference-text">{referenceTextFor(findings, url)}</span>
               </li>
             ))}
           </ol>

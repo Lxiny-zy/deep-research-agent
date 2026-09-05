@@ -27,11 +27,12 @@
     --clarity-amber: #a56b19;
     --clarity-blue: #356b96;
     --editorial-sans:
-      -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'PingFang SC',
-      'Microsoft YaHei', sans-serif;
-    --clarity-shadow-sm: 0 1px 2px rgba(26, 47, 59, 0.05), 0 4px 12px rgba(26, 47, 59, 0.05);
-    --clarity-shadow-md: 0 2px 4px rgba(26, 47, 59, 0.08), 0 10px 24px rgba(26, 47, 59, 0.1);
-    --clarity-shadow-lg: 0 4px 8px rgba(26, 47, 59, 0.08), 0 20px 48px rgba(26, 47, 59, 0.12);
+      'Microsoft YaHei', 'Microsoft YaHei UI', 'Noto Sans SC', 'PingFang SC',
+      -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --editorial-serif: var(--editorial-sans);
+    --clarity-shadow-sm: 0 1px 3px rgba(26, 47, 59, 0.08), 0 6px 16px rgba(26, 47, 59, 0.08);
+    --clarity-shadow-md: 0 3px 7px rgba(26, 47, 59, 0.1), 0 14px 30px rgba(26, 47, 59, 0.12);
+    --clarity-shadow-lg: 0 5px 12px rgba(26, 47, 59, 0.1), 0 24px 52px rgba(26, 47, 59, 0.14);
     --clarity-radius-sm: 5px;
     --clarity-radius-md: 8px;
     /* A card should read as a deliberate object on the canvas, not as a
@@ -1840,6 +1841,72 @@
     .sample-card:hover,
     .btn:hover:not(:disabled) {
       transform: none !important;
+    }
+  }
+
+  /* Report reading controls: make the two destinations explicit so switching
+   * layout never depends on the current state of a toggle label. */
+  .report-view-switch {
+    display: inline-flex;
+    align-items: stretch;
+    gap: 0;
+    padding: 3px;
+    border: 1px solid var(--clarity-line-strong);
+    border-radius: var(--clarity-radius-sm);
+    background: var(--clarity-surface-muted);
+  }
+
+  .report-view-switch .report-view-option {
+    min-height: 32px;
+    min-width: 74px;
+    padding: 7px 11px !important;
+    border: 1px solid transparent !important;
+    border-radius: 3px !important;
+    color: var(--clarity-ink-soft) !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+
+  .report-view-switch .report-view-option:hover:not(:disabled),
+  .report-view-switch .report-view-option.is-active {
+    color: var(--clarity-ink) !important;
+    border-color: var(--clarity-line-strong) !important;
+    background: var(--clarity-surface) !important;
+    box-shadow: var(--clarity-shadow-sm) !important;
+  }
+
+  .report-view-switch .report-view-option:disabled {
+    opacity: 1;
+    cursor: default;
+  }
+
+  @media (max-width: 1024px) {
+    .report-view-switch {
+      display: none;
+    }
+  }
+
+  /* A completed report belongs to the page's reading flow. Release the nested
+   * report scroller while keeping the evidence column visible beside it. */
+  @media (min-width: 1025px) {
+    .run-columns.report-expanded > .run-report-column:not(.is-streaming) {
+      height: auto !important;
+      max-height: none !important;
+      overflow: visible !important;
+    }
+
+    .run-columns.report-expanded
+      > .run-report-column:not(.is-streaming)
+      .report-view,
+    .run-columns.report-expanded
+      > .run-report-column:not(.is-streaming)
+      .report-view-body,
+    .run-columns.report-expanded
+      > .run-report-column:not(.is-streaming)
+      .report-view-body > .report {
+      overflow: visible !important;
+      max-height: none !important;
     }
   }
 }

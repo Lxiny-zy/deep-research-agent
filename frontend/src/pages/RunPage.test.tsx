@@ -476,15 +476,19 @@ describe('RunPage database synchronization', () => {
     expect(grid).not.toBeNull()
     expect(grid).not.toHaveClass('report-expanded')
 
+    expect(screen.getByRole('button', { name: '双栏视图' })).toHaveAttribute('aria-pressed', 'true')
     const toggle = screen.getByRole('button', { name: '全宽阅读' })
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(toggle)
 
     expect(grid).toHaveClass('report-expanded')
-    expect(screen.getByRole('button', { name: '双栏视图' })).toHaveAttribute('aria-pressed', 'true')
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: '双栏视图' })).toHaveAttribute('aria-pressed', 'false')
 
     fireEvent.click(screen.getByRole('button', { name: '双栏视图' }))
     expect(grid).not.toHaveClass('report-expanded')
+    expect(screen.getByRole('button', { name: '双栏视图' })).toHaveAttribute('aria-pressed', 'true')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
   })
 })
 

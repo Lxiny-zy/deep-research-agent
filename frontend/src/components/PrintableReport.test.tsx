@@ -104,7 +104,7 @@ describe('PrintableReport：屏幕侧栏在纸上的等价物', () => {
   })
 
   it('参考来源用落库的学术引用，缺失时回退裸 URL', () => {
-    render(
+    const { container } = render(
       <PrintableReport
         markdown={'正文 [1] [2]'}
         query="q"
@@ -118,6 +118,12 @@ describe('PrintableReport：屏幕侧栏在纸上的等价物', () => {
 
     expect(screen.getAllByText(/Cai 等\. DAUHST\. NeurIPS, 2022\./).length).toBeGreaterThan(0)
     expect(screen.getAllByText(URL_A).length).toBeGreaterThan(0)
+
+    const references = container.querySelectorAll('.print-reference-list .print-reference-item')
+    expect(references).toHaveLength(2)
+    expect(references[0]).toHaveAttribute('data-reference-index', '1')
+    expect(references[1]).toHaveAttribute('data-reference-index', '2')
+    expect(references[0].querySelector('.print-reference-text')).toBeInTheDocument()
   })
 
   it('不把正文尾部自动追加的参考来源段落渲染两遍', () => {

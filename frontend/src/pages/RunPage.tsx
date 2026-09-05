@@ -354,19 +354,30 @@ export default function RunPage() {
           <div className="row between panel-head">
             <h3 className="panel-title">研究报告</h3>
             <div className="row report-panel-tools">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm report-expand-toggle"
-                aria-pressed={reportExpanded}
-                onClick={() => setReportExpanded((value) => !value)}
-              >
-                <AppIcon
-                  name={reportExpanded ? 'panel-open' : 'panel-close'}
-                  size={14}
-                  aria-hidden="true"
-                />
-                {reportExpanded ? '双栏视图' : '全宽阅读'}
-              </button>
+              <div className="report-view-switch" role="group" aria-label="报告阅读布局">
+                <button
+                  type="button"
+                  className={`btn btn-ghost btn-sm report-view-option${!reportExpanded && !printPreview ? ' is-active' : ''}`}
+                  aria-label="双栏视图"
+                  aria-pressed={!reportExpanded && !printPreview}
+                  disabled={printPreview}
+                  onClick={() => setReportExpanded(false)}
+                >
+                  <AppIcon name="panel-close" size={14} aria-hidden="true" />
+                  双栏
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-ghost btn-sm report-view-option report-expand-toggle${reportExpanded || printPreview ? ' is-active' : ''}`}
+                  aria-label="全宽阅读"
+                  aria-pressed={reportExpanded || printPreview}
+                  disabled={printPreview}
+                  onClick={() => setReportExpanded(true)}
+                >
+                  <AppIcon name="panel-open" size={14} aria-hidden="true" />
+                  全宽
+                </button>
+              </div>
               <ReportActions
                 markdown={markdown}
                 query={query}

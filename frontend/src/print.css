@@ -267,6 +267,45 @@
     min-width: 60mm;
   }
 
+  /* Keep the reference directory independent from browser defaults and the
+     report's Markdown list rules.  The explicit index column also survives
+     page breaks and long DOI/URL values without collapsing the list marker. */
+  .print-references {
+    margin: 16pt 0 0;
+    break-inside: auto;
+  }
+
+  .print-reference-list {
+    display: grid;
+    gap: 5pt;
+    margin: 0;
+    padding: 0;
+    list-style: none !important;
+  }
+
+  .print-reference-item {
+    display: grid;
+    grid-template-columns: 24pt minmax(0, 1fr);
+    gap: 4pt;
+    margin: 0;
+    padding: 0;
+    break-inside: avoid;
+    color: var(--print-ink) !important;
+    line-height: 1.45;
+  }
+
+  .print-reference-item::before {
+    content: '[' attr(data-reference-index) ']';
+    color: var(--print-ink-2) !important;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .print-reference-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
   .print-appendix {
     break-before: page; /* 附录另起一页：它是参考材料，不该挤在结论后面 */
   }
@@ -493,6 +532,39 @@
   .print-preview .print-overview table {
     width: auto;
     min-width: 60mm;
+  }
+
+  .print-preview .print-references {
+    margin: 16pt 0 0;
+  }
+
+  .print-preview .print-reference-list {
+    display: grid;
+    gap: 5pt;
+    margin: 0;
+    padding: 0;
+    list-style: none !important;
+  }
+
+  .print-preview .print-reference-item {
+    display: grid;
+    grid-template-columns: 24pt minmax(0, 1fr);
+    gap: 4pt;
+    margin: 0;
+    padding: 0;
+    break-inside: avoid;
+    line-height: 1.45;
+  }
+
+  .print-preview .print-reference-item::before {
+    content: '[' attr(data-reference-index) ']';
+    font-variant-numeric: tabular-nums;
+  }
+
+  .print-preview .print-reference-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .print-preview .print-appendix-group {
