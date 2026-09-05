@@ -1,0 +1,802 @@
+/*
+ * High-contrast research workspace
+ *
+ * This is the final screen layer. It keeps the existing component contracts
+ * and data states, but gives the application a stronger visual hierarchy:
+ * charcoal instrument canvas, paper report surfaces, and explicit signals.
+ */
+
+@media screen {
+  :root {
+    --visual-canvas: #0e171c;
+    --visual-canvas-raised: #17242b;
+    --visual-surface: #fbfdfc;
+    --visual-surface-soft: #f0f6f5;
+    --visual-paper: #fffdf8;
+    --visual-ink: #12232d;
+    --visual-ink-soft: #304b58;
+    --visual-muted: #5a707a;
+    --visual-faint: #788d96;
+    --visual-line: #b9cdd1;
+    --visual-line-soft: #d4e0e2;
+    --visual-teal: #0a8f86;
+    --visual-teal-deep: #066a65;
+    --visual-teal-soft: #dff3f0;
+    --visual-coral: #c95849;
+    --visual-amber: #a86d16;
+    --visual-blue: #2e6d9e;
+    --visual-shadow-panel: 0 10px 24px rgba(4, 18, 24, 0.2),
+      0 2px 5px rgba(4, 18, 24, 0.13), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+    --visual-shadow-card: 0 6px 14px rgba(4, 18, 24, 0.12),
+      0 1px 3px rgba(4, 18, 24, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.88);
+    --visual-shadow-card-hover: 0 12px 22px rgba(4, 18, 24, 0.17),
+      0 2px 5px rgba(4, 18, 24, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.96);
+  }
+
+  html,
+  body,
+  #root {
+    background: var(--visual-canvas) !important;
+  }
+
+  body {
+    color: #eef7f5 !important;
+    background-color: var(--visual-canvas) !important;
+    background-image: linear-gradient(180deg, #1a2a32 0, var(--visual-canvas) 520px) !important;
+    font-size: 16px;
+    line-height: 1.68;
+  }
+
+  .app-container.top-navigation-layout {
+    color: #eef7f5 !important;
+    background: transparent !important;
+  }
+
+  /* Idle motion remains atmospheric and low-frequency, while the live-run
+   * layer in clarity.css takes over when a research stream is active. */
+  .app-container.signal-theme::before {
+    opacity: 0.62;
+    background-image:
+      linear-gradient(rgba(103, 211, 202, 0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(103, 211, 202, 0.07) 1px, transparent 1px);
+  }
+
+  .app-container.signal-theme::after {
+    opacity: 0.36;
+    background: linear-gradient(
+      105deg,
+      transparent 38%,
+      rgba(103, 211, 202, 0.08) 50%,
+      transparent 62%
+    );
+  }
+
+  /* Header ------------------------------------------------------------- */
+  .global-header {
+    min-height: 72px !important;
+    border: 0 !important;
+    border-bottom: 1px solid rgba(154, 207, 207, 0.3) !important;
+    border-radius: 0 !important;
+    background: rgba(14, 23, 28, 0.92) !important;
+    box-shadow: 0 8px 18px rgba(2, 12, 17, 0.2) !important;
+    backdrop-filter: blur(18px);
+  }
+
+  .top-brand,
+  .top-brand-copy strong,
+  .top-navigation .nav-link,
+  .mobile-nav-toggle {
+    color: #edf8f5 !important;
+  }
+
+  .top-brand .brand-icon {
+    width: 38px;
+    height: 38px;
+    border: 1px solid rgba(103, 211, 202, 0.72) !important;
+    border-radius: 9px !important;
+    color: #72ddd4 !important;
+    background: rgba(10, 143, 134, 0.12) !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 0 0 4px rgba(10, 143, 134, 0.08) !important;
+  }
+
+  .top-brand-copy strong {
+    font-size: 1.02rem;
+    font-weight: 750;
+    letter-spacing: 0.08em;
+  }
+
+  .top-brand-copy small {
+    color: #94adb3 !important;
+    font-weight: 600;
+  }
+
+  .top-navigation .nav-link {
+    color: #a3b8bd !important;
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.1em;
+  }
+
+  .top-navigation .nav-link:hover,
+  .top-navigation .nav-link.active {
+    color: #ffffff !important;
+  }
+
+  .top-navigation .nav-link::after {
+    background: #64d4cb !important;
+  }
+
+  .current-page-label {
+    color: #9bb0b5 !important;
+    font-weight: 650;
+  }
+
+  .system-status {
+    color: #75d8cd !important;
+    font-weight: 700;
+  }
+
+  .system-status i {
+    border-color: #75d8cd !important;
+    background: #75d8cd !important;
+    box-shadow: 0 0 0 4px rgba(117, 216, 205, 0.12);
+  }
+
+  .global-header .btn.btn-ghost,
+  .global-header .api-access-button {
+    color: #d8e9e7 !important;
+    border-color: rgba(151, 195, 198, 0.42) !important;
+    background: rgba(255, 255, 255, 0.06) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+  }
+
+  .global-header .btn.btn-ghost:hover,
+  .global-header .api-access-button:hover {
+    color: #ffffff !important;
+    border-color: #73d8cf !important;
+    background: rgba(10, 143, 134, 0.2) !important;
+  }
+
+  /* Page framing ------------------------------------------------------- */
+  .content-area {
+    padding-top: 34px !important;
+    padding-bottom: 88px !important;
+  }
+
+  .page-stack {
+    gap: 30px !important;
+  }
+
+  .page-intro {
+    min-height: 270px !important;
+    padding: 42px 42px !important;
+    border: 1px solid #b8cdd1 !important;
+    border-left: 5px solid var(--visual-teal) !important;
+    border-radius: 12px !important;
+    background: linear-gradient(135deg, #ffffff 0%, #f4f9f8 100%) !important;
+    box-shadow: var(--visual-shadow-panel) !important;
+  }
+
+  .page-intro h1 {
+    max-width: 980px;
+    color: var(--visual-ink) !important;
+    font-size: 3.45rem !important;
+    font-weight: 800 !important;
+    line-height: 1.08 !important;
+  }
+
+  .page-intro h1 em,
+  .page-intro .accent,
+  .headline-accent {
+    color: var(--visual-teal) !important;
+  }
+
+  .page-intro p {
+    max-width: 760px;
+    color: var(--visual-ink-soft) !important;
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 1.72;
+  }
+
+  .eyebrow,
+  .panel-kicker,
+  .workflow-kicker,
+  .boot-kicker,
+  .intent-section-label,
+  .research-progress-kicker,
+  .live-metric-label {
+    color: var(--visual-teal) !important;
+    font-size: 11px !important;
+    font-weight: 800 !important;
+    letter-spacing: 0.16em !important;
+  }
+
+  /* Surfaces and cards ------------------------------------------------- */
+  .panel,
+  .research-live-overview,
+  .orchestration-runtime,
+  .submit-panel,
+  .clarify-dialog,
+  .evidence-card,
+  .stat-card {
+    border: 1px solid var(--visual-line) !important;
+    border-radius: 10px !important;
+    background: var(--visual-surface) !important;
+    box-shadow: var(--visual-shadow-panel) !important;
+  }
+
+  .panel {
+    padding: 30px !important;
+  }
+
+  .panel-header,
+  .panel-head {
+    min-height: 48px;
+    margin-bottom: 24px !important;
+    padding-bottom: 16px !important;
+    border-bottom: 1px solid var(--visual-line-soft) !important;
+  }
+
+  .panel-title {
+    color: var(--visual-ink) !important;
+    font-size: 1.72rem !important;
+    font-weight: 800 !important;
+    line-height: 1.18;
+  }
+
+  .panel-index,
+  .builtin-card-index,
+  .sample-number,
+  .step-index {
+    color: var(--visual-faint) !important;
+    font-weight: 750 !important;
+  }
+
+  .card,
+  .role-card,
+  .history-run-card,
+  .model-profile-card,
+  .builtin-card,
+  .sample-card {
+    color: var(--visual-ink) !important;
+    border: 1px solid #b9cdd1 !important;
+    border-radius: 9px !important;
+    background: linear-gradient(145deg, #ffffff 0%, #f0f6f5 78%) !important;
+    box-shadow: var(--visual-shadow-card) !important;
+  }
+
+  .card:hover,
+  .role-card:hover,
+  .history-run-card:hover,
+  .model-profile-card:hover,
+  .builtin-card:hover,
+  .sample-card:hover,
+  .card:focus-within,
+  .role-card:focus-within,
+  .history-run-card:focus-within,
+  .model-profile-card:focus-within,
+  .builtin-card:focus-within,
+  .sample-card:focus-within {
+    border-color: #6fbdb6 !important;
+    background: #f6fcfb !important;
+    box-shadow: var(--visual-shadow-card-hover) !important;
+    transform: translateY(-3px) !important;
+  }
+
+  .role-card-head strong,
+  .role-meta strong,
+  .builtin-card-name strong,
+  .catalog-card-name strong {
+    color: var(--visual-ink) !important;
+    font-size: 1.2rem !important;
+    font-weight: 800 !important;
+  }
+
+  .builtin-card-name strong {
+    font-size: 1.35rem !important;
+  }
+
+  .card p,
+  .role-card p,
+  .history-run-card p,
+  .model-profile-card p,
+  .builtin-card p,
+  .sample-card p,
+  .role-desc,
+  .builtin-card-desc,
+  .step-summary,
+  .catalog-description {
+    color: var(--visual-ink-soft) !important;
+    font-size: 0.98rem !important;
+    font-weight: 550 !important;
+    line-height: 1.7 !important;
+  }
+
+  .muted,
+  .hint,
+  .catalog-description,
+  .role-desc,
+  .live-metric-note {
+    color: var(--visual-muted) !important;
+  }
+
+  /* Controls ----------------------------------------------------------- */
+  .btn,
+  button.btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-ghost,
+  .btn.ghost,
+  .tab,
+  .chip,
+  .settings-toggle,
+  .tag-x,
+  .welcome-secondary,
+  .sample-card,
+  .clarify-option,
+  .route-action,
+  .delete-action {
+    min-height: 42px;
+    border: 1px solid #9db8be !important;
+    border-radius: 7px !important;
+    color: #203944 !important;
+    background: #ffffff !important;
+    box-shadow: 0 3px 7px rgba(4, 18, 24, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.95) !important;
+    font-size: 13px !important;
+    font-weight: 750 !important;
+    letter-spacing: 0.02em !important;
+  }
+
+  .btn:hover:not(:disabled),
+  .btn-secondary:hover:not(:disabled),
+  .btn-ghost:hover:not(:disabled),
+  .btn.ghost:hover:not(:disabled),
+  .tab:hover,
+  .chip:hover,
+  .settings-toggle:hover,
+  .welcome-secondary:hover,
+  .clarify-option:hover:not(:disabled) {
+    color: var(--visual-teal-deep) !important;
+    border-color: #5caaa3 !important;
+    background: #eff9f7 !important;
+    box-shadow: 0 6px 12px rgba(4, 18, 24, 0.14), inset 0 1px 0 #ffffff !important;
+    transform: translateY(-2px) !important;
+  }
+
+  .btn-primary,
+  .btn.btn-primary,
+  .btn:not(.ghost):not(.btn-ghost):not(.btn-secondary) {
+    color: #ffffff !important;
+    border-color: var(--visual-teal-deep) !important;
+    background: linear-gradient(180deg, #13a69b 0%, #087a73 100%) !important;
+    box-shadow: 0 5px 10px rgba(6, 106, 101, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.28) !important;
+  }
+
+  .btn-primary:hover:not(:disabled),
+  .btn.btn-primary:hover:not(:disabled),
+  .btn:not(.ghost):not(.btn-ghost):not(.btn-secondary):hover:not(:disabled) {
+    color: #ffffff !important;
+    border-color: #045e5a !important;
+    background: linear-gradient(180deg, #18b4a8 0%, #08716c 100%) !important;
+    box-shadow: 0 8px 16px rgba(6, 106, 101, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.32) !important;
+  }
+
+  .btn-lg {
+    min-height: 50px !important;
+    padding-inline: 22px !important;
+    font-size: 14px !important;
+  }
+
+  /* Semantic status colors are deliberately stronger than the neutral
+   * surfaces, so completed, warning, and failed states scan immediately. */
+  .badge.success,
+  .live-sync-state.done,
+  .live-sync-state.streaming,
+  .runtime-status.succeeded {
+    color: #08776f !important;
+    border-color: #78c7bf !important;
+    background: #dff5f1 !important;
+  }
+
+  .badge.info {
+    color: #245f91 !important;
+    border-color: #9bbddd !important;
+    background: #eaf3fb !important;
+  }
+
+  .badge.warning,
+  .live-sync-state.disconnected,
+  .live-sync-state.cancelled,
+  .runtime-status.retrying {
+    color: #8b5a10 !important;
+    border-color: #e4c27f !important;
+    background: #fff4db !important;
+  }
+
+  .badge.error,
+  .live-sync-state.error,
+  .runtime-status.failed {
+    color: #a33b31 !important;
+    border-color: #e3a198 !important;
+    background: #fff0ed !important;
+  }
+
+  /* Runtime overview --------------------------------------------------- */
+  .research-live-overview {
+    overflow: hidden;
+    background: #f8fbfa !important;
+  }
+
+  .research-progress-summary {
+    padding: 30px 32px !important;
+    background: linear-gradient(135deg, #ffffff 0%, #eef7f5 100%) !important;
+  }
+
+  .research-progress-value {
+    color: var(--visual-ink) !important;
+    font-size: 5.1rem !important;
+    font-weight: 800 !important;
+    line-height: 0.95;
+  }
+
+  .research-progress-value small {
+    color: var(--visual-teal) !important;
+    font-size: 0.34em;
+    font-weight: 750;
+  }
+
+  .research-progress-context > span {
+    color: var(--visual-ink) !important;
+    font-size: 1.12rem;
+    font-weight: 800;
+  }
+
+  .research-progress-context small {
+    color: var(--visual-muted) !important;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .research-progress-track,
+  .runtime-header-progress {
+    height: 8px !important;
+    border: 1px solid #b7d2d0;
+    background: #d6e8e6 !important;
+  }
+
+  .research-progress-track > span,
+  .runtime-header-progress > span {
+    background: linear-gradient(90deg, #0a8f86 0%, #39bcb0 100%) !important;
+    box-shadow: 0 0 10px rgba(10, 143, 134, 0.28);
+  }
+
+  .live-metrics {
+    padding: 14px 16px 16px !important;
+    background: #13242b !important;
+  }
+
+  .live-metric {
+    border-color: rgba(174, 218, 216, 0.22) !important;
+  }
+
+  .live-metric-icon {
+    border-color: rgba(112, 216, 207, 0.46) !important;
+    background: rgba(10, 143, 134, 0.18) !important;
+    color: #87e3da !important;
+  }
+
+  .live-metric-label {
+    color: #91c9c6 !important;
+  }
+
+  .live-metric-value {
+    color: #f2fbf9 !important;
+    font-size: 1.6rem !important;
+    font-weight: 800 !important;
+  }
+
+  .live-metric-note {
+    color: #a8bfc0 !important;
+    font-size: 11px;
+    font-weight: 550;
+  }
+
+  .live-metric.is-updating {
+    border-color: rgba(106, 222, 211, 0.62) !important;
+    background: rgba(10, 143, 134, 0.18) !important;
+  }
+
+  /* Timeline, workflow and report ------------------------------------- */
+  .event-row {
+    padding: 15px 12px !important;
+    border-bottom: 1px solid #d6e1e3 !important;
+    border-radius: 6px !important;
+  }
+
+  .event-row:hover {
+    background: #edf7f6 !important;
+  }
+
+  .event-time {
+    color: var(--visual-muted) !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+  }
+
+  .event-stage {
+    color: var(--visual-ink) !important;
+    font-size: 12px !important;
+    font-weight: 800 !important;
+  }
+
+  .event-msg {
+    color: var(--visual-ink-soft) !important;
+    font-size: 14px !important;
+    font-weight: 550;
+    line-height: 1.62;
+  }
+
+  .runtime-step,
+  .runtime-terminal,
+  .dag-node {
+    border-color: #b4cbd0 !important;
+    border-radius: 8px !important;
+    background: #f3f8f7 !important;
+    box-shadow: var(--visual-shadow-card) !important;
+  }
+
+  .runtime-step.running,
+  .runtime-step.succeeded,
+  .runtime-step.retrying {
+    border-color: #74c4bd !important;
+    background: #e6f6f3 !important;
+  }
+
+  .runtime-step.failed {
+    border-color: #e4a097 !important;
+    background: #fff0ed !important;
+  }
+
+  .report-panel {
+    padding: 24px !important;
+  }
+
+  .report-view-body {
+    padding: 28px 30px !important;
+    border: 1px solid #d9d3c8;
+    border-radius: 10px;
+    background: var(--visual-paper) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+  }
+
+  .report-view-body > .report {
+    width: min(80ch, 100%);
+    max-width: 80ch;
+    color: #1b303b !important;
+    font-size: 17px !important;
+    line-height: 1.92 !important;
+  }
+
+  .report-view-body > .report h1 {
+    color: #10242f !important;
+    font-size: 2.45rem !important;
+    font-weight: 800 !important;
+    line-height: 1.24;
+  }
+
+  .report-view-body > .report h2 {
+    margin-top: 2.3em;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #b6d5d1;
+    color: #173540 !important;
+    font-size: 1.55rem !important;
+    font-weight: 800 !important;
+  }
+
+  .report-view-body > .report h3,
+  .report-view-body > .report h4 {
+    color: #1b3c47 !important;
+    font-weight: 800 !important;
+  }
+
+  .report-view-body > .report p,
+  .report-view-body > .report li {
+    color: #304b58 !important;
+    font-weight: 500;
+  }
+
+  .report-view-body > .report strong {
+    color: #132d38 !important;
+    font-weight: 800;
+  }
+
+  .report-view-body > .report blockquote {
+    border-left: 4px solid var(--visual-teal) !important;
+    background: #eaf6f3 !important;
+    color: #294652 !important;
+  }
+
+  .report-view-body > .report .cite-ref {
+    color: #076e68 !important;
+    border-color: #83c9c2 !important;
+    background: #e2f4f1 !important;
+    font-weight: 800;
+  }
+
+  .evidence-overview {
+    border-color: #b8cdd1 !important;
+    border-radius: 8px !important;
+    background: #eaf2f1 !important;
+  }
+
+  .evidence-stat {
+    min-height: 64px;
+    color: #254450 !important;
+    background: #ffffff !important;
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .evidence-stat b {
+    color: #102a35 !important;
+    font-size: 1.15rem;
+    font-weight: 850;
+  }
+
+  .evidence-stat.verified,
+  .evidence-stat.supported,
+  .evidence-stat.corroborated {
+    color: #08776f !important;
+  }
+
+  .evidence-stat.conflicted,
+  .evidence-stat.blocked {
+    color: #a33b31 !important;
+  }
+
+  /* Welcome surface ---------------------------------------------------- */
+  .visitor-welcome.signal-theme {
+    color: #edf8f5 !important;
+    background: var(--visual-canvas) !important;
+  }
+
+  .visitor-welcome .welcome-nav {
+    border-color: rgba(154, 207, 207, 0.28) !important;
+  }
+
+  .visitor-welcome .welcome-brand,
+  .visitor-welcome .welcome-brand strong,
+  .visitor-welcome .welcome-copy h1 {
+    color: #f3faf8 !important;
+  }
+
+  .visitor-welcome .welcome-brand .brand-icon {
+    color: #74ddd4 !important;
+    border-color: #74ddd4 !important;
+    background: rgba(10, 143, 134, 0.14) !important;
+  }
+
+  .visitor-welcome .welcome-brand small,
+  .visitor-welcome .welcome-copy p,
+  .visitor-welcome .welcome-orbit p,
+  .visitor-welcome .welcome-note-list {
+    color: #afc3c6 !important;
+  }
+
+  .visitor-welcome .welcome-copy h1 .headline-accent,
+  .visitor-welcome .welcome-kicker {
+    color: #72ddd4 !important;
+  }
+
+  .visitor-welcome .welcome-orbit,
+  .visitor-welcome .welcome-capabilities article,
+  .visitor-welcome .welcome-telemetry-section {
+    border-color: rgba(154, 207, 207, 0.28) !important;
+    background: rgba(23, 36, 43, 0.86) !important;
+    box-shadow: 0 12px 28px rgba(2, 12, 17, 0.22) !important;
+  }
+
+  .visitor-welcome .welcome-capabilities article strong,
+  .visitor-welcome .welcome-telemetry-heading h2 {
+    color: #f3faf8 !important;
+  }
+
+  /* Responsive -------------------------------------------------------- */
+  @media (max-width: 1100px) {
+    .page-intro h1 {
+      font-size: 3rem !important;
+    }
+
+    .research-progress-value {
+      font-size: 4.4rem !important;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .global-header {
+      min-height: 60px !important;
+      background: rgba(14, 23, 28, 0.97) !important;
+    }
+
+    .top-navigation-layout .main-content {
+      padding-top: 60px;
+    }
+
+    .top-navigation.is-open {
+      border-color: rgba(154, 207, 207, 0.28) !important;
+      background: #122128 !important;
+    }
+
+    .content-area {
+      padding: 20px 14px 54px !important;
+    }
+
+    .page-intro {
+      min-height: 0 !important;
+      padding: 28px 22px !important;
+    }
+
+    .page-intro h1 {
+      font-size: 2.35rem !important;
+    }
+
+    .panel,
+    .report-panel,
+    .research-composer {
+      padding: 22px !important;
+    }
+
+    .panel-title {
+      font-size: 1.42rem !important;
+    }
+
+    .research-progress-summary {
+      padding: 24px 22px !important;
+    }
+
+    .research-progress-value {
+      font-size: 3.8rem !important;
+    }
+
+    .report-view-body {
+      padding: 20px 17px !important;
+    }
+
+    .report-view-body > .report {
+      font-size: 16px !important;
+      line-height: 1.84 !important;
+    }
+
+    .report-view-body > .report h1 {
+      font-size: 2rem !important;
+    }
+
+    .report-view-body > .report h2 {
+      font-size: 1.35rem !important;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .app-container.signal-theme::before,
+    .app-container.signal-theme::after,
+    .card:hover,
+    .role-card:hover,
+    .history-run-card:hover,
+    .model-profile-card:hover,
+    .builtin-card:hover,
+    .sample-card:hover,
+    .card:focus-within,
+    .role-card:focus-within,
+    .history-run-card:focus-within,
+    .model-profile-card:focus-within,
+    .builtin-card:focus-within,
+    .sample-card:focus-within,
+    .btn:hover:not(:disabled) {
+      animation: none !important;
+      transform: none !important;
+      transition: none !important;
+    }
+  }
+}

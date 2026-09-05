@@ -12,6 +12,8 @@ import './motion.css'
 import './editorial.css'
 // Screen-only visual hierarchy; keep print overrides last.
 import './clarity.css'
+// Final high-contrast research workspace layer.
+import './visual-refresh.css'
 // Keep print overrides last so they can flatten the screen report layout.
 import './print.css'
 import AgentSquarePage from './pages/AgentSquarePage'
