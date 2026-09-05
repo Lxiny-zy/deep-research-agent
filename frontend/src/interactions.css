@@ -461,6 +461,8 @@
     display: inline-block !important;
     visibility: visible !important;
     flex: 0 0 auto !important;
+    width: auto !important;
+    max-width: none !important;
   }
 
   .welcome-tour-actions .icon-button .app-icon,
