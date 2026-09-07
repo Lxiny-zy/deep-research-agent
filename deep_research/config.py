@@ -72,7 +72,7 @@ _DEFAULT_LLM_UA = (
 # 已实现的检索后端。``tavily`` / ``brave`` 是通用网页索引，``openalex`` / ``arxiv``
 # 是学术源。分开列在这里而不是散落在 execution 里，是为了让非法配置在
 # Settings 构造时就失败，而不是等到某次研究真的去检索时才报错。
-_KNOWN_SEARCH_BACKENDS = frozenset({"tavily", "brave", "openalex", "arxiv"})
+_KNOWN_SEARCH_BACKENDS = frozenset({"tavily", "brave", "serper", "grok", "openalex", "arxiv"})
 
 
 @dataclass
@@ -97,6 +97,14 @@ class Settings:
     # --- 检索 ---
     tavily_api_key: str = field(default_factory=lambda: os.getenv("TAVILY_API_KEY", ""))
     brave_api_key: str = field(default_factory=lambda: os.getenv("BRAVE_API_KEY", ""))
+    serper_api_key: str = field(default_factory=lambda: os.getenv("SERPER_API_KEY", ""))
+    xai_api_key: str = field(default_factory=lambda: os.getenv("XAI_API_KEY", ""))
+    xai_model: str = field(
+        default_factory=lambda: os.getenv("XAI_SEARCH_MODEL", "grok-4-1-fast-non-reasoning")
+    )
+    xai_base_url: str = field(
+        default_factory=lambda: os.getenv("XAI_SEARCH_BASE_URL", "https://api.x.ai/v1/responses")
+    )
     # OpenAlex / Crossref 的礼貌池联系邮箱。不是密钥，缺失也能用（走匿名池、
     # 配额更紧），因此不进 validate_search 的必填校验。
     openalex_mailto: str = field(default_factory=lambda: os.getenv("OPENALEX_MAILTO", ""))

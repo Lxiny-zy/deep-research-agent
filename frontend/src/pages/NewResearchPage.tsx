@@ -247,7 +247,7 @@ function ResearchComposer() {
           </div>
           <span className="panel-index">NEW / RESEARCH</span>
         </div>
-        <div className="panel-body stack">
+        <div className="research-composer-body">
           <fieldset className="composer-workbench composer-fields" disabled={busy}>
             <div className="composer-main">
               {thread.length > 0 && (

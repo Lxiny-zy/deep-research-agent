@@ -85,6 +85,20 @@ describe('NewResearchPage workflow list race', () => {
     mocks.useConfig.mockReturnValue({ data: { require_corroboration: false } })
   })
 
+  it('keeps the composer body free of nested panel shells', async () => {
+    mocks.listWorkflows.mockResolvedValue(WORKFLOWS)
+
+    const { container } = render(
+      <MemoryRouter initialEntries={['/']}>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('combobox')
+    expect(container.querySelector('.research-composer-body')).not.toBeNull()
+    expect(container.querySelector('.research-composer-body .panel')).toBeNull()
+  })
+
   it('ignores a late response from a superseded listWorkflows request', async () => {
     const first = deferred<WorkflowInfo[]>()
     const second = deferred<WorkflowInfo[]>()

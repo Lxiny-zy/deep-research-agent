@@ -526,6 +526,11 @@ export interface ConfigView {
   llm_api_key_hint: string
   tavily_api_key_set: boolean
   tavily_api_key_hint: string
+  serper_api_key_set: boolean
+  serper_api_key_hint: string
+  xai_api_key_set: boolean
+  xai_api_key_hint: string
+  search_backends: string[]
   max_sub_questions: number
   max_rounds: number
   max_concurrency: number
@@ -543,6 +548,9 @@ export interface ConfigUpdate {
   llm_base_url?: string | null
   llm_api_key?: string
   tavily_api_key?: string
+  serper_api_key?: string
+  xai_api_key?: string
+  search_backends?: string[]
   max_sub_questions?: number
   max_rounds?: number
   max_concurrency?: number

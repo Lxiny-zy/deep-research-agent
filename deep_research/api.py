@@ -268,6 +268,11 @@ class ConfigView(BaseModel):
     llm_api_key_hint: str
     tavily_api_key_set: bool
     tavily_api_key_hint: str
+    serper_api_key_set: bool
+    serper_api_key_hint: str
+    xai_api_key_set: bool
+    xai_api_key_hint: str
+    search_backends: tuple[str, ...]
     max_sub_questions: int
     max_rounds: int
     max_concurrency: int
@@ -289,6 +294,9 @@ class ConfigUpdate(BaseModel):
     llm_base_url: str | None = Field(default=None, max_length=500)
     llm_api_key: str | None = Field(default=None, max_length=500)
     tavily_api_key: str | None = Field(default=None, max_length=500)
+    serper_api_key: str | None = Field(default=None, max_length=500)
+    xai_api_key: str | None = Field(default=None, max_length=500)
+    search_backends: list[str] | None = Field(default=None, min_length=1, max_length=6)
     max_sub_questions: int | None = Field(default=None, ge=1, le=12)
     max_rounds: int | None = Field(default=None, ge=0, le=5)
     max_concurrency: int | None = Field(default=None, ge=1, le=16)
@@ -495,6 +503,11 @@ def _config_view(s: Settings) -> ConfigView:
         llm_api_key_hint=_mask_secret(s.llm_api_key),
         tavily_api_key_set=bool(s.tavily_api_key),
         tavily_api_key_hint=_mask_secret(s.tavily_api_key),
+        serper_api_key_set=bool(s.serper_api_key),
+        serper_api_key_hint=_mask_secret(s.serper_api_key),
+        xai_api_key_set=bool(s.xai_api_key),
+        xai_api_key_hint=_mask_secret(s.xai_api_key),
+        search_backends=s.search_backends,
         max_sub_questions=s.max_sub_questions,
         max_rounds=s.max_rounds,
         max_concurrency=s.max_concurrency,

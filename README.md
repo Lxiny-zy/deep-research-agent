@@ -24,7 +24,7 @@
 - **安全对抗评测**：离线红队集锁定注入拦截、伪引用拦截、矛盾传播、有效双源传播和同源/冲突伪双源拦截；当前固定用例均为 100%，度量的是已知攻击面和管线正确性，不宣称开放世界事实判定率。
 - **流式可观测**：SSE 把每个 Agent 的动作实时推到浏览器；内置 Tracer 统计耗时 / token。
 - **持久化与回放**：每次研究全过程落库（计划 / 结果 / 报告 / 事件）；提供历史列表、详情、SSE 事件回放。仓储接口双实现（内存 / async SQLAlchemy），本地 SQLite 零配置并在启动时准备 schema，生产切 PostgreSQL，Alembic 管 schema 版本。
-- **多检索后端**：`DR_SEARCH_BACKENDS=tavily,brave` 并发查询多个索引并按归一化 URL 去重（剥离跟踪参数、大小写与默认端口），合并发生在来源策略门禁**之前**，独立发布方仍按 registrable domain 判定，不会凭空造出伪双源。单后端失败只记审计事件不阻断，全部失败才向上抛。目的很具体：交叉印证门禁能判定「≥2 个独立发布方」的前提是它们都被检索到了，单一索引下这类漏报无从暴露。run manifest 记录后端组合（如 `TavilySearch+BraveSearch`），因此单/双后端可做对照实验。
+- **多检索后端**：`DR_SEARCH_BACKENDS=tavily,brave,serper,grok` 并发查询多个索引并按归一化 URL 去重（剥离跟踪参数、大小写与默认端口），合并发生在来源策略门禁**之前**，独立发布方仍按 registrable domain 判定，不会凭空造出伪双源。Serper 使用 `SERPER_API_KEY`，Grok 使用 `XAI_API_KEY` 和 Responses API 的 `web_search` 工具。单后端失败只记审计事件不阻断，全部失败才向上抛。run manifest 记录后端组合，便于复现实验。
 - **学术来源与 DOI 级出处**：`DR_SEARCH_BACKENDS=openalex,arxiv` 接入学术索引（均不需要 API Key）。它们额外带回通用网页检索拿不到的字段：DOI、作者、**作者机构**、期刊、发表年份、预印本版本、引用数、**撤稿标记**与开放全文位置。参考来源列表因此从裸 URL 升级为 `作者. 标题. 期刊, 年. <DOI>`，撤稿与预印本状态直接标在引用里而不是只进审计事件。引用文本由 `EvidenceVerifier` 在**验证时刻**渲染并随 Finding 落库（只有那一刻同时握有 Finding 与 Source），因此历史回放与 worker 跨进程执行拿到的引用完全一致；`Report.citations` 仍是纯 URL 列表，前端 [n] 跳转与快照覆盖率指标的契约不变。OpenAlex 的倒排索引摘要会被还原成连续文本，且**还原结果就是逐字证据校验匹配的那一份**——模型看到的、被哈希留证的、被校验的是同一份文本。注意 OpenAlex 有每日免费配额（约 1000 次/日、按出口 IP 计、UTC 午夜重置），耗尽时抛出带重置时间的 `OpenAlexQuotaExceeded` 而非裸 429；多后端下该失败被隔离，其余后端照常产出。详见 [docs/AI4S_HSI_PLAN.md](docs/AI4S_HSI_PLAN.md)。
 - **provider 无关**：任意 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / GLM / Moonshot …）。
 - **可测试**：依赖注入（LLM / 检索后端可替换为假实现），单测无需密钥与网络。

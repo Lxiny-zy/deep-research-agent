@@ -33,6 +33,9 @@ interface FormState {
   llm_model: string
   llm_base_url: string
   llm_api_key: string
+  serper_api_key: string
+  xai_api_key: string
+  search_backends: string[]
   max_sub_questions: number
   max_rounds: number
   max_concurrency: number
@@ -49,6 +52,9 @@ function toForm(c: ConfigView): FormState {
     llm_model: c.llm_model,
     llm_base_url: c.llm_base_url ?? '',
     llm_api_key: '',
+    serper_api_key: '',
+    xai_api_key: '',
+    search_backends: c.search_backends ?? ['tavily'],
     max_sub_questions: c.max_sub_questions,
     max_rounds: c.max_rounds,
     max_concurrency: c.max_concurrency,
@@ -73,11 +79,16 @@ function EffectiveConfig({ config }: { config: ConfigView }) {
     ? `${defaultProfile.name} · ${defaultProfile.model} · ${defaultProfile.base_url || '官方端点'}`
     : `${config.llm_model} · ${config.llm_base_url || '官方端点'}（环境变量兜底）`
 
+  const fallbackKeys = [
+    config.tavily_api_key_set && 'Tavily',
+    config.serper_api_key_set && 'Serper',
+    config.xai_api_key_set && 'Grok',
+  ].filter((value): value is string => Boolean(value))
   const keyLine =
     activeKeys > 0
       ? `Key 池：启用 ${activeKeys} 个（主备故障转移）`
-      : config.tavily_api_key_set
-        ? '单个环境变量 key（兜底）'
+      : fallbackKeys.length > 0
+        ? `环境变量 key：${fallbackKeys.join(' / ')}`
         : '未配置'
 
   return (
@@ -104,6 +115,12 @@ function EffectiveConfig({ config }: { config: ConfigView }) {
           <div className="muted small">{keyLine}</div>
         </div>
       </div>
+      <div className="list-row">
+        <div>
+          <strong>Search backends</strong>
+          <div className="muted small">{config.search_backends.join(' / ')}</div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -115,6 +132,8 @@ export default function SettingsPage() {
   const update = useUpdateConfig()
   const [form, setForm] = useState<FormState | null>(null)
   const [editingGlobalKey, setEditingGlobalKey] = useState(false)
+  const [editingSerperKey, setEditingSerperKey] = useState(false)
+  const [editingXaiKey, setEditingXaiKey] = useState(false)
 
   // 配置到达后初始化表单
   useEffect(() => {
@@ -133,6 +152,7 @@ export default function SettingsPage() {
     const body: ConfigUpdate = {
       llm_model: form.llm_model.trim(),
       llm_base_url: form.llm_base_url.trim() || null,
+      search_backends: form.search_backends,
       max_sub_questions: form.max_sub_questions,
       max_rounds: form.max_rounds,
       max_concurrency: form.max_concurrency,
@@ -144,10 +164,16 @@ export default function SettingsPage() {
       require_corroboration: form.require_corroboration,
     }
     if (editingGlobalKey && form.llm_api_key.trim()) body.llm_api_key = form.llm_api_key.trim()
+    if (editingSerperKey && form.serper_api_key.trim()) {
+      body.serper_api_key = form.serper_api_key.trim()
+    }
+    if (editingXaiKey && form.xai_api_key.trim()) body.xai_api_key = form.xai_api_key.trim()
     update.mutate(body, {
       onSuccess: (next) => {
         setForm(toForm(next))
         setEditingGlobalKey(false)
+        setEditingSerperKey(false)
+        setEditingXaiKey(false)
       },
     })
   }
@@ -170,7 +196,7 @@ export default function SettingsPage() {
       </header>
       {data && <EffectiveConfig config={data} />}
 
-      <div className="panel" data-reveal="2">
+      <section className="settings-form-surface" data-reveal="2">
         <h3 className="panel-title">研究行为默认值</h3>
         <p className="hint" style={{ marginBottom: 18 }}>
           修改后持久化到服务端,对此后创建的研究生效（单次研究亦可在新建页临时覆盖）。
@@ -256,6 +282,91 @@ export default function SettingsPage() {
                 </div>
               )}
             </div>
+            <section className="search-backend-config" aria-labelledby="search-backend-title">
+              <div className="row between">
+                <div>
+                  <h3 className="panel-title" id="search-backend-title">Search backends</h3>
+                  <p className="hint">选择参与研究的来源；至少保留一个后端。</p>
+                </div>
+              </div>
+              <div className="search-backend-options">
+                {[
+                  ['tavily', 'Tavily'],
+                  ['brave', 'Brave'],
+                  ['serper', 'Serper'],
+                  ['grok', 'Grok web search'],
+                  ['openalex', 'OpenAlex'],
+                  ['arxiv', 'arXiv'],
+                ].map(([value, label]) => (
+                  <label className="search-backend-option" key={value}>
+                    <input
+                      type="checkbox"
+                      checked={form.search_backends.includes(value)}
+                      aria-label={label}
+                      onChange={(event) => {
+                        const selected = new Set(form.search_backends)
+                        if (event.target.checked) selected.add(value)
+                        else if (selected.size > 1) selected.delete(value)
+                        setForm({ ...form, search_backends: [...selected] })
+                      }}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="search-credential-grid">
+                <div className="saved-credential-row">
+                  <div>
+                    <strong>Serper API Key</strong>
+                    <small>{data.serper_api_key_set ? `已设置 ${data.serper_api_key_hint}` : '尚未设置'}</small>
+                  </div>
+                  {!editingSerperKey ? (
+                    <button
+                      type="button"
+                      className="btn ghost small"
+                      onClick={() => setEditingSerperKey(true)}
+                    >
+                      {data.serper_api_key_set ? '更换密钥' : '设置密钥'}
+                    </button>
+                  ) : (
+                    <input
+                      className="input"
+                      type="password"
+                      name="serper-api-key-new"
+                      autoComplete="new-password"
+                      value={form.serper_api_key}
+                      onChange={(event) => setForm({ ...form, serper_api_key: event.target.value })}
+                      placeholder="输入新的 Serper API Key"
+                    />
+                  )}
+                </div>
+                <div className="saved-credential-row">
+                  <div>
+                    <strong>xAI / Grok API Key</strong>
+                    <small>{data.xai_api_key_set ? `已设置 ${data.xai_api_key_hint}` : '尚未设置'}</small>
+                  </div>
+                  {!editingXaiKey ? (
+                    <button
+                      type="button"
+                      className="btn ghost small"
+                      onClick={() => setEditingXaiKey(true)}
+                    >
+                      {data.xai_api_key_set ? '更换密钥' : '设置密钥'}
+                    </button>
+                  ) : (
+                    <input
+                      className="input"
+                      type="password"
+                      name="xai-api-key-new"
+                      autoComplete="new-password"
+                      value={form.xai_api_key}
+                      onChange={(event) => setForm({ ...form, xai_api_key: event.target.value })}
+                      placeholder="输入新的 xAI API Key"
+                    />
+                  )}
+                </div>
+              </div>
+            </section>
             <div className="settings-grid">
               {NUM_FIELDS.map((f) => (
                 <label key={f.key} className="settings-item">
@@ -363,7 +474,7 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
-      </div>
+      </section>
     </div>
   )
 }

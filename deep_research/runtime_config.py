@@ -26,6 +26,9 @@ EDITABLE_FIELDS: tuple[str, ...] = (
     "llm_base_url",
     "llm_api_key",
     "tavily_api_key",
+    "serper_api_key",
+    "xai_api_key",
+    "search_backends",
     "max_sub_questions",
     "max_rounds",
     "max_concurrency",
@@ -38,7 +41,9 @@ EDITABLE_FIELDS: tuple[str, ...] = (
 )
 
 # 密钥字段：API 层脱敏回显、空值＝保持不变
-SECRET_FIELDS: frozenset[str] = frozenset({"llm_api_key", "tavily_api_key"})
+SECRET_FIELDS: frozenset[str] = frozenset(
+    {"llm_api_key", "tavily_api_key", "serper_api_key", "xai_api_key"}
+)
 PERSISTED_FIELDS: tuple[str, ...] = tuple(
     field for field in EDITABLE_FIELDS if field not in SECRET_FIELDS
 )

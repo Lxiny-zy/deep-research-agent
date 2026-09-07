@@ -206,6 +206,25 @@ class RunExecutor:
             logger.warning("检索后端 brave 已启用但缺少 BRAVE_API_KEY，本次跳过该后端")
         # 学术源不需要密钥，因此没有「缺 key 退化」这条分支：启用即可用。
         # OPENALEX_MAILTO 只影响配额档位（礼貌池），缺失不影响可用性。
+        if "serper" in settings.search_backends and settings.serper_api_key:
+            from .tools.serper_search import SerperSearch
+
+            backends.append(SerperSearch(settings.serper_api_key, timeout=settings.request_timeout))
+        elif "serper" in settings.search_backends:
+            logger.warning("search backend serper enabled but SERPER_API_KEY is missing; skipping")
+        if "grok" in settings.search_backends and settings.xai_api_key:
+            from .tools.xai_search import XaiGrokSearch
+
+            backends.append(
+                XaiGrokSearch(
+                    settings.xai_api_key,
+                    model=settings.xai_model,
+                    endpoint=settings.xai_base_url,
+                    timeout=settings.request_timeout,
+                )
+            )
+        elif "grok" in settings.search_backends:
+            logger.warning("search backend grok enabled but XAI_API_KEY is missing; skipping")
         if "openalex" in settings.search_backends:
             from .tools.openalex import OpenAlexSearch
 

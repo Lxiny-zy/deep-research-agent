@@ -15,6 +15,8 @@ from deep_research.config import Settings
 from deep_research.execution import ExecutionContext, RunExecutor
 from deep_research.tools.brave_search import BraveSearch
 from deep_research.tools.composite import MultiBackendSearch
+from deep_research.tools.serper_search import SerperSearch
+from deep_research.tools.xai_search import XaiGrokSearch
 
 
 class _Catalog:
@@ -177,3 +179,53 @@ async def test_brave_non_positive_max_results_does_not_issue_a_request() -> None
     finally:
         await tool.aclose()
     assert not called
+
+
+@pytest.mark.asyncio
+async def test_serper_parses_organic_results() -> None:
+    tool = SerperSearch("s-key")
+    tool._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={"organic": [{"title": "T", "link": "https://a.test", "snippet": "D"}]},
+            )
+        )
+    )
+    try:
+        sources = await tool.search("q")
+    finally:
+        await tool.aclose()
+    assert sources[0].url == "https://a.test"
+    assert sources[0].content == "D"
+
+
+@pytest.mark.asyncio
+async def test_grok_parses_response_citations() -> None:
+    tool = XaiGrokSearch("x-key")
+    tool._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={"citations": [{"url": "https://a.test", "title": "A"}]},
+            )
+        )
+    )
+    try:
+        sources = await tool.search("q")
+    finally:
+        await tool.aclose()
+    assert sources[0].title == "A"
+
+
+@pytest.mark.asyncio
+async def test_serper_and_grok_can_be_composed() -> None:
+    settings = Settings(
+        search_backends=("serper", "grok"),
+        serper_api_key="s-key",
+        xai_api_key="x-key",
+    )
+    tool = await _executor().build_search_tool(settings)
+    assert isinstance(tool, MultiBackendSearch)
+    assert tool.backend_name == "SerperSearch+XaiGrokSearch"
+    await tool.aclose()

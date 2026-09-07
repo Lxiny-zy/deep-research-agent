@@ -31,6 +31,11 @@ const CONFIG: ConfigView = {
   llm_api_key_hint: '***1234',
   tavily_api_key_set: true,
   tavily_api_key_hint: '***5678',
+  serper_api_key_set: false,
+  serper_api_key_hint: '',
+  xai_api_key_set: false,
+  xai_api_key_hint: '',
+  search_backends: ['tavily', 'openalex'],
   max_sub_questions: 5,
   max_rounds: 2,
   max_concurrency: 4,
@@ -97,6 +102,24 @@ describe('SettingsPage 严格双源门禁默认值', () => {
 
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ fulltext_enabled: false, fulltext_max_chars: 12000 }),
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    )
+  })
+
+  it('保存所选检索后端', async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    )
+
+    const serper = await screen.findByRole('checkbox', { name: 'Serper' })
+    await user.click(serper)
+    await user.click(screen.getByRole('button', { name: /保存设置/ }))
+
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ search_backends: ['tavily', 'openalex', 'serper'] }),
       expect.objectContaining({ onSuccess: expect.any(Function) }),
     )
   })

@@ -1112,6 +1112,111 @@
   }
 }
 
+/* Keep configuration pages and the research composer as one surface. Their
+ * child groups use separators and controls, rather than another panel shell. */
+@media screen {
+  .research-composer,
+  .settings-form-surface {
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .research-composer-body {
+    display: grid !important;
+    gap: 28px !important;
+  }
+
+  .research-composer > .panel-header,
+  .research-composer-body {
+    background: transparent !important;
+  }
+
+  .composer-sidebar {
+    box-shadow: none !important;
+  }
+
+  .settings-form-surface > .stack,
+  .settings-form-surface .global-model-config,
+  .settings-form-surface .search-backend-config {
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .settings-form-surface .global-model-config,
+  .settings-form-surface .search-backend-config {
+    padding-inline: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  .settings-form-surface .global-model-config {
+    padding-bottom: 24px !important;
+    border-bottom: 1px solid var(--visual-line) !important;
+  }
+
+  .settings-form-surface .settings-item,
+  .settings-form-surface .safety-gate-setting,
+  .research-composer .settings-item,
+  .research-composer .safety-gate-setting {
+    padding: 8px 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .settings-form-surface > .stack {
+    gap: 24px !important;
+  }
+
+  .search-backend-config {
+    display: grid;
+    gap: 14px;
+    padding-block: 24px;
+    border-bottom: 1px solid var(--visual-line) !important;
+  }
+
+  .search-backend-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+
+  .search-backend-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 32px;
+    color: var(--visual-ink-soft);
+    font-size: 13px;
+    font-weight: 650;
+  }
+
+  .search-backend-option input {
+    accent-color: var(--visual-teal);
+  }
+
+  .search-credential-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .search-credential-grid .saved-credential-row {
+    min-width: 0;
+    padding: 12px 0;
+    border-top: 1px solid var(--visual-line-soft);
+  }
+
+  @media (max-width: 760px) {
+    .search-credential-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+}
+
 /* Final layout contract: reports are a single reading surface.  This sits
  * after the legacy screen sheets so the workbench cannot reintroduce a
  * narrow sticky report column. */
