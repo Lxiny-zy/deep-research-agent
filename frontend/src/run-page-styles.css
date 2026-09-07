@@ -1,12 +1,6 @@
 /* ============================================================================
    研究页面布局优化 - 限制高度，添加滚动
    ========================================================================== */
-.grid-2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-  align-items: start;
-}
 
 /* 左侧：事件时间线和 DAG */
 .grid-2 > .stack {
@@ -128,79 +122,6 @@
 /* ============================================================================
    统计栏动画优化
    ========================================================================== */
-.statsbar {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.stat-card {
-  background: var(--surface-1);
-  border: 2px solid var(--border-primary);
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  position: relative;
-  overflow: hidden;
-  transition: all 0.3s var(--ease-smooth);
-}
-
-.stat-card::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  background: var(--accent-gradient);
-  transition: width 0.3s var(--ease-smooth);
-}
-
-.stat-card:hover::before {
-  width: 8px;
-}
-
-.stat-ico {
-  font-size: 2rem;
-  color: var(--accent-primary);
-  animation: stat-pulse 2s ease-in-out infinite;
-}
-
-@keyframes stat-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.7;
-    transform: scale(1.05);
-  }
-}
-
-.stat-body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.stat-num {
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  /* 数字跳动时平滑过渡 */
-  transition: all 0.3s var(--ease-smooth);
-}
-
-.stat-label {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
 
 /* 流式中数字闪烁效果 */
 @keyframes number-update {
@@ -222,9 +143,6 @@
    响应式：小屏幕改为单列
    ========================================================================== */
 @media (max-width: 1024px) {
-  .grid-2 {
-    grid-template-columns: 1fr;
-  }
 
   .grid-2 > .panel {
     position: relative;

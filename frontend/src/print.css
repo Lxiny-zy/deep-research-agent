@@ -171,7 +171,6 @@
   .event-timeline,
   .dag,
   .dag-view,
-  .skeleton,
   .cursor {
     display: none !important;
   }
@@ -182,7 +181,6 @@
   /* --- 解掉所有滚动容器（本文件的首要目的） ------------------------------ */
   .app-shell,
   .stack,
-  .grid-2,
   .run-columns,
   .panel,
   .report-panel,
@@ -199,7 +197,6 @@
   }
 
   /* 双栏在 A4 上太窄，报告一栏到底。 */
-  .grid-2,
   .run-columns {
     display: block !important;
   }

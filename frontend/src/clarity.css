@@ -145,8 +145,7 @@
   }
 
   .app-container.top-navigation-layout,
-  .live-preview-page,
-  .visitor-welcome {
+  .live-preview-page {
     min-height: 100vh;
     color: var(--clarity-ink) !important;
     background: transparent !important;
@@ -295,8 +294,7 @@
   }
 
   .page-intro h1 em,
-  .page-intro .accent,
-  .headline-accent {
+  .page-intro .accent {
     color: var(--clarity-teal) !important;
   }
 
@@ -344,8 +342,7 @@
   .orchestration-runtime,
   .submit-panel,
   .clarify-dialog,
-  .evidence-card,
-  .stat-card {
+  .evidence-card {
     border: 1px solid var(--clarity-line) !important;
     border-radius: var(--clarity-radius-md) !important;
     background: var(--clarity-surface) !important;
@@ -432,8 +429,7 @@
 
   .panel-index,
   .builtin-card-index,
-  .sample-number,
-  .step-index {
+  .sample-number {
     color: var(--clarity-faint) !important;
     font-family: var(--editorial-mono) !important;
   }
@@ -447,7 +443,6 @@
   .card,
   .role-card,
   .history-run-card,
-  .model-profile-card,
   .builtin-card,
   .sample-card {
     color: var(--clarity-ink) !important;
@@ -468,7 +463,6 @@
   .card,
   .role-card,
   .history-run-card,
-  .model-profile-card,
   .builtin-card {
     padding: 22px !important;
   }
@@ -513,8 +507,7 @@
   }
 
   .role-desc,
-  .builtin-card-desc,
-  .step-summary {
+  .builtin-card-desc {
     color: var(--clarity-ink-soft) !important;
     font-size: 0.94rem !important;
     font-weight: 500 !important;
@@ -524,7 +517,6 @@
   .card p,
   .role-card p,
   .history-run-card p,
-  .model-profile-card p,
   .builtin-card p,
   .sample-card p {
     color: var(--clarity-ink-soft) !important;
@@ -534,7 +526,6 @@
   .card small,
   .role-card small,
   .history-run-card small,
-  .model-profile-card small,
   .builtin-card small,
   .sample-card small {
     color: var(--clarity-muted) !important;
@@ -550,13 +541,11 @@
   .card:hover,
   .role-card:hover,
   .history-run-card:hover,
-  .model-profile-card:hover,
   .builtin-card:hover,
   .sample-card:hover,
   .card:focus-within,
   .role-card:focus-within,
   .history-run-card:focus-within,
-  .model-profile-card:focus-within,
   .builtin-card:focus-within,
   .sample-card:focus-within {
     border-color: #9fc8c3 !important;
@@ -570,7 +559,6 @@
   .card::before,
   .role-card::before,
   .history-run-card::before,
-  .model-profile-card::before,
   .builtin-card::before {
     border-radius: var(--clarity-radius-card) 0 0 var(--clarity-radius-card);
     box-shadow: inset -1px 0 rgba(255, 255, 255, 0.28);
@@ -579,8 +567,7 @@
   .card-grid,
   .builtin-card-grid,
   .sample-grid,
-  .settings-grid,
-  .stats-grid {
+  .settings-grid {
     gap: 18px !important;
   }
 
@@ -971,7 +958,6 @@
   .chip,
   .settings-toggle,
   .tag-x,
-  .welcome-secondary,
   .sample-card,
   .clarify-option,
   .route-action,
@@ -1024,7 +1010,6 @@
   .tab:hover,
   .chip:hover,
   .settings-toggle:hover,
-  .welcome-secondary:hover,
   .clarify-option:hover:not(:disabled) {
     color: var(--clarity-teal-deep) !important;
     border-color: #8fc5bf !important;
@@ -1515,11 +1500,6 @@
     font-size: 1.3rem !important;
     font-weight: 650 !important;
     line-height: 1.35;
-  }
-
-  .grid-2 {
-    grid-template-columns: minmax(300px, 0.82fr) minmax(0, 1.18fr);
-    gap: 24px;
   }
 
   .report-panel,
@@ -2086,14 +2066,6 @@
     border-top: 1px solid var(--clarity-line);
   }
 
-  .toast,
-  .toast-container {
-    border: 1px solid var(--clarity-line) !important;
-    border-radius: var(--clarity-radius-sm) !important;
-    background: var(--clarity-surface) !important;
-    box-shadow: var(--clarity-shadow-lg) !important;
-  }
-
   .boot-screen {
     min-height: 100vh;
     color: var(--clarity-ink) !important;
@@ -2140,10 +2112,6 @@
 
     .live-metric {
       padding-inline: 8px;
-    }
-
-    .grid-2 {
-      grid-template-columns: 1fr;
     }
 
     .composer-workbench,
@@ -2327,7 +2295,6 @@
     .card:hover,
     .role-card:hover,
     .history-run-card:hover,
-    .model-profile-card:hover,
     .builtin-card:hover,
     .sample-card:hover,
     .btn:hover:not(:disabled) {
@@ -2337,45 +2304,11 @@
 
   /* Report reading controls: make the two destinations explicit so switching
    * layout never depends on the current state of a toggle label. */
-  .report-view-switch {
-    display: inline-flex;
-    align-items: stretch;
-    gap: 0;
-    padding: 3px;
-    border: 1px solid var(--clarity-line-strong);
-    border-radius: var(--clarity-radius-sm);
-    background: var(--clarity-surface-muted);
-  }
-
-  .report-view-switch .report-view-option {
-    min-height: 32px;
-    min-width: 74px;
-    padding: 7px 11px !important;
-    border: 1px solid transparent !important;
-    border-radius: 3px !important;
-    color: var(--clarity-ink-soft) !important;
-    background: transparent !important;
-    box-shadow: none !important;
-    transform: none !important;
-  }
-
-  .report-view-switch .report-view-option:hover:not(:disabled),
   .report-view-switch .report-view-option.is-active {
     color: var(--clarity-ink) !important;
     border-color: var(--clarity-line-strong) !important;
     background: var(--clarity-surface) !important;
     box-shadow: var(--clarity-shadow-sm) !important;
-  }
-
-  .report-view-switch .report-view-option:disabled {
-    opacity: 1;
-    cursor: default;
-  }
-
-  @media (max-width: 1024px) {
-    .report-view-switch {
-      display: none;
-    }
   }
 
   /* A completed report belongs to the page's reading flow. Release the nested

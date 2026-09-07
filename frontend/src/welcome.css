@@ -39,8 +39,7 @@
   .main-content::after {
     display: none !important;
   }
-  .page-intro-mark,
-  .intro-orbit {
+  .page-intro-mark {
     display: none !important;
   }
   .research-query-input {
@@ -144,7 +143,6 @@
   .card,
   .role-card,
   .history-run-card,
-  .model-profile-card,
   .builtin-card,
   .catalog-card,
   .workflow-studio,

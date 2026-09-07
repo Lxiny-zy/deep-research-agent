@@ -36,15 +36,6 @@
   filter: blur(20px);
 }
 
-/* Hero Panel 大块色域 */
-.hero-panel {
-  padding: 48px 36px;
-  min-height: 200px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
 /* Chips 快捷选择 */
 .chips {
   display: flex;
@@ -70,46 +61,6 @@
   transform: translateY(-1px);
 }
 
-/* Stats / Metrics 统计卡片 */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
-}
-
-.stat-card {
-  background: var(--surface-2);
-  border: 1px solid var(--border-primary);
-  padding: 20px;
-  position: relative;
-  overflow: hidden;
-}
-
-.stat-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 4px;
-  height: 100%;
-  background: var(--accent-gradient);
-}
-
-.stat-label {
-  font-size: 0.8rem;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 8px;
-}
-
-.stat-value {
-  font-size: 2rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  font-family: var(--font-display);
-}
-
 /* Timeline 时间线 */
 .timeline {
   position: relative;
@@ -124,26 +75,6 @@
   bottom: 0;
   width: 2px;
   background: linear-gradient(180deg, var(--accent-primary), transparent);
-}
-
-.timeline-item {
-  position: relative;
-  padding: 16px 0;
-  padding-left: 24px;
-  border-left: 2px solid var(--border-primary);
-  margin-left: 8px;
-}
-
-.timeline-item::before {
-  content: '';
-  position: absolute;
-  left: -9px;
-  top: 20px;
-  width: 16px;
-  height: 16px;
-  background: var(--accent-primary);
-  border: 3px solid var(--bg-primary);
-  animation: pulse-ring 2s ease-out infinite;
 }
 
 @keyframes pulse-ring {
@@ -222,14 +153,6 @@ tbody tr:hover {
 }
 
 /* Loading Spinner */
-.spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border-primary);
-  border-top-color: var(--accent-primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
 
 @keyframes spin {
   to {
@@ -244,55 +167,7 @@ tbody tr:hover {
   min-height: 200px;
 }
 
-/* Progress Bar */
-.progress-bar {
-  height: 8px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-primary);
-  overflow: hidden;
-  position: relative;
-}
-
-.progress-fill {
-  height: 100%;
-  background: var(--accent-gradient);
-  transition: width 0.3s var(--ease-smooth);
-  position: relative;
-}
-
-.progress-fill::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  right: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
-  animation: shimmer 2s infinite;
-}
-
-@keyframes shimmer {
-  0% {
-    transform: translateX(-100%);
-  }
-  100% {
-    transform: translateX(100%);
-  }
-}
-
 /* Notification Toast */
-.toast {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  background: var(--surface-1);
-  border: 2px solid var(--border-primary);
-  padding: 16px 20px;
-  min-width: 300px;
-  box-shadow: var(--shadow-lg);
-  z-index: 10000;
-  animation: slide-in-right 0.3s var(--ease-smooth);
-}
 
 .toast.success {
   border-left: 4px solid var(--success);
@@ -325,81 +200,6 @@ tbody tr:hover {
   font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 8px;
-}
-
-/* Skeleton Loading */
-.skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--surface-2) 25%,
-    var(--surface-3) 50%,
-    var(--surface-2) 75%
-  );
-  background-size: 200% 100%;
-  animation: skeleton-loading 1.5s ease-in-out infinite;
-}
-
-@keyframes skeleton-loading {
-  0% {
-    background-position: 200% 0;
-  }
-  100% {
-    background-position: -200% 0;
-  }
-}
-
-.skeleton-text {
-  height: 12px;
-  margin-bottom: 8px;
-}
-
-.skeleton-text:last-child {
-  width: 60%;
-}
-
-/* Divider */
-.divider {
-  height: 1px;
-  background: var(--border-secondary);
-  margin: 24px 0;
-  position: relative;
-}
-
-.divider::before {
-  content: attr(data-text);
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: var(--bg-primary);
-  padding: 0 16px;
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-
-/* Scrollbar for specific containers */
-.scrollable {
-  overflow-y: auto;
-  max-height: 600px;
-}
-
-.scrollable::-webkit-scrollbar {
-  width: 6px;
-}
-
-.scrollable::-webkit-scrollbar-track {
-  background: var(--surface-1);
-}
-
-.scrollable::-webkit-scrollbar-thumb {
-  background: var(--surface-3);
-  border-radius: 3px;
-}
-
-.scrollable::-webkit-scrollbar-thumb:hover {
-  background: var(--surface-hover);
 }
 
 /* Markdown Content 样式 */
@@ -566,9 +366,6 @@ tbody tr:hover {
 }
 
 @media (max-width: 760px) {
-  .hero-panel {
-    padding: 32px 22px;
-  }
 
   .sample-grid,
   .history-filters-grid {

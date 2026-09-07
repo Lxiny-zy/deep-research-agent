@@ -162,16 +162,6 @@
     color: #a9bec3 !important;
   }
 
-  .system-status {
-    color: #70d9cb !important;
-    font-weight: 800 !important;
-  }
-
-  .system-status i {
-    background: #70d9cb !important;
-    box-shadow: 0 0 0 4px rgba(112, 217, 203, 0.13) !important;
-  }
-
   .global-header .btn.btn-ghost,
   .global-header .api-access-button {
     min-height: 36px !important;
@@ -253,8 +243,7 @@
   }
 
   .page-intro h1 em,
-  .page-intro .accent,
-  .headline-accent {
+  .page-intro .accent {
     color: #4b8061 !important;
     font-style: normal;
   }
@@ -268,8 +257,7 @@
     line-height: 1.75 !important;
   }
 
-  .page-intro-mark,
-  .intro-orbit {
+  .page-intro-mark {
     color: #79e4d8 !important;
     border-color: rgba(121, 228, 216, 0.5) !important;
   }
@@ -280,7 +268,6 @@
   .orchestration-runtime,
   .clarify-dialog,
   .evidence-card,
-  .stat-card,
   .run-head,
   .report-panel,
   .intent-panel {
@@ -336,7 +323,6 @@
   .panel-index,
   .builtin-card-index,
   .sample-number,
-  .step-index,
   .catalog-card-index {
     color: var(--visual-faint) !important;
     font-family: var(--visual-font-mono) !important;
@@ -353,7 +339,6 @@
   .card,
   .role-card,
   .history-run-card,
-  .model-profile-card,
   .builtin-card,
   .sample-card,
   .settings-item,
@@ -370,13 +355,11 @@
   .card:hover,
   .role-card:hover,
   .history-run-card:hover,
-  .model-profile-card:hover,
   .builtin-card:hover,
   .sample-card:hover,
   .card:focus-within,
   .role-card:focus-within,
   .history-run-card:focus-within,
-  .model-profile-card:focus-within,
   .builtin-card:focus-within,
   .sample-card:focus-within {
     border-color: #65bdb5 !important;
@@ -402,12 +385,10 @@
   .card p,
   .role-card p,
   .history-run-card p,
-  .model-profile-card p,
   .builtin-card p,
   .sample-card p,
   .role-desc,
   .builtin-card-desc,
-  .step-summary,
   .catalog-card-desc {
     color: var(--visual-ink-soft) !important;
     font-size: 14px !important;
@@ -419,7 +400,6 @@
   button.btn,
   .tab,
   .chip,
-  .welcome-secondary,
   .clarify-option,
   .route-action,
   .delete-action {
@@ -440,7 +420,6 @@
   .btn.ghost:hover:not(:disabled),
   .tab:hover,
   .chip:hover,
-  .welcome-secondary:hover,
   .clarify-option:hover:not(:disabled) {
     color: var(--visual-teal-deep) !important;
     border-color: #58aaa3 !important;
@@ -875,11 +854,6 @@
     font-size: 11px !important;
   }
 
-  .grid-2 {
-    grid-template-columns: minmax(320px, 0.82fr) minmax(0, 1.18fr) !important;
-    gap: 24px !important;
-  }
-
   .event-row {
     padding: 14px 10px !important;
     border-bottom: 1px solid var(--visual-line-soft) !important;
@@ -967,27 +941,6 @@
       linear-gradient(90deg, rgba(92, 183, 176, 0.06) 1px, transparent 1px) !important;
     background-size: 48px 48px !important;
   }
-
-  .visitor-welcome .welcome-copy h1,
-  .visitor-welcome .welcome-brand,
-  .visitor-welcome .welcome-brand strong {
-    color: #f4fbfa !important;
-  }
-
-  .visitor-welcome .welcome-copy p,
-  .visitor-welcome .welcome-orbit p,
-  .visitor-welcome .welcome-note-list,
-  .visitor-welcome .welcome-brand small {
-    color: #b3c9cc !important;
-  }
-
-  .visitor-welcome .welcome-copy h1 .headline-accent,
-  .visitor-welcome .welcome-kicker {
-    color: #6fe0d5 !important;
-  }
-
-  .visitor-welcome .welcome-orbit,
-  .visitor-welcome .welcome-capabilities article,
   .visitor-welcome .welcome-telemetry-section {
     border-color: rgba(155, 210, 208, 0.3) !important;
     background: rgba(20, 54, 66, 0.82) !important;
@@ -1077,10 +1030,6 @@
 
     .research-submit-panel .submit-button {
       width: 100% !important;
-    }
-
-    .grid-2 {
-      grid-template-columns: 1fr !important;
     }
 
     .run-q {
@@ -1335,10 +1284,6 @@
     background: var(--visual-canvas) !important;
   }
 
-  .report-view-switch {
-    display: none !important;
-  }
-
   .report-panel-tools {
     margin-left: auto !important;
   }
@@ -1353,101 +1298,14 @@
       linear-gradient(90deg, rgba(104, 205, 196, 0.08) 1px, transparent 1px) !important;
     background-size: 52px 52px !important;
   }
-
-  .visitor-welcome .welcome-nav,
-  .visitor-welcome .welcome-hero,
-  .visitor-welcome .welcome-capabilities,
   .visitor-welcome .welcome-telemetry-section {
     position: relative !important;
     z-index: 1 !important;
   }
-
-  .visitor-welcome .welcome-nav {
-    padding-top: 24px !important;
-  }
-
-  .visitor-welcome .welcome-brand,
-  .visitor-welcome .welcome-brand strong {
-    color: #f5fbfc !important;
-  }
-
-  .visitor-welcome .welcome-brand small,
-  .visitor-welcome .welcome-nav-meta,
-  .visitor-welcome .welcome-nav-meta span,
-  .visitor-welcome .welcome-topline {
-    color: #a9c5ca !important;
-  }
-
-  .visitor-welcome .welcome-hero {
-    min-height: auto !important;
-    padding-top: 86px !important;
-    padding-bottom: 72px !important;
-    align-items: start !important;
-  }
-
-  .visitor-welcome .welcome-copy h1,
-  .visitor-welcome .welcome-copy h1 .headline-line-inner {
-    color: #f5fbfc !important;
-    font-size: clamp(3rem, 6.3vw, 6.5rem) !important;
-    line-height: 1.02 !important;
-    letter-spacing: 0 !important;
-  }
-
-  .visitor-welcome .welcome-copy h1 .headline-accent,
-  .visitor-welcome .welcome-kicker {
-    color: #67e1d5 !important;
-  }
-
-  .visitor-welcome .welcome-copy p,
-  .visitor-welcome .welcome-orbit p,
-  .visitor-welcome .welcome-note-list,
-  .visitor-welcome .welcome-signal-line {
-    color: #c7dadd !important;
-    font-size: 1rem !important;
-    line-height: 1.8 !important;
-  }
-
-  .visitor-welcome .welcome-secondary {
-    color: #d9ebed !important;
-    border-color: rgba(217, 235, 237, 0.55) !important;
-    background: transparent !important;
-  }
-
-  .visitor-welcome .welcome-orbit,
-  .visitor-welcome .welcome-capabilities article,
   .visitor-welcome .welcome-telemetry-section {
     border-color: rgba(164, 220, 217, 0.36) !important;
     background: rgba(15, 44, 55, 0.94) !important;
     box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24) !important;
-  }
-
-  .visitor-welcome .welcome-capabilities {
-    margin-bottom: 54px !important;
-    gap: 12px !important;
-    border: 0 !important;
-    background: transparent !important;
-  }
-
-  .visitor-welcome .welcome-capabilities article {
-    min-height: 190px !important;
-    padding: 26px !important;
-    border: 1px solid rgba(164, 220, 217, 0.36) !important;
-    border-radius: 12px !important;
-  }
-
-  .visitor-welcome .welcome-capabilities b,
-  .visitor-welcome .welcome-capabilities strong,
-  .visitor-welcome .welcome-capabilities p {
-    color: #f0fbfb !important;
-  }
-
-  .visitor-welcome .welcome-capabilities b {
-    color: #67e1d5 !important;
-  }
-
-  .visitor-welcome .welcome-capabilities p {
-    color: #bed4d8 !important;
-    font-size: 0.94rem !important;
   }
 
   .visitor-welcome .welcome-telemetry-section {
@@ -1469,20 +1327,6 @@
   }
 
   @media (max-width: 760px) {
-    .visitor-welcome .welcome-hero {
-      grid-template-columns: 1fr !important;
-      padding-top: 72px !important;
-    }
-
-    .visitor-welcome .welcome-orbit {
-      width: min(82vw, 420px) !important;
-      margin-top: 12px !important;
-    }
-
-    .visitor-welcome .welcome-capabilities {
-      grid-template-columns: 1fr !important;
-      margin-inline: 18px !important;
-    }
 
     .visitor-welcome .welcome-telemetry-section {
       margin-inline: 18px !important;
