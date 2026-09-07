@@ -20,9 +20,19 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# WeasyPrint needs Pango at runtime.  Install the CJK font in the image so
+# Chinese reports render as text instead of empty glyph boxes.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        fonts-noto-cjk \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # 先装带哈希的锁定依赖：锁文件不变时这层走缓存，改代码不触发重装。
-COPY requirements.lock ./
-RUN pip install --require-hashes -r requirements.lock
+COPY requirements.lock requirements-pdf.lock ./
+RUN pip install --require-hashes -r requirements.lock \
+    && pip install --require-hashes -r requirements-pdf.lock
 
 # 再拷应用代码 + 迁移脚本 + 前端静态页
 COPY deep_research ./deep_research

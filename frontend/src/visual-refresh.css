@@ -1115,6 +1115,61 @@
 /* Keep configuration pages and the research composer as one surface. Their
  * child groups use separators and controls, rather than another panel shell. */
 @media screen {
+  .history-run-list {
+    gap: 0 !important;
+    border-top: 1px solid var(--visual-line) !important;
+  }
+
+  .history-run-row {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr) 42px;
+    align-items: start;
+    gap: 14px;
+    margin: 0 !important;
+    padding: 18px 4px !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--visual-line) !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .history-run-row:hover,
+  .history-run-row:focus-within {
+    background: #f4faf8 !important;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+
+  .history-run-row > input {
+    margin-top: 4px;
+    accent-color: var(--visual-teal);
+  }
+
+  .history-run-row .history-run-link {
+    display: grid;
+    gap: 9px;
+    min-width: 0;
+  }
+
+  .history-run-row .history-run-query {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--visual-ink) !important;
+    font-family: var(--visual-font-sans) !important;
+    font-size: 14px !important;
+    font-weight: 650 !important;
+    line-height: 1.55 !important;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .history-run-row .history-run-meta {
+    gap: 8px 12px !important;
+    margin-top: 0 !important;
+  }
+
   .research-composer,
   .settings-form-surface {
     border: 0 !important;
@@ -1211,6 +1266,16 @@
   }
 
   @media (max-width: 760px) {
+    .history-run-row {
+      grid-template-columns: 20px minmax(0, 1fr) 36px;
+      gap: 9px;
+      padding: 14px 0 !important;
+    }
+
+    .history-run-row .history-run-query {
+      -webkit-line-clamp: 3;
+    }
+
     .search-credential-grid {
       grid-template-columns: 1fr;
     }

@@ -20,6 +20,7 @@ install:  ## 安装开发依赖（含 lint/类型/测试工具）
 
 lock:  ## 根据人工维护的 requirements*.txt 更新带哈希锁文件（需要 uv）
 	$(UV) pip compile requirements.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements.lock
+	$(UV) pip compile requirements-pdf.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements-pdf.lock
 	$(UV) pip compile requirements-dev.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements-dev.lock
 
 dependency-check:  ## 校验直接依赖均被锁文件以兼容版本覆盖

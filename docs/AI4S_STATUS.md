@@ -325,7 +325,7 @@ KAIST 10 场景、28 波段、CAVE 训练集的 256×256 training patches），�
 |---|---|
 | CSV 导出（已完成） | `deep_research/report/csv.py` 直接投影 `TableBlock`；`GET /api/runs/{id}/document.csv` 支持 `table_id`，保留缺失值、引用、脚注和争议标记 |
 | XLSX 导出（已完成） | `deep_research/report/xlsx.py` 使用可选 `openpyxl` extra；`GET /api/runs/{id}/document.xlsx` 延迟加载依赖，缺失时返回 501，不影响服务启动 |
-| 服务端 PDF（已完成） | `deep_research/report/pdf.py` + `GET /api/runs/{id}/document.pdf`；WeasyPrint 为**可选依赖**，缺它只返回 501，不影响服务启动。`python:3.11-slim` 不含 CJK 字体，生产镜像仍需安装 `fonts-noto-cjk` |
+| 服务端 PDF（已完成） | `deep_research/report/pdf.py` + `GET /api/runs/{id}/document.pdf`；源码安装仍可按需选择 WeasyPrint，生产镜像已安装锁定依赖、Pango 与 `fonts-noto-cjk`，可直接导出中文 PDF |
 | 前端结构化文档接入 | 已完成终态接入：完成态优先消费 `/document`，结构化证据/引用/表格进入交互报告和打印视图；API 边界的 `normalizeReportDocument` 兼容旧版 `Report`、部分字段响应和滚动升级，非法响应触发旧 `RunDetail` 回退；流式阶段继续显示实时 Markdown。TS 交互/打印渲染与 Python 服务端导出继续按出口分工 |
 | 四张领域表（代码 schema + 正式字段适配） | `deep_research/report/hsi_tables.py` 定义光学编码、重建算法、数据集/协议、证据强度四表；`Planner` 在 HSI 策略下动态注入同一 schema 契约；报告/API/CSV/XLSX/PDF 通过 `include_hsi_tables=true` opt-in 输出。实体、数值、实验条件、资源指标和来源三态已接入；后续只补充更多真实论文标注回归 |
 

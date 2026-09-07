@@ -77,6 +77,7 @@ def main() -> int:
     errors: list[str] = []
     lock_pairs = (
         ("requirements.txt", "requirements.lock"),
+        ("requirements-pdf.txt", "requirements-pdf.lock"),
         ("requirements-dev.txt", "requirements-dev.lock"),
     )
     for requirements_name, lock_name in lock_pairs:

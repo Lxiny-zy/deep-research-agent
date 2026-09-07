@@ -194,4 +194,5 @@ jobs:
             exit 1
           fi
           docker compose run --rm --no-deps api python -c "import os; from pathlib import Path; import deep_research.api; assert os.getuid() == 10001; assert Path('/app/alembic/versions').is_dir()"
+          docker compose run --rm --no-deps api python -c "from weasyprint import HTML; assert HTML(string='<p>PDF smoke test</p>').write_pdf().startswith(b'%PDF')"
           docker compose exec -T api python -m alembic check

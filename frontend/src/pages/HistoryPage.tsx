@@ -18,6 +18,19 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'error', label: '出错' },
 ]
 
+function formatCreatedAt(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date)
+}
+
 export default function HistoryPage() {
   const pageRef = useRef<HTMLDivElement>(null)
   useRevealOnScroll(pageRef)
@@ -244,7 +257,7 @@ export default function HistoryPage() {
               <div className="history-run-list">
                 {rows.map((run, index) => (
                   <article
-                    className="history-run-card stagger-item"
+                    className="history-run-row stagger-item"
                     key={run.id}
                     style={{ '--i': index } as React.CSSProperties}
                   >
@@ -255,9 +268,14 @@ export default function HistoryPage() {
                       aria-label={`选择研究：${run.query}`}
                     />
                     <Link to={`/runs/${run.id}`} className="history-run-link">
-                      <div className="history-run-query">{run.query}</div>
+                      <div className="history-run-query" title={run.query}>
+                        {run.query}
+                      </div>
                       <div className="history-run-meta">
                         <StatusBadge status={run.status as RunStatus} />
+                        {run.created_at && (
+                          <time dateTime={run.created_at}>{formatCreatedAt(run.created_at)}</time>
+                        )}
                         <span>{run.total_tokens} tokens</span>
                         <span>{run.elapsed.toFixed(1)}s</span>
                         {run.tags.length > 0 && (
