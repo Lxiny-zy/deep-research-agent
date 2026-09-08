@@ -16,6 +16,8 @@ import './clarity.css'
 import './visual-refresh.css'
 import './welcome.css'
 import './interactions.css'
+// Premium screen layer: atmospheric canvas, stronger hierarchy and restrained motion.
+import './premium-surface.css'
 // Keep print overrides last so they can flatten the screen report layout.
 import './print.css'
 import AgentSquarePage from './pages/AgentSquarePage'

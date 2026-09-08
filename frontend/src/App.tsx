@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { lazy, Suspense, useEffect, useId, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import LoginGate from './components/LoginGate'
 import WelcomePage from './components/WelcomePage'
@@ -6,6 +6,8 @@ import OnboardingTour from './components/OnboardingTour'
 import { hasSeenTour, markTourSeen } from './lib/onboarding'
 import { AppIcon, type AppIconName } from './components/AppIcon'
 import { clearApiKey, getApiKey, getApiKeyStorage } from './api/client'
+
+const ResearchField = lazy(() => import('./components/ResearchField'))
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   isActive ? 'nav-link active' : 'nav-link'
@@ -177,6 +179,9 @@ export default function App() {
 
   return (
     <div className="app-container top-navigation-layout signal-theme">
+      <Suspense fallback={<div className="research-field workspace-field" aria-hidden="true" />}>
+        <ResearchField paused={false} variant="workspace" />
+      </Suspense>
       <header className="global-header">
         <NavLink to="/" className="top-brand" aria-label="Deep Research 首页">
           <span className="brand-icon" aria-hidden="true">

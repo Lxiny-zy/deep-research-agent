@@ -70,4 +70,5 @@ runtime_config.json
 *.gif
 *.webp
 !frontend/public/research-field.png
+!frontend/public/research-ribbons.png
 .tmp-*/
