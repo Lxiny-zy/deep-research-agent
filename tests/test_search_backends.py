@@ -203,6 +203,15 @@ async def test_serper_parses_organic_results() -> None:
 @pytest.mark.asyncio
 async def test_grok_parses_response_citations() -> None:
     tool = XaiGrokSearch("x-key")
+    await tool._client.aclose()
+    await tool._pages.aclose()
+    tool._pages = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, headers={"content-type": "text/plain"}, text="Source evidence"
+            )
+        )
+    )
     tool._client = httpx.AsyncClient(
         transport=httpx.MockTransport(
             lambda request: httpx.Response(

@@ -1,5 +1,7 @@
 // 类型化的 HTTP 客户端：统一错误处理，所有路径走 Vite proxy / 同源后端。
 import type {
+  ResourcePreflight,
+  SearchResourceImpact,
   AgentCard,
   AgentCardInput,
   AssessRequest,
@@ -20,12 +22,21 @@ import type {
   RunSummary,
   SearchKey,
   SearchKeyInput,
+  SearchProfile,
+  SearchProfileInput,
+  PromptPreview,
   TagCount,
   TestResult,
   WorkflowDef,
   WorkflowDefInput,
   WorkflowInfo,
 } from '../types'
+
+export const checkResourcePreflight = (workflow: string) =>
+  request<ResourcePreflight>(`/api/resource-preflight?workflow=${encodeURIComponent(workflow)}`)
+
+export const getSearchResourceImpact = () =>
+  request<SearchResourceImpact>('/api/search-resources/impact')
 import { normalizeReportDocument } from '../lib/reportDocument'
 
 export class ApiError extends Error {
@@ -512,6 +523,41 @@ export function updateAgent(id: string, body: AgentCardInput): Promise<AgentCard
 
 export function deleteAgent(id: string): Promise<void> {
   return requestVoid(`/api/agents/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function listSearchProfiles(): Promise<SearchProfile[]> {
+  return request<SearchProfile[]>('/api/search-profiles')
+}
+
+export function saveSearchProfile(body: SearchProfileInput, id?: string): Promise<SearchProfile> {
+  return request<SearchProfile>(
+    id ? `/api/search-profiles/${encodeURIComponent(id)}` : '/api/search-profiles',
+    {
+      method: id ? 'PUT' : 'POST',
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export function deleteSearchProfile(id: string): Promise<void> {
+  return request<void>(`/api/search-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function testSearchProfile(id: string): Promise<TestResult> {
+  return request<TestResult>(`/api/search-profiles/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+  })
+}
+
+export function previewRolePrompt(
+  behavior: Behavior,
+  system_prompt: string,
+  prompt_mode: 'append' | 'replace',
+): Promise<PromptPreview> {
+  return request<PromptPreview>('/api/agents/prompt-preview', {
+    method: 'POST',
+    body: JSON.stringify({ behavior, system_prompt, prompt_mode }),
+  })
 }
 
 export function listSearchKeys(): Promise<SearchKey[]> {

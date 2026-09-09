@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from urllib.parse import urlsplit, urlunsplit
 
@@ -82,6 +83,11 @@ class MultiBackendSearch(SearchTool):
         # 进 run manifest：可复现实验必须能区分「单后端跑的」与「双后端跑的」。
         return "+".join(backend.backend_name for backend in self._backends)
 
+    def set_tracer(self, tracer: Tracer) -> None:
+        super().set_tracer(tracer)
+        for backend in self._backends:
+            backend.set_tracer(tracer)
+
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
         if max_results <= 0:
             return []
@@ -91,29 +97,70 @@ class MultiBackendSearch(SearchTool):
         )
         merged: dict[str, Source] = {}
         failures: list[str] = []
+        variants: dict[str, list[dict[str, object]]] = {}
         for backend, result in zip(self._backends, results, strict=True):
             if isinstance(result, BaseException):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
                 failures.append(backend.backend_name)
+                # Upstream exceptions may contain credentials or request URLs.
                 logger.warning(
-                    "search backend %s failed: %s", backend.backend_name, result, exc_info=result
+                    "search backend %s failed (%s)", backend.backend_name, type(result).__name__
                 )
-                self._emit(f"检索后端 {backend.backend_name} 失败，已跳过：{result}")
+                self._emit(
+                    f"检索后端 {backend.backend_name} 失败，已跳过",
+                    {
+                        "category": "search_backend",
+                        "backend": backend.backend_name,
+                        "status": "failed",
+                        "error_type": type(result).__name__,
+                    },
+                )
                 continue
+            self._emit(
+                f"检索后端 {backend.backend_name} 返回 {len(result)} 条来源",
+                {
+                    "category": "search_backend",
+                    "backend": backend.backend_name,
+                    "status": "success",
+                    "source_count": len(result),
+                },
+            )
             for source in result:
                 key = normalize_url(source.url) or source.url.strip()
-                # 先到先得：同一 URL 保留最先返回的那份内容，避免同页多份摘要
-                # 在证据验证时相互干扰。
-                if key not in merged:
+                variants.setdefault(key, []).append(
+                    {
+                        "backend": backend.backend_name,
+                        "content_hash": hashlib.sha256(source.content.encode()).hexdigest(),
+                        "has_content": bool(source.content.strip()),
+                    }
+                )
+                # Prefer usable evidence over an empty citation. Never concatenate
+                # different versions; nonempty ties keep configured provider priority.
+                if key not in merged or (
+                    not merged[key].content.strip() and source.content.strip()
+                ):
                     merged[key] = source
+        for key, candidates in variants.items():
+            if len(candidates) > 1:
+                self._emit(
+                    "重复来源已合并，优先保留可用正文",
+                    {
+                        "category": "search_merge",
+                        "url": merged[key].url,
+                        "selected_content_hash": hashlib.sha256(
+                            merged[key].content.encode()
+                        ).hexdigest(),
+                        "variants": candidates,
+                    },
+                )
         if failures and len(failures) == len(self._backends):
             raise RuntimeError(f"所有检索后端均失败：{', '.join(failures)}")
         return list(merged.values())
 
-    def _emit(self, message: str) -> None:
+    def _emit(self, message: str, data: dict | None = None) -> None:
         if self._tracer is not None:
-            self._tracer.emit("RESEARCHER", "error", message)
+            self._tracer.emit("RESEARCHER", "info", message, data=data)
 
     async def aclose(self) -> None:
         for backend in self._backends:

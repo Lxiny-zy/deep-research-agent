@@ -81,7 +81,7 @@ class Researcher:
         """
         self.llm, self.search, self.tracer, self.settings = (
             ctx.llm_for(self.name),
-            ctx.search_tool,
+            await ctx.search_for(self.name),
             ctx.tracer,
             ctx.settings,
         )

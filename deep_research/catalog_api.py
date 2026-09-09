@@ -22,16 +22,20 @@ from .catalog.dto import (
     ModelProfileFull,
     ModelProfileView,
     SearchKeyView,
+    SearchProfileInput,
+    SearchProfileView,
     WorkflowDefCreate,
     WorkflowDefUpdate,
     WorkflowDefView,
 )
 from .catalog.repository import CatalogRepository, WorkflowVersionConflictError
+from .catalog.search import build_profile_tool, list_search_profiles, validate_search_bindings
 from .config import Settings
 from .observability import Tracer
 from .security import (
     ProviderURLPolicyError,
     provider_http_client,
+    validate_provider_url,
     validate_provider_url_resolved,
 )
 
@@ -118,6 +122,7 @@ class ProfileUpdate(BaseModel):
 
 
 class KeyCreate(BaseModel):
+    provider: str = Field("tavily", pattern="^(tavily|brave|serper|grok|responses|chat_search)$")
     label: str = Field("", max_length=64)
     api_key: str = Field(min_length=1, max_length=500)
     priority: int = Field(0, ge=0, le=1000)
@@ -125,12 +130,13 @@ class KeyCreate(BaseModel):
 
 
 class KeyUpdate(BaseModel):
+    provider: str | None = Field(None, pattern="^(tavily|brave|serper|grok|responses|chat_search)$")
     label: str | None = Field(None, max_length=64)
     api_key: str | None = Field(None, max_length=500)
     priority: int | None = Field(None, ge=0, le=1000)
     enabled: bool | None = None
 
-    @field_validator("label", "priority", "enabled", mode="before")
+    @field_validator("provider", "label", "priority", "enabled", mode="before")
     @classmethod
     def reject_null_non_nullable_fields(cls, value: object) -> object:
         if value is None:
@@ -188,8 +194,45 @@ async def _probe_llm(profile: ModelProfileFull, settings: Settings) -> None:
         await llm.aclose()
 
 
+async def _probe_search_for_provider(provider: str, api_key: str, settings: Settings) -> None:
+    """使用对应来源发起一次最小检索。"""
+    from .tools.base import SearchTool
+
+    client: SearchTool
+    if provider == "tavily":
+        # Keep the legacy Tavily probe path compatible with existing integrations
+        # (and with clients that only implement the public ``max_results`` arg).
+        await _probe_search(api_key)
+        return
+    elif provider == "brave":
+        from .tools.brave_search import BraveSearch
+
+        client = BraveSearch(api_key, timeout=settings.request_timeout)
+    elif provider == "serper":
+        from .tools.serper_search import SerperSearch
+
+        client = SerperSearch(api_key, timeout=settings.request_timeout)
+    elif provider == "grok":
+        from .tools.xai_search import XaiGrokSearch
+
+        client = XaiGrokSearch(
+            api_key,
+            model=settings.xai_model,
+            endpoint=settings.xai_base_url,
+            timeout=settings.request_timeout,
+            allow_private=settings.allow_private_provider_urls,
+        )
+    else:
+        raise ValueError(f"unsupported search provider: {provider}")
+    try:
+        async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
+            await client.search("ping", max_results=1)
+    finally:
+        await client.aclose()
+
+
 async def _probe_search(api_key: str) -> None:
-    """用单个 key 发一次最小检索验证可用;失败抛异常。"""
+    """向后兼容的 Tavily 探针（旧集成仍使用单参数）。"""
     from tavily import AsyncTavilyClient
 
     client = AsyncTavilyClient(api_key=api_key)
@@ -403,6 +446,141 @@ def _normalize_graph_payload(
 router = APIRouter(prefix="/api")
 
 
+@router.get("/resource-preflight")
+async def resource_preflight(request: Request, workflow: str = "deep") -> dict:
+    from .catalog.preflight import preflight_workflow
+
+    result = await preflight_workflow(_catalog(request), request.app.state.settings, workflow)
+    return result.model_dump()
+
+
+@router.get("/search-resources/impact")
+async def search_resource_impact(request: Request) -> dict:
+    """Explain current references before a resource is edited or disabled."""
+    from .catalog.search import default_search_ids
+
+    catalog = _catalog(request)
+    profiles = await list_search_profiles(catalog, request.app.state.settings)
+    cards = await catalog.list_agents()
+    defaults = default_search_ids(request.app.state.settings)
+    profile_uses = {
+        profile.id: (["全局默认"] if profile.id in defaults else [])
+        + [
+            card.display_name or card.name
+            for card in cards
+            if card.behavior == "research"
+            and profile.id
+            in (card.search_profile_ids if card.search_profile_ids is not None else defaults)
+        ]
+        for profile in profiles
+    }
+    keys = await catalog.list_keys()
+    return {
+        "profiles": profile_uses,
+        "keys": {
+            key.id: list(
+                dict.fromkeys(
+                    name
+                    for profile in profiles
+                    if profile.provider == key.provider
+                    and (profile.key_ids is None or key.id in profile.key_ids)
+                    for name in [profile.name, *profile_uses[profile.id]]
+                )
+            )
+            for key in keys
+        },
+    }
+
+
+@router.get("/search-profiles")
+async def get_search_profiles(request: Request) -> list[SearchProfileView]:
+    return await list_search_profiles(_catalog(request), request.app.state.settings)
+
+
+async def _save_search_profile(
+    req: SearchProfileInput, request: Request, profile_id: str | None = None
+) -> SearchProfileView:
+    settings = request.app.state.settings
+    try:
+        validate_provider_url(
+            req.endpoint,
+            allow_private=settings.allow_private_provider_urls,
+            allowlist=settings.provider_host_allowlist,
+        )
+        view = await _catalog(request).save_search_profile(req, profile_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(409, "检索档案名称已存在") from exc
+    if view is None:
+        raise HTTPException(404, "检索档案不存在；内置档案请复制后修改")
+    return view
+
+
+@router.post("/search-profiles", status_code=201)
+async def create_search_profile(req: SearchProfileInput, request: Request) -> SearchProfileView:
+    return await _save_search_profile(req, request)
+
+
+@router.put("/search-profiles/{profile_id}")
+async def update_search_profile(
+    profile_id: str, req: SearchProfileInput, request: Request
+) -> SearchProfileView:
+    return await _save_search_profile(req, request, profile_id)
+
+
+@router.delete("/search-profiles/{profile_id}", status_code=204)
+async def delete_search_profile(profile_id: str, request: Request) -> Response:
+    if profile_id in request.app.state.settings.search_profile_ids:
+        raise HTTPException(409, "检索档案仍是全局默认，请先修改设置")
+    try:
+        removed = await _catalog(request).delete_search_profile(profile_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if not removed:
+        raise HTTPException(404, "检索档案不存在；内置档案不能删除")
+    return Response(status_code=204)
+
+
+@router.post("/search-profiles/{profile_id}/test")
+async def test_search_profile(profile_id: str, request: Request) -> TestResult:
+    _check_probe_limit(request)
+    profile = next((p for p in await get_search_profiles(request) if p.id == profile_id), None)
+    if profile is None:
+        raise HTTPException(404, "检索档案不存在")
+
+    async def probe() -> None:
+        tool = await build_profile_tool(profile, _catalog(request), request.app.state.settings)
+        try:
+            sources = await tool.search("Open research", max_results=1)
+            if not sources:
+                raise ValueError("服务未返回来源")
+            if profile.provider in {"grok", "responses", "chat_search"} and not any(
+                s.content for s in sources
+            ):
+                raise ValueError("服务返回了引用，但无法获取可验证的网页正文")
+        finally:
+            await tool.aclose()
+
+    return await _run_probe(probe())
+
+
+class PromptPreviewRequest(BaseModel):
+    behavior: str
+    system_prompt: str = Field("", max_length=8000)
+    prompt_mode: str = Field("append", pattern="^(append|replace)$")
+
+
+@router.post("/agents/prompt-preview")
+async def preview_role_prompt(req: PromptPreviewRequest) -> dict[str, str]:
+    from .prompting import role_prompt_parts
+
+    try:
+        return role_prompt_parts(req.behavior, req.system_prompt, req.prompt_mode)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 # ── 元信息 ──────────────────────────────────────────────────────────────
 @router.get("/behaviors")
 async def list_behaviors() -> list[str]:
@@ -529,8 +707,17 @@ async def create_agent(req: AgentCardCreate, request: Request) -> AgentCardView:
     if req.behavior not in BEHAVIORS:
         raise HTTPException(status_code=422, detail=f"behavior 必须是 {list(BEHAVIORS)} 之一")
     _reject_reserved_agent_name(req.name)
+    if req.search_profile_ids is not None:
+        try:
+            await validate_search_bindings(
+                _catalog(request), request.app.state.settings, req.search_profile_ids
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     try:
         return await _catalog(request).create_agent(req)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except IntegrityError as exc:
         _raise_for_integrity(exc, duplicate_detail=_AGENT_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE)
 
@@ -539,8 +726,17 @@ async def create_agent(req: AgentCardCreate, request: Request) -> AgentCardView:
 async def update_agent(agent_id: str, req: AgentCardUpdate, request: Request) -> AgentCardView:
     if req.behavior is not None and req.behavior not in BEHAVIORS:
         raise HTTPException(status_code=422, detail=f"behavior 必须是 {list(BEHAVIORS)} 之一")
+    if req.search_profile_ids is not None:
+        try:
+            await validate_search_bindings(
+                _catalog(request), request.app.state.settings, req.search_profile_ids
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     try:
         view = await _catalog(request).update_agent(agent_id, req)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except IntegrityError as exc:
         _raise_for_integrity(exc, duplicate_detail=_AGENT_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE)
     if view is None:
@@ -564,13 +760,20 @@ async def list_keys(request: Request) -> list[SearchKeyView]:
 @router.post("/search-keys", status_code=201)
 async def create_key(req: KeyCreate, request: Request) -> SearchKeyView:
     return await _catalog(request).create_key(
-        label=req.label, api_key=req.api_key, priority=req.priority, enabled=req.enabled
+        provider=req.provider,
+        label=req.label,
+        api_key=req.api_key,
+        priority=req.priority,
+        enabled=req.enabled,
     )
 
 
 @router.put("/search-keys/{key_id}")
 async def update_key(key_id: str, req: KeyUpdate, request: Request) -> SearchKeyView:
-    view = await _catalog(request).update_key(key_id, req.model_dump(exclude_unset=True))
+    try:
+        view = await _catalog(request).update_key(key_id, req.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if view is None:
         raise HTTPException(status_code=404, detail="search key not found")
     return view
@@ -578,7 +781,11 @@ async def update_key(key_id: str, req: KeyUpdate, request: Request) -> SearchKey
 
 @router.delete("/search-keys/{key_id}", status_code=204)
 async def delete_key(key_id: str, request: Request) -> Response:
-    if not await _catalog(request).delete_key(key_id):
+    try:
+        removed = await _catalog(request).delete_key(key_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if not removed:
         raise HTTPException(status_code=404, detail="search key not found")
     return Response(status_code=204)
 
@@ -587,10 +794,18 @@ async def delete_key(key_id: str, request: Request) -> Response:
 async def test_key(key_id: str, request: Request) -> TestResult:
     """对搜索 key 发一次最小检索,验证 key 可用。"""
     _check_probe_limit(request)
-    secret = await _catalog(request).get_key_secret(key_id)
-    if secret is None:
+    key = await _catalog(request).get_key_secret(key_id)
+    if key is None:
         raise HTTPException(status_code=404, detail="search key not found")
-    return await _run_probe(_probe_search(secret))
+    provider, secret = key
+    if provider in {"responses", "chat_search"}:
+        raise HTTPException(422, "此 Key 需要端点与模型，请在对应检索档案上测试")
+    probe = (
+        _probe_search(secret)
+        if provider == "tavily"
+        else _probe_search_for_provider(provider, secret, request.app.state.settings)
+    )
+    return await _run_probe(probe)
 
 
 # ── 自定义工作流 ──────────────────────────────────────────────────────────

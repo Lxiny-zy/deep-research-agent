@@ -14,6 +14,25 @@ from deep_research.prompting import load_global_rules
 from tests.fakes import FakeLLM, FakeSearch
 
 
+@pytest.mark.parametrize("behavior", ["plan", "research", "reflect", "synthesize", "critique"])
+@pytest.mark.parametrize("mode", ["append", "replace"])
+def test_role_preview_uses_the_same_prompt_as_runtime(behavior, mode):
+    from deep_research.prompting import compose_system_prompt, role_prompt_parts
+
+    preview = role_prompt_parts(behavior, "domain instruction", mode)
+    agent = CardAgent(
+        name="custom", behavior=behavior, system_prompt="domain instruction", prompt_mode=mode
+    )
+    actual = compose_system_prompt(agent._impl.system, load_global_rules())
+    assert preview["effective_system_prompt"].startswith(actual)
+    assert "固定行为契约" in actual
+    assert "domain instruction" in actual
+    if mode == "append":
+        assert preview["default_prompt"] in actual
+    else:
+        assert preview["default_prompt"] not in actual
+
+
 def test_behavior_impls_cover_all_behaviors():
     impls = behavior_impls()
     assert set(impls) == {"plan", "research", "reflect", "synthesize", "critique"}

@@ -115,6 +115,8 @@ class Settings:
     search_backends: tuple[str, ...] = field(
         default_factory=lambda: _csv_env("DR_SEARCH_BACKENDS") or ("tavily",)
     )
+    # Explicit catalog selections take precedence over legacy provider names.
+    search_profile_ids: tuple[str, ...] = field(default_factory=tuple)
 
     # --- API 认证（支持 Authorization: Bearer 与 X-API-Key；不接受 URL 查询参数）---
     api_key: str = field(default_factory=lambda: os.getenv("API_KEY", ""))
@@ -272,6 +274,13 @@ class Settings:
         if not self.runner_allowed_operations:
             raise ValueError("runner_allowed_operations must not be empty")
         self.search_backends = tuple(dict.fromkeys(self.search_backends))
+        if not isinstance(self.search_profile_ids, (list, tuple)) or any(
+            not isinstance(pid, str) or not pid.strip() for pid in self.search_profile_ids
+        ):
+            raise ValueError("search_profile_ids 必须是检索档案 ID 列表")
+        self.search_profile_ids = tuple(dict.fromkeys(self.search_profile_ids))
+        if len(self.search_profile_ids) > 12:
+            raise ValueError("最多选择 12 个检索档案")
         unknown = set(self.search_backends) - _KNOWN_SEARCH_BACKENDS
         if unknown:
             raise ValueError(

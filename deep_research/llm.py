@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from .config import Settings
 from .observability import Tracer
+from .prompting import structured_system_prompt
 from .security import provider_http_client
 
 T = TypeVar("T", bound=BaseModel)  # 3.11 兼容写法（不用 3.12 的 def f[T]() 语法）
@@ -126,11 +127,7 @@ class LLM:
         retries 是「额外重试次数」（总尝试 = retries + 1）。瞬时网络/限流异常与
         解析失败共用同一重试预算：前者指数退避后重发，后者把错误回灌给模型再试。
         """
-        schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
-        sys = (
-            f"{system}\n\n【输出要求】只输出一个 JSON 对象，禁止解释、禁止 markdown 代码块。"
-            f"必须严格符合以下 JSON Schema：\n{schema_json}"
-        )
+        sys = structured_system_prompt(system, schema)
         err: Exception | None = None
         attempts = max(1, retries + 1)
         for attempt in range(attempts):

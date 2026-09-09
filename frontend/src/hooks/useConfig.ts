@@ -10,6 +10,9 @@ export function useUpdateConfig() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: ConfigUpdate) => updateConfig(body),
-    onSuccess: (data) => qc.setQueryData(['config'], data),
+    onSuccess: (data) => {
+      qc.setQueryData(['config'], data)
+      qc.invalidateQueries({ queryKey: ['search-resource-impact'] })
+    },
   })
 }

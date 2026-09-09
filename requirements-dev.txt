@@ -11,3 +11,4 @@ aiosqlite>=0.20,<1     # async SQLite for tests
 setuptools>=77,<83     # PEP 517 build backend used by the release smoke test
 wheel>=0.45,<1         # local wheel creation in CI and release checks
 pip-audit>=2.9,<3     # dependency vulnerability audit in CI
+playwright>=1.58,<1.59 # isolated browser configuration flow in CI

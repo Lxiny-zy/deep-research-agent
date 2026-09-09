@@ -95,6 +95,35 @@ async def test_same_page_from_two_backends_counts_once() -> None:
     assert merged[0].content == "first", "先到先得：同页保留最先返回的内容"
 
 
+async def test_empty_citation_cannot_hide_real_evidence_and_merge_is_audited():
+    import hashlib
+
+    tracer = Tracer()
+    empty = FakeBackend("empty", [_source("https://example.com/a", content=" \n")])
+    full = FakeBackend("full", [_source("https://example.com/a?utm_source=b", content="Fact 42")])
+    other = FakeBackend("other", [_source("https://example.com/a", content="Different version")])
+    merged = await MultiBackendSearch([empty, full, other], tracer=tracer).search("q")
+    assert len(merged) == 1
+    assert merged[0].content == "Fact 42"
+    event = next(e for e in tracer.events if e.data.get("category") == "search_merge")
+    assert event.data["selected_content_hash"] == hashlib.sha256(b"Fact 42").hexdigest()
+    assert len(event.data["variants"]) == 3
+
+
+async def test_backend_failure_events_and_logs_do_not_include_upstream_secrets(caplog):
+    tracer = Tracer()
+    await MultiBackendSearch(
+        [
+            FakeBackend("good", [_source("https://example.com")]),
+            FakeBackend("bad", [], fail=RuntimeError("Authorization: Bearer test-secret")),
+        ],
+        tracer=tracer,
+    ).search("q")
+    assert "test-secret" not in caplog.text
+    assert "test-secret" not in str(tracer.events)
+    assert {e.data["status"] for e in tracer.events} == {"success", "failed"}
+
+
 @pytest.mark.asyncio
 async def test_one_failing_backend_does_not_block_the_others() -> None:
     a = FakeBackend("A", [_source("https://a.com/1")])

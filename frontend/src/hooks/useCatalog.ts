@@ -81,6 +81,7 @@ export function useAgentMutations() {
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['agents'] })
     qc.invalidateQueries({ queryKey: ['roles'] })
+    qc.invalidateQueries({ queryKey: ['search-resource-impact'] })
   }
   return {
     create: useMutation({
@@ -102,7 +103,10 @@ export function useSearchKeys() {
 
 export function useSearchKeyMutations() {
   const qc = useQueryClient()
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['search-keys'] })
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['search-keys'] })
+    qc.invalidateQueries({ queryKey: ['search-resource-impact'] })
+  }
   return {
     create: useMutation({
       mutationFn: (b: SearchKeyInput) => createSearchKey(b),

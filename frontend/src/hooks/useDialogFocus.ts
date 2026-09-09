@@ -11,7 +11,7 @@ export function useDialogFocus(onClose: () => void) {
     const focusable = () =>
       Array.from(
         ref.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), summary, [tabindex="0"]',
+          'button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [tabindex="0"]',
         ) ?? [],
       ).filter(
         (element) => !element.closest('details:not([open])') || element.tagName === 'SUMMARY',

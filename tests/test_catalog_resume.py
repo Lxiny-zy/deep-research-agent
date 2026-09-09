@@ -243,7 +243,8 @@ async def test_snapshot_runtime_restores_terminal_role_after_card_delete(catalog
         restored = runtime.resolve_agent(card.name)
         assert isinstance(restored, CardAgent)
         assert restored.behavior == "synthesize"
-        assert restored._impl.system == "terminal prompt"
+        assert "terminal prompt" in restored._impl.system
+        assert "固定行为契约" in restored._impl.system
         assert runtime.terminal_roles == {"synthesizer", "aggregator", card.name}
         assert profile.id in runtime._profiles
     finally:

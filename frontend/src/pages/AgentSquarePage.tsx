@@ -1,10 +1,14 @@
 import ResearchMotif from '../components/ResearchMotif'
 import { useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import AgentCardEditor from '../components/AgentCardEditor'
 import BuiltinRoleGallery from '../components/BuiltinRoleGallery'
 import ModelProfileCard from '../components/ModelProfileCard'
 import ModelProfileEditor from '../components/ModelProfileEditor'
 import SearchKeyCard from '../components/SearchKeyCard'
+import SearchProfilesManager from '../components/SearchProfilesManager'
+import { useSearchProfiles, useSearchResourceImpact } from '../hooks/useSearchProfiles'
+import { SEARCH_PROVIDERS, searchSelectionNames } from '../lib/searchProfiles'
 import Skeleton from '../components/Skeleton'
 import { AgentGlyph, AppIcon, type AppIconName } from '../components/AppIcon'
 import {
@@ -17,7 +21,13 @@ import {
   useSearchKeys,
 } from '../hooks/useCatalog'
 import { behaviorLabel } from '../lib/behaviors'
-import type { AgentCard, AgentCardInput, ModelProfile, ModelProfileInput } from '../types'
+import type {
+  AgentCard,
+  AgentCardInput,
+  ModelProfile,
+  ModelProfileInput,
+  SearchKeyInput,
+} from '../types'
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败'
@@ -35,25 +45,33 @@ type EditSession<T> = {
 const TABS: { key: Tab; label: string; icon: AppIconName }[] = [
   { key: 'agents', label: '角色', icon: 'users' },
   { key: 'models', label: '模型档案', icon: 'server' },
-  { key: 'keys', label: '检索 Key', icon: 'key' },
+  { key: 'keys', label: '检索资源', icon: 'key' },
 ]
 
 export default function AgentSquarePage() {
+  const [searchParams] = useSearchParams()
   const agents = useAgents()
   const models = useModels()
   const keys = useSearchKeys()
+  const searchProfiles = useSearchProfiles()
+  const resourceImpact = useSearchResourceImpact()
   const roles = useRoles()
   const agentM = useAgentMutations()
   const modelM = useModelMutations()
   const keyM = useSearchKeyMutations()
 
-  const [tab, setTab] = useState<Tab>('agents')
+  const [tab, setTab] = useState<Tab>(searchParams.get('tab') === 'keys' ? 'keys' : 'agents')
   const sessionSequence = useRef(0)
   const [agentSession, setAgentSession] = useState<EditSession<AgentCard> | undefined>(undefined) // undefined=关闭
   const [modelSession, setModelSession] = useState<EditSession<ModelProfile> | undefined>(undefined)
   const [savingSessionKey, setSavingSessionKey] = useState<number | null>(null)
   const [saveErrors, setSaveErrors] = useState<Record<number, string>>({})
-  const [newKey, setNewKey] = useState({ label: '', api_key: '', priority: 0 })
+  const [newKey, setNewKey] = useState<SearchKeyInput>({
+    provider: 'tavily',
+    label: '',
+    api_key: '',
+    priority: 0,
+  })
 
   const profiles = models.data ?? []
 
@@ -104,10 +122,19 @@ export default function AgentSquarePage() {
   }
 
   function addKey() {
-    if (!newKey.api_key.trim()) return
+    const apiKey = newKey.api_key?.trim() ?? ''
+    if (!apiKey) return
     keyM.create.mutate(
-      { label: newKey.label.trim(), api_key: newKey.api_key.trim(), priority: newKey.priority },
-      { onSuccess: () => setNewKey({ label: '', api_key: '', priority: 0 }) },
+      {
+        provider: newKey.provider,
+        label: newKey.label?.trim(),
+        api_key: apiKey,
+        priority: newKey.priority,
+      },
+      {
+        onSuccess: () =>
+          setNewKey({ provider: newKey.provider, label: '', api_key: '', priority: 0 }),
+      },
     )
   }
 
@@ -218,6 +245,14 @@ export default function AgentSquarePage() {
                     <AppIcon name="server" size={13} aria-hidden="true" />
                     <span>模型：{a.model_profile_name ?? '默认档案'}</span>
                   </div>
+                  {a.behavior === 'research' && (
+                    <p className="hint">
+                      检索：
+                      {a.search_profile_ids
+                        ? searchSelectionNames(a.search_profile_ids, searchProfiles.data ?? [])
+                        : '继承全局默认检索档案'}
+                    </p>
+                  )}
                   <div className="role-card-foot catalog-card-foot">
                     <button
                       className="btn ghost small"
@@ -298,18 +333,35 @@ export default function AgentSquarePage() {
           <div className="panel-header">
             <div>
               <span className="panel-kicker">SEARCH ACCESS / 03</span>
-              <h2 className="panel-title">搜索 Key 池</h2>
+              <h2 className="panel-title">检索服务与 Key 池</h2>
             </div>
             <span className="badge info">主备故障转移</span>
           </div>
           <div className="panel-body">
             <p className="hint catalog-description">
-              按优先级从小到大使用；当前 Key 配额耗尽或限流时自动切换到下一个，全部耗尽才报错。
+              按来源分别管理 API Key；同一来源按优先级主备切换，多来源会并发检索后合并去重。
             </p>
+            <SearchProfilesManager
+              keys={keys.data ?? []}
+              references={resourceImpact.data?.profiles}
+            />
+            <h3 className="panel-title" style={{ marginTop: 28 }}>
+              API Key 池
+            </h3>
+            <p className="hint">
+              内置档案使用同渠道的全部启用 Key；自定义档案仅使用明确绑定的
+              Key。池中全部凭据不可用时会报告错误。
+            </p>
+            {(keyM.create.isError || keyM.update.isError || keyM.remove.isError) && (
+              <p className="error-text" role="alert">
+                {errMsg(keyM.create.error || keyM.update.error || keyM.remove.error)}
+              </p>
+            )}
             {keys.isLoading && <Skeleton rows={2} />}
             {keys.data && keys.data.length === 0 && (
               <p className="muted">
-                还没有检索 Key。在下方添加一个，即可替代环境变量里的单个 Tavily Key。
+                还没有检索 Key。下方可选择 Tavily、Brave、Serper 或 Grok；OpenAlex 与 arXiv 无需
+                Key。
               </p>
             )}
             <div className="card-grid">
@@ -317,13 +369,33 @@ export default function AgentSquarePage() {
                 <SearchKeyCard
                   key={k.id}
                   k={k}
+                  references={resourceImpact.data?.keys[k.id]}
                   onToggle={() => keyM.update.mutate({ id: k.id, body: { enabled: !k.enabled } })}
                   onDelete={() => keyM.remove.mutate(k.id)}
+                  onUpdate={(body) => keyM.update.mutateAsync({ id: k.id, body })}
                 />
               ))}
             </div>
 
             <div className="key-create-grid">
+              <label className="field-label">
+                来源
+                <select
+                  className="input"
+                  value={newKey.provider}
+                  onChange={(e) =>
+                    setNewKey({ ...newKey, provider: e.target.value as SearchKeyInput['provider'] })
+                  }
+                >
+                  {Object.entries(SEARCH_PROVIDERS)
+                    .filter(([value]) => !['openalex', 'arxiv'].includes(value))
+                    .map(([value, name]) => (
+                      <option key={value} value={value}>
+                        {name}
+                      </option>
+                    ))}
+                </select>
+              </label>
               <label className="field-label">
                 备注
                 <input
@@ -334,7 +406,7 @@ export default function AgentSquarePage() {
                 />
               </label>
               <label className="field-label">
-                Tavily API Key
+                {(newKey.provider ?? 'tavily').toUpperCase()} API Key
                 <input
                   className="input"
                   type="password"
@@ -378,6 +450,7 @@ export default function AgentSquarePage() {
           key={agentSession.key}
           initial={agentSession.item}
           profiles={profiles}
+          searchProfiles={searchProfiles.data ?? []}
           onSubmit={saveAgent}
           onCancel={() => setAgentSession(undefined)}
           pending={savingSessionKey === agentSession.key}

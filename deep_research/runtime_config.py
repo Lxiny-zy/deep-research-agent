@@ -29,6 +29,7 @@ EDITABLE_FIELDS: tuple[str, ...] = (
     "serper_api_key",
     "xai_api_key",
     "search_backends",
+    "search_profile_ids",
     "max_sub_questions",
     "max_rounds",
     "max_concurrency",

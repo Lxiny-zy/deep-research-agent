@@ -150,6 +150,7 @@ def workflow_catalog_roles(workflow: Workflow) -> set[str]:
 async def snapshot_catalog_for_execution(
     execution: WorkflowRun,
     catalog_repo: CatalogSource | None,
+    settings: Settings | None = None,
 ) -> None:
     """Persist the non-secret role semantics needed to recover this execution."""
     if catalog_repo is None or not execution.definition:
@@ -163,7 +164,9 @@ async def snapshot_catalog_for_execution(
     from .catalog.runtime import create_catalog_runtime_snapshot
 
     workflow = Workflow.model_validate(execution.definition)
-    snapshot = await create_catalog_runtime_snapshot(catalog_repo, workflow_catalog_roles(workflow))
+    snapshot = await create_catalog_runtime_snapshot(
+        catalog_repo, workflow_catalog_roles(workflow), settings
+    )
     scratch[RUN_CATALOG_CHECKPOINT_KEY] = snapshot.model_dump(mode="json")
 
 
@@ -261,6 +264,8 @@ class _LazyOwnedSearchTool(SearchTool):
     def _get(self) -> SearchTool:
         if self._value is None:
             self._value = self._factory()
+        if self._tracer is not None:
+            self._value.set_tracer(self._tracer)
         return self._value
 
     async def search(self, query: str, *, max_results: int = 5):  # type: ignore[no-untyped-def]
@@ -344,7 +349,7 @@ class DeepResearchAgent:
 
         # Validate only dependencies constructed here. A catalog default model
         # is loaded asynchronously, so its LLM validation is deferred to run().
-        if search_tool is None:
+        if search_tool is None and catalog_repo is None and not settings.search_profile_ids:
             settings.validate_search()
         if llm is None and catalog_repo is None:
             settings.validate_llm()
@@ -352,11 +357,18 @@ class DeepResearchAgent:
         tracer = self.tracer
         self.llm = llm if llm is not None else _LazyOwnedLLM(lambda: LLM(settings, tracer))
         self._owns_search_tool = search_tool is None
+        from .catalog.search import MissingSearchTool
+
+        self._catalog_search_defaults = search_tool is None or isinstance(
+            search_tool, MissingSearchTool
+        )
         raw_search_tool = (
             search_tool
             if search_tool is not None
             else _LazyOwnedSearchTool(lambda: _default_search_tool(settings))
         )
+        if isinstance(raw_search_tool, SearchTool):
+            raw_search_tool.set_tracer(self.tracer)
         self.search_tool = RecordingSearchTool(raw_search_tool)
 
         # 仍构造具名角色实例：向后兼容（测试替换 self.researcher、直接调用各角色）
@@ -635,6 +647,11 @@ class DeepResearchAgent:
             tracer=self.tracer,
             settings=self.settings,
             llm_resolver=cr.resolve_llm if cr is not None else None,
+            search_resolver=(
+                lambda name: cr.resolve_search(name, include_default=self._catalog_search_defaults)
+            )
+            if cr is not None
+            else None,
             artifact_store=self._artifact_store,
             command_runner=self._command_runner,
             skill_resolver=self._skill_resolver,
@@ -780,10 +797,14 @@ class DeepResearchAgent:
                 settings=checkpoint_settings(self.settings),
                 llm_model=self.settings.llm_model,
                 llm_endpoint=self.settings.llm_base_url,
-                search_backend=getattr(
-                    self.search_tool.delegate,
-                    "backend_name",
-                    type(self.search_tool.delegate).__name__,
+                search_backend=(
+                    "catalog:" + ",".join(cr.search_runtime.profiles)
+                    if cr is not None and cr.search_runtime.profiles
+                    else getattr(
+                        self.search_tool.delegate,
+                        "backend_name",
+                        type(self.search_tool.delegate).__name__,
+                    )
                 ),
                 catalog_snapshot=catalog_snapshot,
                 catalog_model_profiles=(

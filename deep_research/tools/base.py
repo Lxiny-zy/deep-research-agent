@@ -5,9 +5,15 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from ..models import Source
+from ..observability import Tracer
 
 
 class SearchTool(ABC):
+    _tracer: Tracer | None = None
+
+    def set_tracer(self, tracer: Tracer) -> None:
+        self._tracer = tracer
+
     @abstractmethod
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
         """检索并返回标准化的来源列表。"""

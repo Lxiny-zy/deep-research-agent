@@ -325,6 +325,10 @@ class AgentCardRow(Base):
     # 行为模板：plan / research / reflect / synthesize / critique
     behavior: Mapped[str] = mapped_column(String(20))
     system_prompt: Mapped[str] = mapped_column(Text, default="")  # 空=用该行为的内置默认
+    prompt_mode: Mapped[str] = mapped_column(
+        String(16), default="replace", server_default="replace"
+    )
+    search_profile_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     icon: Mapped[str] = mapped_column(String(16), default="🧩")  # 卡片图标（emoji）
     enabled: Mapped[bool] = mapped_column(Integer, default=1)
     # 绑定的模型档案；NULL=用全局默认档案兜底（按角色绑模型）
@@ -336,12 +340,25 @@ class AgentCardRow(Base):
     model_profile: Mapped[ModelProfileRow | None] = relationship(back_populates="agents")
 
 
+class SearchProfileRow(Base):
+    __tablename__ = "search_profile"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    provider: Mapped[str] = mapped_column(String(16))
+    endpoint: Mapped[str] = mapped_column(String(500), default="")
+    model: Mapped[str] = mapped_column(String(100), default="")
+    key_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    enabled: Mapped[bool] = mapped_column(Integer, default=1)
+
+
 class SearchKeyRow(Base):
     """搜索 API key 池：主备故障转移——按 priority 升序使用，配额/限流错误切下一个。"""
 
     __tablename__ = "search_key"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    provider: Mapped[str] = mapped_column(String(16), default="tavily", server_default="tavily")
     label: Mapped[str] = mapped_column(String(64), default="")  # 备注名（如 "主账号"）
     api_key: Mapped[str] = mapped_column(Text)
     priority: Mapped[int] = mapped_column(Integer, default=0)  # 越小越先用

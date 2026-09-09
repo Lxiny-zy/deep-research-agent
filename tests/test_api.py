@@ -34,6 +34,7 @@ async def _assert_hub_closed(hub: EventHub) -> None:
 @pytest.fixture
 def repo(monkeypatch) -> InMemoryRepository:
     r = InMemoryRepository()
+    monkeypatch.setattr(api.app.state, "catalog", None, raising=False)
     api.app.state.settings = Settings()  # lifespan 未在 ASGITransport 下触发，手动注入
     api.app.state.repo = r
     api.app.state.live = {}

@@ -194,33 +194,68 @@ class RunExecutor:
         返回 ``None`` 表示交给 ``DeepResearchAgent`` 用 ``settings.tavily_api_key``
         自建默认单后端——这是既有行为，只有显式配置了 key 池或多后端时才接管。
         """
+        if settings.search_profile_ids:
+            # CatalogRuntime restores frozen profile definitions and owns their clients.
+            from .catalog.search import MissingSearchTool
+
+            return MissingSearchTool()
         backends: list[SearchTool] = []
         tavily = await self._build_tavily(settings)
         if tavily is not None:
             backends.append(tavily)
-        if "brave" in settings.search_backends and settings.brave_api_key:
+        brave_keys = await self._active_keys("brave")
+        if not brave_keys and settings.brave_api_key:
+            brave_keys = [settings.brave_api_key]
+        if "brave" in settings.search_backends and brave_keys:
             from .tools.brave_search import BraveSearch
+            from .tools.key_pool import ApiKeyPoolSearch
 
-            backends.append(BraveSearch(settings.brave_api_key))
+            backends.append(
+                ApiKeyPoolSearch(
+                    "brave",
+                    brave_keys,
+                    lambda key: BraveSearch(key, timeout=settings.request_timeout),
+                )
+            )
         elif "brave" in settings.search_backends:
             logger.warning("检索后端 brave 已启用但缺少 BRAVE_API_KEY，本次跳过该后端")
         # 学术源不需要密钥，因此没有「缺 key 退化」这条分支：启用即可用。
         # OPENALEX_MAILTO 只影响配额档位（礼貌池），缺失不影响可用性。
-        if "serper" in settings.search_backends and settings.serper_api_key:
+        serper_keys = await self._active_keys("serper")
+        if not serper_keys and settings.serper_api_key:
+            serper_keys = [settings.serper_api_key]
+        if "serper" in settings.search_backends and serper_keys:
+            from .tools.key_pool import ApiKeyPoolSearch
             from .tools.serper_search import SerperSearch
 
-            backends.append(SerperSearch(settings.serper_api_key, timeout=settings.request_timeout))
+            backends.append(
+                ApiKeyPoolSearch(
+                    "serper",
+                    serper_keys,
+                    lambda key: SerperSearch(key, timeout=settings.request_timeout),
+                )
+            )
         elif "serper" in settings.search_backends:
             logger.warning("search backend serper enabled but SERPER_API_KEY is missing; skipping")
-        if "grok" in settings.search_backends and settings.xai_api_key:
+        grok_keys = await self._active_keys("grok")
+        if not grok_keys and settings.xai_api_key:
+            grok_keys = [settings.xai_api_key]
+        if "grok" in settings.search_backends and grok_keys:
+            from .tools.key_pool import ApiKeyPoolSearch
             from .tools.xai_search import XaiGrokSearch
 
             backends.append(
-                XaiGrokSearch(
-                    settings.xai_api_key,
-                    model=settings.xai_model,
-                    endpoint=settings.xai_base_url,
-                    timeout=settings.request_timeout,
+                ApiKeyPoolSearch(
+                    "grok",
+                    grok_keys,
+                    lambda key: XaiGrokSearch(
+                        key,
+                        model=settings.xai_model,
+                        endpoint=settings.xai_base_url,
+                        timeout=settings.request_timeout,
+                        allow_private=settings.allow_private_provider_urls,
+                    ),
+                    display_name="XaiGrokSearch",
                 )
             )
         elif "grok" in settings.search_backends:
@@ -255,6 +290,18 @@ class RunExecutor:
 
         return MultiBackendSearch(backends)
 
+    async def _active_keys(self, provider: str) -> list[str]:
+        catalog = self.ctx.catalog
+        if catalog is not None:
+            try:
+                return await catalog.active_keys(provider)
+            except TypeError:
+                if provider == "tavily":
+                    return await catalog.active_keys()
+            except Exception:
+                logger.exception("读取 %s 搜索 key 池失败", provider)
+        return []
+
     async def _build_tavily(self, settings: Settings) -> SearchTool | None:
         """优先用搜索 key 池（主备故障转移）；池为空则回退到全局单 key。"""
         if "tavily" not in settings.search_backends:
@@ -263,7 +310,7 @@ class RunExecutor:
         catalog = self.ctx.catalog
         if catalog is not None:
             try:
-                keys = await catalog.active_keys()
+                keys = await self._active_keys("tavily")
             except Exception:
                 logger.exception("读取搜索 key 池失败，回退单 key")
         if keys:
@@ -297,7 +344,13 @@ class RunExecutor:
             demo_llm.tracer = agent.tracer
             return agent, demo_search
         await validate_runtime_provider_url(settings)
-        search_tool = await self.build_search_tool(settings)
+        if hasattr(self.ctx.catalog, "list_search_profiles"):
+            from .catalog.search import MissingSearchTool
+
+            # Resolve defaults and role overrides from the same run snapshot.
+            search_tool: SearchTool | None = MissingSearchTool()
+        else:
+            search_tool = await self.build_search_tool(settings)
         try:
             agent = DeepResearchAgent(
                 settings,

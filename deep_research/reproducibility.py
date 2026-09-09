@@ -80,8 +80,25 @@ class RecordingSearchTool(SearchTool):
     def set_error_sink(self, sink: RecordingErrorSink | None) -> None:
         self._error_sink = sink
 
+    def for_delegate(self, delegate: SearchTool) -> SearchTool:
+        recorder = self
+
+        class RecordedSelection(SearchTool):
+            @property
+            def backend_name(self) -> str:
+                return delegate.backend_name
+
+            async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
+                sources = await delegate.search(query, max_results=max_results)
+                return await recorder.record(sources)
+
+        return RecordedSelection()
+
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
         sources = await self.delegate.search(query, max_results=max_results)
+        return await self.record(sources)
+
+    async def record(self, sources: list[Source]) -> list[Source]:
         snapshots = [
             source.model_copy(
                 update={"content_hash": hashlib.sha256(source.content.encode("utf-8")).hexdigest()}

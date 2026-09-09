@@ -22,6 +22,8 @@ vi.mock('../hooks/useCatalog', () => ({
   useSearchKeys: mocks.useSearchKeys,
 }))
 
+vi.mock('../hooks/useSearchProfiles', () => ({ useSearchProfiles: () => ({ data: undefined }) }))
+
 vi.mock('../hooks/useRevealOnScroll', () => ({ useRevealOnScroll: vi.fn() }))
 
 const CONFIG: ConfigView = {
@@ -119,7 +121,9 @@ describe('SettingsPage 严格双源门禁默认值', () => {
     await user.click(screen.getByRole('button', { name: /保存设置/ }))
 
     expect(mocks.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ search_backends: ['tavily', 'openalex', 'serper'] }),
+      expect.objectContaining({
+        search_profile_ids: ['builtin:tavily', 'builtin:openalex', 'builtin:serper'],
+      }),
       expect.objectContaining({ onSuccess: expect.any(Function) }),
     )
   })

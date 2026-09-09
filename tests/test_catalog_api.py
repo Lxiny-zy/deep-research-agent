@@ -60,6 +60,73 @@ async def test_model_config_probe_and_discovery(cat_app, monkeypatch) -> None:
         assert discovered.json()["models"] == ["model-a", "model-b"]
 
 
+@pytest.mark.asyncio
+async def test_search_profile_api_validates_references_and_role_bindings(cat_app):
+    async with _client() as client:
+        profiles = (await client.get("/api/search-profiles")).json()
+        assert {p["id"] for p in profiles} >= {"builtin:tavily", "builtin:arxiv"}
+        key = (
+            await client.post(
+                "/api/search-keys", json={"provider": "responses", "api_key": "private-key"}
+            )
+        ).json()
+        body = {
+            "name": "external",
+            "provider": "responses",
+            "endpoint": "https://search.example/v1/responses",
+            "model": "search",
+            "key_ids": [key["id"]],
+        }
+        response = await client.post("/api/search-profiles", json=body)
+        assert response.status_code == 201
+        profile = response.json()
+        assert "private-key" not in response.text
+        assert (
+            await client.post(
+                "/api/search-profiles",
+                json={**body, "name": "bad", "endpoint": "https://127.0.0.1/api"},
+            )
+        ).status_code == 422
+        assert (
+            await client.post(
+                "/api/agents",
+                json={"name": "bad", "behavior": "research", "search_profile_ids": ["missing"]},
+            )
+        ).status_code == 422
+        card = (
+            await client.post(
+                "/api/agents",
+                json={
+                    "name": "external-researcher",
+                    "behavior": "research",
+                    "search_profile_ids": [profile["id"]],
+                },
+            )
+        ).json()
+        assert card["prompt_mode"] == "append"
+        assert card["search_profile_ids"] == [profile["id"]]
+        assert (await client.delete(f"/api/search-profiles/{profile['id']}")).status_code == 409
+        assert (await client.delete(f"/api/search-keys/{key['id']}")).status_code == 409
+        cleared = await client.put(f"/api/agents/{card['id']}", json={"search_profile_ids": None})
+        assert cleared.status_code == 200 and cleared.json()["search_profile_ids"] is None
+        assert (await client.delete(f"/api/search-profiles/{profile['id']}")).status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_role_prompt_preview_preserves_fixed_contract(cat_app):
+    async with _client() as client:
+        response = await client.post(
+            "/api/agents/prompt-preview",
+            json={"behavior": "research", "prompt_mode": "replace", "system_prompt": "关注新闻"},
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert "关注新闻" in result["effective_system_prompt"]
+        assert "固定行为契约" in result["effective_system_prompt"]
+        assert "JSON Schema" in result["effective_system_prompt"]
+        assert "evidence_quote" in result["contract"]
+
+
 def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=api.app), base_url="http://test")
 

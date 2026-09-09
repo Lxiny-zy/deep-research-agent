@@ -531,6 +531,7 @@ export interface ConfigView {
   xai_api_key_set: boolean
   xai_api_key_hint: string
   search_backends: string[]
+  search_profile_ids?: string[]
   max_sub_questions: number
   max_rounds: number
   max_concurrency: number
@@ -551,6 +552,7 @@ export interface ConfigUpdate {
   serper_api_key?: string
   xai_api_key?: string
   search_backends?: string[]
+  search_profile_ids?: string[]
   max_sub_questions?: number
   max_rounds?: number
   max_concurrency?: number
@@ -599,6 +601,8 @@ export interface AgentCard {
   description: string
   behavior: Behavior
   system_prompt: string
+  prompt_mode?: 'append' | 'replace'
+  search_profile_ids?: string[] | null
   icon: string
   enabled: boolean
   model_profile_id: string | null
@@ -611,14 +615,49 @@ export interface AgentCardInput {
   description?: string
   behavior?: Behavior
   system_prompt?: string
+  prompt_mode?: 'append' | 'replace'
+  search_profile_ids?: string[] | null
   icon?: string
   enabled?: boolean
   model_profile_id?: string | null
 }
 
 // 搜索 key（GET /api/search-keys，api_key 脱敏）
+export type SearchProvider =
+  | 'tavily'
+  | 'brave'
+  | 'serper'
+  | 'grok'
+  | 'responses'
+  | 'chat_search'
+  | 'openalex'
+  | 'arxiv'
+
+export interface SearchProfile {
+  id: string
+  name: string
+  provider: SearchProvider
+  endpoint: string
+  model: string
+  key_ids: string[] | null
+  enabled: boolean
+  builtin: boolean
+}
+
+export type SearchProfileInput = Omit<SearchProfile, 'id' | 'builtin' | 'key_ids'> & {
+  key_ids: string[]
+}
+
+export interface PromptPreview {
+  default_prompt: string
+  contract: string
+  global_rules: string
+  effective_system_prompt: string
+}
+
 export interface SearchKey {
   id: string
+  provider: SearchProvider
   label: string
   priority: number
   enabled: boolean
@@ -626,6 +665,7 @@ export interface SearchKey {
 }
 
 export interface SearchKeyInput {
+  provider?: SearchProvider
   label?: string
   api_key?: string
   priority?: number
@@ -651,4 +691,22 @@ export interface ModelProbeInput {
 export interface ModelDiscoveryResult {
   models: string[]
   latency_ms: number
+}
+export interface ResourcePreflight {
+  ok: boolean
+  workflow: string
+  roles: {
+    role: string
+    model: string
+    model_profile: string
+    inherits_search: boolean
+    search_profiles: { id: string; name: string; ready: boolean; key_count: number }[]
+  }[]
+  errors: string[]
+  warnings: string[]
+}
+
+export interface SearchResourceImpact {
+  profiles: Record<string, string[]>
+  keys: Record<string, string[]>
 }

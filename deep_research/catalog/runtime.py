@@ -19,14 +19,17 @@ from ..llm import LLM
 from ..observability import Tracer
 from ..registry import create as registry_create
 from ..security import validate_provider_url_resolved
+from ..tools.base import SearchTool
 from .dto import (
     AgentCardSnapshot,
     AgentCardView,
     CatalogRuntimeSnapshot,
     ModelProfileFull,
     ModelProfileSnapshot,
+    SearchProfileView,
     WorkflowDefView,
 )
+from .search import SearchRuntime, default_search_ids, freeze_search_profiles
 
 
 class CatalogSource(Protocol):
@@ -63,9 +66,12 @@ def terminal_roles_for_cards(cards: Iterable[AgentCardView]) -> set[str]:
 async def create_catalog_runtime_snapshot(
     catalog_repo: CatalogSource,
     required_roles: Iterable[str],
+    settings: Settings | None = None,
 ) -> CatalogRuntimeSnapshot:
     """Capture non-secret catalog semantics for the roles a workflow may use."""
     required = set(required_roles)
+    effective_settings = settings or Settings()
+    search_defaults = default_search_ids(effective_settings)
     cards = await catalog_repo.list_agents()
     enabled = {card.name: card for card in cards if card.enabled}
     default_profile = await catalog_repo.get_default_profile()
@@ -87,11 +93,14 @@ async def create_catalog_runtime_snapshot(
     terminal_roles = terminal_roles_for_cards(cards)
 
     return CatalogRuntimeSnapshot(
+        default_search_profile_ids=search_defaults,
         cards=[
             AgentCardSnapshot(
                 name=card.name,
                 behavior=card.behavior,
                 system_prompt=card.system_prompt,
+                prompt_mode=card.prompt_mode,
+                search_profile_ids=card.search_profile_ids,
                 model_profile_id=card.model_profile_id,
             )
             for name, card in sorted(enabled.items())
@@ -100,6 +109,17 @@ async def create_catalog_runtime_snapshot(
         profiles=[_profile_snapshot(profile) for profile in profiles],
         default_profile_id=default_profile.id if default_profile is not None else None,
         terminal_roles=sorted(terminal_roles.intersection(required | _BUILTIN_TERMINAL_ROLES)),
+        search_profiles=await freeze_search_profiles(
+            catalog_repo,
+            effective_settings,
+            {
+                pid
+                for name, card in enabled.items()
+                if name in required
+                for pid in (card.search_profile_ids or [])
+            }
+            | set(search_defaults),
+        ),
     )
 
 
@@ -115,6 +135,9 @@ class CatalogRuntime:
         tracer: Tracer,
         settings: Settings,
         terminal_roles: set[str] | None = None,
+        search_profiles: list[SearchProfileView] | None = None,
+        catalog_repo: CatalogSource | None = None,
+        default_search_profile_ids: list[str] | None = None,
     ) -> None:
         self._cards = {c.name: c for c in cards if c.enabled}
         self._profiles = profiles  # profile_id -> full
@@ -127,13 +150,44 @@ class CatalogRuntime:
         self._tracer = tracer
         self._settings = settings
         self._llm_cache: dict[str, LLM] = {}  # profile_id -> LLM（运行内复用）
+        self.search_runtime = SearchRuntime(search_profiles or [], catalog_repo, settings, tracer)
+        self._default_search_ids = (
+            list(settings.search_profile_ids)
+            if default_search_profile_ids is None
+            else default_search_profile_ids
+        )
+
+    async def resolve_search(
+        self, agent_name: str, *, include_default: bool = True
+    ) -> SearchTool | None:
+        card = self._cards.get(agent_name)
+        if not include_default and (card is None or card.search_profile_ids is None):
+            return None
+        ids = (
+            card.search_profile_ids
+            if card and card.search_profile_ids is not None
+            else self._default_search_ids
+        )
+        if not ids:
+            return None
+        tool = await self.search_runtime.resolve(ids)
+        self._tracer.emit(
+            "RESEARCHER",
+            "info",
+            f"角色 {agent_name} 使用检索服务：{tool.backend_name}",
+            data={"category": "search_binding", "role": agent_name, "profile_ids": ids},
+        )
+        return tool
 
     # ── 角色解析 ────────────────────────────────────────────────────────
     def resolve_agent(self, name: str) -> Agent:
         card = self._cards.get(name)
         if card is not None:
             return CardAgent(
-                name=card.name, behavior=card.behavior, system_prompt=card.system_prompt
+                name=card.name,
+                behavior=card.behavior,
+                system_prompt=card.system_prompt,
+                prompt_mode=card.prompt_mode,
             )
         return registry_create(name)  # 回退内置注册表
 
@@ -145,11 +199,14 @@ class CatalogRuntime:
         """Serialize this runtime's role semantics without profile credentials."""
         required = set(required_roles)
         return CatalogRuntimeSnapshot(
+            default_search_profile_ids=list(self._default_search_ids),
             cards=[
                 AgentCardSnapshot(
                     name=card.name,
                     behavior=card.behavior,
                     system_prompt=card.system_prompt,
+                    prompt_mode=card.prompt_mode,
+                    search_profile_ids=card.search_profile_ids,
                     model_profile_id=card.model_profile_id,
                 )
                 for name, card in sorted(self._cards.items())
@@ -168,6 +225,7 @@ class CatalogRuntime:
             terminal_roles=sorted(
                 self._terminal_roles.intersection(required | _BUILTIN_TERMINAL_ROLES)
             ),
+            search_profiles=list(self.search_runtime.profiles.values()),
         )
 
     @property
@@ -210,6 +268,10 @@ class CatalogRuntime:
     async def aclose(self) -> None:
         """释放本运行期新建的所有 LLM client 连接池。"""
         errors: list[Exception] = []
+        try:
+            await self.search_runtime.aclose()
+        except Exception as exc:
+            errors.append(exc)
         for llm in self._llm_cache.values():
             try:
                 await llm.aclose()
@@ -236,6 +298,8 @@ async def load_catalog_runtime(
                 name=card.name,
                 behavior=card.behavior,
                 system_prompt=card.system_prompt,
+                prompt_mode=card.prompt_mode,
+                search_profile_ids=card.search_profile_ids,
                 enabled=True,
                 model_profile_id=card.model_profile_id,
             )
@@ -262,6 +326,16 @@ async def load_catalog_runtime(
             else None
         )
         await _validate_profile_endpoints(snapshot_profiles.values(), settings)
+        search_defaults = snapshot.default_search_profile_ids
+        search_profiles = snapshot.search_profiles
+        if search_defaults is None:
+            # Pre-upgrade checkpoints contain no search definitions. Retain their
+            # legacy provider configuration instead of adopting newly selected profiles.
+            search_defaults = [f"builtin:{p}" for p in settings.search_backends]
+            legacy = await freeze_search_profiles(catalog_repo, settings, set(search_defaults))
+            search_profiles = search_profiles + [
+                p for p in legacy if p.id not in {s.id for s in search_profiles}
+            ]
         return CatalogRuntime(
             cards=cards,
             profiles=snapshot_profiles,
@@ -269,11 +343,26 @@ async def load_catalog_runtime(
             tracer=tracer,
             settings=settings,
             terminal_roles=set(snapshot.terminal_roles),
+            search_profiles=search_profiles,
+            catalog_repo=catalog_repo,
+            default_search_profile_ids=search_defaults,
         )
 
     if catalog_repo is None:
+        if settings.search_profile_ids:
+            return CatalogRuntime(
+                cards=[],
+                profiles={},
+                default_profile=None,
+                tracer=tracer,
+                settings=settings,
+                search_profiles=await freeze_search_profiles(
+                    None, settings, set(settings.search_profile_ids)
+                ),
+            )
         return None
     cards = await catalog_repo.list_agents()
+    search_defaults = default_search_ids(settings)
     # A global default profile is useful even when no custom role cards exist:
     # it supplies the model for built-in roles without requiring LLM_API_KEY.
     default_profile = await catalog_repo.get_default_profile()
@@ -294,6 +383,14 @@ async def load_catalog_runtime(
         default_profile=default_profile,
         tracer=tracer,
         settings=settings,
+        search_profiles=await freeze_search_profiles(
+            catalog_repo,
+            settings,
+            {pid for card in cards if card.enabled for pid in (card.search_profile_ids or [])}
+            | set(search_defaults),
+        ),
+        catalog_repo=catalog_repo,
+        default_search_profile_ids=search_defaults,
     )
 
 

@@ -1,0 +1,63 @@
+.search-profile-manager {
+  gap: 18px;
+}
+
+.search-profile-form {
+  padding: 20px;
+  gap: 16px;
+}
+
+.search-endpoint {
+  overflow-wrap: anywhere;
+}
+
+.search-role-binding {
+  border: 1px solid var(--clarity-line, #cbded9);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.modal-backdrop > .modal.agent-editor-modal {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.prompt-preview details {
+  margin-block: 10px;
+}
+
+.prompt-preview summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.prompt-preview pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  background: #eef5f3;
+  color: #16352e;
+  font-size: 12px;
+}
+
+.catalog-panel .key-create-grid {
+  grid-template-columns: minmax(170px, 1fr) minmax(140px, 1fr) minmax(240px, 2fr) 90px auto;
+}
+
+@media (max-width: 1000px) {
+  .catalog-panel .key-create-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .catalog-panel .key-create-grid > :nth-child(3) {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 600px) {
+  .catalog-panel .key-create-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

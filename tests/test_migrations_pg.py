@@ -36,6 +36,59 @@ def _postgres_url() -> str:
     return url
 
 
+@pytest.mark.pg
+async def test_postgres_search_reference_races_cannot_create_dangling_references():
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from deep_research.catalog.dto import AgentCardCreate, SearchProfileInput
+    from deep_research.catalog.repository import CatalogRepository
+
+    async with _isolated_database(_postgres_url()) as database_url:
+        await _run_migration(database_url, "head")
+        engine = make_engine(database_url)
+        catalog = CatalogRepository(async_sessionmaker(engine, expire_on_commit=False))
+        try:
+            key = await catalog.create_key(
+                provider="responses", label="k", api_key="test", priority=0, enabled=True
+            )
+            payload = SearchProfileInput(
+                name="p",
+                provider="responses",
+                endpoint="https://example.com/responses",
+                model="s",
+                key_ids=[key.id],
+            )
+            saved, removed = await asyncio.gather(
+                catalog.save_search_profile(payload),
+                catalog.delete_key(key.id),
+                return_exceptions=True,
+            )
+            # Either the delete wins and creation rejects a missing Key, or
+            # creation wins and the reference protects the Key from deletion.
+            if removed is True:
+                assert isinstance(saved, ValueError)
+                assert await catalog.list_search_profiles() == []
+            else:
+                assert isinstance(removed, ValueError)
+                assert not isinstance(saved, BaseException)
+                bound, deleted = await asyncio.gather(
+                    catalog.create_agent(
+                        AgentCardCreate(
+                            name="role", behavior="research", search_profile_ids=[saved.id]
+                        )
+                    ),
+                    catalog.delete_search_profile(saved.id),
+                    return_exceptions=True,
+                )
+                if deleted is True:
+                    assert isinstance(bound, ValueError)
+                else:
+                    assert isinstance(deleted, ValueError)
+                    assert not isinstance(bound, BaseException)
+        finally:
+            await engine.dispose()
+
+
 def _alembic_config(database_url: str) -> Config:
     root = _migration_root()
     config = Config(str(root / "alembic.ini"))

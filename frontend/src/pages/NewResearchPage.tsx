@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import ClarifyDialog from '../components/ClarifyDialog'
 import SettingsPanel from '../components/SettingsPanel'
+import ResourcePreflightPanel from '../components/ResourcePreflightPanel'
 import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { useConfig } from '../hooks/useConfig'
 import { useResearchDraft } from '../hooks/useResearchDraft'
@@ -337,6 +338,7 @@ function ResearchComposer() {
                 onChange={(next) => draft.update({ params: next })}
                 globalRequireCorroboration={config?.require_corroboration ?? false}
               />
+              <ResourcePreflightPanel key={workflow} workflow={workflow} />
             </aside>
           </fieldset>
           <div className="composer-action-column">

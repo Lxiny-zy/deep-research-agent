@@ -44,6 +44,12 @@ const agent: AgentCard = {
   model_profile_name: null,
 }
 
+vi.mock('react-router-dom', () => ({ useSearchParams: () => [new URLSearchParams()] }))
+vi.mock('../hooks/useSearchProfiles', () => ({
+  useSearchProfiles: () => ({ data: [] }),
+  useSearchResourceImpact: () => ({ data: { profiles: {}, keys: {} } }),
+}))
+
 vi.mock('../hooks/useCatalog', () => ({
   useAgents: () => ({ data: [agent], isLoading: false, isError: false }),
   useRoles: () => ({ data: ROLES, isLoading: false, isError: false }),

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -18,6 +18,8 @@ from .dto import (
     ModelProfileFull,
     ModelProfileView,
     SearchKeyView,
+    SearchProfileInput,
+    SearchProfileView,
     WorkflowDefCreate,
     WorkflowDefUpdate,
     WorkflowDefView,
@@ -26,6 +28,24 @@ from .dto import (
 
 class WorkflowVersionConflictError(RuntimeError):
     """Raised when a workflow update is based on a stale version."""
+
+
+async def _lock_search_resources(session: AsyncSession) -> None:
+    # JSON references cannot use SQL foreign keys. Serialize reference changes
+    # and deletes in PostgreSQL, then validate within this same transaction.
+    if session.get_bind().dialect.name == "postgresql":
+        await session.execute(text("SELECT pg_advisory_xact_lock(73104920260909)"))
+
+
+async def _validate_role_search(session: AsyncSession, ids: list[str] | None) -> None:
+    from .search import BUILTIN_NAMES
+
+    for profile_id in ids or []:
+        if profile_id in {f"builtin:{p}" for p in BUILTIN_NAMES}:
+            continue
+        profile = await session.get(orm.SearchProfileRow, profile_id)
+        if profile is None or not profile.enabled:
+            raise ValueError(f"检索档案不存在或已停用：{profile_id}")
 
 
 def mask(secret: str) -> str:
@@ -74,6 +94,8 @@ def _agent_view(r: orm.AgentCardRow) -> AgentCardView:
         description=r.description,
         behavior=r.behavior,
         system_prompt=r.system_prompt,
+        prompt_mode=r.prompt_mode,
+        search_profile_ids=r.search_profile_ids,
         icon=r.icon,
         enabled=bool(r.enabled),
         model_profile_id=r.model_profile_id,
@@ -84,6 +106,7 @@ def _agent_view(r: orm.AgentCardRow) -> AgentCardView:
 def _key_view(r: orm.SearchKeyRow, cipher: SecretCipher) -> SearchKeyView:
     return SearchKeyView(
         id=r.id,
+        provider=r.provider,
         label=r.label,
         priority=r.priority,
         enabled=bool(r.enabled),
@@ -145,6 +168,67 @@ class CatalogRepository:
         return changed
 
     # ── 模型档案 ────────────────────────────────────────────────────────
+    async def list_search_profiles(self) -> list[SearchProfileView]:
+        async with self._sm() as s:
+            rows = (
+                await s.scalars(select(orm.SearchProfileRow).order_by(orm.SearchProfileRow.name))
+            ).all()
+            return [SearchProfileView.model_validate(row, from_attributes=True) for row in rows]
+
+    async def save_search_profile(
+        self, payload: SearchProfileInput, profile_id: str | None = None
+    ) -> SearchProfileView | None:
+        async with self._sm() as s, s.begin():
+            await _lock_search_resources(s)
+            for key_id in payload.key_ids:
+                key = await s.get(orm.SearchKeyRow, key_id)
+                if key is None or key.provider != payload.provider:
+                    raise ValueError("Key 不存在或与检索档案的渠道不匹配")
+            if profile_id:
+                row = await s.get(orm.SearchProfileRow, profile_id)
+                if row is None:
+                    return None
+            else:
+                row = orm.SearchProfileRow()
+                s.add(row)
+            for name, value in payload.model_dump().items():
+                setattr(row, name, value)
+            await s.flush()
+            return SearchProfileView.model_validate(row, from_attributes=True)
+
+    async def delete_search_profile(self, profile_id: str) -> bool:
+        async with self._sm() as s, s.begin():
+            await _lock_search_resources(s)
+            row = await s.get(orm.SearchProfileRow, profile_id)
+            if row is None:
+                return False
+            cards = (await s.scalars(select(orm.AgentCardRow))).all()
+            if any(profile_id in (card.search_profile_ids or []) for card in cards):
+                raise ValueError("检索档案仍被角色引用，请先修改角色绑定")
+            await s.delete(row)
+            return True
+
+    async def selected_key_secrets(
+        self, provider: str, key_ids: list[str], *, preserve_order: bool = False
+    ) -> list[str]:
+        """Validate every frozen reference; resolve enabled keys in priority order."""
+        async with self._sm() as s:
+            rows = (
+                await s.scalars(
+                    select(orm.SearchKeyRow)
+                    .where(orm.SearchKeyRow.id.in_(key_ids))
+                    .order_by(orm.SearchKeyRow.priority, orm.SearchKeyRow.created_at)
+                )
+            ).all()
+            if len(rows) != len(set(key_ids)) or any(row.provider != provider for row in rows):
+                raise ValueError("检索档案引用的 Key 已删除或渠道已改变")
+            if preserve_order:
+                by_id = {row.id: row for row in rows}
+                rows = [by_id[key_id] for key_id in key_ids]
+            return [
+                self._cipher.decrypt(row.api_key) for row in rows if row.enabled and row.api_key
+            ]
+
     async def list_profiles(self) -> list[ModelProfileView]:
         async with self._sm() as s:
             stmt = select(orm.ModelProfileRow).order_by(orm.ModelProfileRow.name)
@@ -244,12 +328,16 @@ class CatalogRepository:
 
     async def create_agent(self, payload: AgentCardCreate) -> AgentCardView:
         async with self._sm() as s, s.begin():
+            await _lock_search_resources(s)
+            await _validate_role_search(s, payload.search_profile_ids)
             row = orm.AgentCardRow(
                 name=payload.name,
                 display_name=payload.display_name,
                 description=payload.description,
                 behavior=payload.behavior,
                 system_prompt=payload.system_prompt,
+                prompt_mode=payload.prompt_mode,
+                search_profile_ids=payload.search_profile_ids,
                 icon=payload.icon,
                 enabled=1 if payload.enabled else 0,
                 model_profile_id=payload.model_profile_id,
@@ -262,9 +350,12 @@ class CatalogRepository:
     async def update_agent(self, agent_id: str, payload: AgentCardUpdate) -> AgentCardView | None:
         fields = payload.model_dump(exclude_unset=True)
         async with self._sm() as s, s.begin():
+            await _lock_search_resources(s)
             row = await s.get(orm.AgentCardRow, agent_id)
             if row is None:
                 return None
+            if "search_profile_ids" in fields:
+                await _validate_role_search(s, payload.search_profile_ids)
             for k, v in fields.items():
                 if k == "enabled":
                     row.enabled = bool(v)
@@ -276,6 +367,7 @@ class CatalogRepository:
 
     async def delete_agent(self, agent_id: str) -> bool:
         async with self._sm() as s, s.begin():
+            await _lock_search_resources(s)
             row = await s.get(orm.AgentCardRow, agent_id)
             if row is None:
                 return False
@@ -294,29 +386,37 @@ class CatalogRepository:
             ).all()
             return [_key_view(r, self._cipher) for r in rows]
 
-    async def get_key_secret(self, key_id: str) -> str | None:
-        """按 id 取明文 key（供「测试连接」单点验证）。不存在返回 None。"""
+    async def get_key_secret(self, key_id: str) -> tuple[str, str] | None:
+        """按 id 取来源与明文 key（供「测试连接」单点验证）。"""
         async with self._sm() as s:
             row = await s.get(orm.SearchKeyRow, key_id)
-            return self._cipher.decrypt(row.api_key) if row else None
+            return (row.provider, self._cipher.decrypt(row.api_key)) if row else None
 
-    async def active_keys(self) -> list[str]:
-        """按优先级升序返回启用的明文 key（供检索池故障转移）。"""
+    async def active_keys(self, provider: str = "tavily") -> list[str]:
+        """按来源和优先级返回启用的明文 key。"""
         async with self._sm() as s:
             rows = (
                 await s.scalars(
                     select(orm.SearchKeyRow)
                     .where(orm.SearchKeyRow.enabled == 1)
+                    .where(orm.SearchKeyRow.provider == provider)
                     .order_by(orm.SearchKeyRow.priority, orm.SearchKeyRow.created_at)
                 )
             ).all()
             return [self._cipher.decrypt(r.api_key) for r in rows if r.api_key]
 
     async def create_key(
-        self, *, label: str, api_key: str, priority: int, enabled: bool
+        self,
+        *,
+        label: str,
+        api_key: str,
+        priority: int,
+        enabled: bool,
+        provider: str = "tavily",
     ) -> SearchKeyView:
         async with self._sm() as s, s.begin():
             row = orm.SearchKeyRow(
+                provider=provider,
                 label=label,
                 api_key=self._cipher.encrypt(api_key),
                 priority=priority,
@@ -328,9 +428,14 @@ class CatalogRepository:
 
     async def update_key(self, key_id: str, fields: dict) -> SearchKeyView | None:
         async with self._sm() as s, s.begin():
+            await _lock_search_resources(s)
             row = await s.get(orm.SearchKeyRow, key_id)
             if row is None:
                 return None
+            if fields.get("provider", row.provider) != row.provider:
+                profiles = (await s.scalars(select(orm.SearchProfileRow))).all()
+                if any(key_id in profile.key_ids for profile in profiles):
+                    raise ValueError("此 Key 被检索档案引用，不能改变渠道")
             for k, v in fields.items():
                 if k == "enabled":
                     row.enabled = bool(v)
@@ -345,9 +450,13 @@ class CatalogRepository:
 
     async def delete_key(self, key_id: str) -> bool:
         async with self._sm() as s, s.begin():
+            await _lock_search_resources(s)
             row = await s.get(orm.SearchKeyRow, key_id)
             if row is None:
                 return False
+            profiles = (await s.scalars(select(orm.SearchProfileRow))).all()
+            if any(key_id in profile.key_ids for profile in profiles):
+                raise ValueError("此 Key 被检索档案引用，请先解除绑定，或停用该 Key")
             await s.delete(row)
             return True
 

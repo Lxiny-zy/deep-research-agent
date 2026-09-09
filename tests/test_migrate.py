@@ -32,6 +32,55 @@ async def test_upgrade_head_initializes_sqlite(tmp_path) -> None:
         await engine.dispose()
 
 
+async def test_search_resource_upgrade_preserves_legacy_keys_and_prompt_mode(tmp_path) -> None:
+    from alembic import command
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'legacy-search.db'}"
+    config = AlembicConfig("alembic.ini")
+    config.attributes["database_url"] = url
+    await asyncio.to_thread(command.upgrade, config, "0023")
+    engine = make_engine(url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO search_key (id, api_key, priority) "
+                    "VALUES ('legacy-key', 'preserve-this-secret', 7)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO agent_card (id, name, behavior, system_prompt) "
+                    "VALUES ('legacy-role', 'legacy', 'research', 'original prompt')"
+                )
+            )
+    finally:
+        await engine.dispose()
+    await migrate.upgrade_head(url)
+    engine = make_engine(url)
+    try:
+        async with engine.connect() as connection:
+            key = (
+                await connection.execute(
+                    text(
+                        "SELECT api_key, provider, priority FROM search_key WHERE id = 'legacy-key'"
+                    )
+                )
+            ).one()
+            role = (
+                await connection.execute(
+                    text(
+                        "SELECT system_prompt, prompt_mode, search_profile_ids "
+                        "FROM agent_card WHERE id = 'legacy-role'"
+                    )
+                )
+            ).one()
+        assert tuple(key) == ("preserve-this-secret", "tavily", 7)
+        assert tuple(role) == ("original prompt", "replace", None)
+    finally:
+        await engine.dispose()
+
+
 class _FakeConnection:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any] | None]] = []

@@ -6,6 +6,8 @@ import { AppIcon } from '../components/AppIcon'
 import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { useModels, useSearchKeys } from '../hooks/useCatalog'
 import { useConfig, useUpdateConfig } from '../hooks/useConfig'
+import { useSearchProfiles } from '../hooks/useSearchProfiles'
+import { BUILTIN_SEARCH_PROFILES, searchSelectionNames } from '../lib/searchProfiles'
 import type { ConfigUpdate, ConfigView } from '../types'
 
 interface NumField {
@@ -34,9 +36,7 @@ interface FormState {
   llm_model: string
   llm_base_url: string
   llm_api_key: string
-  serper_api_key: string
-  xai_api_key: string
-  search_backends: string[]
+  search_profile_ids: string[]
   max_sub_questions: number
   max_rounds: number
   max_concurrency: number
@@ -53,9 +53,9 @@ function toForm(c: ConfigView): FormState {
     llm_model: c.llm_model,
     llm_base_url: c.llm_base_url ?? '',
     llm_api_key: '',
-    serper_api_key: '',
-    xai_api_key: '',
-    search_backends: c.search_backends ?? ['tavily'],
+    search_profile_ids: c.search_profile_ids?.length
+      ? c.search_profile_ids
+      : (c.search_backends ?? ['tavily']).map((p) => 'builtin:' + p),
     max_sub_questions: c.max_sub_questions,
     max_rounds: c.max_rounds,
     max_concurrency: c.max_concurrency,
@@ -72,25 +72,43 @@ function toForm(c: ConfigView): FormState {
 function EffectiveConfig({ config }: { config: ConfigView }) {
   const models = useModels()
   const keys = useSearchKeys()
+  const searchProfiles = useSearchProfiles()
 
   const defaultProfile = models.data?.find((p) => p.is_default)
-  const activeKeys = keys.data?.filter((k) => k.enabled).length ?? 0
+  const selectedIds = config.search_profile_ids?.length
+    ? config.search_profile_ids
+    : config.search_backends.map((p) => 'builtin:' + p)
+  const availableProfiles = searchProfiles.data ?? BUILTIN_SEARCH_PROFILES
 
   const modelLine = defaultProfile
     ? `${defaultProfile.name} · ${defaultProfile.model} · ${defaultProfile.base_url || '官方端点'}`
     : `${config.llm_model} · ${config.llm_base_url || '官方端点'}（环境变量兜底）`
 
-  const fallbackKeys = [
-    config.tavily_api_key_set && 'Tavily',
-    config.serper_api_key_set && 'Serper',
-    config.xai_api_key_set && 'Grok',
-  ].filter((value): value is string => Boolean(value))
-  const keyLine =
-    activeKeys > 0
-      ? `Key 池：启用 ${activeKeys} 个（主备故障转移）`
-      : fallbackKeys.length > 0
-        ? `环境变量 key：${fallbackKeys.join(' / ')}`
-        : '未配置'
+  const fallbackKeys: Record<string, boolean> = {
+    tavily: config.tavily_api_key_set,
+    serper: config.serper_api_key_set,
+    grok: config.xai_api_key_set,
+  }
+  const keyLine = selectedIds
+    .map((id) => {
+      const profile = availableProfiles.find((p) => p.id === id)
+      if (!profile) return '存在失效的检索档案，请重新选择'
+      if (!profile.enabled) return `${profile.name}：已停用`
+      if (['openalex', 'arxiv'].includes(profile.provider)) return `${profile.name}：无需 Key`
+      const count =
+        keys.data?.filter(
+          (k) =>
+            k.enabled &&
+            k.provider === profile.provider &&
+            (profile.key_ids === null || profile.key_ids.includes(k.id)),
+        ).length ?? 0
+      if (count) return `${profile.name}：${count} 个启用 Key`
+      if (profile.builtin && fallbackKeys[profile.provider]) return `${profile.name}：环境配置凭据`
+      if (profile.builtin && profile.provider === 'brave')
+        return `${profile.name}：请确认 BRAVE_API_KEY 环境配置`
+      return `${profile.name}：未配置可用 Key`
+    })
+    .join('；')
 
   return (
     <div className="panel" data-reveal="1">
@@ -101,8 +119,8 @@ function EffectiveConfig({ config }: { config: ConfigView }) {
         </Link>
       </div>
       <p className="hint" style={{ marginBottom: 14 }}>
-        模型与检索 Key 现统一在角色广场维护。角色绑定的档案 / Key
-        池优先生效,以下环境变量仅作未配置时的兜底。
+        模型、检索档案与 Key
+        在角色广场维护。研究角色可覆盖下方默认检索档案；自定义检索档案仅使用其绑定的 Key。
       </p>
       <div className="list-row">
         <div>
@@ -118,8 +136,15 @@ function EffectiveConfig({ config }: { config: ConfigView }) {
       </div>
       <div className="list-row">
         <div>
-          <strong>Search backends</strong>
-          <div className="muted small">{config.search_backends.join(' / ')}</div>
+          <strong>默认检索档案</strong>
+          <div className="muted small">
+            {searchSelectionNames(
+              config.search_profile_ids?.length
+                ? config.search_profile_ids
+                : config.search_backends.map((p) => 'builtin:' + p),
+              searchProfiles.data ?? BUILTIN_SEARCH_PROFILES,
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -131,10 +156,9 @@ export default function SettingsPage() {
   const { data, isLoading, isError, error } = useConfig()
   useRevealOnScroll(pageRef, [data])
   const update = useUpdateConfig()
+  const searchProfiles = useSearchProfiles()
   const [form, setForm] = useState<FormState | null>(null)
   const [editingGlobalKey, setEditingGlobalKey] = useState(false)
-  const [editingSerperKey, setEditingSerperKey] = useState(false)
-  const [editingXaiKey, setEditingXaiKey] = useState(false)
 
   // 配置到达后初始化表单
   useEffect(() => {
@@ -153,7 +177,7 @@ export default function SettingsPage() {
     const body: ConfigUpdate = {
       llm_model: form.llm_model.trim(),
       llm_base_url: form.llm_base_url.trim() || null,
-      search_backends: form.search_backends,
+      search_profile_ids: form.search_profile_ids,
       max_sub_questions: form.max_sub_questions,
       max_rounds: form.max_rounds,
       max_concurrency: form.max_concurrency,
@@ -165,16 +189,10 @@ export default function SettingsPage() {
       require_corroboration: form.require_corroboration,
     }
     if (editingGlobalKey && form.llm_api_key.trim()) body.llm_api_key = form.llm_api_key.trim()
-    if (editingSerperKey && form.serper_api_key.trim()) {
-      body.serper_api_key = form.serper_api_key.trim()
-    }
-    if (editingXaiKey && form.xai_api_key.trim()) body.xai_api_key = form.xai_api_key.trim()
     update.mutate(body, {
       onSuccess: (next) => {
         setForm(toForm(next))
         setEditingGlobalKey(false)
-        setEditingSerperKey(false)
-        setEditingXaiKey(false)
       },
     })
   }
@@ -284,87 +302,47 @@ export default function SettingsPage() {
             <section className="search-backend-config" aria-labelledby="search-backend-title">
               <div className="row between">
                 <div>
-                  <h3 className="panel-title" id="search-backend-title">Search backends</h3>
-                  <p className="hint">选择参与研究的来源；至少保留一个后端。</p>
+                  <h3 className="panel-title" id="search-backend-title">
+                    默认检索档案
+                  </h3>
+                  <p className="hint">
+                    未单独绑定检索服务的研究角色使用这些档案；多个档案并发检索后合并来源。
+                  </p>
                 </div>
+                <Link to="/agents?tab=keys" className="nav-link inline-link">
+                  管理检索档案与 Key
+                </Link>
               </div>
+              {searchProfiles.isError && (
+                <p role="alert" className="error-text">
+                  无法加载检索档案，请重试。
+                </p>
+              )}
               <div className="search-backend-options">
-                {[
-                  ['tavily', 'Tavily'],
-                  ['brave', 'Brave'],
-                  ['serper', 'Serper'],
-                  ['grok', 'Grok web search'],
-                  ['openalex', 'OpenAlex'],
-                  ['arxiv', 'arXiv'],
-                ].map(([value, label]) => (
-                  <label className="search-backend-option" key={value}>
+                {(searchProfiles.data ?? BUILTIN_SEARCH_PROFILES).map((profile) => (
+                  <label className="search-backend-option" key={profile.id}>
                     <input
                       type="checkbox"
-                      checked={form.search_backends.includes(value)}
-                      aria-label={label}
+                      checked={form.search_profile_ids.includes(profile.id)}
+                      disabled={!profile.enabled}
                       onChange={(event) => {
-                        const selected = new Set(form.search_backends)
-                        if (event.target.checked) selected.add(value)
-                        else if (selected.size > 1) selected.delete(value)
-                        setForm({ ...form, search_backends: [...selected] })
+                        const selected = new Set(form.search_profile_ids)
+                        if (event.target.checked) selected.add(profile.id)
+                        else if (selected.size > 1) selected.delete(profile.id)
+                        setForm({ ...form, search_profile_ids: [...selected] })
                       }}
                     />
-                    <span>{label}</span>
+                    <span>
+                      {profile.name}
+                      {!profile.enabled ? '（已停用）' : ''}
+                    </span>
                   </label>
                 ))}
               </div>
-              <div className="search-credential-grid">
-                <div className="saved-credential-row">
-                  <div>
-                    <strong>Serper API Key</strong>
-                    <small>{data.serper_api_key_set ? `已设置 ${data.serper_api_key_hint}` : '尚未设置'}</small>
-                  </div>
-                  {!editingSerperKey ? (
-                    <button
-                      type="button"
-                      className="btn ghost small"
-                      onClick={() => setEditingSerperKey(true)}
-                    >
-                      {data.serper_api_key_set ? '更换密钥' : '设置密钥'}
-                    </button>
-                  ) : (
-                    <input
-                      className="input"
-                      type="password"
-                      name="serper-api-key-new"
-                      autoComplete="new-password"
-                      value={form.serper_api_key}
-                      onChange={(event) => setForm({ ...form, serper_api_key: event.target.value })}
-                      placeholder="输入新的 Serper API Key"
-                    />
-                  )}
-                </div>
-                <div className="saved-credential-row">
-                  <div>
-                    <strong>xAI / Grok API Key</strong>
-                    <small>{data.xai_api_key_set ? `已设置 ${data.xai_api_key_hint}` : '尚未设置'}</small>
-                  </div>
-                  {!editingXaiKey ? (
-                    <button
-                      type="button"
-                      className="btn ghost small"
-                      onClick={() => setEditingXaiKey(true)}
-                    >
-                      {data.xai_api_key_set ? '更换密钥' : '设置密钥'}
-                    </button>
-                  ) : (
-                    <input
-                      className="input"
-                      type="password"
-                      name="xai-api-key-new"
-                      autoComplete="new-password"
-                      value={form.xai_api_key}
-                      onChange={(event) => setForm({ ...form, xai_api_key: event.target.value })}
-                      placeholder="输入新的 xAI API Key"
-                    />
-                  )}
-                </div>
-              </div>
+              <p className="hint">
+                密钥只在检索资源页维护。内置档案的渠道 Key
+                池为空时使用环境配置；自定义档案不会借用其他凭据。
+              </p>
             </section>
             <div className="settings-grid">
               {NUM_FIELDS.map((f) => (

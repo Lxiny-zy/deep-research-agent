@@ -273,6 +273,7 @@ class ConfigView(BaseModel):
     xai_api_key_set: bool
     xai_api_key_hint: str
     search_backends: tuple[str, ...]
+    search_profile_ids: tuple[str, ...] = ()
     max_sub_questions: int
     max_rounds: int
     max_concurrency: int
@@ -297,6 +298,7 @@ class ConfigUpdate(BaseModel):
     serper_api_key: str | None = Field(default=None, max_length=500)
     xai_api_key: str | None = Field(default=None, max_length=500)
     search_backends: list[str] | None = Field(default=None, min_length=1, max_length=6)
+    search_profile_ids: list[str] | None = Field(default=None, max_length=12)
     max_sub_questions: int | None = Field(default=None, ge=1, le=12)
     max_rounds: int | None = Field(default=None, ge=0, le=5)
     max_concurrency: int | None = Field(default=None, ge=1, le=16)
@@ -508,6 +510,7 @@ def _config_view(s: Settings) -> ConfigView:
         xai_api_key_set=bool(s.xai_api_key),
         xai_api_key_hint=_mask_secret(s.xai_api_key),
         search_backends=s.search_backends,
+        search_profile_ids=s.search_profile_ids,
         max_sub_questions=s.max_sub_questions,
         max_rounds=s.max_rounds,
         max_concurrency=s.max_concurrency,
@@ -1545,7 +1548,38 @@ async def create_run(
         else:
             execution.definition = get_workflow(workflow_name).model_dump(mode="json")
         execution.workflow_name = str(execution.definition["name"])
-    await snapshot_catalog_for_execution(execution, catalog)
+    try:
+        await snapshot_catalog_for_execution(execution, catalog, settings)
+    except ValueError as exc:
+        raise HTTPException(
+            422, detail={"code": "resource_unavailable", "message": str(exc)}
+        ) from exc
+    if (
+        catalog is not None
+        and hasattr(catalog, "list_search_profiles")
+        and not (intent_decision is not None and intent_decision.blocked)
+    ):
+        from .catalog.dto import CatalogRuntimeSnapshot
+        from .catalog.preflight import inspect_snapshot
+        from .orchestrator import RUN_CATALOG_CHECKPOINT_KEY, workflow_catalog_roles
+        from .workflow import Workflow
+
+        raw_catalog = execution.checkpoint.get("scratch", {}).get(RUN_CATALOG_CHECKPOINT_KEY)
+        if raw_catalog is not None:
+            preflight = await inspect_snapshot(
+                catalog,
+                settings,
+                CatalogRuntimeSnapshot.model_validate(raw_catalog),
+                workflow_catalog_roles(Workflow.model_validate(execution.definition)),
+            )
+            if not preflight.ok:
+                raise HTTPException(
+                    422,
+                    detail={
+                        "code": "resource_unavailable",
+                        "message": "配置检查未通过：" + "；".join(preflight.errors),
+                    },
+                )
     normalized_key = idempotency_key.strip() if idempotency_key else None
     normalized_key = normalized_key or None
     if _worker_mode(request.app):
@@ -1865,6 +1899,14 @@ async def _update_config_unlocked(req: ConfigUpdate, request: Request) -> Config
     # 响应视图也必须先构造成功——全部校验通过后才允许提交内存状态与落盘
     try:
         new_settings = runtime_config.apply_overrides(Settings(), overrides)
+        if new_settings.search_profile_ids:
+            from .catalog.search import validate_search_bindings
+
+            await validate_search_bindings(
+                getattr(request.app.state, "catalog", None),
+                new_settings,
+                list(new_settings.search_profile_ids),
+            )
         try:
             await validate_provider_url_resolved(
                 new_settings.llm_base_url,

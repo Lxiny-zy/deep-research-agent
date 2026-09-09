@@ -35,7 +35,9 @@ class CardAgent:
     name（决定模型解析）与 system_prompt（决定提示词）。
     """
 
-    def __init__(self, *, name: str, behavior: str, system_prompt: str = "") -> None:
+    def __init__(
+        self, *, name: str, behavior: str, system_prompt: str = "", prompt_mode: str = "replace"
+    ) -> None:
         impl_cls = _BEHAVIOR_IMPL.get(behavior)
         if impl_cls is None:
             raise ValueError(f"未知 behavior：{behavior}（可选：{sorted(_BEHAVIOR_IMPL)}）")
@@ -45,8 +47,9 @@ class CardAgent:
         self._impl.name = name  # 让委托实例用卡片名解析专属模型（llm_for）
         # 卡片提供自定义提示词时覆盖内置默认；内置角色 step 只重绑依赖、不碰 system，
         # 故此处设置在整个生命周期有效。空 prompt＝沿用该 behavior 的内置默认。
-        if system_prompt.strip():
-            self._impl.system = system_prompt
+        from ..prompting import role_prompt_parts
+
+        self._impl.system = role_prompt_parts(behavior, system_prompt, prompt_mode)["role_prompt"]
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         return await self._impl.step(bb, ctx)

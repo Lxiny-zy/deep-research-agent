@@ -70,6 +70,7 @@ class RunContext:
         tracer: Tracer,
         settings: Settings,
         llm_resolver: Callable[[str], LLM | None] | None = None,
+        search_resolver: Any | None = None,
         # Optional execution capabilities are injected by the runner.  They
         # stay typed as ``Any`` here to avoid importing filesystem/process
         # adapters into every agent (and to keep the legacy constructor intact).
@@ -86,6 +87,7 @@ class RunContext:
         self.tracer = tracer
         self.settings = settings
         self._llm_resolver = llm_resolver
+        self._search_resolver = search_resolver
         self.artifact_store = artifact_store
         self.command_runner = command_runner
         self.skill_resolver = skill_resolver
@@ -104,6 +106,17 @@ class RunContext:
             if resolved is not None:
                 return resolved
         return self.llm
+
+    async def search_for(self, agent_name: str) -> SearchTool:
+        if self._search_resolver is not None:
+            resolved = await self._search_resolver(agent_name)
+            if resolved is not None:
+                from ..reproducibility import RecordingSearchTool
+
+                if isinstance(self.search_tool, RecordingSearchTool):
+                    return self.search_tool.for_delegate(resolved)
+                return resolved
+        return self.search_tool
 
     def system_prompt(self, role_prompt: str) -> str:
         """Render a role prompt with the run-wide orchestration rules."""

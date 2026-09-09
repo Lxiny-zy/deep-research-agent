@@ -14,7 +14,7 @@
 - **全局提示词与流程规则**：`framework/06_global_rules.md` 作为共享系统上下文注入内置、自定义和 planner-authored 的每个 Agent；默认 `DR_ORCHESTRATION_MODE=planner-driven`，因此提示词约束、计划与 artifact 交接对所有入口一致生效。
 - **可靠性设计**：节点级超时 / 重试 / 退避 / fallback、token 预算、Blackboard checkpoint、崩溃后启动自动恢复，多实例场景用可续期租约 fencing 防止旧实例写脏数据。
 - **API 与执行分离（可水平扩展）**：`DR_EXECUTION_MODE=worker` 时 API 只把研究入队，由独立 worker 进程抢占式领取执行（`SELECT … FOR UPDATE SKIP LOCKED` 选候选、租约条件更新做最终仲裁），可任意扩副本；全局并发＝副本数 × `MAX_ACTIVE_RUNS`。硬杀任一 worker，API 全程可用，另一个 worker 在租约过期后从 checkpoint 接管续跑。默认 `inline`（API 自执行），桌面版与单容器部署不受影响。
-- **角色广场与多模型档案**：Agent 角色卡片与模型档案数据驱动可编辑，检索 key 支持主备池自动切换。
+- **角色广场与检索资源**：统一维护多渠道 Key 池与检索档案，研究角色可继承默认检索或绑定专属服务；支持外接 Responses / Chat Completions 搜索模型，并可预览含固定契约的角色提示词。详见 [检索与角色配置指南](docs/SEARCH_AND_ROLE_CONFIGURATION.md)。
 - **并行 fan-out**：子问题用 `asyncio` 并发检索，墙钟时间 ≈ 最慢的一条链，而非求和。
 - **反思循环**：Reflector 自评证据是否充分，不足则自动补洞（loop-until-sufficient）。
 - **来源策略门禁**：检索内容进入 LLM 前检查 URL scheme、非公网/歧义 IP、嵌入凭据，以及网页标题/正文/URL path/query/fragment 中的中英文 Prompt Injection 信号；隔离/拒绝决策进入结构化事件审计。
@@ -321,11 +321,11 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 | `PUT`  | `/api/config` | 更新并持久化全局配置（对后续 run 生效） |
 | `GET`  | `/api/research?q=` | 兼容旧 SSE 客户端：创建持久化 run 后转发事件流，响应含 `X-Run-ID` |
 
-角色广场 / 自定义工作流另有一组 Catalog API（`catalog_api.py`）：`/api/behaviors`、`/api/models*`、`/api/agents*`、`/api/search-keys*`、`/api/workflows/custom*`，覆盖角色卡、模型档案、检索 key 池与画布工作流的增删改查。
+角色广场 / 自定义工作流另有一组 Catalog API（`catalog_api.py`）：`/api/behaviors`、`/api/models*`、`/api/agents*`、`/api/search-keys*`、`/api/search-profiles*`、`/api/workflows/custom*`，覆盖角色卡、模型档案、检索资源与画布工作流的增删改查；`/api/agents/prompt-preview` 提供角色提示词预览。
 
 ## 全局配置 · 前端设置中心
 
-前端「设置」页（`GET`/`PUT /api/config`）可在线修改 LLM 模型 / Base URL、当前进程使用的 API Key / Tavily Key 与研究行为默认值，并对后续创建的研究生效。
+前端「设置」页（`GET`/`PUT /api/config`）可在线修改默认模型、默认检索档案与研究行为参数，并对后续创建的研究生效。搜索 Key 统一在角色广场的「检索资源」维护；研究角色可覆盖默认检索选择。旧密钥 API 字段与环境变量保留兼容，详见 [检索与角色配置指南](docs/SEARCH_AND_ROLE_CONFIGURATION.md)。
 
 - **加载顺序**：环境变量（基础默认）→ `runtime_config.json`（前端写入的覆盖项）→ per-run `params`（本次运行覆盖）。
 - **严格双源门禁**：设置页可全局开启，也可在新建研究的高级设置中按次覆盖；环境变量部署可使用 `REQUIRE_CORROBORATION=true`。默认关闭以兼容既有单来源报告，开启后关系验证失败、单一来源或争议论断均无法进入报告；若没有任何合格素材，Synthesizer 会跳过生成模型并返回确定性的无证据结果。

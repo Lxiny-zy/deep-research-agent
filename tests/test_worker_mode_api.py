@@ -25,6 +25,7 @@ def _client() -> httpx.AsyncClient:
 @pytest.fixture
 def worker_repo(monkeypatch) -> InMemoryRepository:
     repo = InMemoryRepository()
+    monkeypatch.setattr(api.app.state, "catalog", None, raising=False)
     api.app.state.settings = Settings(execution_mode="worker")
     api.app.state.repo = repo
     api.app.state.live = {}
