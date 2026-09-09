@@ -32,6 +32,29 @@ async def test_upgrade_head_initializes_sqlite(tmp_path) -> None:
         await engine.dispose()
 
 
+async def test_migrated_search_indexes_match_orm(tmp_path) -> None:
+    from sqlalchemy import inspect
+
+    from deep_research.persistence.orm import SearchKeyRow
+
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'search-indexes.db'}"
+    await migrate.upgrade_head(database_url)
+    engine = make_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            indexes = await connection.run_sync(
+                lambda sync: inspect(sync).get_indexes("search_key")
+            )
+        actual = {index["name"]: index["column_names"] for index in indexes}
+        expected = {
+            index.name: [column.name for column in index.columns]
+            for index in SearchKeyRow.__table__.indexes
+        }
+        assert actual == expected
+    finally:
+        await engine.dispose()
+
+
 async def test_search_resource_upgrade_preserves_legacy_keys_and_prompt_mode(tmp_path) -> None:
     from alembic import command
 

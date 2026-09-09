@@ -356,6 +356,7 @@ class SearchKeyRow(Base):
     """搜索 API key 池：主备故障转移——按 priority 升序使用，配额/限流错误切下一个。"""
 
     __tablename__ = "search_key"
+    __table_args__ = (Index("ix_search_key_provider_priority", "provider", "priority"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     provider: Mapped[str] = mapped_column(String(16), default="tavily", server_default="tavily")
