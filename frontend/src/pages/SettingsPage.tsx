@@ -1,3 +1,4 @@
+import ResearchMotif from '../components/ResearchMotif'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Skeleton from '../components/Skeleton'
@@ -190,9 +191,7 @@ export default function SettingsPage() {
           </h1>
           <p>管理默认模型、并行策略与反思预算。全局设置是长期偏好，单次研究仍可在新建页覆盖。</p>
         </div>
-        <div className="page-intro-mark" aria-hidden="true">
-          <AppIcon name="sliders" size={40} strokeWidth={1.2} />
-        </div>
+        <ResearchMotif kind="orbit" className="page-motif" />
       </header>
       {data && <EffectiveConfig config={data} />}
 

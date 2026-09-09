@@ -1,3 +1,4 @@
+import ResearchMotif from '../components/ResearchMotif'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
@@ -111,9 +112,7 @@ export default function HistoryPage() {
           </h1>
           <p>按问题、状态或标签检索每一次运行。完整链路、引用与产出都在这里留下痕迹。</p>
         </div>
-        <div className="page-intro-mark" aria-hidden="true">
-          <AppIcon name="orbit" size={40} strokeWidth={1.2} />
-        </div>
+        <ResearchMotif kind="archive" className="page-motif" />
       </header>
 
       <div className="history-workbench">

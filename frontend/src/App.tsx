@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import LoginGate from './components/LoginGate'
 import WelcomePage from './components/WelcomePage'
@@ -6,8 +6,17 @@ import OnboardingTour from './components/OnboardingTour'
 import { hasSeenTour, markTourSeen } from './lib/onboarding'
 import { AppIcon, type AppIconName } from './components/AppIcon'
 import { clearApiKey, getApiKey, getApiKeyStorage } from './api/client'
+import WorkspaceAtmosphere from './components/WorkspaceAtmosphere'
+import ResearchMotif, { type MotifKind } from './components/ResearchMotif'
 
-const ResearchField = lazy(() => import('./components/ResearchField'))
+function motifForPath(path: string): MotifKind {
+  if (path.startsWith('/history')) return 'archive'
+  if (path.startsWith('/workflows')) return 'weave'
+  if (path.startsWith('/agents')) return 'constellation'
+  if (path.startsWith('/settings')) return 'orbit'
+  if (path.startsWith('/runs/')) return 'pulse'
+  return 'ribbons'
+}
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   isActive ? 'nav-link active' : 'nav-link'
@@ -29,6 +38,7 @@ export default function App() {
   const [authError, setAuthError] = useState('')
   const [authAttempt, setAuthAttempt] = useState(0)
   const [navOpen, setNavOpen] = useState(false)
+  const [atmospherePaused, setAtmospherePaused] = useState(false)
   const [showTour, setShowTour] = useState(() => !hasSeenTour())
   const location = useLocation()
   const navigate = useNavigate()
@@ -178,10 +188,11 @@ export default function App() {
   }
 
   return (
-    <div className="app-container top-navigation-layout signal-theme">
-      <Suspense fallback={<div className="research-field workspace-field" aria-hidden="true" />}>
-        <ResearchField paused={false} variant="workspace" />
-      </Suspense>
+    <div
+      className="app-container top-navigation-layout signal-theme"
+      data-atmosphere-paused={atmospherePaused}
+    >
+      <WorkspaceAtmosphere kind={motifForPath(location.pathname)} paused={atmospherePaused} />
       <header className="global-header">
         <NavLink to="/" className="top-brand" aria-label="Deep Research 首页">
           <span className="brand-icon" aria-hidden="true">
@@ -236,6 +247,17 @@ export default function App() {
             <AppIcon name="help" size={15} aria-hidden="true" />
             入门引导
           </button>
+          <button
+            type="button"
+            className="nav-link compact-nav-action"
+            onClick={() => setAtmospherePaused((value) => !value)}
+            aria-pressed={atmospherePaused}
+            aria-label={atmospherePaused ? '播放背景动效' : '暂停背景动效'}
+            title={atmospherePaused ? '播放背景动效' : '暂停背景动效'}
+          >
+            <AppIcon name={atmospherePaused ? 'play' : 'pause'} size={15} aria-hidden="true" />
+            <span>{atmospherePaused ? '播放背景动效' : '暂停背景动效'}</span>
+          </button>
           <NavLink
             to="/welcome"
             className="nav-link compact-nav-action"
@@ -261,6 +283,17 @@ export default function App() {
         </nav>
 
         <div className="global-header-actions">
+          <button
+            type="button"
+            className="atmosphere-toggle"
+            onClick={() => setAtmospherePaused((value) => !value)}
+            aria-pressed={atmospherePaused}
+            aria-label={atmospherePaused ? '播放背景动效' : '暂停背景动效'}
+            title={atmospherePaused ? '播放背景动效' : '暂停背景动效'}
+          >
+            <AppIcon name={atmospherePaused ? 'play' : 'pause'} size={15} aria-hidden="true" />
+          </button>
+
           <button
             type="button"
             className="btn btn-ghost btn-sm icon-button"
@@ -293,6 +326,11 @@ export default function App() {
       <main className="main-content">
         <div className="content-area route-enter" key={location.pathname}>
           <Outlet />
+          <div className="workspace-trail" aria-hidden="true">
+            <span className="workspace-trail-line" />
+            <ResearchMotif kind={motifForPath(location.pathname)} />
+            <span className="workspace-trail-line" />
+          </div>
         </div>
       </main>
 

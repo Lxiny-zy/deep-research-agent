@@ -1,0 +1,263 @@
+@media screen {
+  :root {
+    --motif-mint: #91d8bd;
+    --motif-pearl: #d4f3e4;
+    --motif-teal: #19b8a5;
+    --motif-gold: #e3bd89;
+  }
+
+  .research-motif {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    pointer-events: none;
+  }
+
+  .motif-threads {
+    transform-origin: 200px 120px;
+    animation: motif-breathe 24s ease-in-out infinite alternate;
+  }
+
+  .motif-orbit .motif-threads,
+  .motif-archive .motif-threads {
+    animation-name: motif-turn;
+    animation-duration: 38s;
+  }
+
+  .page-intro:has(.page-motif) {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) clamp(210px, 27vw, 360px);
+    align-items: center;
+    column-gap: 28px;
+    overflow: visible !important;
+  }
+
+  .page-intro .page-motif {
+    width: 100%;
+    max-height: 184px;
+    align-self: center;
+    opacity: 0.95;
+  }
+
+  .workspace-atmosphere {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .ambient-particles,
+  .atmosphere-light {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .atmosphere-light {
+    background:
+      radial-gradient(ellipse at 10% 65%, #91d8bd09, transparent 48%),
+      radial-gradient(ellipse at 87% 25%, #19b8a50d, transparent 50%);
+    animation: atmosphere-tide 32s ease-in-out infinite alternate;
+  }
+
+  .ambient-motif {
+    position: absolute;
+    width: clamp(340px, 42vw, 650px);
+    opacity: 0.2;
+  }
+
+  .ambient-motif-near {
+    left: -17%;
+    top: 38%;
+    transform: rotate(-28deg);
+  }
+
+  .ambient-motif-far {
+    right: -18%;
+    bottom: -8%;
+    opacity: 0.13;
+    transform: rotate(20deg);
+  }
+
+  .atmosphere-archive .ambient-motif-near,
+  .atmosphere-constellation .ambient-motif-near {
+    left: auto;
+    right: -17%;
+    top: 35%;
+  }
+
+  .atmosphere-archive .ambient-motif-far,
+  .atmosphere-constellation .ambient-motif-far {
+    right: auto;
+    left: -15%;
+    bottom: 0;
+  }
+
+  .atmosphere-weave .ambient-motif-near {
+    top: 48%;
+    transform: rotate(65deg);
+  }
+
+  .atmosphere-orbit .ambient-motif-near {
+    top: 18%;
+    left: -22%;
+  }
+
+  .workspace-trail {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    margin: 40px auto -40px;
+    width: min(500px, 75%);
+    opacity: 0.55;
+    pointer-events: none;
+  }
+
+  .workspace-trail .research-motif {
+    width: 100px;
+    flex-shrink: 0;
+  }
+
+  .workspace-trail-line {
+    height: 1px;
+    flex: 1;
+    background: linear-gradient(90deg, transparent, #91d8bd4a);
+  }
+
+  .workspace-trail-line:last-child {
+    transform: rotate(180deg);
+  }
+
+  .global-header .atmosphere-toggle {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    color: #b6d9cc;
+    background: transparent;
+    border: 1px solid #91d8bd38;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+
+  .global-header .atmosphere-toggle:hover {
+    color: #e2f9ea;
+    background: #91d8bd18;
+    border-color: #91d8bd80;
+  }
+
+  .research-welcome .research-field,
+  .research-welcome .research-field[data-state='fallback'] {
+    background-image: url('/research-field.png');
+  }
+
+  .research-welcome .research-field[data-state='ready'] {
+    background-image: none;
+  }
+
+  [data-atmosphere-paused='true'] .motif-threads,
+  [data-atmosphere-paused='true'] .atmosphere-light {
+    animation-play-state: paused;
+  }
+
+  @keyframes motif-breathe {
+    from {
+      transform: translateY(-3px) rotate(-3deg);
+    }
+    to {
+      transform: translateY(5px) rotate(3deg);
+    }
+  }
+
+  @keyframes motif-turn {
+    from {
+      transform: rotate(-8deg) scale(0.97);
+    }
+    to {
+      transform: rotate(8deg) scale(1.02);
+    }
+  }
+
+  @keyframes atmosphere-tide {
+    from {
+      opacity: 0.45;
+      transform: translateY(-2%);
+    }
+    to {
+      opacity: 0.9;
+      transform: translateY(2%);
+    }
+  }
+
+  @media (max-width: 1100px) {
+    .page-intro:has(.page-motif) {
+      grid-template-columns: minmax(0, 1fr) 210px;
+      column-gap: 16px;
+    }
+    .page-intro:has(.page-motif) h1 {
+      font-size: clamp(28px, 3.5vw, 36px) !important;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .global-header {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      column-gap: 12px;
+    }
+    .page-intro:has(.page-motif) {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 0;
+      padding-bottom: 12px !important;
+    }
+    .page-intro .page-motif {
+      width: 160px;
+      height: 84px;
+      justify-self: end;
+      opacity: 0.75;
+      margin-top: 4px;
+    }
+    .ambient-motif {
+      opacity: 0.12;
+    }
+    .ambient-motif-near {
+      left: -250px;
+    }
+    .ambient-motif-far {
+      right: -240px;
+    }
+    .workspace-trail {
+      margin-top: 24px;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .global-header {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .global-header .compact-key-status {
+      display: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .motif-threads,
+    .atmosphere-light {
+      animation: none;
+    }
+  }
+}
+
+@media print {
+  .workspace-atmosphere,
+  .research-motif,
+  .workspace-trail,
+  .atmosphere-toggle {
+    display: none !important;
+  }
+}

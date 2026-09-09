@@ -1,4 +1,5 @@
-﻿import { useEffect, useRef, useState } from 'react'
+import ResearchMotif from '../components/ResearchMotif'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import ClarifyDialog from '../components/ClarifyDialog'
@@ -188,14 +189,7 @@ function ResearchComposer() {
           </h1>
           <p>从一个值得深挖的问题开始。</p>
         </div>
-        <div className="workspace-signature" aria-hidden="true">
-          <AppIcon name="scan-search" size={34} strokeWidth={1.1} />
-          <span>
-            RESEARCH
-            <br />
-            STARTS HERE
-          </span>
-        </div>
+        <ResearchMotif kind="ribbons" className="page-motif" />
       </header>
       <section className="panel research-composer" data-reveal="1">
         {draft.status !== 'idle' && (

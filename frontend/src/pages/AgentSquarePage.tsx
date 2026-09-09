@@ -1,3 +1,4 @@
+import ResearchMotif from '../components/ResearchMotif'
 import { useRef, useState } from 'react'
 import AgentCardEditor from '../components/AgentCardEditor'
 import BuiltinRoleGallery from '../components/BuiltinRoleGallery'
@@ -125,9 +126,7 @@ export default function AgentSquarePage() {
             池，让每条工作流都能调用清晰、稳定、可复用的能力单元。
           </p>
         </div>
-        <div className="page-intro-mark" aria-hidden="true">
-          <AppIcon name="brain" size={40} strokeWidth={1.2} />
-        </div>
+        <ResearchMotif kind="constellation" className="page-motif" />
       </header>
 
       <div className="tabs agent-tabs" role="tablist" aria-label="角色广场分类">

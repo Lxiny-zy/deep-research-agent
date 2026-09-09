@@ -2,7 +2,7 @@
  * Premium workspace surface
  *
  * Final visual overrides for the legacy screen sheets. The workspace shares
- * its scene palette and flowing ribbons with the welcome page.
+ * its scene palette with the welcome page. Motifs live in research-atmosphere.css.
  */
 
 @media screen {
@@ -60,27 +60,6 @@
     max-width: 100%;
     overflow-x: clip;
     background: transparent !important;
-  }
-
-  .research-field {
-    background-image: none;
-  }
-
-  .research-field[data-state='fallback'] {
-    background-image: url('/research-ribbons.png');
-  }
-
-  .workspace-field {
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    width: 100%;
-    height: 100dvh;
-    overflow: hidden;
-    pointer-events: none;
-    opacity: 0.9;
-    background-size: auto min(70vh, 580px);
-    background-position: right top;
   }
 
   .app-container.signal-theme::before,
@@ -1237,10 +1216,6 @@
   }
 
   @media (max-width: 760px) {
-    .workspace-field {
-      background-size: auto 360px;
-    }
-
     .global-header {
       width: 100%;
       max-width: 100%;
@@ -1333,11 +1308,5 @@
     .chip:hover {
       transform: none !important;
     }
-  }
-}
-
-@media print {
-  .workspace-field {
-    display: none !important;
   }
 }

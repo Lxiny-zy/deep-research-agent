@@ -1,3 +1,4 @@
+import ResearchMotif from '../components/ResearchMotif'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import BuiltinTemplateGallery from '../components/BuiltinTemplateGallery'
@@ -170,9 +171,7 @@ export default function WorkflowBuilderPage() {
             从可用角色里挑选、排成一条有序流程（可插入反思循环），保存后即可在「新建研究」中选用并运行。
           </p>
         </div>
-        <div className="page-intro-mark" aria-hidden="true">
-          <AppIcon name="waypoints" size={40} strokeWidth={1.2} />
-        </div>
+        <ResearchMotif kind="weave" className="page-motif" />
       </section>
 
       <BuiltinTemplateGallery templates={templates} onClone={cloneTemplate} />
