@@ -140,7 +140,8 @@ async def test_postgres_upgrade_0017_to_0018_preserves_historical_rows() -> None
                     {"id": workflow_id, "run_id": run_id},
                 )
 
-            await _run_migration(database_url, "head")
+            # This regression test targets the 0017 -> 0018 boundary explicitly.
+            await _run_migration(database_url, "0018")
             async with engine.connect() as connection:
                 revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
                 row = (
