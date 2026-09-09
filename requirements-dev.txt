@@ -8,6 +8,7 @@ pytest>=8.0,<9
 pytest-asyncio>=0.23,<2
 pytest-cov>=5.0,<8
 aiosqlite>=0.20,<1     # async SQLite for tests
+openpyxl>=3.1,<4      # exercise the optional XLSX exporter in tests
 setuptools>=77,<83     # PEP 517 build backend used by the release smoke test
 wheel>=0.45,<1         # local wheel creation in CI and release checks
 pip-audit>=2.9,<3     # dependency vulnerability audit in CI

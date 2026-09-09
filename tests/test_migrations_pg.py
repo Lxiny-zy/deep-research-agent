@@ -69,7 +69,8 @@ async def _isolated_database(base_url: str) -> AsyncIterator[str]:
             if getattr(getattr(exc, "orig", None), "sqlstate", None) == "42501":
                 pytest.skip(f"PostgreSQL 用户无权创建临时数据库: {exc}")
             raise
-        yield str(parsed_url.set(database=database))
+        # URL.__str__ masks the password; migrations need the real credentials.
+        yield parsed_url.set(database=database).render_as_string(hide_password=False)
     finally:
         if created:
             async with admin.connect() as connection:
