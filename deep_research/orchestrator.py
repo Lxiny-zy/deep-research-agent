@@ -17,15 +17,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
+from uuid import uuid4
 
 from pydantic import BaseModel
 
 from .agents import Planner, Reflector, Researcher, Synthesizer  # noqa: F401 触发角色注册
-from .agents.base import Blackboard, RunContext
-from .artifacts import ArtifactStore
+from .agents.base import Blackboard, RunContext, effective_require_corroboration
+from .artifacts import ArtifactStore, _validate_component
+from .blocking import run_blocking
+from .checkpoints import RUN_SETTINGS_KEY as RUN_SETTINGS_CHECKPOINT_KEY
+from .checkpoints import SCHEMA_VERSION, SETTING_FIELDS
 from .config import Settings
 from .llm import LLM
 from .models import Finding, Report, ResearchResult, SubQuestion
@@ -48,6 +53,7 @@ from .planner_runtime import (
 )
 from .planning import stable_slug
 from .prompting import load_global_rules
+from .report.validation import finalize_report
 from .reproducibility import (
     RUN_MANIFEST_CHECKPOINT_KEY,
     RecordingSearchTool,
@@ -101,26 +107,12 @@ def _is_infrastructure_step_failure(error: object) -> bool:
     return any(marker in message for marker in _INFRA_FAILURE_MARKERS)
 
 
-RUN_SETTINGS_CHECKPOINT_KEY = "_run_settings"
 RUN_METRICS_CHECKPOINT_KEY = "_runtime_metrics"
 RUN_CATALOG_CHECKPOINT_KEY = "_catalog_runtime"
-_RUN_SETTING_FIELDS = (
-    "max_sub_questions",
-    "max_rounds",
-    "max_concurrency",
-    "results_per_search",
-    "fulltext_enabled",
-    "fulltext_max_chars",
-    "require_corroboration",
-    "max_tokens",
-    "max_replans",
-    "request_timeout",
-    "max_run_seconds",
-    "orchestration_mode",
-)
+_RUN_SETTING_FIELDS = SETTING_FIELDS
 
 
-def checkpoint_settings(settings: Settings) -> dict[str, bool | int | float | str | None]:
+def checkpoint_settings(settings: Settings) -> dict[str, Any]:
     """Serialize non-secret run behavior so recovery keeps the original limits."""
     return {name: getattr(settings, name) for name in _RUN_SETTING_FIELDS}
 
@@ -183,6 +175,9 @@ def create_initial_execution(
     execution = runtime.start(workflow_name or "deep", {"query": query})
     scratch: dict[str, Any] = {
         RUN_SETTINGS_CHECKPOINT_KEY: checkpoint_settings(settings),
+        "_schema_version": SCHEMA_VERSION,
+        "_artifact_run_scoped": True,
+        "_deadline_at": time.time() + settings.max_run_seconds,
     }
     # Preserve the user's explicit choice across queue admission and worker
     # recovery.  ``workflow_name`` may instead be an intent-derived route,
@@ -307,6 +302,7 @@ class DeepResearchAgent:
     ) -> None:
         self.settings = settings
         self.tracer = Tracer()
+        self.tracer.budget = TokenBudget(max_tokens=settings.max_tokens)
         self.repo = repo
         self._run_id = run_id
         self._workflow_name = workflow
@@ -346,6 +342,7 @@ class DeepResearchAgent:
         # 运行期延迟加载（需 await），收尾时关闭其 LLM 池
         self._catalog_runtime: CatalogRuntime | None = None
         self._run_started = False
+        self._event_flush_lock = asyncio.Lock()
 
         # Validate only dependencies constructed here. A catalog default model
         # is loaded asynchronously, so its LLM validation is deferred to run().
@@ -421,12 +418,32 @@ class DeepResearchAgent:
         return await self._run_once(query)
 
     async def _run_once(self, query: str) -> Report:
+        from .provider_limits import coordinator_for, provider_scope
+
+        with provider_scope(coordinator_for(self.repo, self.settings)):
+            return await self._execute_once(query)
+
+    async def _execute_once(self, query: str) -> Report:
         run_id = self._run_id
+        event_pump: asyncio.Task[None] | None = None
         try:
             if self.repo is not None:
                 if run_id is None:
                     run_id = await self.repo.create_run(query)
                 await self.repo.set_status(run_id, "running", lease_owner=self._lease_owner)
+
+                async def flush_live_events() -> None:
+                    while True:
+                        await asyncio.sleep(0.2)
+                        try:
+                            if run_id is not None:
+                                await self._flush_events(run_id)
+                        except LeaseLostError:
+                            return
+                        except Exception:
+                            logger.exception("live event flush failed; checkpoint flush will retry")
+
+                event_pump = asyncio.create_task(flush_live_events())
 
             self.tracer.emit("ORCHESTRATOR", "start", f"开始深度研究：{query}")
 
@@ -466,6 +483,10 @@ class DeepResearchAgent:
                     logger.exception("failed to persist error status for run %s", run_id)
             raise
         finally:
+            if event_pump is not None:
+                event_pump.cancel()
+                await asyncio.gather(event_pump, return_exceptions=True)
+            self.tracer.flush_tokens()
             # Checkpoints flush incrementally; this final flush captures the
             # report and terminal event emitted after the last checkpoint.
             if self.repo is not None and run_id is not None:
@@ -478,6 +499,10 @@ class DeepResearchAgent:
                     logger.exception("failed to persist events for run %s", run_id)
 
     async def _flush_events(self, run_id: str) -> None:
+        async with self._event_flush_lock:
+            await self._flush_events_locked(run_id)
+
+    async def _flush_events_locked(self, run_id: str) -> None:
         if self.repo is None:
             return
         pending = self.tracer.events[self._persisted_event_count :]
@@ -583,9 +608,18 @@ class DeepResearchAgent:
             # RunExecutor factory.  Create the same isolated store lazily so
             # both entry points obey the artifact-first contract.
             if self._artifact_store is None:
+                root = Path(self.settings.artifact_root)
+                if existing_execution is None or bb.scratch.get("_artifact_run_scoped"):
+                    artifact_run_id = run_id or bb.scratch.get("_artifact_run_id") or str(uuid4())
+                    artifact_run_id = _validate_component(artifact_run_id, label="artifact run id")
+                    root = root / "runs" / artifact_run_id
+                    bb.scratch["_artifact_run_scoped"] = True
+                    bb.scratch["_artifact_run_id"] = artifact_run_id
                 self._artifact_store = ArtifactStore(
-                    Path(self.settings.artifact_root),
+                    root,
                     max_bytes=self.settings.artifact_max_bytes,
+                    max_total_bytes=self.settings.artifact_total_bytes,
+                    quota_root=self.settings.artifact_root,
                 )
             raw_slug = bb.scratch.get(ARTIFACT_SLUG_SCRATCH_KEY)
             self._artifact_slug = (
@@ -602,6 +636,8 @@ class DeepResearchAgent:
                     default_timeout_seconds=self.settings.runner_default_timeout,
                     max_output_bytes=self.settings.runner_max_output_bytes,
                     max_processes=self.settings.runner_max_processes,
+                    isolation=self.settings.runner_isolation,
+                    memory_bytes=self.settings.runner_memory_bytes,
                 )
             if self._skill_resolver is None:
                 self._skill_resolver = default_skill_resolver(Path.cwd())
@@ -659,7 +695,7 @@ class DeepResearchAgent:
             artifact_slug=artifact_slug,
             global_rules=load_global_rules(),
         )
-        budget = TokenBudget(max_tokens=self.settings.max_tokens)
+        budget = self.tracer.budget or TokenBudget(max_tokens=self.settings.max_tokens)
 
         # The API normally performs this preflight before creating the durable
         # run.  Direct Python/CLI callers do not have that outer request layer,
@@ -840,7 +876,8 @@ class DeepResearchAgent:
                 # is classified as infrastructure failure by the outer run.
                 assert self._artifact_store is not None
                 attempt = getattr(execution, "attempt", None)
-                output_paths = persist_blackboard_artifacts(
+                output_paths = await run_blocking(
+                    persist_blackboard_artifacts,
                     self._artifact_store,
                     artifact_slug,
                     bb,
@@ -900,10 +937,11 @@ class DeepResearchAgent:
                     partial_step_ids={item for item in partial_ids if item},
                 )
                 store_plan_in_blackboard(bb, runtime_plan)
-                persist_plan(self._artifact_store, runtime_plan)
+                await run_blocking(persist_plan, self._artifact_store, runtime_plan)
                 # Keep a user-readable copy of the execution contract in the
                 # work tree as well as the private control file.
-                self._artifact_store.write_text(
+                await run_blocking(
+                    self._artifact_store.write_text,
                     artifact_slug,
                     "planner",
                     "execution-plan.json",
@@ -911,7 +949,8 @@ class DeepResearchAgent:
                     mime_type="application/json",
                     attempt=attempt,
                 )
-                snapshot = project_blackboard(
+                snapshot = await run_blocking(
+                    project_blackboard,
                     self._artifact_store,
                     artifact_slug,
                     query=bb.query,
@@ -974,7 +1013,40 @@ class DeepResearchAgent:
 
         if bb.report is None:  # WorkflowEngine(require_report=True) should have raised first.
             raise RuntimeError("工作流结束但未生成报告")
+        if bb.results or bb.report.citations:
+            bb.report, check = await run_blocking(
+                finalize_report,
+                bb.report,
+                bb.results,
+                require_corroboration=effective_require_corroboration(bb, self.settings),
+            )
+            prior_issues = [
+                issue
+                for event in self.tracer.events
+                if isinstance(event.data, dict)
+                and isinstance(event.data.get("report_validation"), dict)
+                for issue in event.data["report_validation"].get("issues", [])
+                if isinstance(issue, str)
+            ]
+            issues = list(dict.fromkeys([*prior_issues, *check.issues]))
+            validation = {
+                "scope": "citation_and_numbers",
+                "issues": issues,
+                "fallback": bool(issues),
+                "semantic_verification": False,
+            }
+            bb.scratch["_report_validation"] = validation
+            self.tracer.emit(
+                "ORCHESTRATOR",
+                "info",
+                "最终正文引用与数值检查完成",
+                data={"report_validation": validation},
+            )
+            if engine.runtime.run is not None:
+                engine.runtime.run.checkpoint = bb.model_dump(mode="json")
+                await save_checkpoint(engine.runtime.run)
         report = bb.report
+        assert report is not None
         if self.repo is not None and run_id is not None:
             if engine.runtime.run is not None:
                 await self.repo.save_orchestration(

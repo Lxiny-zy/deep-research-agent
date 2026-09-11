@@ -1,5 +1,5 @@
 import ResearchMotif from '../components/ResearchMotif'
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import AgentCardEditor from '../components/AgentCardEditor'
 import BuiltinRoleGallery from '../components/BuiltinRoleGallery'
@@ -10,6 +10,7 @@ import SearchProfilesManager from '../components/SearchProfilesManager'
 import { useSearchProfiles, useSearchResourceImpact } from '../hooks/useSearchProfiles'
 import { SEARCH_PROVIDERS, searchSelectionNames } from '../lib/searchProfiles'
 import Skeleton from '../components/Skeleton'
+import EmptyState from '../components/EmptyState'
 import { AgentGlyph, AppIcon, type AppIconName } from '../components/AppIcon'
 import {
   useAgentMutations,
@@ -49,7 +50,8 @@ const TABS: { key: Tab; label: string; icon: AppIconName }[] = [
 ]
 
 export default function AgentSquarePage() {
-  const [searchParams] = useSearchParams()
+  const tabsId = useId()
+  const [searchParams, setSearchParams] = useSearchParams()
   const agents = useAgents()
   const models = useModels()
   const keys = useSearchKeys()
@@ -60,7 +62,19 @@ export default function AgentSquarePage() {
   const modelM = useModelMutations()
   const keyM = useSearchKeyMutations()
 
-  const [tab, setTab] = useState<Tab>(searchParams.get('tab') === 'keys' ? 'keys' : 'agents')
+  const requestedTab = searchParams.get('tab')
+  const tab: Tab = requestedTab === 'models' || requestedTab === 'keys' ? requestedTab : 'agents'
+  function setTab(nextTab: Tab) {
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous)
+        if (nextTab === 'agents') next.delete('tab')
+        else next.set('tab', nextTab)
+        return next
+      },
+      { replace: true },
+    )
+  }
   const sessionSequence = useRef(0)
   const [agentSession, setAgentSession] = useState<EditSession<AgentCard> | undefined>(undefined) // undefined=关闭
   const [modelSession, setModelSession] = useState<EditSession<ModelProfile> | undefined>(undefined)
@@ -163,8 +177,28 @@ export default function AgentSquarePage() {
             type="button"
             role="tab"
             aria-selected={tab === t.key}
+            id={`${tabsId}-${t.key}`}
+            aria-controls={`${tabsId}-${t.key}-panel`}
+            tabIndex={tab === t.key ? 0 : -1}
             className={`tab${tab === t.key ? ' active' : ''}`}
             onClick={() => setTab(t.key)}
+            onKeyDown={(event) => {
+              const index = TABS.findIndex((item) => item.key === t.key)
+              const next =
+                event.key === 'ArrowRight'
+                  ? (index + 1) % TABS.length
+                  : event.key === 'ArrowLeft'
+                    ? (index + TABS.length - 1) % TABS.length
+                    : event.key === 'Home'
+                      ? 0
+                      : event.key === 'End'
+                        ? TABS.length - 1
+                        : null
+              if (next === null) return
+              event.preventDefault()
+              setTab(TABS[next].key)
+              document.getElementById(`${tabsId}-${TABS[next].key}`)?.focus()
+            }}
           >
             <AppIcon name={t.icon} size={15} aria-hidden="true" />
             {t.label}
@@ -174,7 +208,13 @@ export default function AgentSquarePage() {
 
       {/* ── 角色 ── */}
       {tab === 'agents' && (
-        <section className="panel catalog-panel">
+        <section
+          className="panel catalog-panel"
+          role="tabpanel"
+          id={`${tabsId}-agents-panel`}
+          aria-labelledby={`${tabsId}-agents`}
+          tabIndex={0}
+        >
           <div className="panel-header">
             <div>
               <span className="panel-kicker">角色 / 01</span>
@@ -187,6 +227,11 @@ export default function AgentSquarePage() {
           </div>
           <div className="panel-body">
             {roles.isLoading && <Skeleton rows={2} />}
+            {roles.isError && (
+              <p className="error-text" role="alert">
+                内置角色加载失败：{errMsg(roles.error)}
+              </p>
+            )}
             <BuiltinRoleGallery roles={roles.data ?? []} />
 
             <div className="builtin-rail-head custom-follow">
@@ -203,10 +248,26 @@ export default function AgentSquarePage() {
 
             {agents.isLoading && <Skeleton rows={4} />}
             {agents.isError && (
-              <p className="error-text">
+              <p className="error-text" role="alert">
                 <AppIcon name="circle-x" size={14} aria-hidden="true" />
                 {errMsg(agents.error)}
               </p>
+            )}
+            {(agentM.remove.isError || agentM.update.isError) && !agentSession && (
+              <p className="error-text" role="alert">
+                {errMsg(agentM.remove.error ?? agentM.update.error)}
+              </p>
+            )}
+            {!agents.isLoading && !agents.isError && agents.data?.length === 0 && (
+              <EmptyState
+                icon="user-cog"
+                title="把研究经验，交给专属角色"
+                description="内置角色已经可以使用。需要特定的提示词或模型时，创建自己的研究助手。"
+              >
+                <button className="btn btn-secondary" onClick={() => openAgentEditor(null)}>
+                  创建自定义角色
+                </button>
+              </EmptyState>
             )}
 
             <div className="card-grid custom-role-grid">
@@ -287,7 +348,13 @@ export default function AgentSquarePage() {
 
       {/* ── 模型档案 ── */}
       {tab === 'models' && (
-        <section className="panel catalog-panel">
+        <section
+          className="panel catalog-panel"
+          role="tabpanel"
+          id={`${tabsId}-models-panel`}
+          aria-labelledby={`${tabsId}-models`}
+          tabIndex={0}
+        >
           <div className="panel-header">
             <div>
               <span className="panel-kicker">模型 / 02</span>
@@ -304,10 +371,26 @@ export default function AgentSquarePage() {
               模型，可被不同角色绑定。标为「全局默认」的档案在角色未绑定时生效。
             </p>
             {models.isLoading && <Skeleton rows={3} />}
-            {models.data && models.data.length === 0 && (
-              <p className="muted">
-                还没有模型档案。新建一个并设为「全局默认」，即可替代环境变量兜底。
+            {models.isError && (
+              <p className="error-text" role="alert">
+                模型档案加载失败：{errMsg(models.error)}
               </p>
+            )}
+            {modelM.remove.isError && (
+              <p className="error-text" role="alert">
+                {errMsg(modelM.remove.error)}
+              </p>
+            )}
+            {!models.isLoading && !models.isError && models.data?.length === 0 && (
+              <EmptyState
+                icon="server"
+                title="连接适合你的研究模型"
+                description="保存模型与连接信息，设为全局默认，或为不同的研究角色单独指定。"
+              >
+                <button className="btn btn-secondary" onClick={() => openModelEditor(null)}>
+                  创建模型档案
+                </button>
+              </EmptyState>
             )}
             <div className="card-grid">
               {models.data?.map((p) => (
@@ -329,7 +412,13 @@ export default function AgentSquarePage() {
 
       {/* ── 搜索 key 池 ── */}
       {tab === 'keys' && (
-        <section className="panel catalog-panel">
+        <section
+          className="panel catalog-panel"
+          role="tabpanel"
+          id={`${tabsId}-keys-panel`}
+          aria-labelledby={`${tabsId}-keys`}
+          tabIndex={0}
+        >
           <div className="panel-header">
             <div>
               <span className="panel-kicker">SEARCH ACCESS / 03</span>
@@ -358,6 +447,11 @@ export default function AgentSquarePage() {
               </p>
             )}
             {keys.isLoading && <Skeleton rows={2} />}
+            {keys.isError && (
+              <p className="error-text" role="alert">
+                检索密钥加载失败：{errMsg(keys.error)}
+              </p>
+            )}
             {keys.data && keys.data.length === 0 && (
               <p className="muted">
                 还没有检索 Key。下方可选择 Tavily、Brave、Serper 或 Grok；OpenAlex 与 arXiv 无需

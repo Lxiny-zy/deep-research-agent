@@ -1,3 +1,7 @@
+import type { components } from './api/schema'
+
+type Wire<Name extends keyof components['schemas']> = components['schemas'][Name]
+
 // 后端数据契约的 TypeScript 映射（与 deep_research/models.py、observability.py、
 // persistence/repository.py 对齐）。Event 命名为 ResearchEvent 以避开 DOM 全局 Event。
 
@@ -38,16 +42,9 @@ export interface RunSummary {
   tags: string[]
 }
 
-export interface CancelRunResponse {
-  run_id: string
-  status: 'cancelling' | 'cancelled'
-}
+export type CancelRunResponse = Wire<'CancelRunResponse'>
 
-export interface SubQuestion {
-  question: string
-  rationale: string
-  depends_on: number[]
-}
+export type SubQuestion = Required<Wire<'SubQuestion'>>
 
 /**
  * 数值校验三态，与后端 ``EvidenceVerification.quantity_status`` 对齐。
@@ -95,14 +92,11 @@ export interface ResearchResult {
   findings: Finding[]
 }
 
-export interface Report {
-  query: string
-  markdown: string
-  citations: string[]
-}
+export type Report = Required<Wire<'Report'>>
 
 /** Structured report wire contract returned by GET /api/runs/{id}/document. */
 export interface ReportDocument {
+  final_validation?: Wire<'FinalReportValidation'> | null
   schema_version: number
   query: string
   blocks: ReportBlock[]
@@ -216,39 +210,9 @@ export interface SourceSnapshot {
   content_hash: string
 }
 
-export interface RunManifest {
-  schema_version: number
-  created_at: string
-  workflow_name: string
-  workflow_hash: string
-  query_hash: string
-  settings: Record<string, boolean | number | null>
-  llm_model: string
-  llm_endpoint: string
-  search_backend: string
-  catalog_snapshot_hash: string
-  catalog_model_profiles: Record<string, unknown>[]
-}
+export type RunManifest = Required<Wire<'RunManifest'>>
 
-export interface QualityMetrics {
-  total_findings: number
-  verbatim_verified: number
-  semantically_supported: number
-  report_eligible: number
-  corroborated: number
-  conflicted: number
-  disputed: number
-  source_snapshots: number
-  cited_sources: number
-  cited_source_snapshot_coverage: number
-  verified_finding_rate: number
-  supported_finding_rate: number
-  eligible_finding_rate: number
-  independent_publishers: number
-  blocked_sources: number
-  total_tokens: number
-  elapsed_seconds: number
-}
+export type QualityMetrics = Required<Wire<'QualityMetrics'>>
 
 export type IntentTier = 'rule' | 'model' | 'llm' | 'fallback'
 
@@ -468,41 +432,15 @@ export interface ConversationTurn {
   slots: IntentSlots
 }
 
-export interface CreateRunRequest {
-  query: string
-  params?: ResearchParams | null
-  workflow?: string | null
-  history?: ConversationTurn[]
-  /** 已走过澄清循环（含用户点「直接研究」）：服务端不再复核澄清，风险门禁照常 */
-  clarified?: boolean
-}
+export type CreateRunRequest = Wire<'CreateRunRequest'>
 
-export interface CreateRunResponse {
-  run_id: string
-}
+export type CreateRunResponse = Wire<'CreateRunResponse'>
 
 // POST /api/intent/assess —— 建 run 之前的「信息够不够」判定。
 // 累积的答案由客户端携带（见 lib/clarification.ts），服务端不存会话。
-export interface AssessRequest {
-  query: string
-  answers?: IntentSlots
-  round?: number
-  history?: ConversationTurn[]
-  /** 用户显式跳过追问：服务端把已答槽位合成进最终问题后放行 */
-  skip?: boolean
-}
+export type AssessRequest = Wire<'AssessRequest'>
 
-export interface AssessResponse {
-  ready: boolean
-  resolved_query: string
-  question: string
-  options: string[]
-  gap: string
-  /** 安全拦截：前端照常建 run，让拒识留下审计痕迹 */
-  blocked: boolean
-  intent: string
-  reason: string
-}
+export type AssessResponse = Required<Wire<'AssessResponse'>>
 
 // done 事件的 data 负载
 export interface RunStats {
@@ -519,50 +457,12 @@ export interface DagData {
 }
 
 // 全局配置（GET /api/config 响应，密钥脱敏）
-export interface ConfigView {
-  llm_model: string
-  llm_base_url: string | null
-  llm_api_key_set: boolean
-  llm_api_key_hint: string
-  tavily_api_key_set: boolean
-  tavily_api_key_hint: string
-  serper_api_key_set: boolean
-  serper_api_key_hint: string
-  xai_api_key_set: boolean
-  xai_api_key_hint: string
-  search_backends: string[]
-  search_profile_ids?: string[]
-  max_sub_questions: number
-  max_rounds: number
-  max_concurrency: number
-  results_per_search: number
-  fulltext_enabled: boolean
-  fulltext_max_chars: number
-  request_timeout: number
-  max_run_seconds: number
-  require_corroboration: boolean
+export type ConfigView = Omit<Wire<'ConfigView'>, 'access'> & {
+  access?: { id: string; role: 'admin' | 'researcher' | 'reader' }
 }
 
 // 全局配置更新（PUT /api/config 请求，全部可选）
-export interface ConfigUpdate {
-  llm_model?: string
-  llm_base_url?: string | null
-  llm_api_key?: string
-  tavily_api_key?: string
-  serper_api_key?: string
-  xai_api_key?: string
-  search_backends?: string[]
-  search_profile_ids?: string[]
-  max_sub_questions?: number
-  max_rounds?: number
-  max_concurrency?: number
-  results_per_search?: number
-  fulltext_enabled?: boolean
-  fulltext_max_chars?: number
-  request_timeout?: number
-  max_run_seconds?: number
-  require_corroboration?: boolean
-}
+export type ConfigUpdate = Wire<'ConfigUpdate'>
 
 // ── 角色广场 catalog ──────────────────────────────────────────────────
 // 角色行为模板（决定该角色在引擎里的执行逻辑）

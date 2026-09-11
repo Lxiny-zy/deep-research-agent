@@ -1,2 +1,2 @@
 # Server-side PDF export installed by the production image.
-weasyprint>=62,<69
+weasyprint>=70,<71

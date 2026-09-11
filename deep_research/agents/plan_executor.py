@@ -16,9 +16,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import Any
 
+from ..blocking import run_blocking
 from ..models import Report
 from ..registry import register
-from .base import Blackboard, RunContext
+from ..report.validation import finalize_report
+from .base import Blackboard, RunContext, effective_require_corroboration
 
 _URL_RE = re.compile(r"https?://[^\s)\]>]+")
 _MAX_SKILL_BYTES = 128_000
@@ -180,6 +182,30 @@ class PlanExecutor:
             raise RuntimeError("plan step returned an empty response")
         response = response.strip()
 
+        if bool(metadata.get("is_terminal", False)):
+            citations = sorted(set(_URL_RE.findall(response)))
+            bb.report = Report(query=bb.query, markdown=response, citations=citations)
+            if bb.results or citations:
+                checked_report, check = await run_blocking(
+                    finalize_report,
+                    bb.report,
+                    bb.results,
+                    require_corroboration=effective_require_corroboration(bb, ctx.settings),
+                )
+                bb.report = checked_report
+                response = checked_report.markdown
+                ctx.tracer.emit(
+                    "PLAN_EXECUTOR",
+                    "info",
+                    "最终产物引用与数值检查完成",
+                    data={
+                        "report_validation": {
+                            "issues": list(check.issues),
+                            "fallback": bool(check.issues),
+                        }
+                    },
+                )
+
         store = getattr(ctx, "artifact_store", None)
         committed: list[str] = []
         if store is not None:
@@ -191,7 +217,8 @@ class PlanExecutor:
             for path in sorted(output_paths):
                 area, stage, name = _split_artifact_path(path, slug)
                 content, mime = _json_or_text(name, response)
-                record = store.write_text(
+                record = await run_blocking(
+                    store.write_text,
                     slug,
                     stage,
                     name,
@@ -209,9 +236,6 @@ class PlanExecutor:
             "response_chars": len(response),
         }
         bb.scratch.setdefault("plan_step_outputs", []).append(audit)
-        if bool(metadata.get("is_terminal", False)):
-            citations = sorted(set(_URL_RE.findall(response)))
-            bb.report = Report(query=bb.query, markdown=response, citations=citations)
         return bb
 
 

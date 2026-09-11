@@ -400,7 +400,7 @@ async def test_append_events_keeps_monotonic_sequence_across_attempts(repo):
         run_id,
         [
             Event(stage="PLANNER", type="start"),
-            Event(stage="PLANNER", type="token", message="not durable"),
+            Event(stage="PLANNER", type="token", data={"delta": "durable text"}, tokens=123),
             Event(stage="PLANNER", type="info"),
         ],
         lease_owner=owner,
@@ -416,30 +416,46 @@ async def test_append_events_keeps_monotonic_sequence_across_attempts(repo):
     assert [(event.seq, event.attempt) for event in first + second] == [
         (0, 1),
         (1, 1),
-        (2, 2),
+        (2, 1),
+        (3, 2),
     ]
     assert [(event.seq, event.attempt) for event in await repo.get_events(run_id)] == [
         (0, 1),
         (1, 1),
-        (2, 2),
+        (2, 1),
+        (3, 2),
     ]
 
 
 @pytest.mark.asyncio
-async def test_save_events_filters_tokens_before_assigning_replay_sequence(repo):
+async def test_save_events_preserves_text_tokens_and_replay_sequence(repo):
     run_id = await repo.create_run("durable event sequence")
     await repo.save_events(
         run_id,
         [
-            Event(stage="PLANNER", type="token", message="ignored"),
+            Event(
+                stage="PLANNER",
+                type="token",
+                data={"delta": "first text"},
+                tokens=5,
+                tokens_estimated=True,
+            ),
             Event(stage="PLANNER", type="start", message="first"),
-            Event(stage="PLANNER", type="token", message="ignored too"),
+            Event(stage="PLANNER", type="token", data={"delta": "second text"}, tokens=123),
             Event(stage="ORCHESTRATOR", type="done", message="second"),
         ],
     )
 
     events = await repo.get_events(run_id)
-    assert [(event.seq, event.message) for event in events] == [(0, "first"), (1, "second")]
+    assert [(event.seq, event.message) for event in events] == [
+        (0, ""),
+        (1, "first"),
+        (2, ""),
+        (3, "second"),
+    ]
+    assert events[0].data == {"delta": "first text"}
+    assert events[0].tokens == 5 and events[0].tokens_estimated
+    assert events[2].tokens == 123 and not events[2].tokens_estimated
     assert await repo.get_events(run_id, after_seq=1) == events[1:]
 
 

@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ..blocking import run_blocking
 from ..models import Source
 from ..security import provider_http_client
 
@@ -492,7 +493,7 @@ class OaPdfFetcher:
         if scholarly is None or not scholarly.oa_pdf_url:
             return [source]
         raw = await self.fetch(scholarly.oa_pdf_url)
-        document = parse_oa_pdf(raw, self._limits)
+        document = await run_blocking(parse_oa_pdf, raw, self._limits)
         required_names: set[str]
         if required is True:
             required_names = set(_CANONICAL_KINDS)

@@ -17,6 +17,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from .token_budget import TokenBudget
+
 # Stage 不再是封闭枚举：新增角色（Critic / FactChecker / Coder 等）可直接发自己的事件，
 # 无需改动本文件。下列常量是内置角色的约定值，仅供参考与类型提示，不构成校验白名单。
 Stage = str
@@ -48,6 +50,7 @@ class _SubscriberOverflow:
 
 
 class Event(BaseModel):
+    version: int = 1
     # Tracers may create events without knowing storage state.  EventHub assigns
     # a provisional durable-compatible id for live delivery; the repository
     # reconciles it when the event is appended.
@@ -57,7 +60,7 @@ class Event(BaseModel):
     type: EventType
     message: str = ""
     elapsed: float = 0.0  # 距开始的秒数
-    tokens: int = 0  # 事件发生时的累计 token（供前端实时显示；不落库，回放时回退 0）
+    tokens: int = 0  # 累计 token 随事件持久化，跨进程回放保持一致。
     tokens_estimated: bool = False  # 累计值中是否仍含尚未被 provider usage 校准的估算
     data: dict | None = None  # 结构化附带数据（子问题列表、报告内容、token 增量、统计等）
 
@@ -70,10 +73,15 @@ class Tracer:
         self._elapsed_offset = 0.0
         self.total_tokens = 0
         self.estimated_tokens = 0
+        self.budget: TokenBudget | None = None
         self.events: list[Event] = []
         self._subscribers: list[Callable[[Event], None]] = []
         # 实时 sink：接收含 token 在内的全部事件，供 run_stream / EventHub(SSE) 消费
         self._sinks: list[Callable[[Event], None]] = []
+        self._token_pending: Event | None = None
+        self._token_parts: list[str] = []
+        self._token_size = 0
+        self._token_timer: asyncio.TimerHandle | None = None
 
     @property
     def elapsed(self) -> float:
@@ -131,11 +139,24 @@ class Tracer:
             tokens_estimated=self.tokens_estimated,
             data=data,
         )
-        # token 增量是瞬态的：只实时推给 sink，不记录、不落库、不触发同步订阅者（如 CLI 打印）
         if type == "token":
-            for sink in self._sinks:
-                sink(event)
+            if self._token_pending is not None and self._token_pending.stage != stage:
+                self.flush_tokens()
+            self._token_pending = event
+            delta = str((data or {}).get("delta", ""))
+            self._token_parts.append(delta)
+            self._token_size += len(delta)
+            if self._token_size >= 4096:
+                self.flush_tokens()
+            elif self._token_timer is None:
+                try:
+                    self._token_timer = asyncio.get_running_loop().call_later(
+                        0.1, self.flush_tokens
+                    )
+                except RuntimeError:
+                    self.flush_tokens()
             return event
+        self.flush_tokens()
         self.events.append(event)
         for cb in self._subscribers:
             try:
@@ -146,13 +167,26 @@ class Tracer:
             sink(event)
         return event
 
+    def flush_tokens(self) -> None:
+        if self._token_timer is not None:
+            self._token_timer.cancel()
+            self._token_timer = None
+        event = self._token_pending
+        if event is None:
+            return
+        event.data = {**(event.data or {}), "delta": "".join(self._token_parts)}
+        self._token_pending, self._token_parts, self._token_size = None, [], 0
+        self.events.append(event)
+        for sink in self._sinks:
+            sink(event)
+
 
 class EventHub:
     """单次 run 的事件中枢：作为 Tracer 的 sink 收事件，向多个 SSE 订阅者扇出。
 
     - publish 作为 Tracer sink 被同步调用（含 token 事件）。
-    - 非 token 事件进缓冲，供迟到的订阅者回放历史（体量与落库事件一致，有界）。
-    - token 事件仅实时转发给在线订阅者；无人订阅时直接丢弃，避免在内存中无界堆积。
+    - 阶段事件与合并正文增量都进入有界缓冲，迟到订阅者可恢复正文。
+    - 超出内存窗口时显式报告缺口，由调用方从数据库接续。
     - 每个 SSE 连接经 stream() 拿到独立队列，互不抢占，可多端同时观看同一进行中的 run。
     """
 
@@ -163,7 +197,7 @@ class EventHub:
         self._next_seq = 0
 
     # 单订阅者队列上界：慢消费者（TCP 缓冲满、移动网络）不再无界堆积内存。
-    # 满时优先丢 token 增量（前端可经 report 事件全量恢复正文）。
+    # 满时显式通知缺口，由 SSE 层从持久化事件恢复。
     _QUEUE_MAXSIZE = 1024
     # 进程内历史也必须有界。超出这段窗口的 SSE 断点由 API 从持久化事件表补齐。
     _BUFFER_MAXSIZE = 4096
@@ -176,17 +210,16 @@ class EventHub:
         event is intentionally not replayed to subscribers.
         """
         for event in events:
-            if event.type != "token" and event.seq is not None:
+            if event.seq is not None:
                 self._next_seq = max(self._next_seq, event.seq + 1)
 
     def publish(self, event: Event) -> None:
-        if event.type != "token":
-            if event.seq is None:
-                event.seq = self._next_seq
-            self._next_seq = max(self._next_seq, event.seq + 1)
-            self._buffer.append(event)  # 仅缓冲非 token 事件供回放
-            if len(self._buffer) > self._BUFFER_MAXSIZE:
-                del self._buffer[: len(self._buffer) - self._BUFFER_MAXSIZE]
+        if event.seq is None:
+            event.seq = self._next_seq
+        self._next_seq = max(self._next_seq, event.seq + 1)
+        self._buffer.append(event)
+        if len(self._buffer) > self._BUFFER_MAXSIZE:
+            del self._buffer[: len(self._buffer) - self._BUFFER_MAXSIZE]
         for q in list(self._subscribers):
             try:
                 q.put_nowait(event)
@@ -213,7 +246,7 @@ class EventHub:
                 q.put_nowait(None)
 
     async def stream(self, *, after_seq: int = 0) -> AsyncIterator[Event]:
-        """订阅：先回放已发生的非 token 事件，再续收实时事件，直到 run 结束。"""
+        """订阅：先回放已有事件，再续收实时事件，直到 run 结束。"""
         q: asyncio.Queue[Event | None | _SubscriberOverflow] = asyncio.Queue(
             maxsize=self._QUEUE_MAXSIZE
         )

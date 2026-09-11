@@ -6,6 +6,8 @@ import math
 import os
 from dataclasses import dataclass, field
 
+from .access import ApiCredential, load_api_credentials
+
 
 def _int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -77,6 +79,13 @@ _KNOWN_SEARCH_BACKENDS = frozenset({"tavily", "brave", "serper", "grok", "openal
 
 @dataclass
 class Settings:
+    runtime_config_version: int = 0
+    provider_max_concurrency: int = field(
+        default_factory=lambda: _int_env("DR_PROVIDER_MAX_CONCURRENCY", 2)
+    )
+    provider_requests_per_minute: int = field(
+        default_factory=lambda: _int_env("DR_PROVIDER_REQUESTS_PER_MINUTE", 120)
+    )
     # --- deployment posture ---
     app_env: str = field(default_factory=lambda: os.getenv("APP_ENV", "development"))
     allow_private_provider_urls: bool = field(
@@ -90,6 +99,12 @@ class Settings:
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
     llm_base_url: str | None = field(default_factory=lambda: os.getenv("LLM_BASE_URL") or None)
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o-mini"))
+    llm_max_output_tokens: int = field(
+        default_factory=lambda: _int_env("LLM_MAX_OUTPUT_TOKENS", 8192)
+    )
+    llm_max_input_chars: int = field(
+        default_factory=lambda: _int_env("LLM_MAX_INPUT_CHARS", 200_000)
+    )
     llm_user_agent: str = field(
         default_factory=lambda: os.getenv("LLM_USER_AGENT") or _DEFAULT_LLM_UA
     )
@@ -119,7 +134,10 @@ class Settings:
     search_profile_ids: tuple[str, ...] = field(default_factory=tuple)
 
     # --- API 认证（支持 Authorization: Bearer 与 X-API-Key；不接受 URL 查询参数）---
-    api_key: str = field(default_factory=lambda: os.getenv("API_KEY", ""))
+    api_key: str = field(default_factory=lambda: os.getenv("API_KEY", ""), repr=False)
+    api_credentials: tuple[ApiCredential, ...] = field(
+        default_factory=load_api_credentials, repr=False
+    )
 
     # --- 持久化（默认本地 SQLite；生产经 DATABASE_URL 注入 PostgreSQL）---
     database_url: str = field(
@@ -192,10 +210,19 @@ class Settings:
         default_factory=lambda: _str_env("DR_ORCHESTRATION_MODE", "planner-driven")
     )
     artifact_root: str = field(default_factory=lambda: _str_env("DR_ARTIFACT_ROOT", "./artifacts"))
+    artifact_total_bytes: int = field(
+        default_factory=lambda: _int_env("DR_ARTIFACT_TOTAL_BYTES", 10 * 1024 * 1024 * 1024)
+    )
     artifact_max_bytes: int = field(
         default_factory=lambda: _int_env("DR_ARTIFACT_MAX_BYTES", 100 * 1024 * 1024)
     )
     runner_enabled: bool = field(default_factory=lambda: _bool_env("DR_RUNNER_ENABLED", True))
+    runner_isolation: str = field(
+        default_factory=lambda: _str_env("DR_RUNNER_ISOLATION", "required")
+    )
+    runner_memory_bytes: int = field(
+        default_factory=lambda: _int_env("DR_RUNNER_MEMORY_BYTES", 1024 * 1024 * 1024)
+    )
     runner_default_timeout: float = field(
         default_factory=lambda: _float_env("DR_RUNNER_DEFAULT_TIMEOUT", 300.0)
     )
@@ -214,6 +241,10 @@ class Settings:
 
     def __post_init__(self) -> None:
         """范围校验：非法配置尽早失败（含 per-run 覆盖经 dataclasses.replace 时）。"""
+        if self.provider_max_concurrency < 1 or self.provider_requests_per_minute < 1:
+            raise ValueError("provider concurrency and request limits must be positive")
+        if self.llm_max_output_tokens < 1 or self.llm_max_input_chars < 1:
+            raise ValueError("LLM input and output limits must be positive")
         self.app_env = self.app_env.strip().lower()
         if self.app_env not in {"development", "test", "production"}:
             raise ValueError("app_env 必须是 development、test 或 production")
@@ -260,8 +291,17 @@ class Settings:
             raise ValueError("artifact_root must not be empty")
         if self.artifact_max_bytes < 0:
             raise ValueError("artifact_max_bytes must be >= 0")
+        if self.artifact_total_bytes < 1:
+            raise ValueError("artifact_total_bytes must be positive")
         if not isinstance(self.runner_enabled, bool):
             raise ValueError("runner_enabled must be a boolean")
+        if (
+            self.runner_isolation not in {"required", "trusted"}
+            or self.runner_memory_bytes < 64 * 1024 * 1024
+        ):
+            raise ValueError(
+                "runner isolation must be required/trusted and memory must be >= 64 MiB"
+            )
         if not math.isfinite(self.runner_default_timeout) or self.runner_default_timeout <= 0:
             raise ValueError("runner_default_timeout must be > 0")
         if self.runner_max_output_bytes < 1024:
@@ -294,11 +334,13 @@ class Settings:
         """Fail fast when production is configured with development defaults."""
         if self.app_env != "production":
             return
+        if self.runner_enabled and self.runner_isolation != "required":
+            raise RuntimeError("production command runner requires OS isolation")
         if os.getenv("DR_DEMO_FAKE_BACKENDS", "").strip().casefold() in {"1", "true", "yes", "on"}:
             raise RuntimeError("DR_DEMO_FAKE_BACKENDS must be disabled in production")
         missing: list[str] = []
-        if not self.api_key.strip():
-            missing.append("API_KEY")
+        if not self.api_key.strip() and not self.api_credentials:
+            missing.append("API_KEY or DR_API_KEYS")
         if not self.database_url.startswith("postgresql+"):
             missing.append("PostgreSQL DATABASE_URL")
         from .security import SecretCipher

@@ -16,6 +16,7 @@ from .repository import (
     IdempotencyConflictError,
     LeaseLostError,
     RunDetail,
+    RunQueueFullError,
     RunSummary,
     TagCount,
 )
@@ -25,6 +26,7 @@ from .repository import (
 class _RunRecord:
     id: str
     query: str
+    owner_id: str | None = None
     status: str = "pending"
     interpretation: str = ""
     sub_questions: list[SubQuestion] = field(default_factory=list)
@@ -52,6 +54,8 @@ class InMemoryRepository:
         self._runs: dict[str, _RunRecord] = {}
         self._order: list[str] = []
         self._idempotency: dict[str, tuple[str, str]] = {}
+        self._workers: dict[str, tuple[datetime, int]] = {}
+        self._artifact_cleanup: dict[str, str] = {}
 
     async def create_run(
         self,
@@ -77,6 +81,8 @@ class InMemoryRepository:
         execution: WorkflowRun | None = None,
         lease_owner: str | None = None,
         claimable: bool = False,
+        owner_id: str | None = None,
+        max_inflight: int | None = None,
     ) -> tuple[str, bool]:
         if idempotency_key:
             existing = self._idempotency.get(idempotency_key)
@@ -87,10 +93,12 @@ class InMemoryRepository:
                         "idempotency key was already used for a different request"
                     )
                 return existing_id, False
+        self._check_capacity(max_inflight)
         run_id = str(uuid4())
         record = _RunRecord(
             id=run_id,
             query=query,
+            owner_id=owner_id,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
             attempt=execution.attempt if execution is not None else 1,
@@ -107,6 +115,67 @@ class InMemoryRepository:
         if idempotency_key:
             self._idempotency[idempotency_key] = (run_id, request_hash)
         return run_id, True
+
+    def _check_capacity(self, maximum: int | None) -> None:
+        if (
+            maximum is not None
+            and sum(r.status in RUN_ACTIVE_STATUSES for r in self._runs.values()) >= maximum
+        ):
+            raise RunQueueFullError("研究队列已满，请稍后重试")
+
+    async def find_run_once(self, idempotency_key: str, request_hash: str) -> str | None:
+        existing = self._idempotency.get(idempotency_key)
+        if existing is None:
+            return None
+        if existing[1] != request_hash:
+            raise IdempotencyConflictError("Idempotency-Key 已用于不同的请求")
+        return existing[0]
+
+    async def get_run_owner(self, run_id: str) -> str | None:
+        record = self._runs.get(run_id)
+        return record.owner_id if record else None
+
+    async def heartbeat_worker(self, name: str, active: int) -> None:
+        self._workers[name] = (datetime.now(UTC), active)
+
+    async def remove_worker(self, name: str) -> None:
+        self._workers.pop(name, None)
+
+    async def service_status(self, *, heartbeat_seconds: int = 30) -> dict[str, int | float]:
+        now = datetime.now(UTC)
+        workers = [
+            active
+            for seen, active in self._workers.values()
+            if (now - seen).total_seconds() < heartbeat_seconds
+        ]
+        queued = [
+            r for r in self._runs.values() if r.status == "pending" and r.claimable_at is not None
+        ]
+        return {
+            "workers": len(workers),
+            "active": sum(workers),
+            "queued": len(queued),
+            "oldest_queued_seconds": max(
+                ((now - r.claimable_at).total_seconds() for r in queued if r.claimable_at),
+                default=0,
+            ),
+            "done": sum(r.status == "done" for r in self._runs.values()),
+            "error": sum(r.status == "error" for r in self._runs.values()),
+            "total_tokens": sum(r.total_tokens for r in self._runs.values()),
+        }
+
+    async def pending_artifact_cleanup(self) -> list[tuple[str, str]]:
+        return list(self._artifact_cleanup.items())[:100]
+
+    async def finish_artifact_cleanup(self, run_id: str) -> None:
+        self._artifact_cleanup.pop(run_id, None)
+
+    async def artifact_slug_in_use(self, slug: str) -> bool:
+        return any(
+            record.orchestration
+            and record.orchestration.checkpoint.get("scratch", {}).get("_artifact_slug") == slug
+            for record in self._runs.values()
+        )
 
     def _assert_lease(self, run_id: str, owner: str | None) -> None:
         if owner is None:
@@ -195,7 +264,7 @@ class InMemoryRepository:
         self._assert_lease(run_id, lease_owner)
         # 覆盖式：按产生顺序存全部非 token 事件（seq 即下标）
         rec = self._runs[run_id]
-        durable = [event for event in events if event.type != "token"]
+        durable = events
         rec.events = [
             event.model_copy(update={"seq": i, "attempt": rec.attempt})
             for i, event in enumerate(durable)
@@ -206,7 +275,7 @@ class InMemoryRepository:
     ) -> list[Event]:
         self._assert_lease(run_id, lease_owner)
         rec = self._runs[run_id]
-        durable = [event for event in events if event.type != "token"]
+        durable = events
         appended = [
             event.model_copy(update={"seq": len(rec.events) + i, "attempt": rec.attempt})
             for i, event in enumerate(durable)
@@ -262,7 +331,7 @@ class InMemoryRepository:
         rec.claimable_at = datetime.now(UTC)
         return True
 
-    async def requeue_failed_run(self, run_id: str) -> bool:
+    async def requeue_failed_run(self, run_id: str, *, max_inflight: int | None = None) -> bool:
         rec = self._runs.get(run_id)
         if rec is None or rec.status != "error" or rec.orchestration is None:
             return False
@@ -272,13 +341,16 @@ class InMemoryRepository:
         lease_active = rec.lease_expires_at is not None and rec.lease_expires_at > now
         if rec.lease_owner is not None and lease_active:
             return False
+        self._check_capacity(max_inflight)
         rec.status = "running"
         rec.claimable_at = now
         rec.lease_owner = None
         rec.lease_expires_at = None
         return True
 
-    async def claim_next_run(self, owner: str, *, lease_seconds: int = 120) -> ClaimedRun | None:
+    async def claim_next_run(
+        self, owner: str, *, lease_seconds: int = 120, max_active_runs: int | None = None
+    ) -> ClaimedRun | None:
         """Reference implementation of the claim protocol.
 
         Single-threaded by construction, so the SQL layer's fence-then-reload
@@ -287,6 +359,18 @@ class InMemoryRepository:
         attempt counter for a resumed run.
         """
         now = datetime.now(UTC)
+        if (
+            max_active_runs is not None
+            and sum(
+                r.status in RUN_ACTIVE_STATUSES
+                and r.lease_owner is not None
+                and r.lease_expires_at is not None
+                and r.lease_expires_at > now
+                for r in self._runs.values()
+            )
+            >= max_active_runs
+        ):
+            return None
         for run_id in self._order:
             rec = self._runs.get(run_id)
             if rec is None or rec.orchestration is None:
@@ -335,6 +419,13 @@ class InMemoryRepository:
     async def delete_run(self, run_id: str) -> bool:
         if run_id not in self._runs:
             return False
+        record = self._runs[run_id]
+        scratch = record.orchestration.checkpoint.get("scratch", {}) if record.orchestration else {}
+        slug = scratch.get("_artifact_slug") if isinstance(scratch, dict) else None
+        if isinstance(slug, str) and slug:
+            self._artifact_cleanup[run_id] = (
+                f"runs/{run_id}" if scratch.get("_artifact_run_scoped") else slug
+            )
         del self._runs[run_id]
         self._order.remove(run_id)
         for key, (stored_id, _hash) in list(self._idempotency.items()):
@@ -346,9 +437,11 @@ class InMemoryRepository:
         cleaned = list(dict.fromkeys(t.strip() for t in tags if t.strip()))
         self._runs[run_id].tags = cleaned
 
-    async def list_tags(self) -> list[TagCount]:
+    async def list_tags(self, *, owner_id: str | None = None) -> list[TagCount]:
         counts: dict[str, int] = {}
         for rec in self._runs.values():
+            if owner_id is not None and rec.owner_id != owner_id:
+                continue
             for tag in rec.tags:
                 counts[tag] = counts.get(tag, 0) + 1
         # 计数降序、同计数按标签名升序，与 SQL 实现对齐
@@ -363,9 +456,12 @@ class InMemoryRepository:
         status: str | None = None,
         q: str | None = None,
         tag: str | None = None,
+        owner_id: str | None = None,
     ) -> list[RunSummary]:
         ids = list(reversed(self._order))
         recs = [self._runs[i] for i in ids]
+        if owner_id is not None:
+            recs = [r for r in recs if r.owner_id == owner_id]
         if status:
             recs = [r for r in recs if r.status == status]
         if q:
@@ -379,6 +475,7 @@ class InMemoryRepository:
                 id=rec.id,
                 query=rec.query,
                 status=rec.status,
+                owner_id=rec.owner_id,
                 total_tokens=rec.total_tokens,
                 elapsed=rec.elapsed,
                 tags=list(rec.tags),
@@ -394,6 +491,7 @@ class InMemoryRepository:
             id=rec.id,
             query=rec.query,
             status=rec.status,
+            owner_id=rec.owner_id,
             interpretation=rec.interpretation,
             sub_questions=list(rec.sub_questions),
             results=list(rec.results),

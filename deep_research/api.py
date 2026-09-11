@@ -21,7 +21,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import sys
 import time
 from collections.abc import AsyncIterator
@@ -34,7 +33,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator
 
@@ -45,8 +44,11 @@ from .agents.intent_router import (
     INTENT_SCRATCH_KEY,
     INTENT_SUB_QUESTION_KEY,
 )
+from .artifact_lifecycle import cleanup_artifacts
+from .blocking import run_blocking
 from .catalog.repository import CatalogRepository
 from .config import Settings
+from .config_service import ConfigConflictError, ConfigStore, effective_settings
 from .execution import (
     ExecutionContext,
     RunExecutor,
@@ -64,6 +66,7 @@ from .http.admission import (
     _acquire_run_slot,
     _run_admission,
 )
+from .http.auth import principal_for, require_api_key
 from .http.sse import (
     _SSE_EVENT_BATCH_SIZE,  # noqa: F401  经 api 命名空间再导出（既有测试依赖）
     _stream_run_sse,
@@ -79,7 +82,6 @@ from .models import RunManifest
 from .observability import Event, EventHub, Tracer
 from .orchestration import WorkflowRun
 from .orchestrator import (
-    RUN_SETTINGS_CHECKPOINT_KEY,
     DeepResearchAgent,
     create_initial_execution,
     snapshot_catalog_for_execution,
@@ -90,11 +92,13 @@ from .persistence.repository import (
     IdempotencyConflictError,
     ResearchRepository,
     RunDetail,
+    RunQueueFullError,
     RunSummary,
     TagCount,
 )
 from .persistence.sql_repository import SqlRepository
 from .planner_runtime import coerce_execution_plan
+from .provider_limits import coordinator_for, current_coordinator, provider_scope
 from .report import (
     ChartDataError,
     CsvTableNotFoundError,
@@ -110,6 +114,8 @@ from .report import (
     render_pdf,
     render_xlsx,
 )
+from .report.service import ReportNotFoundError, ReportService
+from .report.service import requires_corroboration as _run_requires_corroboration
 from .reproducibility import RUN_MANIFEST_CHECKPOINT_KEY, quality_metrics
 from .security import ProviderURLPolicyError, validate_provider_url_resolved
 from .tools.base import SearchTool
@@ -257,6 +263,7 @@ class BatchDeleteRequest(BaseModel):
 class BatchDeleteResponse(BaseModel):
     deleted: int
     skipped: int  # 进行中、跳过删除的数量
+    deleted_ids: list[str] = Field(default_factory=list)
 
 
 class ConfigView(BaseModel):
@@ -283,6 +290,8 @@ class ConfigView(BaseModel):
     require_corroboration: bool
     request_timeout: float
     max_run_seconds: int
+    access: dict[str, str] = Field(default_factory=dict)
+    version: int = 0
 
 
 class ConfigUpdate(BaseModel):
@@ -308,6 +317,7 @@ class ConfigUpdate(BaseModel):
     require_corroboration: bool | None = None
     request_timeout: float | None = Field(default=None, gt=0, le=600)
     max_run_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    version: int | None = Field(default=None, ge=0)
 
     @field_validator(
         "llm_model",
@@ -527,32 +537,6 @@ async def _validate_runtime_provider_url(settings: Settings) -> None:
     await validate_runtime_provider_url(settings)
 
 
-async def require_api_key(
-    request: Request,
-    x_api_key: str | None = Header(default=None),
-    authorization: str | None = Header(default=None),
-) -> None:
-    """API 认证：设置了 API_KEY 环境变量即启用，所有 /api 端点必须携带。
-
-    支持标准 Authorization: Bearer 或兼容性的 X-API-Key 请求头。
-    查询参数不会被接受，避免密钥进入 URL、代理日志和浏览器历史。
-    未配置 API_KEY 时跳过（本地开发零摩擦），但生产部署应当配置。
-    """
-    expected: str = request.app.state.settings.api_key
-    if not expected:
-        return
-    bearer = ""
-    if authorization:
-        scheme, _, credential = authorization.partition(" ")
-        if scheme.casefold() == "bearer":
-            bearer = credential.strip()
-    candidates = [candidate for candidate in (bearer, x_api_key or "") if candidate]
-    if not any(
-        secrets.compare_digest(candidate.encode(), expected.encode()) for candidate in candidates
-    ):
-        raise HTTPException(status_code=401, detail="invalid or missing API key")
-
-
 class _RateLimiter:
     """每 IP 滑动窗口限流（进程内）。只挡「触发 LLM 调用」的昂贵端点。"""
 
@@ -635,14 +619,25 @@ def _route_label(request: Request) -> str:
     return "__unmatched__"
 
 
-def _check_rate_limit(request: Request) -> None:
-    if not _run_limiter.check(_rate_limit_key(request)):
+async def _check_rate_limit(request: Request) -> None:
+    if not await _shared_rate_limit(request, "create", _run_limiter):
         raise HTTPException(status_code=429, detail="too many requests, slow down")
 
 
-def _check_assess_rate_limit(request: Request) -> None:
-    if not _assess_limiter.check(_rate_limit_key(request)):
+async def _check_assess_rate_limit(request: Request) -> None:
+    if not await _shared_rate_limit(request, "assess", _assess_limiter):
         raise HTTPException(status_code=429, detail="too many requests, slow down")
+
+
+async def _shared_rate_limit(request: Request, action: str, limiter: _RateLimiter) -> bool:
+    coordinator = current_coordinator.get()
+    principal = principal_for(request)
+    identity = principal.id if principal.id != "local" else _rate_limit_key(request)
+    if coordinator is None:
+        return limiter.check(identity)
+    return await coordinator.admit_request(
+        f"{action}:{identity}", limit=limiter.max_calls, window=limiter.window
+    )
 
 
 async def _recover_orphaned_runs(app: FastAPI, settings: Settings) -> None:
@@ -804,6 +799,7 @@ async def _recovery_loop(app: FastAPI) -> None:
         await asyncio.sleep(_RECOVERY_INTERVAL_SECONDS)
         try:
             await _recover_orphaned_runs(app, app.state.settings)
+            await cleanup_artifacts(app.state.repo, app.state.settings)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -833,6 +829,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.engine = engine
         app.state.repo = SqlRepository(make_sessionmaker(engine))
         app.state.catalog = CatalogRepository(make_sessionmaker(engine))  # 角色广场 catalog 仓储
+        settings = await effective_settings(settings, app.state.catalog)
+        if settings.runtime_config_version == 0 and isinstance(
+            getattr(app.state.catalog, "config_store", None), ConfigStore
+        ):
+            try:
+                settings = await app.state.catalog.config_store.save(settings, expected_version=0)
+            except ConfigConflictError:
+                settings = await effective_settings(settings, app.state.catalog)
+        await _validate_runtime_provider_url(settings)
+        app.state.settings = settings
         encrypt_legacy = getattr(app.state.catalog, "encrypt_legacy_secrets", None)
         if encrypt_legacy is not None:
             migrated = await encrypt_legacy()
@@ -905,7 +911,14 @@ async def security_headers(request: Request, call_next):  # type: ignore[no-unty
     response = None
     status = 500
     try:
-        response = await call_next(request)
+        settings = getattr(request.app.state, "settings", None)
+        coordinator = (
+            coordinator_for(getattr(request.app.state, "repo", None), settings)
+            if settings
+            else None
+        )
+        with provider_scope(coordinator):
+            response = await call_next(request)
         status = response.status_code
         return response
     except Exception:
@@ -924,8 +937,7 @@ async def security_headers(request: Request, call_next):  # type: ignore[no-unty
             "status": str(status),
         }
         metrics.inc("deep_research_http_requests_total", labels)
-        metrics.inc("deep_research_http_request_duration_seconds_sum", labels, elapsed)
-        metrics.inc("deep_research_http_request_duration_seconds_count", labels)
+        metrics.observe("deep_research_http_request_duration_seconds", elapsed, labels)
         logger.info(
             "http_request request_id=%s method=%s path=%s status=%s duration_ms=%.1f",
             request_id,
@@ -996,7 +1008,12 @@ async def _enqueue_run(
             idempotency_key=idempotency_key,
             execution=execution,
             claimable=True,
+            owner_id=principal_for(request).id,
+            max_inflight=request.app.state.settings.max_active_runs
+            + request.app.state.settings.max_queued_runs,
         )
+    except RunQueueFullError as exc:
+        raise HTTPException(503, str(exc), headers={"Retry-After": "5"}) from exc
     except IdempotencyConflictError as exc:
         raise HTTPException(
             status_code=409,
@@ -1228,12 +1245,18 @@ async def readyz(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=503, detail="database is unavailable") from exc
     if not ready:
         raise HTTPException(status_code=503, detail="database is unavailable")
+    if _worker_mode(request.app):
+        status = await repo.service_status()
+        if not status["workers"]:
+            raise HTTPException(503, "no healthy research worker")
     return {"status": "ready"}
 
 
 @app.get("/metrics", dependencies=[Depends(require_api_key)])
-async def metrics_endpoint() -> PlainTextResponse:
+async def metrics_endpoint(request: Request) -> PlainTextResponse:
     """Prometheus text exposition for internal service monitoring."""
+    for name, value in (await request.app.state.repo.service_status()).items():
+        metrics.set_gauge(f"deep_research_service_{name}", float(value))
     return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 
 
@@ -1294,7 +1317,7 @@ async def assess_intent(req: AssessRequest, request: Request) -> AssessResponse:
     成本纪律：第一轮只跑规则 + 本地模型（零 token）。只有进入第二轮才让 LLM
     生成贴合具体提问的候选项——能走到第二轮说明情况确实复杂，值得花这次钱。
     """
-    _check_assess_rate_limit(request)
+    await _check_assess_rate_limit(request)
     settings = request.app.state.settings
     if not settings.intent_enabled:
         # 意图识别关掉了就不该由它拦路：直接放行，让用户照常提问。
@@ -1395,8 +1418,21 @@ async def create_run(
     response: Response,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=128),
 ) -> CreateRunResponse:
-    _check_rate_limit(request)
     repo: ResearchRepository = request.app.state.repo
+    normalized_key = idempotency_key.strip() if isinstance(idempotency_key, str) else None
+    normalized_key = normalized_key or None
+    principal = principal_for(request)
+    if normalized_key and not principal.can_manage:
+        normalized_key = hashlib.sha256(f"{principal.id}:{normalized_key}".encode()).hexdigest()
+    if normalized_key:
+        try:
+            existing_id = await repo.find_run_once(normalized_key, _run_request_hash(req))
+        except IdempotencyConflictError as exc:
+            raise HTTPException(409, {"code": "idempotency_conflict", "message": str(exc)}) from exc
+        if existing_id:
+            response.headers["Idempotency-Replayed"] = "true"
+            return CreateRunResponse(run_id=existing_id)
+    await _check_rate_limit(request)
     settings = _settings_for(request.app.state.settings, req.params)
     supplied_plan = None
     if req.execution_plan is not None:
@@ -1580,13 +1616,19 @@ async def create_run(
                         "message": "配置检查未通过：" + "；".join(preflight.errors),
                     },
                 )
-    normalized_key = idempotency_key.strip() if idempotency_key else None
-    normalized_key = normalized_key or None
     if _worker_mode(request.app):
         # worker 模式：本进程只入队。不占准入名额、不建 EventHub、不派发 task——
         # 执行、租约与事件全部归领取到该 run 的 worker。
         return await _enqueue_run(request, repo, req, execution, normalized_key, response)
-    admission = await _acquire_run_slot(request.app)
+    try:
+        admission = await _acquire_run_slot(request.app)
+    except HTTPException:
+        if normalized_key:
+            existing_id = await repo.find_run_once(normalized_key, _run_request_hash(req))
+            if existing_id:
+                response.headers["Idempotency-Replayed"] = "true"
+                return CreateRunResponse(run_id=existing_id)
+        raise
     try:
         run_id, created = await repo.create_run_once(
             req.query,
@@ -1594,7 +1636,12 @@ async def create_run(
             idempotency_key=normalized_key,
             execution=execution,
             lease_owner=lease_owner,
+            owner_id=principal.id,
+            max_inflight=settings.max_active_runs + settings.max_queued_runs,
         )
+    except RunQueueFullError as exc:
+        admission.release()
+        raise HTTPException(503, str(exc), headers={"Retry-After": "5"}) from exc
     except IdempotencyConflictError as exc:
         admission.release()
         raise HTTPException(
@@ -1695,10 +1742,16 @@ async def resume_run(run_id: str, request: Request) -> CreateRunResponse:
         raise HTTPException(status_code=409, detail="terminal or cancelling run cannot be resumed")
     if _worker_mode(request.app):
         # worker 模式：交还队列而不是自己执行。不取租约——取了 worker 反而领不走。
-        if detail.status == "error":
-            requeued = await request.app.state.repo.requeue_failed_run(run_id)
-        else:
-            requeued = await request.app.state.repo.enqueue_run(run_id)
+        try:
+            if detail.status == "error":
+                settings = request.app.state.settings
+                requeued = await request.app.state.repo.requeue_failed_run(
+                    run_id, max_inflight=settings.max_active_runs + settings.max_queued_runs
+                )
+            else:
+                requeued = await request.app.state.repo.enqueue_run(run_id)
+        except RunQueueFullError as exc:
+            raise HTTPException(503, str(exc), headers={"Retry-After": "5"}) from exc
         if not requeued:
             raise HTTPException(status_code=409, detail="run is no longer resumable")
         return CreateRunResponse(run_id=run_id)
@@ -1854,7 +1907,19 @@ async def list_roles(request: Request) -> list[dict[str, object]]:
 async def get_config(request: Request) -> ConfigView:
     """当前全局配置（密钥脱敏）。"""
     try:
-        return _config_view(request.app.state.settings)
+        view = _config_view(request.app.state.settings)
+        view.version = request.app.state.settings.runtime_config_version
+        principal = principal_for(request)
+        view.access = {"id": principal.id, "role": principal.role}
+        if not principal.can_manage:
+            for name in (
+                "llm_api_key_hint",
+                "tavily_api_key_hint",
+                "serper_api_key_hint",
+                "xai_api_key_hint",
+            ):
+                setattr(view, name, "")
+        return view
     except ValidationError:
         # 自愈：内存里的 Settings 被历史污染的 overrides（如 llm_model=null）弄脏时，
         # 以「环境变量 + 清洗后覆盖」重建并回写文件，端点恢复可用而非永久 500
@@ -1868,6 +1933,13 @@ async def get_config(request: Request) -> ConfigView:
         return _config_view(settings)
 
 
+@app.get("/api/capabilities", dependencies=[Depends(require_api_key)])
+async def get_capabilities() -> dict[str, dict[str, bool]]:
+    from .report.capabilities import export_capabilities
+
+    return {"exports": await run_blocking(export_capabilities)}
+
+
 @app.put("/api/config", dependencies=[Depends(require_api_key)])
 async def update_config(req: ConfigUpdate, request: Request) -> ConfigView:
     # Serialize read/validate/write/switch as one transaction. Without this,
@@ -1879,6 +1951,39 @@ async def update_config(req: ConfigUpdate, request: Request) -> ConfigView:
 
 async def _update_config_unlocked(req: ConfigUpdate, request: Request) -> ConfigView:
     """更新并持久化全局配置；对后续创建的 run 生效。"""
+    store = getattr(getattr(request.app.state, "catalog", None), "config_store", None)
+    if isinstance(store, ConfigStore):
+        current = await store.load(request.app.state.settings)
+        changes = req.model_dump(exclude_unset=True, exclude={"version"})
+        changes = {
+            name: value
+            for name, value in changes.items()
+            if name not in runtime_config.SECRET_FIELDS or value
+        }
+        if "llm_base_url" in changes:
+            changes["llm_base_url"] = changes["llm_base_url"] or None
+        try:
+            updated = runtime_config.apply_overrides(current, changes)
+            await _validate_runtime_provider_url(updated)
+            if updated.search_profile_ids:
+                from .catalog.search import validate_search_bindings
+
+                await validate_search_bindings(
+                    request.app.state.catalog, updated, list(updated.search_profile_ids)
+                )
+            updated = await store.save(
+                updated,
+                expected_version=req.version
+                if req.version is not None
+                else current.runtime_config_version,
+                secrets_changed=bool(set(changes) & runtime_config.SECRET_FIELDS),
+            )
+        except ConfigConflictError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(422, f"配置非法：{exc}") from exc
+        request.app.state.settings = updated
+        return await get_config(request)
     overrides = _sanitized_overrides(runtime_config.load_overrides())
     # Runtime-entered credentials are intentionally absent from the JSON
     # file. Preserve them across later non-secret settings updates.
@@ -1886,7 +1991,7 @@ async def _update_config_unlocked(req: ConfigUpdate, request: Request) -> Config
         current_secret = getattr(request.app.state.settings, secret_field, "")
         if current_secret:
             overrides[secret_field] = current_secret
-    payload = req.model_dump(exclude_unset=True)
+    payload = req.model_dump(exclude_unset=True, exclude={"version"})
     for key, value in payload.items():
         if key in runtime_config.SECRET_FIELDS:
             if value:  # 空＝保持不变（不被脱敏表单覆盖清空）
@@ -1940,19 +2045,30 @@ async def list_runs(
     tag: str | None = Query(None, max_length=64),
 ) -> list[RunSummary]:
     repo: ResearchRepository = request.app.state.repo
-    return await repo.list_runs(limit=limit, offset=offset, status=status, q=q, tag=tag)
+    principal = principal_for(request)
+    return await repo.list_runs(
+        limit=limit,
+        offset=offset,
+        status=status,
+        q=q,
+        tag=tag,
+        owner_id=None if principal.can_manage else principal.id,
+    )
 
 
 @app.get("/api/tags", dependencies=[Depends(require_api_key)])
 async def list_tags(request: Request) -> list[TagCount]:
     repo: ResearchRepository = request.app.state.repo
-    return await repo.list_tags()
+    principal = principal_for(request)
+    return await repo.list_tags(owner_id=None if principal.can_manage else principal.id)
 
 
 async def _delete_run_if_idle(repo: ResearchRepository, run_id: str) -> str:
     detail = await repo.get_run(run_id)
     if detail is None:
         return "missing"
+    if detail.status in RUN_ACTIVE_STATUSES:
+        return "leased"
     if detail.orchestration is None:
         if detail.status in RUN_ACTIVE_STATUSES:
             # Legacy workers created the workflow row after the research row,
@@ -1984,6 +2100,7 @@ async def delete_run(run_id: str, request: Request) -> Response:
         raise HTTPException(status_code=409, detail="运行进行中，无法删除")
     if outcome == "missing":
         raise HTTPException(status_code=404, detail="run not found")
+    await cleanup_artifacts(app_.state.repo, app_.state.settings)
     return Response(status_code=204)
 
 
@@ -1991,7 +2108,12 @@ async def delete_run(run_id: str, request: Request) -> Response:
 async def batch_delete(req: BatchDeleteRequest, request: Request) -> BatchDeleteResponse:
     app_ = request.app
     deleted = skipped = 0
-    for run_id in req.ids:
+    deleted_ids: list[str] = []
+    principal = principal_for(request)
+    for run_id in dict.fromkeys(req.ids):
+        if not principal.can_manage and await app_.state.repo.get_run_owner(run_id) != principal.id:
+            skipped += 1
+            continue
         if app_.state.live.get(run_id) is not None:
             skipped += 1  # 进行中：跳过而非报错，批量操作尽量推进
             continue
@@ -2000,7 +2122,11 @@ async def batch_delete(req: BatchDeleteRequest, request: Request) -> BatchDelete
             skipped += 1
         elif outcome == "deleted":
             deleted += 1
-    return BatchDeleteResponse(deleted=deleted, skipped=skipped)
+            deleted_ids.append(run_id)
+        else:
+            skipped += 1
+    await cleanup_artifacts(app_.state.repo, app_.state.settings)
+    return BatchDeleteResponse(deleted=deleted, skipped=skipped, deleted_ids=deleted_ids)
 
 
 @app.put("/api/runs/{run_id}/tags", dependencies=[Depends(require_api_key)])
@@ -2035,29 +2161,16 @@ async def _enrich_run_detail(repo: ResearchRepository, detail: RunDetail) -> Run
     return detail
 
 
-def _run_requires_corroboration(detail: RunDetail) -> bool:
-    """Read the persisted per-run corroboration gate for report consumers.
-
-    Export endpoints may be called without first going through
-    ``_enrich_run_detail``.  Prefer the parsed manifest, then fall back to
-    the original settings checkpoint for older runs whose manifest was not
-    written yet.  The value is a serialized boolean; malformed values are
-    treated as disabled rather than relying on truthiness (``"false"``).
-    """
-    if detail.manifest is not None and "require_corroboration" in detail.manifest.settings:
-        return detail.manifest.settings.get("require_corroboration") is True
-    execution = detail.orchestration
-    checkpoint = execution.checkpoint if execution is not None else None
-    scratch = checkpoint.get("scratch") if isinstance(checkpoint, dict) else None
-    if not isinstance(scratch, dict):
-        return False
-    raw_manifest = scratch.get(RUN_MANIFEST_CHECKPOINT_KEY)
-    if isinstance(raw_manifest, dict):
-        settings = raw_manifest.get("settings")
-        if isinstance(settings, dict) and settings.get("require_corroboration") is True:
-            return True
-    raw_settings = scratch.get(RUN_SETTINGS_CHECKPOINT_KEY)
-    return isinstance(raw_settings, dict) and raw_settings.get("require_corroboration") is True
+async def _load_report_document(
+    request: Request, run_id: str, *, include_hsi_tables: bool
+) -> ReportDocument:
+    service = ReportService(
+        request.app.state.repo, assembler=assemble_document, event_limit=_DOCUMENT_EVENT_LIMIT
+    )
+    try:
+        return await service.document(run_id, include_hsi_tables=include_hsi_tables)
+    except ReportNotFoundError as exc:
+        raise HTTPException(404, "run not found") from exc
 
 
 @app.get("/api/runs/{run_id}", dependencies=[Depends(require_api_key)])
@@ -2081,21 +2194,7 @@ async def get_run_document(
     并列而不是取代后者——``RunDetail`` 仍按原样返回 ``report.citations`` 等字段，
     既有前端与质量指标链路不受影响。
     """
-    repo: ResearchRepository = request.app.state.repo
-    detail = await repo.get_run(run_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="run not found")
-    # 拦截数来自 source_policy 审计事件。这里取完整事件流而不是详情里被截断的那份：
-    # 截断会让长运行的拦截数偏小，而偏小的安全指标比缺失更糟。
-    events = await repo.get_events(run_id, limit=_DOCUMENT_EVENT_LIMIT)
-    return assemble_document(
-        detail.report,
-        detail.results,
-        events=events,
-        query=detail.query,
-        require_corroboration=_run_requires_corroboration(detail),
-        include_hsi_tables=include_hsi_tables,
-    )
+    return await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
 
 
 @app.get("/api/runs/{run_id}/document.md", dependencies=[Depends(require_api_key)])
@@ -2113,21 +2212,9 @@ async def get_run_document_markdown(
     assembled document the CSV/XLSX/PDF exports use, so every format makes the
     same claims about the same run.
     """
-    repo: ResearchRepository = request.app.state.repo
-    detail = await repo.get_run(run_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="run not found")
-    events = await repo.get_events(run_id, limit=_DOCUMENT_EVENT_LIMIT)
-    document = assemble_document(
-        detail.report,
-        detail.results,
-        events=events,
-        query=detail.query,
-        require_corroboration=_run_requires_corroboration(detail),
-        include_hsi_tables=include_hsi_tables,
-    )
+    document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     try:
-        markdown_text = render_markdown(document)
+        markdown_text = await run_blocking(render_markdown, document)
     except ChartDataError as exc:
         # A chart whose source table is missing means assembly produced an
         # inconsistent document.  Surface it rather than shipping a file with
@@ -2154,22 +2241,9 @@ async def get_run_document_csv(
     when more than one ``TableBlock`` is present.  A run without a table (for
     example, while it is still streaming) returns an empty CSV body.
     """
-    repo: ResearchRepository = request.app.state.repo
-    detail = await repo.get_run(run_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="run not found")
-
-    events = await repo.get_events(run_id, limit=_DOCUMENT_EVENT_LIMIT)
-    document = assemble_document(
-        detail.report,
-        detail.results,
-        events=events,
-        query=detail.query,
-        require_corroboration=_run_requires_corroboration(detail),
-        include_hsi_tables=include_hsi_tables,
-    )
+    document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     try:
-        csv_text = render_csv(document, table_id=table_id)
+        csv_text = await run_blocking(render_csv, document, table_id=table_id)
     except CsvTableNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except CsvTableSelectionError as exc:
@@ -2199,22 +2273,9 @@ async def get_run_document_xlsx(
     deployments receive a clear 501 response only when this endpoint is
     requested.
     """
-    repo: ResearchRepository = request.app.state.repo
-    detail = await repo.get_run(run_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="run not found")
-
-    events = await repo.get_events(run_id, limit=_DOCUMENT_EVENT_LIMIT)
-    document = assemble_document(
-        detail.report,
-        detail.results,
-        events=events,
-        query=detail.query,
-        require_corroboration=_run_requires_corroboration(detail),
-        include_hsi_tables=include_hsi_tables,
-    )
+    document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     try:
-        xlsx_bytes = render_xlsx(document, table_id=table_id)
+        xlsx_bytes = await run_blocking(render_xlsx, document, table_id=table_id)
     except XlsxDependencyError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     except XlsxTableNotFoundError as exc:
@@ -2237,21 +2298,9 @@ async def get_run_document_pdf(
     include_hsi_tables: bool = Query(default=False),
 ) -> Response:
     """Download a server-rendered PDF when the optional PDF extra is installed."""
-    repo: ResearchRepository = request.app.state.repo
-    detail = await repo.get_run(run_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="run not found")
-    events = await repo.get_events(run_id, limit=_DOCUMENT_EVENT_LIMIT)
-    document = assemble_document(
-        detail.report,
-        detail.results,
-        events=events,
-        query=detail.query,
-        require_corroboration=_run_requires_corroboration(detail),
-        include_hsi_tables=include_hsi_tables,
-    )
+    document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     try:
-        pdf_bytes = render_pdf(document)
+        pdf_bytes = await run_blocking(render_pdf, document)
     except PdfExportUnavailable as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
@@ -2328,6 +2377,7 @@ async def research(
 @app.api_route(
     "/api/{full_path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    include_in_schema=False,
     dependencies=[Depends(require_api_key)],
 )
 async def unknown_api_route(full_path: str) -> None:
@@ -2335,8 +2385,8 @@ async def unknown_api_route(full_path: str) -> None:
     raise HTTPException(status_code=404, detail="not found")
 
 
-@app.get("/{full_path:path}", response_class=HTMLResponse)
-async def spa_fallback(full_path: str) -> str:
+@app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
+async def spa_fallback(full_path: str) -> Response:
     """SPA history 路由回退：非 /api 路径一律返回前端入口，支持深链接刷新。
 
     具体路由（/、/healthz、/api/*）按声明顺序优先匹配；此 catch-all 只接管
@@ -2344,4 +2394,27 @@ async def spa_fallback(full_path: str) -> str:
     """
     if full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="not found")
-    return await index()
+    root = _FRONTEND_DIST.parent.resolve()
+    candidate = (root / full_path).resolve()
+    # Serve only public build assets. Never let SPA fallback disguise a missing asset as HTML.
+    if not candidate.is_relative_to(root) or any(
+        part.startswith(".") for part in Path(full_path).parts
+    ):
+        raise HTTPException(404, "not found")
+    if candidate.suffix.lower() in {
+        ".svg",
+        ".png",
+        ".ico",
+        ".webp",
+        ".jpg",
+        ".jpeg",
+        ".woff2",
+        ".txt",
+        ".json",
+    }:
+        if candidate.is_file():
+            return FileResponse(candidate)
+        raise HTTPException(404, "asset not found")
+    if candidate.suffix and not full_path.startswith("runs/"):
+        raise HTTPException(404, "asset not found")
+    return HTMLResponse(await index())

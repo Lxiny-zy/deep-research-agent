@@ -13,6 +13,7 @@ from __future__ import annotations
 import httpx
 
 from ..models import Source
+from ..provider_limits import provider_request
 from .base import SearchTool
 
 _ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
@@ -21,6 +22,7 @@ _MAX_RESULTS = 20
 
 class BraveSearch(SearchTool):
     def __init__(self, api_key: str, *, timeout: float = 30.0) -> None:
+        self._api_key = api_key
         if not api_key:
             raise ValueError("BraveSearch 需要 API key")
         self._client = httpx.AsyncClient(
@@ -39,11 +41,12 @@ class BraveSearch(SearchTool):
         if max_results <= 0:
             return []
         requested = min(max_results, _MAX_RESULTS)
-        response = await self._client.get(
-            _ENDPOINT,
-            params={"q": query, "count": requested},
-        )
-        response.raise_for_status()
+        async with provider_request(_ENDPOINT, self._api_key):
+            response = await self._client.get(
+                _ENDPOINT,
+                params={"q": query, "count": requested},
+            )
+            response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
             raise RuntimeError("Brave Search returned a non-object JSON payload")

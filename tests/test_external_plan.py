@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from deep_research.api import CreateRunRequest
+from deep_research.artifacts import ArtifactStore
 from deep_research.config import Settings
 from deep_research.orchestration.runtime import OrchestrationRuntime
 from deep_research.orchestrator import DeepResearchAgent, create_initial_execution
@@ -185,10 +186,13 @@ async def test_external_plan_runs_each_prompt_and_writes_declared_outputs(tmp_pa
 
     assert report.markdown
     assert llm.complete_calls == 2
-    assert (tmp_path / "work/external-run/explore/evidence.md").is_file()
-    assert (tmp_path / "output/external-run/final/report.md").is_file()
+    assert agent._artifact_store is not None
+    root = agent._artifact_store.workspace_root
+    assert root.parent == tmp_path / "runs"
+    assert (root / "work/external-run/explore/evidence.md").is_file()
+    assert (root / "output/external-run/final/report.md").is_file()
     persisted = json.loads(
-        (tmp_path / ".framework/plans/external-run.json").read_text(encoding="utf-8")
+        (root / ".framework/plans/external-run.json").read_text(encoding="utf-8")
     )
     assert persisted["metadata"]["source"] == "external"
     assert [step["status"] for step in persisted["steps"]] == ["done", "done"]
@@ -218,6 +222,7 @@ async def test_operation_only_terminal_uses_step_outputs_and_writes_report(tmp_p
         search_tool=FakeSearch(),
         command_runner=runner,
         execution_plan=plan,
+        artifact_store=ArtifactStore(tmp_path),
     )
     try:
         report = await agent.run("ignored")
@@ -257,6 +262,7 @@ async def test_operation_rejects_cross_run_artifact_slug(tmp_path: Path) -> None
         search_tool=FakeSearch(),
         command_runner=runner,
         execution_plan=plan,
+        artifact_store=ArtifactStore(tmp_path),
     )
     try:
         with pytest.raises(RuntimeError):
@@ -293,6 +299,7 @@ async def test_operation_failure_is_failed_not_partial(tmp_path: Path) -> None:
         search_tool=FakeSearch(),
         command_runner=runner,
         execution_plan=plan,
+        artifact_store=ArtifactStore(tmp_path),
     )
     try:
         with pytest.raises(RuntimeError):
@@ -325,6 +332,7 @@ async def test_generic_step_gap_is_partial_when_later_report_exists(tmp_path: Pa
         llm=llm,
         search_tool=FakeSearch(),
         execution_plan=plan,
+        artifact_store=ArtifactStore(tmp_path),
     )
     try:
         report = await agent.run("ignored")

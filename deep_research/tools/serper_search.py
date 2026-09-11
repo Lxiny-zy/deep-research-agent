@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 
 from ..models import Source
+from ..provider_limits import provider_request
 from .base import SearchTool
 
 _ENDPOINT = "https://google.serper.dev/search"
@@ -15,6 +16,7 @@ class SerperSearch(SearchTool):
     """Search Google through the Serper JSON API."""
 
     def __init__(self, api_key: str, *, timeout: float = 30.0) -> None:
+        self._api_key = api_key
         if not api_key.strip():
             raise ValueError("SerperSearch requires an API key")
         self._client = httpx.AsyncClient(
@@ -30,11 +32,12 @@ class SerperSearch(SearchTool):
         if max_results <= 0:
             return []
         requested = min(max_results, _MAX_RESULTS)
-        response = await self._client.post(
-            _ENDPOINT,
-            json={"q": query, "num": requested},
-        )
-        response.raise_for_status()
+        async with provider_request(_ENDPOINT, self._api_key):
+            response = await self._client.post(
+                _ENDPOINT,
+                json={"q": query, "num": requested},
+            )
+            response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
             raise RuntimeError("Serper returned a non-object JSON payload")

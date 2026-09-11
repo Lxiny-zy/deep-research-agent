@@ -63,7 +63,15 @@ export default function OnboardingTour({
           <h2 id="welcome-tour-title">{steps[step].title}</h2>
           <p>{steps[step].text}</p>
         </div>
-        <div className="welcome-tour-progress" aria-label={`引导进度 ${step + 1} / 3`}>
+        <div
+          className="welcome-tour-progress"
+          role="progressbar"
+          aria-label="引导进度"
+          aria-valuemin={1}
+          aria-valuemax={steps.length}
+          aria-valuenow={step + 1}
+          aria-valuetext={`第 ${step + 1} 步，共 ${steps.length} 步`}
+        >
           {steps.map((_, index) => (
             <i key={index} className={index <= step ? 'active' : ''} />
           ))}

@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -27,6 +28,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -39,6 +41,57 @@ class Base(DeclarativeBase):
     pass
 
 
+class CoordinationRow(Base):
+    __tablename__ = "coordination"
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class ProviderStateRow(Base):
+    __tablename__ = "provider_state"
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    retry_at: Mapped[float] = mapped_column(Float, default=0)
+    window_start: Mapped[float] = mapped_column(Float, default=0)
+    window_count: Mapped[int] = mapped_column(Integer, default=0)
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    limited: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ProviderLeaseRow(Base):
+    __tablename__ = "provider_lease"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    expires_at: Mapped[float] = mapped_column(Float)
+
+
+class RequestWindowRow(Base):
+    __tablename__ = "request_window"
+    identity: Mapped[str] = mapped_column(String(64), primary_key=True)
+    starts_at: Mapped[float] = mapped_column(Float)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class RuntimeConfigRow(Base):
+    __tablename__ = "runtime_config_revision"
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    values: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WorkerHeartbeatRow(Base):
+    __tablename__ = "worker_heartbeat"
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    active: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ArtifactCleanupRow(Base):
+    __tablename__ = "artifact_cleanup"
+    # Independent of research_run so deletion and the cleanup request commit together.
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ResearchRun(Base):
     __tablename__ = "research_run"
     __table_args__ = (
@@ -48,6 +101,7 @@ class ResearchRun(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     query: Mapped[str] = mapped_column(Text)
+    owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/running/done/error
     # 队列语义（``execution_mode=worker``）：
     #   status=pending 且 claimable_at 非空  → 待领取，**不是孤儿**
@@ -222,6 +276,8 @@ class EventRow(Base):
     message: Mapped[str] = mapped_column(Text, default="")
     elapsed: Mapped[float] = mapped_column(Float, default=0.0)
     data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    tokens_estimated: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     run: Mapped[ResearchRun] = relationship(back_populates="events")
 
@@ -298,6 +354,15 @@ class ModelProfileRow(Base):
     """一个可复用的 LLM 模型档案：不同任务可绑定不同档案（不同 base_url/key/model）。"""
 
     __tablename__ = "model_profile"
+    __table_args__ = (
+        Index(
+            "uq_model_profile_default",
+            "is_default",
+            unique=True,
+            sqlite_where=text("is_default = 1"),
+            postgresql_where=text("is_default = 1"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(64), unique=True)  # 展示名，唯一

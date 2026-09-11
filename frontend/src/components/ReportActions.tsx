@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { downloadRunDocument, type RunDocumentFormat } from '../api/client'
+import { downloadRunDocument, getCapabilities, type RunDocumentFormat } from '../api/client'
 import { downloadBlob, downloadText, slugify } from '../lib/download'
 import { AppIcon } from './AppIcon'
 
@@ -24,6 +24,7 @@ export default function ReportActions({
   documentReady = false,
   previewing = false,
   onTogglePreview,
+  capabilities,
 }: {
   markdown: string
   query: string
@@ -34,11 +35,26 @@ export default function ReportActions({
   documentReady?: boolean
   previewing?: boolean
   onTogglePreview?: () => void
+  capabilities?: { pdf: boolean; xlsx: boolean }
 }) {
   const [copied, setCopied] = useState(false)
   const [selectedTableId, setSelectedTableId] = useState('')
   const [exporting, setExporting] = useState<RunDocumentFormat | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [available, setAvailable] = useState(capabilities)
+  useEffect(() => {
+    if (capabilities) {
+      setAvailable(capabilities)
+      return
+    }
+    const controller = new AbortController()
+    getCapabilities(controller.signal)
+      .then((result) => setAvailable(result.exports))
+      .catch(() => {
+        if (!controller.signal.aborted) setAvailable({ pdf: false, xlsx: false })
+      })
+    return () => controller.abort()
+  }, [capabilities])
   const disabled = !markdown
   // 导出依赖服务端已装配好的文档。只判 runId 的话，运行仍在流式阶段时按钮就是
   // 可点的，而那时导出的 CSV 是空表、PDF 是空正文——用户拿到一个"成功"的空文件，
@@ -185,9 +201,9 @@ export default function ReportActions({
         type="button"
         className="btn ghost sm"
         onClick={() => void exportDocument('xlsx')}
-        disabled={tableExportDisabled}
+        disabled={tableExportDisabled || !available?.xlsx}
         aria-busy={exporting === 'xlsx'}
-        title={tableExportHint}
+        title={!available?.xlsx ? '此服务暂不支持 XLSX 导出' : tableExportHint}
       >
         <AppIcon name={exporting === 'xlsx' ? 'loader' : 'download'} size={14} aria-hidden="true" />
         {exporting === 'xlsx' ? '导出中…' : '下载 XLSX'}
@@ -196,9 +212,9 @@ export default function ReportActions({
         type="button"
         className="btn ghost sm"
         onClick={() => void exportDocument('pdf')}
-        disabled={exportDisabled}
+        disabled={exportDisabled || !available?.pdf}
         aria-busy={exporting === 'pdf'}
-        title={exportHint}
+        title={!available?.pdf ? '此服务暂不支持 PDF 导出，可使用打印功能' : exportHint}
       >
         <AppIcon name={exporting === 'pdf' ? 'loader' : 'download'} size={14} aria-hidden="true" />
         {exporting === 'pdf' ? '导出中…' : '下载 PDF'}

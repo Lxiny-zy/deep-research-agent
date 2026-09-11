@@ -32,12 +32,16 @@ import type {
   WorkflowInfo,
 } from '../types'
 
-export const checkResourcePreflight = (workflow: string) =>
-  request<ResourcePreflight>(`/api/resource-preflight?workflow=${encodeURIComponent(workflow)}`)
+export const checkResourcePreflight = (workflow: string, signal?: AbortSignal) =>
+  request<ResourcePreflight>(`/api/resource-preflight?workflow=${encodeURIComponent(workflow)}`, {
+    signal,
+  })
 
 export const getSearchResourceImpact = () =>
   request<SearchResourceImpact>('/api/search-resources/impact')
 import { normalizeReportDocument } from '../lib/reportDocument'
+import { withResponse } from './transport'
+import { RequestTimeoutError } from './transport'
 
 export class ApiError extends Error {
   constructor(
@@ -110,7 +114,7 @@ export function getApiKeyStorage(): 'local' | 'session' | 'memory' | 'none' {
   return memoryApiKey ? 'memory' : 'none'
 }
 
-export function setApiKey(key: string, remember = true): 'local' | 'session' | 'memory' {
+export function setApiKey(key: string, remember = false): 'local' | 'session' | 'memory' {
   clearApiKey()
   const value = key.trim()
   if (!value) return 'memory'
@@ -132,8 +136,24 @@ export function setApiKey(key: string, remember = true): 'local' | 'session' | '
 export function clearApiKey(): void {
   memoryApiKey = null
   for (const storage of ['localStorage', 'sessionStorage'] as const) {
+    try { window[storage].removeItem(API_KEY_STORAGE) } catch { /* Storage is optional. */ }
+  }
+  clearWorkspaceState()
+}
+
+export function clearWorkspaceState(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('dr:credentials-cleared'))
+  pendingSubmission = null
+  try {
+    window.sessionStorage.removeItem('dr_pending_run')
+  } catch {
+    /* Storage is optional. */
+  }
+  for (const storage of ['localStorage', 'sessionStorage'] as const) {
     try {
-      window[storage].removeItem(API_KEY_STORAGE)
+      for (const name of Object.keys(window[storage])) {
+        if (/^dr_.*(?:draft|thread|pending_run)/.test(name)) window[storage].removeItem(name)
+      }
     } catch {
       // Storage access can be disabled by browser policy.
     }
@@ -150,68 +170,115 @@ function signalUnauthorized(rejectedKey: string | null): void {
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const key = getApiKey()
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(key ? { Authorization: `Bearer ${key}` } : {}),
-      ...(init?.headers ?? {}),
+  const headers = new Headers(init?.headers)
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  if (key && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${key}`)
+  return withResponse(
+    url,
+    {
+      ...init,
+      headers,
     },
-  })
-  if (!res.ok) {
-    if (res.status === 401) signalUnauthorized(key)
-    let detail = res.statusText
-    try {
-      const body = (await res.json()) as { detail?: unknown }
-      if (body.detail != null) detail = formatDetail(body.detail, res.statusText)
-    } catch {
-      // 错误体非 JSON，沿用 statusText
-    }
-    throw new ApiError(res.status, detail)
-  }
-  return (await res.json()) as T
+    async (res) => {
+      if (!res.ok) {
+        if (res.status === 401) signalUnauthorized(key)
+        let detail = res.statusText || `请求失败（HTTP ${res.status}）`
+        try {
+          const body = (await res.json()) as { detail?: unknown }
+          if (body.detail != null) detail = formatDetail(body.detail, detail)
+        } catch {
+          // 错误体非 JSON，沿用 statusText
+        }
+        throw new ApiError(res.status, detail)
+      }
+      if (res.status === 204) return undefined as T
+      return (await res.json()) as T
+    },
+  )
 }
 
 // 用于 204 No Content（如 DELETE）：仅校验状态，不解析响应体
 async function requestVoid(url: string, init?: RequestInit): Promise<void> {
-  const key = getApiKey()
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      ...(key ? { Authorization: `Bearer ${key}` } : {}),
-      ...(init?.headers ?? {}),
-    },
-  })
-  if (!res.ok) {
-    if (res.status === 401) signalUnauthorized(key)
-    let detail = res.statusText
-    try {
-      const body = (await res.json()) as { detail?: unknown }
-      if (body.detail != null) detail = formatDetail(body.detail, res.statusText)
-    } catch {
-      // 无响应体或非 JSON
-    }
-    throw new ApiError(res.status, detail)
-  }
+  await request<void>(url, init)
 }
 
-export function createRun(body: CreateRunRequest): Promise<CreateRunResponse> {
-  const idempotencyKey =
+interface PendingSubmission {
+  body: string
+  key: string
+  identity?: string
+}
+let pendingSubmission: PendingSubmission | null = null
+
+function submissionFor(body: CreateRunRequest, identity?: string): PendingSubmission {
+  const serialized = JSON.stringify(body)
+  const logicalIdentity = identity ?? serialized
+  try {
+    const saved = JSON.parse(
+      window.sessionStorage.getItem('dr_pending_run') ?? 'null',
+    ) as PendingSubmission | null
+    if (
+      (saved?.identity ?? saved?.body) === logicalIdentity &&
+      typeof saved?.key === 'string' && typeof saved?.body === 'string'
+    )
+      return saved
+  } catch {
+    /* Private browsing can disable storage. */
+  }
+  if (pendingSubmission?.identity === logicalIdentity) return pendingSubmission
+  const key =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  return request<CreateRunResponse>('/api/runs', {
-    method: 'POST',
-    headers: { 'Idempotency-Key': idempotencyKey },
-    body: JSON.stringify(body),
-  })
+  pendingSubmission = { body: serialized, key, identity: logicalIdentity }
+  try {
+    window.sessionStorage.setItem('dr_pending_run', JSON.stringify(pendingSubmission))
+  } catch {
+    /* Retain in memory. */
+  }
+  return pendingSubmission
+}
+
+export async function createRun(
+  body: CreateRunRequest,
+  signal?: AbortSignal,
+  logicalIdentity?: string,
+): Promise<CreateRunResponse> {
+  const submission = submissionFor(body, logicalIdentity)
+  try {
+    const result = await request<CreateRunResponse>('/api/runs', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': submission.key },
+      body: submission.body,
+      signal,
+    })
+    forgetSubmission(submission)
+    return result
+  } catch (error) {
+    // A rejected request can be edited. An uncertain outcome must reuse its original body/key.
+    if (error instanceof ApiError && [400, 401, 403, 404, 409, 413, 422].includes(error.status))
+      forgetSubmission(submission)
+    throw error
+  }
+}
+
+function forgetSubmission(submission: PendingSubmission): void {
+  if (pendingSubmission?.key === submission.key) pendingSubmission = null
+  try {
+    const saved = JSON.parse(
+      window.sessionStorage.getItem('dr_pending_run') ?? 'null',
+    ) as PendingSubmission | null
+    if (saved?.key === submission.key) window.sessionStorage.removeItem('dr_pending_run')
+  } catch {
+    /* Storage is optional. */
+  }
 }
 
 /** 建 run 之前判断信息够不够。不够时返回追问与候选项，且**不会创建任何 run**。 */
-export function assessIntent(body: AssessRequest): Promise<AssessResponse> {
+export function assessIntent(body: AssessRequest, signal?: AbortSignal): Promise<AssessResponse> {
   return request<AssessResponse>('/api/intent/assess', {
     method: 'POST',
     body: JSON.stringify(body),
+    signal,
   })
 }
 
@@ -254,6 +321,7 @@ export function listRuns(
     q?: string
     tag?: string
   } = {},
+  signal?: AbortSignal,
 ): Promise<RunSummary[]> {
   const query = new URLSearchParams()
   if (params.limit != null) query.set('limit', String(params.limit))
@@ -262,15 +330,16 @@ export function listRuns(
   if (params.q) query.set('q', params.q)
   if (params.tag) query.set('tag', params.tag)
   const qs = query.toString()
-  return request<RunSummary[]>(`/api/runs${qs ? `?${qs}` : ''}`)
+  return request<RunSummary[]>(`/api/runs${qs ? `?${qs}` : ''}`, { signal })
 }
 
-export function getRun(id: string): Promise<RunDetail> {
-  return request<RunDetail>(`/api/runs/${encodeURIComponent(id)}`)
+export function getRun(id: string, signal?: AbortSignal): Promise<RunDetail> {
+  return request<RunDetail>(`/api/runs/${encodeURIComponent(id)}`, { signal })
 }
 
 export interface GetRunDocumentOptions {
   includeHsiTables?: boolean
+  signal?: AbortSignal
 }
 
 /** Fetch the server-owned structured report for a persisted run. */
@@ -281,13 +350,13 @@ export function getRunDocument(
   const query = new URLSearchParams()
   if (options.includeHsiTables) query.set('include_hsi_tables', 'true')
   const suffix = query.toString() ? `?${query.toString()}` : ''
-  return request<unknown>(`/api/runs/${encodeURIComponent(id)}/document${suffix}`).then(
-    (payload) => {
-      const document = normalizeReportDocument(payload)
-      if (!document) throw new Error('Invalid structured report response')
-      return document
-    },
-  )
+  return request<unknown>(`/api/runs/${encodeURIComponent(id)}/document${suffix}`, {
+    signal: options.signal,
+  }).then((payload) => {
+    const document = normalizeReportDocument(payload)
+    if (!document) throw new Error('Invalid structured report response')
+    return document
+  })
 }
 
 export type RunDocumentFormat = 'md' | 'csv' | 'xlsx' | 'pdf'
@@ -295,6 +364,7 @@ export type RunDocumentFormat = 'md' | 'csv' | 'xlsx' | 'pdf'
 export interface RunDocumentExportOptions {
   includeHsiTables?: boolean
   tableId?: string
+  signal?: AbortSignal
 }
 
 export interface RunDocumentDownload {
@@ -341,27 +411,34 @@ export async function downloadRunDocument(
   const encodedId = encodeURIComponent(id)
   const fallback = `research-${id.replace(/[^A-Za-z0-9._-]/g, '_') || 'run'}.${format}`
   const key = getApiKey()
-  const res = await fetch(`/api/runs/${encodedId}/document.${format}${suffix}`, {
-    headers: {
-      Accept: 'application/octet-stream',
-      ...(key ? { Authorization: `Bearer ${key}` } : {}),
+  return withResponse(
+    `/api/runs/${encodedId}/document.${format}${suffix}`,
+    {
+      headers: {
+        Accept: 'application/octet-stream',
+        ...(key ? { Authorization: `Bearer ${key}` } : {}),
+      },
+      signal: options.signal,
     },
-  })
-  if (!res.ok) {
-    if (res.status === 401) signalUnauthorized(key)
-    let detail = res.statusText
-    try {
-      const body = (await res.json()) as { detail?: unknown }
-      if (body.detail != null) detail = formatDetail(body.detail, res.statusText)
-    } catch {
-      // Error responses are allowed to be non-JSON; retain statusText.
-    }
-    throw new ApiError(res.status, detail)
-  }
-  return {
-    blob: await res.blob(),
-    filename: downloadFilename(res.headers.get('Content-Disposition'), fallback),
-  }
+    async (res) => {
+      if (!res.ok) {
+        if (res.status === 401) signalUnauthorized(key)
+        let detail = res.statusText
+        try {
+          const body = (await res.json()) as { detail?: unknown }
+          if (body.detail != null) detail = formatDetail(body.detail, res.statusText)
+        } catch {
+          // Error responses are allowed to be non-JSON; retain statusText.
+        }
+        throw new ApiError(res.status, detail)
+      }
+      return {
+        blob: await res.blob(),
+        filename: downloadFilename(res.headers.get('Content-Disposition'), fallback),
+      }
+    },
+    120_000,
+  )
 }
 
 export function deleteRun(id: string): Promise<void> {
@@ -380,11 +457,16 @@ export function resumeRun(id: string): Promise<CreateRunResponse> {
   })
 }
 
-export function batchDeleteRuns(ids: string[]): Promise<{ deleted: number; skipped: number }> {
-  return request<{ deleted: number; skipped: number }>('/api/runs/batch_delete', {
-    method: 'POST',
-    body: JSON.stringify({ ids }),
-  })
+export function batchDeleteRuns(
+  ids: string[],
+): Promise<{ deleted: number; skipped: number; deleted_ids?: string[] }> {
+  return request<{ deleted: number; skipped: number; deleted_ids?: string[] }>(
+    '/api/runs/batch_delete',
+    {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    },
+  )
 }
 
 export function setTags(id: string, tags: string[]): Promise<RunDetail> {
@@ -404,57 +486,96 @@ export async function streamRun(
   signal?: AbortSignal,
   lastEventId?: string,
 ): Promise<void> {
+  signal?.throwIfAborted()
   const key = getApiKey()
-  const res = await fetch(`/api/runs/${encodeURIComponent(id)}/stream`, {
-    headers: {
-      Accept: 'text/event-stream',
-      ...(key ? { Authorization: `Bearer ${key}` } : {}),
-      ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}),
-    },
-    signal,
+  const controller = new AbortController()
+  const cancel = () => controller.abort(signal?.reason)
+  let rejectAbort: () => void = () => {}
+  const aborted = new Promise<never>((_, reject) => {
+    rejectAbort = () => reject(controller.signal.reason)
+    controller.signal.addEventListener('abort', rejectAbort, { once: true })
   })
-  if (!res.ok) {
-    if (res.status === 401) signalUnauthorized(key)
-    throw new ApiError(res.status, res.statusText)
+  if (signal?.aborted) cancel()
+  signal?.addEventListener('abort', cancel, { once: true })
+  let idleTimer: ReturnType<typeof setTimeout>
+  const heartbeat = () => {
+    clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => controller.abort(new RequestTimeoutError()), 45_000)
   }
-  if (!res.body) throw new ApiError(0, 'SSE response has no body')
-
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  const dispatchCompleteEvents = () => {
-    let boundary = buffer.match(/\r?\n\r?\n/)
-    while (boundary?.index != null) {
-      const block = buffer.slice(0, boundary.index)
-      buffer = buffer.slice(boundary.index + boundary[0].length)
-      const id = block
-        .split(/\r?\n/)
-        .find((line) => line.startsWith('id:'))
-        ?.slice(3)
-        .trim()
-      const data = block
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).replace(/^ /, ''))
-        .join('\n')
-      if (data) onMessage(data, id || undefined)
-      boundary = buffer.match(/\r?\n\r?\n/)
+  heartbeat()
+  try {
+    controller.signal.throwIfAborted()
+    const res = await Promise.race([fetch(`/api/runs/${encodeURIComponent(id)}/stream`, {
+      headers: {
+        Accept: 'text/event-stream',
+        ...(key ? { Authorization: `Bearer ${key}` } : {}),
+        ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}),
+      },
+      signal: controller.signal,
+    }), aborted])
+    if (!res.ok) {
+      if (res.status === 401) signalUnauthorized(key)
+      throw new ApiError(res.status, res.statusText)
     }
-  }
+    if (!res.body) throw new ApiError(0, 'SSE response has no body')
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    dispatchCompleteEvents()
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    const dispatchCompleteEvents = () => {
+      let boundary = buffer.match(/\r?\n\r?\n/)
+      while (boundary?.index != null) {
+        const block = buffer.slice(0, boundary.index)
+        buffer = buffer.slice(boundary.index + boundary[0].length)
+        const id = block
+          .split(/\r?\n/)
+          .find((line) => line.startsWith('id:'))
+          ?.slice(3)
+          .trim()
+        const data = block
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).replace(/^ /, ''))
+          .join('\n')
+        if (data) onMessage(data, id || undefined)
+        boundary = buffer.match(/\r?\n\r?\n/)
+      }
+    }
+
+    try {
+      while (true) {
+        const { done, value } = await Promise.race([reader.read(), aborted])
+        if (done) break
+        heartbeat()
+        buffer += decoder.decode(value, { stream: true })
+        if (buffer.length > 16_000_000) throw new ApiError(0, '事件内容过大，请重新连接')
+        dispatchCompleteEvents()
+      }
+      buffer += decoder.decode()
+      dispatchCompleteEvents()
+    } finally {
+      await reader.cancel().catch(() => {})
+      reader.releaseLock()
+    }
+  } catch (error) {
+    if (!signal?.aborted && controller.signal.aborted) throw new RequestTimeoutError()
+    throw error
+  } finally {
+    clearTimeout(idleTimer!)
+    signal?.removeEventListener('abort', cancel)
+    controller.signal.removeEventListener('abort', rejectAbort)
   }
-  buffer += decoder.decode()
-  dispatchCompleteEvents()
 }
 
-export function getConfig(): Promise<ConfigView> {
-  return request<ConfigView>('/api/config')
+export function getConfig(signal?: AbortSignal): Promise<ConfigView> {
+  return request<ConfigView>('/api/config', { signal })
+}
+
+export function getCapabilities(
+  signal?: AbortSignal,
+): Promise<{ exports: Record<RunDocumentFormat, boolean> }> {
+  return request('/api/capabilities', { signal })
 }
 
 export function updateConfig(body: ConfigUpdate): Promise<ConfigView> {
@@ -540,7 +661,7 @@ export function saveSearchProfile(body: SearchProfileInput, id?: string): Promis
 }
 
 export function deleteSearchProfile(id: string): Promise<void> {
-  return request<void>(`/api/search-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  return requestVoid(`/api/search-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 export function testSearchProfile(id: string): Promise<TestResult> {

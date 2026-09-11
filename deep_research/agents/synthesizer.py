@@ -11,6 +11,8 @@ from ..llm import LLM
 from ..models import Report, ResearchResult
 from ..observability import Tracer
 from ..registry import register
+from ..report.validation import validate_body
+from ..token_budget import TokenBudgetExceeded
 from .base import Blackboard, RunContext, direct_system_prompt, effective_require_corroboration
 
 SYSTEM = (
@@ -159,11 +161,15 @@ class Synthesizer:
             self.tracer.emit("SYNTHESIZER", "info", "报告完成，引用 0 个来源")
             return
         user = f"研究问题：{query}\n\n素材（角标即引用编号）：\n{material}"
-        async for delta in self.llm.stream(
-            direct_system_prompt(system or self.system), user, temperature=0.4
-        ):
-            self.tracer.emit("SYNTHESIZER", "token", data={"delta": delta})
-            yield delta
+        try:
+            async for delta in self.llm.stream(
+                direct_system_prompt(system or self.system), user, temperature=0.4
+            ):
+                self.tracer.emit("SYNTHESIZER", "token", data={"delta": delta})
+                yield delta
+        except TokenBudgetExceeded:
+            self.tracer.emit("SYNTHESIZER", "info", "预算不足，使用已验证素材生成摘要")
+            yield "预算不足，以下仅提供已验证素材摘要。"
         self.tracer.emit("SYNTHESIZER", "info", f"报告完成，引用 {len(url_to_idx)} 个来源")
 
     async def run(
@@ -187,4 +193,29 @@ class Synthesizer:
                 )
             ]
         )
-        return self._finalize(query, body, url_to_idx, self._references(results))
+        check = validate_body(
+            body,
+            results,
+            url_to_idx,
+            require_corroboration=(
+                self.settings.require_corroboration
+                if require_corroboration is None
+                else require_corroboration
+            ),
+        )
+        self.tracer.emit(
+            "SYNTHESIZER",
+            "info",
+            "正文未通过一致性检查，已回退到已验证素材摘要"
+            if check.issues
+            else "正文引用与数值一致性检查完成",
+            data={
+                "report_validation": {
+                    "scope": "citation_and_numbers",
+                    "issues": list(check.issues),
+                    "fallback": bool(check.issues),
+                    "citation_evidence": check.evidence_by_citation,
+                }
+            },
+        )
+        return self._finalize(query, check.body, url_to_idx, self._references(results))

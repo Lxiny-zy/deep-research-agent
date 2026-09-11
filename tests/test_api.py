@@ -6,6 +6,7 @@ import asyncio
 import json
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -138,7 +139,7 @@ async def test_create_run(repo):
 async def test_create_run_rejects_when_admission_capacity_is_full(repo, monkeypatch):
     api.app.state.settings = Settings(max_active_runs=1, max_queued_runs=0)
     api.app.state.run_admission = api.RunAdmission(1, 0)
-    monkeypatch.setattr(api, "_check_rate_limit", lambda request: None)
+    monkeypatch.setattr(api, "_check_rate_limit", AsyncMock(return_value=None))
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -149,7 +150,7 @@ async def test_create_run_rejects_when_admission_capacity_is_full(repo, monkeypa
     monkeypatch.setattr(api, "_execute", blocked_execute)
     async with _client() as c:
         first = asyncio.create_task(c.post("/api/runs", json={"query": "first"}))
-        await started.wait()
+        await asyncio.wait_for(started.wait(), 5)
         second = await c.post("/api/runs", json={"query": "second"})
         assert second.status_code == 503
         release.set()
@@ -170,7 +171,7 @@ async def test_cancelled_create_request_releases_admission(repo, monkeypatch) ->
     monkeypatch.setattr(repo, "create_run_once", blocked_create_run_once)
     async with _client() as client:
         request_task = asyncio.create_task(client.post("/api/runs", json={"query": "cancel me"}))
-        await persistence_started.wait()
+        await asyncio.wait_for(persistence_started.wait(), 5)
         request_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await request_task
@@ -545,7 +546,7 @@ async def test_legacy_research_creates_persisted_run_and_streams_it(repo, monkey
             await app.state.repo.release_lease(run_id, lease_owner)
 
     monkeypatch.setattr(api, "_execute", fake_execute)
-    monkeypatch.setattr(api, "_check_rate_limit", lambda request: None)
+    monkeypatch.setattr(api, "_check_rate_limit", AsyncMock(return_value=None))
 
     async with _client() as c:
         resp = await c.get("/api/research", params={"q": "Q"})
@@ -631,7 +632,7 @@ async def test_delete_rejects_lease_held_by_another_instance(repo) -> None:
         batch = await client.post("/api/runs/batch_delete", json={"ids": [run_id]})
 
     assert single.status_code == 409
-    assert batch.json() == {"deleted": 0, "skipped": 1}
+    assert batch.json() == {"deleted": 0, "skipped": 1, "deleted_ids": []}
     assert await repo.get_run(run_id) is not None
 
 
@@ -647,7 +648,7 @@ async def test_batch_delete_skips_running(repo):
         resp = await c.post("/api/runs/batch_delete", json={"ids": [a, b, c_id]})
     api.app.state.live.pop(c_id, None)
     body = resp.json()
-    assert body == {"deleted": 2, "skipped": 1}
+    assert body == {"deleted": 2, "skipped": 1, "deleted_ids": [a, b]}
     assert await repo.get_run(a) is None
     assert await repo.get_run(c_id) is not None
 
@@ -663,7 +664,7 @@ async def test_delete_protects_legacy_active_run_without_orchestration(repo, sta
         batch = await client.post("/api/runs/batch_delete", json={"ids": [run_id]})
 
     assert single.status_code == 409
-    assert batch.json() == {"deleted": 0, "skipped": 1}
+    assert batch.json() == {"deleted": 0, "skipped": 1, "deleted_ids": []}
     detail = await repo.get_run(run_id)
     assert detail is not None
     assert detail.orchestration is None
@@ -1935,7 +1936,7 @@ async def test_lease_renewal_failure_cancels_execution(monkeypatch) -> None:
             return None
 
     app = SimpleNamespace(state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub}))
-    monkeypatch.setattr(api, "_LEASE_RENEW_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr(execution_module, "_LEASE_RENEW_INTERVAL_SECONDS", 0.001)
     monkeypatch.setattr(execution_module, "DeepResearchAgent", Agent)
     monkeypatch.setattr(
         execution_module.RunExecutor,

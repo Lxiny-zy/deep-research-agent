@@ -23,7 +23,7 @@ export interface RunsFilter {
 export function useRunsList(params: RunsFilter = {}) {
   return useQuery({
     queryKey: ['runs', params],
-    queryFn: () => listRuns(params),
+    queryFn: ({ signal }) => listRuns(params, signal),
   })
 }
 
@@ -36,7 +36,7 @@ type RefetchInterval = number | false | ((query: { state: { data?: RunDetail } }
 export function useRunDetail(id: string | undefined, opts?: { refetchInterval?: RefetchInterval }) {
   return useQuery({
     queryKey: ['run', id],
-    queryFn: () => getRun(id as string),
+    queryFn: ({ signal }) => getRun(id as string, signal),
     enabled: Boolean(id),
     refetchInterval: opts?.refetchInterval ?? false,
   })
@@ -49,7 +49,7 @@ export function useRunDocument(
   const includeHsiTables = opts.includeHsiTables ?? false
   return useQuery({
     queryKey: ['run-document', id, { includeHsiTables }],
-    queryFn: () => getRunDocument(id as string, { includeHsiTables }),
+    queryFn: ({ signal }) => getRunDocument(id as string, { includeHsiTables, signal }),
     enabled: Boolean(id) && (opts.enabled ?? true),
     // A completed report is immutable for the lifetime of a run. Keeping it
     // cached avoids rebuilding the structured document on every tab revisit.

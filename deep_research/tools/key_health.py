@@ -18,6 +18,11 @@ import httpx
 
 
 def failure_kind(exc: Exception) -> str | None:
+    status = getattr(exc, "status_code", None)
+    if status in {401, 403}:
+        return "invalid"
+    if status in {402, 429}:
+        return "limited"
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status in {401, 403}:
@@ -37,9 +42,13 @@ def failure_kind(exc: Exception) -> str | None:
 
 def retry_delay(exc: Exception, kind: str) -> float:
     fallback = 300.0 if kind == "invalid" else 30.0
-    if not isinstance(exc, httpx.HTTPStatusError):
+    retry_after = getattr(exc, "retry_after", None)
+    if isinstance(retry_after, (int, float)):
+        return max(1, min(86400, retry_after))
+    response = getattr(exc, "response", None)
+    if not isinstance(response, httpx.Response):
         return fallback
-    raw = exc.response.headers.get("retry-after", "")
+    raw = response.headers.get("retry-after", "")
     try:
         seconds = float(raw)
     except ValueError:

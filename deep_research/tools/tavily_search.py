@@ -5,17 +5,22 @@ from __future__ import annotations
 from tavily import AsyncTavilyClient
 
 from ..models import Source
+from ..provider_limits import provider_request
 from .base import SearchTool
 
 
 class TavilySearch(SearchTool):
     def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
         self._client = AsyncTavilyClient(api_key=api_key)
 
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
         if max_results <= 0:
             return []
-        resp = await self._client.search(query, max_results=max_results, search_depth="advanced")
+        async with provider_request("https://api.tavily.com", self._api_key):
+            resp = await self._client.search(
+                query, max_results=max_results, search_depth="advanced"
+            )
         sources: list[Source] = []
         results = resp.get("results", []) if isinstance(resp, dict) else []
         for item in results if isinstance(results, list) else []:

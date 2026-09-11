@@ -20,8 +20,11 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import os
 import signal
+import socket
 import sys
+import time
 from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -59,6 +62,7 @@ class Worker:
         self.name = name or f"worker-{uuid4().hex[:12]}"
         self._stopping = asyncio.Event()
         self._running: set[asyncio.Task[None]] = set()
+        self._last_heartbeat = 0.0
 
     def request_stop(self) -> None:
         """停止领取新任务。**不**取消在跑的任务：优雅退出要让它们跑完。"""
@@ -87,13 +91,23 @@ class Worker:
                 await self._sleep_or_stop(delay)
         finally:
             await self._drain()
+            await self.repo.remove_worker(self.name)
 
     async def _tick(self) -> float:
         """领取并派发至多一个任务；返回下一次领取前应等待的秒数。"""
+        if time.monotonic() - self._last_heartbeat >= 5:
+            try:
+                await self.repo.heartbeat_worker(self.name, len(self._running))
+                self._last_heartbeat = time.monotonic()
+            except Exception:
+                logger.exception("worker heartbeat failed; pausing admission")
+                return self.settings.worker_poll_seconds
         if self.capacity <= 0:
             return self.settings.worker_poll_seconds
         try:
-            claimed = await self.repo.claim_next_run(self.name)
+            claimed = await self.repo.claim_next_run(
+                self.name, max_active_runs=self.settings.max_active_runs
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -210,9 +224,10 @@ async def main_async(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Deep Research Agent 执行 worker")
     parser.add_argument(
         "--name",
-        default=None,
+        default=os.getenv("DR_WORKER_NAME") or socket.gethostname(),
         help="worker 身份（租约 owner）。默认随机生成；多副本部署无需指定。",
     )
+    parser.add_argument("--check", action="store_true", help="检查本 worker 的持久化心跳后退出")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -221,6 +236,26 @@ async def main_async(argv: list[str] | None = None) -> int:
     )
     settings = Settings()
     settings.validate_deployment()
+    if args.check:
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import select
+
+        from .persistence.orm import WorkerHeartbeatRow
+
+        engine = make_engine(settings.database_url)
+        try:
+            async with make_sessionmaker(engine)() as session:
+                seen = await session.scalar(
+                    select(WorkerHeartbeatRow.seen_at).where(WorkerHeartbeatRow.name == args.name)
+                )
+                return (
+                    0
+                    if seen and seen.replace(tzinfo=UTC) > datetime.now(UTC) - timedelta(seconds=30)
+                    else 1
+                )
+        finally:
+            await engine.dispose()
     worker, engine = await _build_worker(settings)
     if args.name:
         worker.name = args.name

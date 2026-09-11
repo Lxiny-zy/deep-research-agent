@@ -6,6 +6,7 @@ for API-process metrics without requiring a separate metrics dependency.
 
 from __future__ import annotations
 
+import math
 import threading
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
@@ -27,6 +28,22 @@ class MetricsRegistry:
         self._counters: dict[tuple[str, tuple[tuple[str, str], ...]], float] = defaultdict(float)
         self._gauges: dict[tuple[str, tuple[tuple[str, str], ...]], float] = {}
         self._types: dict[str, str] = {}
+        self._histograms: dict[tuple[str, tuple[tuple[str, str], ...]], list[float]] = {}
+
+    _BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 120.0)
+
+    def observe(self, name: str, value: float, labels: Mapping[str, str] | None = None) -> None:
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("duration observations must be finite and non-negative")
+        self._register(name, "histogram")
+        with self._lock:
+            bins = self._histograms.setdefault(
+                (name, _labels_key(labels or {})), [0.0] * (len(self._BUCKETS) + 2)
+            )
+            for index, bound in enumerate(self._BUCKETS):
+                bins[index] += value <= bound
+            bins[-2] += value
+            bins[-1] += 1
 
     def inc(self, name: str, labels: Mapping[str, str] | None = None, value: float = 1.0) -> None:
         self._register(name, "counter")
@@ -72,6 +89,7 @@ class MetricsRegistry:
             counters = dict(self._counters)
             gauges = dict(self._gauges)
             types = dict(self._types)
+            histograms = {key: list(value) for key, value in self._histograms.items()}
 
         families: dict[str, list[tuple[tuple[tuple[str, str], ...], float]]] = defaultdict(list)
         for (name, labels), value in counters.items():
@@ -89,6 +107,20 @@ class MetricsRegistry:
                         "{" + ",".join(f'{key}="{_escape(value)}"' for key, value in labels) + "}"
                     )
                 lines.append(f"{name}{rendered_labels} {value:g}")
+        declared: set[str] = set()
+        for (name, labels), bins in sorted(histograms.items()):
+            if name not in declared:
+                lines.append(f"# TYPE {name} histogram")
+                declared.add(name)
+            for bound, count in zip(
+                (*self._BUCKETS, float("inf")), (*bins[:-2], bins[-1]), strict=True
+            ):
+                bucket_labels = (*labels, ("le", "+Inf" if math.isinf(bound) else f"{bound:g}"))
+                rendered = ",".join(f'{key}="{_escape(value)}"' for key, value in bucket_labels)
+                lines.append(f"{name}_bucket{{{rendered}}} {count:g}")
+            rendered = ",".join(f'{key}="{_escape(value)}"' for key, value in labels)
+            suffix = "{" + rendered + "}" if labels else ""
+            lines.extend((f"{name}_sum{suffix} {bins[-2]:g}", f"{name}_count{suffix} {bins[-1]:g}"))
         return "\n".join(lines) + ("\n" if lines else "")
 
 

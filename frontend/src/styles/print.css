@@ -330,8 +330,9 @@
   .print-root h2,
   .print-root h3,
   .print-root h4 {
-    font-family: 'Noto Serif CJK SC', 'Source Han Serif SC', 'Noto Serif SC',
-      'Microsoft YaHei', 'SimSun', serif;
+    font-family:
+      'Noto Serif CJK SC', 'Source Han Serif SC', 'Noto Serif SC', 'Microsoft YaHei', 'SimSun',
+      serif;
   }
 
   .print-root .print-kicker,
@@ -538,8 +539,9 @@
     padding: 12mm 0;
     background: #f9f8f6;
     color: #1c1c1c;
-    font-family: 'Noto Serif CJK SC', 'Source Han Serif SC', 'Noto Serif SC',
-      'Microsoft YaHei', 'SimSun', serif;
+    font-family:
+      'Noto Serif CJK SC', 'Source Han Serif SC', 'Noto Serif SC', 'Microsoft YaHei', 'SimSun',
+      serif;
     font-size: 10.5pt;
     line-height: 1.7;
   }
@@ -611,7 +613,7 @@
   }
   .print-preview .print-kicker {
     margin: 0 0 7pt;
-    color: rgba(28, 28, 28, 0.6);
+    color: #565656;
     font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;
     font-size: 8.5pt;
     letter-spacing: 0.12em;

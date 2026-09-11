@@ -167,6 +167,8 @@ describe('NewResearchPage workflow list race', () => {
     await waitFor(() =>
       expect(mocks.createRun).toHaveBeenCalledWith(
         expect.objectContaining({ params: { require_corroboration: true } }),
+        expect.any(AbortSignal),
+        expect.any(String),
       ),
     )
   })
@@ -236,6 +238,8 @@ describe('NewResearchPage 追问上下文', () => {
             expect.objectContaining({ query: '对比 Milvus 和 Qdrant', intent: 'comparative' }),
           ],
         }),
+        expect.any(AbortSignal),
+        expect.any(String),
       ),
     )
   })
@@ -261,7 +265,9 @@ describe('NewResearchPage 追问上下文', () => {
     fireEvent.click(screen.getByRole('button', { name: '开始研究' }))
 
     await waitFor(() =>
-      expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({ history: [] })),
+      expect(mocks.createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ history: [] }), expect.any(AbortSignal), expect.any(String),
+      ),
     )
   })
 
@@ -380,11 +386,14 @@ describe('NewResearchPage 澄清循环', () => {
         round: 1,
         answers: expect.objectContaining({ entities: ['Kafka', 'RabbitMQ'] }),
       }),
+      expect.any(AbortSignal),
     )
     // 交给研究的是服务端合成的完整问题，不是用户最初那句；
     // 走完澄清循环的创建必须带 clarified，免得被 create_run 再拦一次。
     expect(mocks.createRun).toHaveBeenCalledWith(
       expect.objectContaining({ query: '对比 Kafka、RabbitMQ', clarified: true }),
+      expect.any(AbortSignal),
+      expect.any(String),
     )
   })
 
@@ -413,9 +422,13 @@ describe('NewResearchPage 澄清循环', () => {
     await waitFor(() =>
       expect(mocks.createRun).toHaveBeenCalledWith(
         expect.objectContaining({ query: '帮我看看', clarified: true }),
+        expect.any(AbortSignal),
+        expect.any(String),
       ),
     )
-    expect(mocks.assessIntent).toHaveBeenLastCalledWith(expect.objectContaining({ skip: true }))
+    expect(mocks.assessIntent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ skip: true }), expect.any(AbortSignal),
+    )
   })
 
   it('跳过时 assess 挂了也能建 run，不把用户锁在追问里', async () => {
@@ -431,6 +444,8 @@ describe('NewResearchPage 澄清循环', () => {
     await waitFor(() =>
       expect(mocks.createRun).toHaveBeenCalledWith(
         expect.objectContaining({ query: '帮我看看', clarified: true }),
+        expect.any(AbortSignal),
+        expect.any(String),
       ),
     )
   })
@@ -443,7 +458,9 @@ describe('NewResearchPage 澄清循环', () => {
     await ask('帮我看看')
 
     await waitFor(() =>
-      expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({ query: '帮我看看' })),
+      expect(mocks.createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ query: '帮我看看' }), expect.any(AbortSignal), expect.any(String),
+      ),
     )
     expect(screen.queryByText('需要补充信息')).not.toBeInTheDocument()
   })

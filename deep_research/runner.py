@@ -8,7 +8,9 @@ Agent 只能请求一个已登记的 ``operation``，不能把模型生成的 sh
 from __future__ import annotations
 
 import asyncio
+import math
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -16,6 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+from weakref import WeakKeyDictionary
 
 CommandStatus = Literal["succeeded", "failed", "timed_out", "cancelled"]
 
@@ -150,36 +153,84 @@ def _default_operations() -> dict[str, OperationDefinition]:
     normal operation failure, not a reason to fall back to arbitrary shell.
     """
 
-    def _static(executable: str, *prefix: str) -> CommandBuilder:
-        def build(request: OperationRequest) -> Sequence[str]:
-            # Paths are passed as individual argv entries.  The operation
-            # adapter, rather than an LLM, decides their positional meaning.
-            return (
-                executable,
-                *prefix,
-                *(str(p) for p in request.inputs),
-                *(str(p) for p in request.outputs),
-            )
+    def paths(request: OperationRequest) -> tuple[Path, Path]:
+        if len(request.inputs) != 1 or len(request.outputs) != 1:
+            raise CommandPolicyError("operation requires one input and one declared output")
+        return request.inputs[0], request.outputs[0]
 
-        return build
+    def archive(request: OperationRequest) -> Sequence[str]:
+        source, target = paths(request)
+        return (
+            "bsdtar",
+            "--no-same-owner",
+            "--no-same-permissions",
+            "-xf",
+            str(source),
+            "-C",
+            str(target),
+        )
+
+    def pdf(request: OperationRequest) -> Sequence[str]:
+        source, target = paths(request)
+        if target.name != source.stem + ".pdf":
+            raise CommandPolicyError("pdf.convert output must be named <input-stem>.pdf")
+        return (
+            "libreoffice",
+            "--headless",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(target.parent),
+            str(source),
+        )
+
+    def latex(request: OperationRequest) -> Sequence[str]:
+        source, target = paths(request)
+        if source.suffix.lower() != ".tex" or target.name != source.stem + ".pdf":
+            raise CommandPolicyError(
+                "latex.compile requires a .tex input and <input-stem>.pdf output"
+            )
+        return (
+            "latexmk",
+            "-pdf",
+            "-no-shell-escape",
+            "-interaction=nonstopmode",
+            "-halt-on-error",
+            f"-outdir={target.parent}",
+            str(source),
+        )
 
     return {
         # These definitions are useful when the corresponding utility is
         # installed in the runner image.  They do not enable arbitrary flags.
         "archive.unpack": OperationDefinition(
-            "archive.unpack", _static("bsdtar", "-xf"), description="Extract an archive"
+            "archive.unpack", archive, description="Extract an archive into the declared directory"
         ),
         "pdf.convert": OperationDefinition(
             "pdf.convert",
-            _static("libreoffice", "--headless", "--convert-to", "pdf"),
+            pdf,
             description="Convert a document to PDF",
         ),
         "latex.compile": OperationDefinition(
             "latex.compile",
-            _static("latexmk", "-pdf", "-interaction=nonstopmode"),
+            latex,
             description="Compile LaTeX",
         ),
     }
+
+
+_process_limits: WeakKeyDictionary[asyncio.AbstractEventLoop, dict[int, asyncio.Semaphore]] = (
+    WeakKeyDictionary()
+)
+
+
+def _process_semaphore(maximum: int | None) -> asyncio.Semaphore | None:
+    if maximum is None:
+        return None
+    limits = _process_limits.setdefault(asyncio.get_running_loop(), {})
+    if maximum not in limits:
+        limits[maximum] = asyncio.Semaphore(maximum)
+    return limits[maximum]
 
 
 class CommandRunner:
@@ -202,6 +253,8 @@ class CommandRunner:
         default_timeout_seconds: float = 300.0,
         max_output_bytes: int = 256_000,
         max_processes: int | None = None,
+        isolation: str = "required",
+        memory_bytes: int = 1024 * 1024 * 1024,
     ) -> None:
         root = Path(workspace_root).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
@@ -215,6 +268,10 @@ class CommandRunner:
         self.default_timeout_seconds = float(default_timeout_seconds)
         self.max_output_bytes = int(max_output_bytes)
         self.max_processes = max_processes
+        if isolation not in {"required", "trusted"}:
+            raise ValueError("unknown runner isolation mode")
+        self.isolation = isolation
+        self.memory_bytes = memory_bytes
         self._operations: dict[str, OperationDefinition] = dict(_default_operations())
         if operations:
             for definition in operations.values():
@@ -227,11 +284,81 @@ class CommandRunner:
         unknown = self.allowed_operations.difference(self._operations)
         if unknown:
             raise OperationNotAllowed(f"unknown allowed operations: {sorted(unknown)}")
-        self._semaphore = asyncio.Semaphore(max_processes) if max_processes else None
 
     @property
     def operations(self) -> tuple[str, ...]:
         return tuple(sorted(self._operations))
+
+    def _sandbox_argv(
+        self,
+        argv: tuple[str, ...],
+        workspace: Path,
+        cwd: Path,
+        definition: OperationDefinition,
+        timeout: float,
+    ) -> tuple[str, ...]:
+        bwrap, prlimit = shutil.which("bwrap"), shutil.which("prlimit")
+        if os.name != "posix" or not bwrap or not prlimit:
+            raise CommandPolicyError(
+                "command runner requires Linux bubblewrap and prlimit; operation was not executed"
+            )
+        if definition.network_profile != "none":
+            raise CommandPolicyError(
+                "networked operations require an independently managed egress sandbox"
+            )
+        command = [
+            prlimit,
+            f"--as={self.memory_bytes}",
+            f"--cpu={math.ceil(timeout)}",
+            "--nproc=64",
+            "--fsize=104857600",
+            "--",
+            bwrap,
+            "--die-with-parent",
+            "--new-session",
+            "--unshare-all",
+            "--cap-drop",
+            "ALL",
+        ]
+        for directory in ("/usr", "/bin", "/sbin", "/lib", "/lib64"):
+            if Path(directory).exists():
+                command.extend(("--ro-bind", directory, directory))
+        command.extend(("--dir", "/etc"))
+        for path in ("/etc/fonts", "/etc/ld.so.cache"):
+            if Path(path).exists():
+                command.extend(("--ro-bind", path, path))
+        command.extend(
+            (
+                "--proc",
+                "/proc",
+                "--dev",
+                "/dev",
+                "--tmpfs",
+                "/tmp",
+                "--bind",
+                str(workspace),
+                "/workspace",
+                "--setenv",
+                "HOME",
+                "/tmp",
+                "--setenv",
+                "TMPDIR",
+                "/tmp",
+                "--chdir",
+                "/workspace/" + cwd.relative_to(workspace).as_posix(),
+                "--",
+            )
+        )
+        prefix = str(workspace)
+        command.extend(
+            argument.replace(prefix + os.sep, "/workspace/")
+            if prefix + os.sep in argument
+            else "/workspace"
+            if argument == prefix
+            else argument
+            for argument in argv
+        )
+        return tuple(command)
 
     def register(self, definition: OperationDefinition) -> None:
         name = definition.name.strip()
@@ -348,6 +475,13 @@ class CommandRunner:
                 "all_proxy",
             ):
                 child_env.pop(key, None)
+        launch_argv = argv
+        if self.isolation == "required":
+            launch_argv = self._sandbox_argv(argv, run_workspace, run_cwd, definition, timeout)
+        for output in output_paths:
+            (output if name == "archive.unpack" else output.parent).mkdir(
+                parents=True, exist_ok=True
+            )
 
         async def _invoke() -> CommandResult:
             started = time.perf_counter()
@@ -388,7 +522,7 @@ class CommandRunner:
                     kwargs["creationflags"] = creationflags
                 else:
                     kwargs["start_new_session"] = True
-                process = await asyncio.create_subprocess_exec(*argv, **kwargs)
+                process = await asyncio.create_subprocess_exec(*launch_argv, **kwargs)
                 # Read both pipes concurrently.  This avoids deadlocks while
                 # ensuring untrusted tools cannot force unbounded buffering.
                 if process.stdout is None or process.stderr is None:
@@ -453,9 +587,10 @@ class CommandRunner:
                     outputs=output_names,
                 )
 
-        if self._semaphore is None:
+        semaphore = _process_semaphore(self.max_processes)
+        if semaphore is None:
             return await _invoke()
-        async with self._semaphore:
+        async with semaphore:
             return await _invoke()
 
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:

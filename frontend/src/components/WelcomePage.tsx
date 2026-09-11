@@ -2,6 +2,7 @@ import { lazy, Suspense, useRef, useState } from 'react'
 import { AppIcon, type AppIconName } from './AppIcon'
 import WelcomeTelemetrySection from './WelcomeTelemetrySection'
 import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
+import { useAmbientMotion } from '../hooks/useAmbientMotion'
 
 const ResearchField = lazy(() => import('./ResearchField'))
 const stages: { icon: AppIconName; name: string; english: string; description: string }[] = [
@@ -39,15 +40,31 @@ export default function WelcomePage({
   onTour?: () => void
 }) {
   const pageRef = useRef<HTMLElement>(null)
-  const [paused, setPaused] = useState(false)
+  const motion = useAmbientMotion()
+  const [showField, setShowField] = useState(() => {
+    const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection
+    return (
+      !motion.paused &&
+      !connection?.saveData &&
+      (navigator.hardwareConcurrency || 8) > 4 &&
+      !window.matchMedia?.('(prefers-reduced-motion: reduce), (max-width: 600px)').matches
+    )
+  })
+  const motionPaused = motion.paused || !showField
   useRevealOnScroll(pageRef)
 
   return (
-    <main className="research-welcome" ref={pageRef}>
+    <main className="research-welcome" ref={pageRef} data-atmosphere-paused={motion.inactive}>
       <section className="entry-scene" aria-labelledby="entry-title">
-        <Suspense fallback={null}>
-          <ResearchField paused={paused} />
-        </Suspense>
+        {showField ? (
+          <Suspense
+            fallback={<div className="research-field" data-state="fallback" aria-hidden="true" />}
+          >
+            <ResearchField paused={motion.inactive} />
+          </Suspense>
+        ) : (
+          <div className="research-field" data-state="fallback" aria-hidden="true" />
+        )}
         <header className="entry-nav">
           <a className="entry-brand" href="/welcome" aria-label="Deep Research 欢迎页">
             <AppIcon name="network" size={30} strokeWidth={1.5} aria-hidden="true" />
@@ -120,12 +137,28 @@ export default function WelcomePage({
           <button
             type="button"
             className="entry-motion"
-            onClick={() => setPaused(!paused)}
-            aria-pressed={paused}
-            aria-label={paused ? '播放背景动画' : '暂停背景动画'}
-            title={paused ? '播放背景动画' : '暂停背景动画'}
+            onClick={() => {
+              setShowField(true)
+              motion.setPaused(showField ? !motion.paused : false)
+            }}
+            disabled={motion.reduced}
+            aria-pressed={motionPaused}
+            aria-label={
+              motion.reduced
+                ? '背景动画已按系统设置暂停'
+                : motionPaused
+                  ? '播放背景动画'
+                  : '暂停背景动画'
+            }
+            title={
+              motion.reduced
+                ? '已跟随系统减少动态效果'
+                : motionPaused
+                  ? '播放背景动画'
+                  : '暂停背景动画'
+            }
           >
-            <AppIcon name={paused ? 'play' : 'pause'} size={16} aria-hidden="true" />
+            <AppIcon name={motionPaused ? 'play' : 'pause'} size={16} aria-hidden="true" />
           </button>
         </footer>
       </section>

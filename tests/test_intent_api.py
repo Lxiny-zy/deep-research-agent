@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 from httpx import ASGITransport
@@ -36,7 +38,7 @@ def repo(monkeypatch) -> InMemoryRepository:
     monkeypatch.setattr(api, "_execute", _noop)
     # 限流器是模块级共享状态，按 IP 计数；本文件的用例数已超过窗口配额，
     # 而这里测的是意图路由不是限流本身。
-    monkeypatch.setattr(api, "_check_rate_limit", lambda request: None)
+    monkeypatch.setattr(api, "_check_rate_limit", AsyncMock(return_value=None))
     return r
 
 

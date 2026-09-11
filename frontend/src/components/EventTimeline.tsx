@@ -14,6 +14,10 @@ export default function EventTimeline({
   const timelineRef = useRef<HTMLDivElement>(null)
   const previousStreaming = useRef(streaming)
   const [followLatest, setFollowLatest] = useState(true)
+  const [page, setPage] = useState<number | null>(null)
+  const lastPage = Math.max(0, Math.ceil(events.length / 100) - 1)
+  const currentPage = Math.min(page ?? lastPage, lastPage)
+  const visibleEvents = events.slice(currentPage * 100, (currentPage + 1) * 100)
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const node = timelineRef.current
@@ -51,6 +55,40 @@ export default function EventTimeline({
 
   return (
     <div className="timeline-shell">
+      {lastPage > 0 && (
+        <nav className="row gap" aria-label="事件分页">
+          <button
+            type="button"
+            disabled={currentPage === 0}
+            onClick={() => {
+              setPage(currentPage - 1)
+              setFollowLatest(false)
+            }}
+          >
+            较早事件
+          </button>
+          <span>
+            第 {currentPage + 1} / {lastPage + 1} 页
+            {events.length >= 5000 ? '（最近 5000 条）' : ''}
+          </span>
+          <button
+            type="button"
+            disabled={currentPage === lastPage}
+            onClick={() => setPage(currentPage + 1)}
+          >
+            较新事件
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setPage(null)
+              setFollowLatest(true)
+            }}
+          >
+            最新事件
+          </button>
+        </nav>
+      )}
       {streaming && events.length > 0 && (
         <div className="timeline-toolbar">
           <span className="timeline-follow-state" aria-live="polite">
@@ -64,6 +102,7 @@ export default function EventTimeline({
                 setFollowLatest(false)
               } else {
                 setFollowLatest(true)
+                setPage(null)
                 scrollToLatest()
               }
             }}
@@ -77,9 +116,9 @@ export default function EventTimeline({
         </div>
       )}
       <div className="timeline" ref={timelineRef} onScroll={handleScroll}>
-        {events.map((ev, i) => {
+        {visibleEvents.map((ev, i) => {
           const meta = getStageMeta(ev.stage)
-          const live = streaming && i === events.length - 1
+          const live = streaming && currentPage === lastPage && i === visibleEvents.length - 1
           return (
             <div
               className={`event-row${live ? ' live' : ''}`}

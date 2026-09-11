@@ -35,12 +35,14 @@ from ..models import (
 from ..observability import Event
 from ..orchestration import StepRun, WorkflowRun
 from . import orm
+from .coordination import transaction_lock
 from .repository import (
     RUN_ACTIVE_STATUSES,
     ClaimedRun,
     IdempotencyConflictError,
     LeaseLostError,
     RunDetail,
+    RunQueueFullError,
     RunSummary,
     TagCount,
 )
@@ -170,6 +172,8 @@ class SqlRepository:
         execution: WorkflowRun | None = None,
         lease_owner: str | None = None,
         claimable: bool = False,
+        owner_id: str | None = None,
+        max_inflight: int | None = None,
     ) -> tuple[str, bool]:
         """Insert a run and its initial workflow atomically.
 
@@ -179,8 +183,21 @@ class SqlRepository:
         """
         try:
             async with self._sm() as s, s.begin():
+                await transaction_lock(s, "run-admission")
+                if idempotency_key:
+                    existing = await s.scalar(
+                        select(orm.ResearchRun).where(
+                            orm.ResearchRun.idempotency_key == idempotency_key
+                        )
+                    )
+                    if existing is not None:
+                        if existing.request_hash != request_hash:
+                            raise IdempotencyConflictError("Idempotency-Key 已用于不同的请求")
+                        return existing.id, False
+                await self._check_capacity(s, max_inflight)
                 run = orm.ResearchRun(
                     query=query,
+                    owner_id=owner_id,
                     status="pending",
                     idempotency_key=idempotency_key,
                     request_hash=request_hash or None,
@@ -227,6 +244,128 @@ class SqlRepository:
                         "idempotency key was already used for a different request"
                     ) from exc
                 return row.id, False
+
+    async def _check_capacity(self, session: AsyncSession, maximum: int | None) -> None:
+        if maximum is not None:
+            count = await session.scalar(
+                select(func.count())
+                .select_from(orm.ResearchRun)
+                .where(orm.ResearchRun.status.in_(RUN_ACTIVE_STATUSES))
+            )
+            if int(count or 0) >= maximum:
+                raise RunQueueFullError("研究队列已满，请稍后重试")
+
+    async def find_run_once(self, idempotency_key: str, request_hash: str) -> str | None:
+        async with self._sm() as s:
+            row = await s.scalar(
+                select(orm.ResearchRun).where(orm.ResearchRun.idempotency_key == idempotency_key)
+            )
+            if row is None:
+                return None
+            if row.request_hash != request_hash:
+                raise IdempotencyConflictError("Idempotency-Key 已用于不同的请求")
+            return row.id
+
+    async def get_run_owner(self, run_id: str) -> str | None:
+        async with self._sm() as s:
+            return await s.scalar(
+                select(orm.ResearchRun.owner_id).where(orm.ResearchRun.id == run_id)
+            )
+
+    async def heartbeat_worker(self, name: str, active: int) -> None:
+        async with self._sm() as s, s.begin():
+            row = await s.get(orm.WorkerHeartbeatRow, name)
+            if row is None:
+                row = orm.WorkerHeartbeatRow(name=name)
+                s.add(row)
+            row.seen_at, row.active = datetime.now(UTC), active
+
+    async def remove_worker(self, name: str) -> None:
+        async with self._sm() as s, s.begin():
+            await s.execute(
+                sa_delete(orm.WorkerHeartbeatRow).where(orm.WorkerHeartbeatRow.name == name)
+            )
+
+    async def service_status(self, *, heartbeat_seconds: int = 30) -> dict[str, int | float]:
+        async with self._sm() as s:
+            now = datetime.now(UTC)
+            workers = list(
+                await s.scalars(
+                    select(orm.WorkerHeartbeatRow).where(
+                        orm.WorkerHeartbeatRow.seen_at > now - timedelta(seconds=heartbeat_seconds)
+                    )
+                )
+            )
+            queued, oldest = (
+                await s.execute(
+                    select(func.count(), func.min(orm.ResearchRun.claimable_at)).where(
+                        orm.ResearchRun.status == "pending",
+                        orm.ResearchRun.claimable_at.is_not(None),
+                    )
+                )
+            ).one()
+            counts = {
+                status: int(count)
+                for status, count in await s.execute(
+                    select(orm.ResearchRun.status, func.count()).group_by(orm.ResearchRun.status)
+                )
+            }
+            tokens = await s.scalar(select(func.sum(orm.ResearchRun.total_tokens)))
+            provider_requests, provider_limited = (
+                await s.execute(
+                    select(
+                        func.sum(orm.ProviderStateRow.requests),
+                        func.sum(orm.ProviderStateRow.limited),
+                    )
+                )
+            ).one()
+            cleanup_pending = await s.scalar(
+                select(func.count()).select_from(orm.ArtifactCleanupRow)
+            )
+            return {
+                "workers": len(workers),
+                "active": sum(w.active for w in workers),
+                "queued": queued,
+                "oldest_queued_seconds": max(0, (now - oldest.replace(tzinfo=UTC)).total_seconds())
+                if oldest
+                else 0,
+                "done": counts.get("done", 0),
+                "error": counts.get("error", 0),
+                "total_tokens": int(tokens or 0),
+                "provider_requests": int(provider_requests or 0),
+                "provider_limited": int(provider_limited or 0),
+                "artifact_cleanup_pending": int(cleanup_pending or 0),
+            }
+
+    async def pending_artifact_cleanup(self) -> list[tuple[str, str]]:
+        async with self._sm() as s:
+            return [
+                (row.run_id, row.slug)
+                for row in await s.scalars(
+                    select(orm.ArtifactCleanupRow)
+                    .order_by(orm.ArtifactCleanupRow.created_at)
+                    .limit(100)
+                )
+            ]
+
+    async def artifact_slug_in_use(self, slug: str) -> bool:
+        async with self._sm() as s:
+            return bool(
+                await s.scalar(
+                    select(func.count())
+                    .select_from(orm.WorkflowRunRow)
+                    .where(
+                        orm.WorkflowRunRow.checkpoint["scratch"]["_artifact_slug"].as_string()
+                        == slug
+                    )
+                )
+            )
+
+    async def finish_artifact_cleanup(self, run_id: str) -> None:
+        async with self._sm() as s, s.begin():
+            await s.execute(
+                sa_delete(orm.ArtifactCleanupRow).where(orm.ArtifactCleanupRow.run_id == run_id)
+            )
 
     async def _owned_workflow_row(
         self, s: AsyncSession, run_id: str, owner: str | None
@@ -511,7 +650,7 @@ class SqlRepository:
                 select(orm.WorkflowRunRow).where(orm.WorkflowRunRow.research_run_id == run_id)
             )
             attempt = workflow.attempt if workflow is not None else 1
-            durable = [event for event in events if event.type != "token"]
+            durable = events
             for i, ev in enumerate(durable):
                 s.add(
                     orm.EventRow(
@@ -523,6 +662,8 @@ class SqlRepository:
                         message=ev.message,
                         elapsed=ev.elapsed,
                         data=ev.data,
+                        tokens=ev.tokens,
+                        tokens_estimated=ev.tokens_estimated,
                     )
                 )
 
@@ -530,7 +671,7 @@ class SqlRepository:
         self, run_id: str, events: list[Event], *, lease_owner: str | None = None
     ) -> list[Event]:
         """Append a checkpoint's new events with monotonically increasing ids."""
-        durable = [event for event in events if event.type != "token"]
+        durable = events
         if not durable:
             return []
         async with self._sm() as s, s.begin():
@@ -564,6 +705,8 @@ class SqlRepository:
                         message=event.message,
                         elapsed=event.elapsed,
                         data=event.data,
+                        tokens=event.tokens,
+                        tokens_estimated=event.tokens_estimated,
                     )
                 )
             return appended
@@ -674,10 +817,12 @@ class SqlRepository:
             )
             return bool(cast("CursorResult[Any]", result).rowcount)
 
-    async def requeue_failed_run(self, run_id: str) -> bool:
+    async def requeue_failed_run(self, run_id: str, *, max_inflight: int | None = None) -> bool:
         now = datetime.now(UTC)
         owner = f"resume-{uuid4().hex}"
         async with self._sm() as s, s.begin():
+            await transaction_lock(s, "run-admission")
+            await self._check_capacity(s, max_inflight)
             fenced = await s.execute(
                 update(orm.WorkflowRunRow)
                 .where(
@@ -720,7 +865,9 @@ class SqlRepository:
             workflow.lease_expires_at = None
             return True
 
-    async def claim_next_run(self, owner: str, *, lease_seconds: int = 120) -> ClaimedRun | None:
+    async def claim_next_run(
+        self, owner: str, *, lease_seconds: int = 120, max_active_runs: int | None = None
+    ) -> ClaimedRun | None:
         """Claim the oldest queued or abandoned run whose lease is free.
 
         Candidate selection and the actual claim are deliberately separate.
@@ -729,6 +876,8 @@ class SqlRepository:
         and it is the same arbiter crash recovery already relies on.  A worker
         that loses the race simply moves on to the next candidate.
         """
+        if max_active_runs is not None:
+            return await self._claim_with_limit(owner, lease_seconds, max_active_runs)
         for _ in range(_CLAIM_CANDIDATE_LIMIT):
             candidate = await self._next_claim_candidate()
             if candidate is None:
@@ -742,6 +891,65 @@ class SqlRepository:
             # cancelled, or dequeued).  Give the lease back and look further.
             await self.release_lease(candidate, owner)
         return None
+
+    async def _claim_with_limit(self, owner: str, seconds: int, maximum: int) -> ClaimedRun | None:
+        async with self._sm() as s, s.begin():
+            await transaction_lock(s, "run-admission")
+            now = datetime.now(UTC)
+            joined = select(orm.ResearchRun).join(
+                orm.WorkflowRunRow, orm.WorkflowRunRow.research_run_id == orm.ResearchRun.id
+            )
+            active = await s.scalar(
+                select(func.count())
+                .select_from(orm.ResearchRun)
+                .join(orm.WorkflowRunRow, orm.WorkflowRunRow.research_run_id == orm.ResearchRun.id)
+                .where(
+                    orm.ResearchRun.status.in_(RUN_ACTIVE_STATUSES),
+                    orm.WorkflowRunRow.lease_owner.is_not(None),
+                    orm.WorkflowRunRow.lease_expires_at > now,
+                )
+            )
+            if int(active or 0) >= maximum:
+                return None
+            row = await s.scalar(
+                joined.where(
+                    orm.ResearchRun.status.in_(("pending", "running")),
+                    orm.ResearchRun.claimable_at <= now,
+                    or_(
+                        orm.WorkflowRunRow.lease_owner.is_(None),
+                        orm.WorkflowRunRow.lease_expires_at.is_(None),
+                        orm.WorkflowRunRow.lease_expires_at <= now,
+                    ),
+                )
+                .order_by(orm.ResearchRun.claimable_at)
+                .limit(1)
+            )
+            if row is None:
+                return None
+            workflow = await s.scalar(
+                select(orm.WorkflowRunRow)
+                .where(orm.WorkflowRunRow.research_run_id == row.id)
+                .options(selectinload(orm.WorkflowRunRow.steps))
+            )
+            assert workflow is not None
+            resumed = bool(workflow.checkpoint) and row.status == "running"
+            workflow.lease_owner, workflow.lease_expires_at = (
+                owner,
+                now + timedelta(seconds=seconds),
+            )
+            row.status = "running"
+            row.claim_attempts = (row.claim_attempts or 0) + 1
+            if resumed:
+                workflow.attempt = max(1, workflow.attempt or 1) + 1
+            return ClaimedRun(
+                row.id,
+                row.query,
+                owner,
+                _workflow_run(workflow),
+                workflow.attempt,
+                row.claim_attempts,
+                resumed,
+            )
 
     async def _next_claim_candidate(self) -> str | None:
         now = datetime.now(UTC)
@@ -831,6 +1039,14 @@ class SqlRepository:
     async def delete_run(self, run_id: str) -> bool:
         # 单条 DELETE：DB 级 ondelete=CASCADE 清子表（SQLite 已开 foreign_keys=ON）
         async with self._sm() as s, s.begin():
+            workflow = await s.scalar(
+                select(orm.WorkflowRunRow).where(orm.WorkflowRunRow.research_run_id == run_id)
+            )
+            scratch = workflow.checkpoint.get("scratch", {}) if workflow else {}
+            slug = scratch.get("_artifact_slug") if isinstance(scratch, dict) else None
+            if isinstance(slug, str) and slug:
+                target = f"runs/{run_id}" if scratch.get("_artifact_run_scoped") else slug
+                s.add(orm.ArtifactCleanupRow(run_id=run_id, slug=target))
             result = await s.execute(sa_delete(orm.ResearchRun).where(orm.ResearchRun.id == run_id))
             return bool(cast("CursorResult[Any]", result).rowcount)
 
@@ -842,13 +1058,18 @@ class SqlRepository:
             for tag in cleaned:
                 s.add(orm.RunTagRow(run_id=run_id, tag=tag))
 
-    async def list_tags(self) -> list[TagCount]:
+    async def list_tags(self, *, owner_id: str | None = None) -> list[TagCount]:
         async with self._sm() as s:
+            stmt = select(orm.RunTagRow.tag, func.count()).join(
+                orm.ResearchRun, orm.ResearchRun.id == orm.RunTagRow.run_id
+            )
+            if owner_id is not None:
+                stmt = stmt.where(orm.ResearchRun.owner_id == owner_id)
             rows = (
                 await s.execute(
-                    select(orm.RunTagRow.tag, func.count())
-                    .group_by(orm.RunTagRow.tag)
-                    .order_by(func.count().desc(), orm.RunTagRow.tag)
+                    stmt.group_by(orm.RunTagRow.tag).order_by(
+                        func.count().desc(), orm.RunTagRow.tag
+                    )
                 )
             ).all()
             return [TagCount(tag=tag, count=int(count)) for tag, count in rows]
@@ -861,6 +1082,7 @@ class SqlRepository:
         status: str | None = None,
         q: str | None = None,
         tag: str | None = None,
+        owner_id: str | None = None,
     ) -> list[RunSummary]:
         async with self._sm() as s:
             stmt = (
@@ -870,6 +1092,8 @@ class SqlRepository:
             )
             if status:
                 stmt = stmt.where(orm.ResearchRun.status == status)
+            if owner_id is not None:
+                stmt = stmt.where(orm.ResearchRun.owner_id == owner_id)
             if q:
                 stmt = stmt.where(orm.ResearchRun.query.ilike(f"%{q}%"))
             if tag:
@@ -881,6 +1105,7 @@ class SqlRepository:
                     id=r.id,
                     query=r.query,
                     status=r.status,
+                    owner_id=r.owner_id,
                     created_at=r.created_at,
                     total_tokens=r.total_tokens,
                     elapsed=r.elapsed,
@@ -986,6 +1211,7 @@ class SqlRepository:
                 orchestration = _workflow_run(run.orchestration)
             return RunDetail(
                 id=run.id,
+                owner_id=run.owner_id,
                 query=run.query,
                 status=run.status,
                 interpretation=run.interpretation,
@@ -1048,6 +1274,8 @@ class SqlRepository:
                     message=r.message,
                     elapsed=r.elapsed,
                     data=r.data,
+                    tokens=r.tokens,
+                    tokens_estimated=r.tokens_estimated,
                 )
                 for r in rows
             ]

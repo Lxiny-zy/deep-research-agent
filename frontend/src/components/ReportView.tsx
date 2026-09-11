@@ -39,7 +39,10 @@ export default function ReportView({
   const activeCitationRef = useRef(activeCitation)
   activeCitationRef.current = activeCitation
   const citationTriggerRef = useRef<HTMLButtonElement | null>(null)
-  const targets = useMemo(() => resolveCitationTargets(markdown, citations), [markdown, citations])
+  const targets = useMemo(
+    () => (streaming ? [] : resolveCitationTargets(markdown, citations)),
+    [markdown, citations, streaming],
+  )
   const overview = useMemo(() => summarizeEvidence(findings), [findings])
   // 参考来源列表。结构化文档把「## 参考来源」从正文里剥掉并放进独立的
   // references 字段（见 report/assemble.py 的 _body），所以正文本身不再带
@@ -48,7 +51,10 @@ export default function ReportView({
   // 正文统一剥掉尾部的参考来源段：来源由下面独立成节渲染，两种数据源
   // （结构化文档已剥离 / 旧 report.markdown 未剥离）因此行为一致，不会有
   // 一种路径印两遍、另一种路径不印。
-  const body = useMemo(() => stripTrailingReferences(markdown), [markdown])
+  const body = useMemo(
+    () => (streaming ? markdown : stripTrailingReferences(markdown)),
+    [markdown, streaming],
+  )
   const closeEvidence = useCallback(() => {
     setActiveCitation(null)
     citationTriggerRef.current?.focus()
@@ -56,6 +62,11 @@ export default function ReportView({
 
   const components = useMemo<Components>(
     () => ({
+      pre: ({ children }) => (
+        <pre tabIndex={0} aria-label="代码示例">
+          {children}
+        </pre>
+      ),
       a: ({ href, children, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement>) => {
         const link = href ?? ''
         if (!link.startsWith(CITE_HREF_PREFIX)) {
@@ -162,9 +173,16 @@ export default function ReportView({
       )}
       <div className="report-view-body">
         <div className="report markdown-content">
-          <Markdown remarkPlugins={[remarkGfm, remarkCitations]} components={components}>
-            {body}
-          </Markdown>
+          {streaming ? (
+            <>
+              <p className="hint">正文正在生成，完成前内容可能调整。结论请结合引用来源核对。</p>
+              <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{body}</div>
+            </>
+          ) : (
+            <Markdown remarkPlugins={[remarkGfm, remarkCitations]} components={components}>
+              {body}
+            </Markdown>
+          )}
           {streaming && <span className="cursor">▍</span>}
           {/* 流式阶段不渲染来源节：正文还在写，此时的 citations 是残缺快照，
               先给出一份会随后变化的清单，比暂时不给更容易误导。 */}

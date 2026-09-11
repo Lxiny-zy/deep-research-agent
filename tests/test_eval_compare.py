@@ -29,7 +29,7 @@ from tests.fakes import FakeLLM, FakeSearch
 
 
 class FakeJudge:
-    async def score(self, query: str, markdown: str, notes: str = "") -> EvalScore:
+    async def score(self, query: str, markdown: str, notes: str = "", *, sources=()) -> EvalScore:
         return EvalScore(coverage=4, groundedness=4, depth=3, coherence=5, justification="ok")
 
 

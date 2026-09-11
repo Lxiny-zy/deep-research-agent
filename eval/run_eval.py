@@ -26,7 +26,7 @@ import json
 import time
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -34,7 +34,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from deep_research.config import Settings
-from deep_research.models import QualityMetrics, RunManifest
+from deep_research.models import QualityMetrics, RunManifest, Source
 from deep_research.orchestrator import (
     DeepResearchAgent,
     create_initial_execution,
@@ -42,7 +42,11 @@ from deep_research.orchestrator import (
 from deep_research.persistence.db import make_engine, make_sessionmaker, prepare_sqlite_schema
 from deep_research.persistence.repository import ResearchRepository
 from deep_research.persistence.sql_repository import SqlRepository
-from deep_research.reproducibility import RUN_MANIFEST_CHECKPOINT_KEY, quality_metrics
+from deep_research.reproducibility import (
+    RUN_MANIFEST_CHECKPOINT_KEY,
+    RecordingSearchTool,
+    quality_metrics,
+)
 
 from .dataset import CASES, EvalCase
 from .judge import EvalScore, Judge
@@ -76,6 +80,8 @@ class EvalRow:
     run_id: str = ""
     manifest: RunManifest | None = None
     metrics: QualityMetrics | None = None
+    report_markdown: str = ""
+    source_snapshots: list[Source] = field(default_factory=list)
 
 
 def _default_agent_factory(settings: Settings, workflow: str) -> DeepResearchAgent:
@@ -131,11 +137,26 @@ async def run_comparison(
                 execution = create_initial_execution(case.query, wf, run_settings)
                 run_id = await repository.create_run(case.query, execution=execution)
                 agent = persistent_agent_factory(run_settings, wf, repository, run_id, execution)
+            snapshots: list[Source] = []
+            recorder = getattr(agent, "search_tool", None)
+            if repository is None and isinstance(recorder, RecordingSearchTool):
+
+                async def collect(sources: list[Source], target: list[Source] = snapshots) -> None:
+                    target.extend(sources)
+
+                recorder.set_sink(collect)
             try:
                 started = time.monotonic()
                 report = await agent.run(case.query)
                 wall = time.monotonic() - started
-                score = await judge.score(case.query, report.markdown, case.notes)  # type: ignore[attr-defined]
+                detail = await repository.get_run(run_id) if repository is not None else None
+                if repository is not None and detail is None:
+                    raise RuntimeError(f"persisted benchmark run disappeared: {run_id}")
+                if detail is not None:
+                    snapshots = detail.sources
+                score = await judge.score(  # type: ignore[attr-defined]
+                    case.query, report.markdown, case.notes, sources=snapshots
+                )
                 row = EvalRow(
                     case.id,
                     wf,
@@ -144,11 +165,11 @@ async def run_comparison(
                     wall_seconds=wall,
                     budget=budget,
                     run_id=run_id,
+                    report_markdown=report.markdown,
+                    source_snapshots=snapshots,
                 )
                 if repository is not None:
-                    detail = await repository.get_run(run_id)
-                    if detail is None:
-                        raise RuntimeError(f"persisted benchmark run disappeared: {run_id}")
+                    assert detail is not None
                     detail.events = await repository.get_events(run_id)
                     scratch = (
                         detail.orchestration.checkpoint.get("scratch", {})
@@ -254,7 +275,7 @@ def format_comparison(rows: list[EvalRow], workflow_names: list[str]) -> str:
     for r in rows:
         s = r.score
         lines.append(
-            f"{r.case_id:<22}{r.workflow:<10}{s.coverage:>5}{s.groundedness:>5}"
+            f"{r.case_id:<22}{r.workflow:<10}{s.coverage:>5}{str(s.groundedness or 'n/a'):>5}"
             f"{s.depth:>5}{s.coherence:>5}{s.average:>7}{r.tokens:>9}{r.wall_seconds:>8.1f}"
         )
 
@@ -316,7 +337,7 @@ def format_markdown(
         snapshot_coverage = f"{metrics.cited_source_snapshot_coverage:.1%}" if metrics else "n/a"
         md.append(
             f"| {r.case_id} | {r.workflow} | {r.run_id or '-'} | {s.coverage} "
-            f"| {s.groundedness} | {s.depth} | {s.coherence} | {s.average} "
+            f"| {s.groundedness or 'n/a'} | {s.depth} | {s.coherence} | {s.average} "
             f"| {verified_rate} | {supported_rate} | {eligible_rate} | {snapshot_coverage} "
             f"| {r.tokens} "
             f"| {r.wall_seconds:.1f} | {row_budget} |"
@@ -400,6 +421,8 @@ def benchmark_payload(
     )
     payload: dict[str, Any] = {
         "schema_version": 1,
+        "judge_protocol": "source-snapshots-v2",
+        "review_status": "unreviewed",
         "generated_at": generated_at,
         "workflows": workflow_names,
         "budget": budget,
@@ -417,6 +440,10 @@ def benchmark_payload(
                 "budget": row.budget,
                 "manifest": row.manifest.model_dump(mode="json") if row.manifest else None,
                 "metrics": row.metrics.model_dump(mode="json") if row.metrics else None,
+                "report_markdown": row.report_markdown,
+                "source_snapshots": [
+                    source.model_dump(mode="json") for source in row.source_snapshots
+                ],
             }
             for row in rows
         ],

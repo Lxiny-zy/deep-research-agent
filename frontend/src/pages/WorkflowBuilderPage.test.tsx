@@ -69,12 +69,14 @@ vi.mock('../components/WorkflowEditor', () => ({
     onCancel,
     pending,
     error,
+    conflict,
   }: {
     initial: WorkflowDef | null
     onSubmit: (body: WorkflowDefInput) => void
     onCancel: () => void
     pending?: boolean
     error?: string
+    conflict?: WorkflowDef | null
   }) => (
     <div
       data-testid="workflow-editor"
@@ -93,6 +95,11 @@ vi.mock('../components/WorkflowEditor', () => ({
       </button>
       <span data-testid="editor-pending">{String(!!pending)}</span>
       <span data-testid="editor-version">{String(initial?.version ?? '')}</span>
+      {conflict && (
+        <button data-testid="overwrite-editor" onClick={() => onSubmit({ version: conflict.version })}>
+          用当前草稿覆盖
+        </button>
+      )}
       {error && <span data-testid="editor-error">{error}</span>}
     </div>
   ),
@@ -241,7 +248,7 @@ describe('WorkflowBuilderPage edit sessions', () => {
     )
   })
 
-  it('refreshes only the version after conflict so retry carries the server version', async () => {
+  it('retains the base version until the user explicitly chooses to overwrite', async () => {
     const { container } = await renderPage()
 
     fireEvent.click(editButton(container, 0))
@@ -258,9 +265,11 @@ describe('WorkflowBuilderPage edit sessions', () => {
 
     expect(mocks.refetch).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('workflow-editor')).toHaveAttribute('data-workflow', 'alpha')
-    expect(screen.getByTestId('editor-version')).toHaveTextContent('2')
+    expect(screen.getByTestId('editor-version')).toHaveTextContent('1')
 
     fireEvent.click(screen.getByTestId('save-editor'))
-    expect(mocks.updateMutate.mock.calls[1][0].body.version).toBe(2)
+    expect(mocks.updateMutate.mock.calls[1][0].body.version).toBe(1)
+    fireEvent.click(screen.getByTestId('overwrite-editor'))
+    expect(mocks.updateMutate.mock.calls[2][0].body.version).toBe(2)
   })
 })

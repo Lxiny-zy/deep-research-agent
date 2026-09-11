@@ -14,6 +14,9 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    cpus: "${DB_CPUS:-1.0}"
+    mem_limit: ${DB_MEMORY_LIMIT:-1g}
+    pids_limit: 128
     environment:
       POSTGRES_USER: dr
       # 必填：在 .env 中设置 POSTGRES_PASSWORD（不再提供弱口令默认值）
@@ -60,6 +63,10 @@ services:
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-4}
       RESULTS_PER_SEARCH: ${RESULTS_PER_SEARCH:-5}
       MAX_TOKENS: ${MAX_TOKENS:-100000}
+      LLM_MAX_INPUT_CHARS: ${LLM_MAX_INPUT_CHARS:-200000}
+      LLM_MAX_OUTPUT_TOKENS: ${LLM_MAX_OUTPUT_TOKENS:-8192}
+      DR_PROVIDER_MAX_CONCURRENCY: ${DR_PROVIDER_MAX_CONCURRENCY:-2}
+      DR_PROVIDER_REQUESTS_PER_MINUTE: ${DR_PROVIDER_REQUESTS_PER_MINUTE:-120}
       MAX_REPLANS: ${MAX_REPLANS:-1}
       REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-60}
       MAX_RUN_SECONDS: ${MAX_RUN_SECONDS:-3600}
@@ -71,13 +78,14 @@ services:
       INTENT_SOURCE_SCREENING: ${INTENT_SOURCE_SCREENING:-true}
       # Production mode fails fast unless authentication and catalog encryption are configured.
       API_KEY: ${API_KEY:-}
+      DR_API_KEYS: ${DR_API_KEYS:-}
       CATALOG_ENCRYPTION_KEY: ${CATALOG_ENCRYPTION_KEY:-}
       PROVIDER_HOST_ALLOWLIST: ${PROVIDER_HOST_ALLOWLIST:-}
       # 经可信反向代理访问时启用，按代理覆盖写入的客户端 IP 分配限流额度。
       APP_TRUST_PROXY: ${APP_TRUST_PROXY:-false}
       # Uvicorn 对 X-Forwarded-* 的独立信任边界；经宿主机反代时按 README 配置。
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
-      # 前端设置中心写入的运行时配置持久化到独立数据卷，容器重建不丢失
+      # JSON 仅作为旧配置导入/本地兼容路径；API 与 worker 以数据库加密配置为准。
       RUNTIME_CONFIG_PATH: /app/data/runtime_config.json
       # inline（默认）＝API 自己执行；worker＝只入队，由 worker 服务执行。
       DR_EXECUTION_MODE: ${DR_EXECUTION_MODE:-inline}
@@ -88,11 +96,17 @@ services:
       DR_ORCHESTRATION_MODE: ${DR_ORCHESTRATION_MODE:-planner-driven}
       DR_ARTIFACT_ROOT: ${DR_ARTIFACT_ROOT:-/app/artifacts}
       DR_ARTIFACT_MAX_BYTES: ${DR_ARTIFACT_MAX_BYTES:-104857600}
+      DR_ARTIFACT_TOTAL_BYTES: ${DR_ARTIFACT_TOTAL_BYTES:-10737418240}
       DR_RUNNER_ENABLED: ${DR_RUNNER_ENABLED:-true}
+      DR_RUNNER_ISOLATION: ${DR_RUNNER_ISOLATION:-required}
+      DR_RUNNER_MEMORY_BYTES: ${DR_RUNNER_MEMORY_BYTES:-1073741824}
       DR_RUNNER_DEFAULT_TIMEOUT: ${DR_RUNNER_DEFAULT_TIMEOUT:-300}
       DR_RUNNER_MAX_OUTPUT_BYTES: ${DR_RUNNER_MAX_OUTPUT_BYTES:-256000}
       DR_RUNNER_MAX_PROCESSES: ${DR_RUNNER_MAX_PROCESSES:-2}
       DR_RUNNER_ALLOWED_OPERATIONS: ${DR_RUNNER_ALLOWED_OPERATIONS:-archive.unpack,pdf.convert,latex.compile}
+    cpus: "${API_CPUS:-2.0}"
+    mem_limit: ${API_MEMORY_LIMIT:-2g}
+    pids_limit: 256
     # 仅绑回环：对外访问应经反向代理（nginx/caddy）做 TLS 与速率限制
     ports:
       - "${APP_BIND:-127.0.0.1}:8000:8000"
@@ -126,7 +140,7 @@ services:
         max-file: "5"
 
   # 独立执行进程。仅在 DR_EXECUTION_MODE=worker 时需要（compose profile 控制），
-  # 可任意扩副本：全局并发 = 副本数 × MAX_ACTIVE_RUNS。
+  # 可扩副本；MAX_ACTIVE_RUNS 是数据库协调的整个服务并发上限。
   worker:
     build: .
     profiles: ["worker"]
@@ -134,6 +148,9 @@ services:
     environment:
       <<: *app_env
       DR_EXECUTION_MODE: worker
+    cpus: "${WORKER_CPUS:-2.0}"
+    mem_limit: ${WORKER_MEMORY_LIMIT:-2g}
+    pids_limit: 256
     depends_on:
       db:
         condition: service_healthy
@@ -147,9 +164,12 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp:size=64m,noexec,nosuid,nodev
-    # 镜像自带的 HEALTHCHECK 探的是 :8000，worker 不监听端口，必须显式关掉。
     healthcheck:
-      disable: true
+      test: ["CMD", "python", "-m", "deep_research.worker", "--check"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     restart: unless-stopped
     # 优雅退出：停止领取新任务并等待在跑的研究结束。超时被强杀也无妨——
     # 租约到期后另一个 worker 会从 checkpoint 接管续跑。

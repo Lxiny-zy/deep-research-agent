@@ -38,6 +38,10 @@ class IdempotencyConflictError(RuntimeError):
     """The same idempotency key was reused with a different request payload."""
 
 
+class RunQueueFullError(RuntimeError):
+    """The shared service has no capacity for another active or queued run."""
+
+
 RUN_ACTIVE_STATUSES = frozenset({"pending", "running", "cancelling"})
 RUN_TERMINAL_STATUSES = frozenset({"cancelled", "done", "error"})
 
@@ -49,6 +53,7 @@ class RunSummary:
     id: str
     query: str
     status: str
+    owner_id: str | None = None
     created_at: datetime | None = None
     total_tokens: int = 0
     elapsed: float = 0.0
@@ -62,6 +67,7 @@ class RunDetail:
     id: str
     query: str
     status: str
+    owner_id: str | None = None
     interpretation: str = ""
     sub_questions: list[SubQuestion] = field(default_factory=list)
     results: list[ResearchResult] = field(default_factory=list)
@@ -127,6 +133,8 @@ class ResearchRepository(Protocol):
         execution: WorkflowRun | None = None,
         lease_owner: str | None = None,
         claimable: bool = False,
+        owner_id: str | None = None,
+        max_inflight: int | None = None,
     ) -> tuple[str, bool]:
         """Create a run once; return ``(run_id, created)``.
 
@@ -136,6 +144,22 @@ class ResearchRepository(Protocol):
         """
         ...
 
+    async def find_run_once(self, idempotency_key: str, request_hash: str) -> str | None: ...
+
+    async def get_run_owner(self, run_id: str) -> str | None: ...
+
+    async def heartbeat_worker(self, name: str, active: int) -> None: ...
+
+    async def remove_worker(self, name: str) -> None: ...
+
+    async def service_status(self, *, heartbeat_seconds: int = 30) -> dict[str, int | float]: ...
+
+    async def pending_artifact_cleanup(self) -> list[tuple[str, str]]: ...
+
+    async def finish_artifact_cleanup(self, run_id: str) -> None: ...
+
+    async def artifact_slug_in_use(self, slug: str) -> bool: ...
+
     async def enqueue_run(self, run_id: str) -> bool:
         """Mark an existing active run as claimable; return ``False`` if absent.
 
@@ -144,7 +168,7 @@ class ResearchRepository(Protocol):
         """
         ...
 
-    async def requeue_failed_run(self, run_id: str) -> bool:
+    async def requeue_failed_run(self, run_id: str, *, max_inflight: int | None = None) -> bool:
         """Atomically requeue a failed checkpointed run for worker recovery.
 
         Implementations must reject runs without a checkpoint and runs whose
@@ -154,7 +178,9 @@ class ResearchRepository(Protocol):
         """
         ...
 
-    async def claim_next_run(self, owner: str, *, lease_seconds: int = 120) -> ClaimedRun | None:
+    async def claim_next_run(
+        self, owner: str, *, lease_seconds: int = 120, max_active_runs: int | None = None
+    ) -> ClaimedRun | None:
         """Atomically claim one queued or abandoned run, or return ``None``.
 
         The workflow lease is the cross-process arbiter, exactly as it is for
@@ -237,7 +263,7 @@ class ResearchRepository(Protocol):
 
     async def set_tags(self, run_id: str, tags: list[str]) -> None: ...
 
-    async def list_tags(self) -> list[TagCount]: ...
+    async def list_tags(self, *, owner_id: str | None = None) -> list[TagCount]: ...
 
     async def list_runs(
         self,
@@ -247,6 +273,7 @@ class ResearchRepository(Protocol):
         status: str | None = None,
         q: str | None = None,
         tag: str | None = None,
+        owner_id: str | None = None,
     ) -> list[RunSummary]: ...
 
     async def get_run(self, run_id: str) -> RunDetail | None: ...

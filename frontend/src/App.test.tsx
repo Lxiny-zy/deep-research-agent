@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { clearApiKey, getApiKey, setApiKey } from './api/client'
 import App from './App'
 
@@ -13,13 +14,15 @@ vi.mock('./components/LoginGate', () => ({
 
 function renderApp() {
   return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <MemoryRouter initialEntries={['/']}>
       <Routes>
         <Route path="/" element={<App />}>
           <Route index element={<div data-testid="console">console</div>} />
         </Route>
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
+    </QueryClientProvider>,
   )
 }
 
@@ -37,10 +40,8 @@ describe('App authentication bootstrap', () => {
     renderApp()
 
     expect(await screen.findByTestId('console')).toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/config',
-      expect.not.objectContaining({ headers: expect.anything() }),
-    )
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/config')
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has('Authorization')).toBe(false)
     expect(screen.queryByTestId('login-gate')).not.toBeInTheDocument()
   })
 
@@ -64,18 +65,16 @@ describe('App authentication bootstrap', () => {
   })
 
   it('automatically authenticates a remembered key in a new tab session', async () => {
-    setApiKey('remembered-key')
+    setApiKey('remembered-key', true)
     sessionStorage.clear()
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response('{}', { status: 200 }))
     renderApp()
     expect(await screen.findByTestId('console')).toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/config',
-      expect.objectContaining({
-        headers: { Authorization: 'Bearer remembered-key' },
-      }),
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/config')
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')).toBe(
+      'Bearer remembered-key',
     )
     expect(screen.queryByTestId('login-gate')).not.toBeInTheDocument()
   })

@@ -1,4 +1,4 @@
-"""EventHub：多订阅者扇出、迟到订阅者回放非 token 历史、无人订阅时丢弃 token。"""
+"""EventHub：多订阅者扇出，合并正文增量与阶段事件共享有界回放窗口。"""
 
 from __future__ import annotations
 
@@ -36,11 +36,11 @@ async def test_fans_out_to_multiple_subscribers():
 
 
 @pytest.mark.asyncio
-async def test_late_subscriber_replays_non_token_history():
-    """迟到订阅者回放到已发生的非 token 历史（不含已错过的 token），再续收实时事件。"""
+async def test_late_subscriber_replays_text_and_stage_history():
+    """迟到订阅者先恢复正文和阶段历史，再续收实时事件。"""
     hub = EventHub()
     hub.publish(_ev("start"))
-    hub.publish(_ev("token"))  # token 不进缓冲，迟到者收不到
+    hub.publish(_ev("token"))
     hub.publish(_ev("finding", stage="RESEARCHER"))
 
     got: list[str] = []
@@ -55,20 +55,21 @@ async def test_late_subscriber_replays_non_token_history():
     hub.close()
     await task
 
-    assert got == ["start", "finding", "done"]
+    assert got == ["start", "token", "finding", "done"]
 
 
 @pytest.mark.asyncio
-async def test_tokens_dropped_when_no_subscriber():
-    """无订阅者时 token 不在内存堆积，仅非 token 事件进缓冲。"""
+async def test_tokens_retained_in_bounded_window_without_subscribers():
+    """无人观看时的正文也可回放，且遵守相同的内存窗口限制。"""
     hub = EventHub()
+    hub._BUFFER_MAXSIZE = 3
     hub.publish(_ev("token"))
     hub.publish(_ev("token"))
     hub.publish(_ev("start"))
     hub.publish(_ev("done"))
 
     buffered = [e.type for e in hub._buffer]
-    assert buffered == ["start", "done"]
+    assert buffered == ["token", "start", "done"]
 
 
 @pytest.mark.asyncio
@@ -84,7 +85,7 @@ async def test_subscriber_after_close_replays_then_ends():
 
 
 @pytest.mark.asyncio
-async def test_live_non_token_events_receive_stable_sequence_ids():
+async def test_live_text_and_stage_events_receive_stable_sequence_ids():
     """实时事件在持久化回填前也带可续传的序号。"""
     hub = EventHub()
     first = _ev("start")
@@ -96,8 +97,8 @@ async def test_live_non_token_events_receive_stable_sequence_ids():
     hub.close()
 
     assert first.seq == 0
-    assert second.seq == 1
-    replayed = [event async for event in hub.stream(after_seq=1)]
+    assert second.seq == 2
+    replayed = [event async for event in hub.stream(after_seq=2)]
     assert [event.type for event in replayed] == ["done"]
 
 

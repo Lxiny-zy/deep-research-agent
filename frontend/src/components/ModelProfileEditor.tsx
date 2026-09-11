@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useModelProbe } from '../hooks/useCatalog'
 import type { ModelProfile, ModelProfileInput } from '../types'
 import { AppIcon } from './AppIcon'
+import { useModalFocus } from '../hooks/useModalFocus'
 
 interface Props {
   initial?: ModelProfile | null
@@ -13,6 +15,8 @@ interface Props {
 
 /** 模型档案新建/编辑表单。api_key 留空＝保持不变（脱敏表单不回写清空）。 */
 export default function ModelProfileEditor({ initial, onSubmit, onCancel, pending, error }: Props) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalFocus(dialogRef, onCancel)
   const editing = !!initial
   const [name, setName] = useState(initial?.name ?? '')
   const [baseUrl, setBaseUrl] = useState(initial?.base_url ?? '')
@@ -67,9 +71,10 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
     onSubmit(body)
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={onCancel}>
       <div
+        ref={dialogRef}
         className="modal editor-modal"
         role="dialog"
         aria-modal="true"
@@ -150,6 +155,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
                 <input
                   className="input"
                   value={modelQuery}
+                  aria-label="筛选模型列表"
                   onChange={(e) => setModelQuery(e.target.value)}
                   placeholder="按名称搜索模型，例如 gpt / deepseek / qwen"
                 />
@@ -161,6 +167,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
             {manualModelEntry ? (
               <input
                 className="input model-select"
+                aria-label="模型 ID"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 placeholder="输入供应商提供的模型 ID，例如 deepseek-v4-pro"
@@ -168,6 +175,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
             ) : (
               <select
                 className="input model-select"
+                aria-label="模型列表"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 disabled={!models.length}
@@ -222,6 +230,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
                   className="input"
                   type="password"
                   name="model-api-credential-new"
+                  aria-label="模型服务 API Key"
                   autoComplete="new-password"
                   autoCapitalize="none"
                   autoCorrect="off"
@@ -354,6 +363,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

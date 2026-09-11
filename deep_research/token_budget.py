@@ -5,6 +5,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+
+class TokenBudgetExceeded(RuntimeError):
+    """No unreserved allowance remains for another provider call."""
+
+
+@dataclass(frozen=True)
+class TokenReservation:
+    input_tokens: int
+    output_tokens: int
+
+    @property
+    def total(self) -> int:
+        return self.input_tokens + self.output_tokens
+
 
 class TokenBudget:
     """轻量预算检查器：无锁、非异步，适合在循环判断点同步调用。"""
@@ -12,12 +28,25 @@ class TokenBudget:
     def __init__(self, *, max_tokens: int | None = None) -> None:
         self.max_tokens = max_tokens  # None = 不限
         self._consumed = 0
+        self._reserved = 0
 
     @property
     def remaining(self) -> int | None:
         if self.max_tokens is None:
             return None
-        return max(0, self.max_tokens - self._consumed)
+        return max(0, self.max_tokens - self._consumed - self._reserved)
+
+    def reserve(self, input_tokens: int, output_limit: int) -> TokenReservation:
+        remaining = self.remaining
+        output = output_limit if remaining is None else min(output_limit, remaining - input_tokens)
+        if output < 1:
+            raise TokenBudgetExceeded("Token 预算不足，已停止新增模型请求")
+        reservation = TokenReservation(input_tokens, output)
+        self._reserved += reservation.total
+        return reservation
+
+    def release(self, reservation: TokenReservation) -> None:
+        self._reserved = max(0, self._reserved - reservation.total)
 
     @property
     def exhausted(self) -> bool:

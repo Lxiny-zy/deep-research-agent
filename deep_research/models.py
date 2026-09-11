@@ -73,10 +73,8 @@ class RunManifest(BaseModel):
     workflow_name: str
     workflow_hash: str
     query_hash: str
-    # Run settings are non-secret JSON scalars.  Keep strings here because
-    # deployment-level switches such as ``orchestration_mode`` are part of
-    # the reproducibility contract alongside numeric limits and booleans.
-    settings: dict[str, bool | int | float | str | None] = Field(default_factory=dict)
+    # Search selections are lists; the remaining non-secret settings are scalars.
+    settings: dict[str, bool | int | float | str | list[str] | None] = Field(default_factory=dict)
     llm_model: str = ""
     llm_endpoint: str = ""
     search_backend: str = ""

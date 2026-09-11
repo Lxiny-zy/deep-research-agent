@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -5,7 +6,41 @@ import pytest
 
 from deep_research.observability import Tracer
 from deep_research.security import ProviderURLPolicyError
+from deep_research.token_budget import TokenBudget, TokenBudgetExceeded
 from deep_research.tools.model_search import ModelSearch, cited_sources
+
+
+async def test_search_model_reserves_parallel_budget_and_bounds_output():
+    tracer = Tracer()
+    tracer.budget = TokenBudget(max_tokens=200)
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def model(request):
+        calls.append(json.loads(request.content))
+        entered.set()
+        await release.wait()
+        return httpx.Response(200, json={"usage": {"total_tokens": 12}})
+
+    tool = ModelSearch("key", endpoint="https://budget.test/responses", model="s", tracer=tracer)
+    await tool._client.aclose()
+    tool._client = httpx.AsyncClient(transport=httpx.MockTransport(model))
+    first = asyncio.create_task(tool.search("q"))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        with pytest.raises(TokenBudgetExceeded):
+            await tool.search("q")
+        assert len(calls) == 1
+        assert 0 < calls[0]["max_output_tokens"] < 200
+        release.set()
+        with pytest.raises(ValueError, match="结构化引用"):
+            await first
+        assert tracer.budget.remaining == 188
+    finally:
+        release.set()
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        await tool.aclose()
 
 
 @pytest.mark.parametrize(
@@ -29,7 +64,11 @@ async def test_search_usage_is_charged_even_when_citations_are_invalid(usage, ex
     try:
         with pytest.raises(ValueError, match="结构化引用"):
             await tool.search("q")
-        assert tracer.total_tokens == 5 + (expected or 0)
+        if expected is None:
+            assert tracer.total_tokens > 5
+            assert tracer.estimated_tokens == tracer.total_tokens - 5
+        else:
+            assert tracer.total_tokens == 5 + expected
         assert tracer.events[0].data["usage_known"] is (expected is not None)
         assert tracer.events[0].data["total_tokens"] == expected
     finally:

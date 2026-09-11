@@ -30,6 +30,7 @@ function renderActions(over: Partial<Parameters<typeof ReportActions>[0]> = {}) 
       runId="run-1"
       documentReady
       tableOptions={TABLES}
+      capabilities={{ pdf: true, xlsx: true }}
       {...over}
     />,
   )

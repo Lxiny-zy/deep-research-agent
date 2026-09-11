@@ -1,13 +1,22 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import LoginGate from './components/LoginGate'
 import WelcomePage from './components/WelcomePage'
 import OnboardingTour from './components/OnboardingTour'
 import { hasSeenTour, markTourSeen } from './lib/onboarding'
 import { AppIcon, type AppIconName } from './components/AppIcon'
-import { clearApiKey, getApiKey, getApiKeyStorage } from './api/client'
+import {
+  ApiError,
+  clearApiKey,
+  clearWorkspaceState,
+  getApiKey,
+  getApiKeyStorage,
+  getConfig,
+} from './api/client'
 import WorkspaceAtmosphere from './components/WorkspaceAtmosphere'
 import ResearchMotif, { type MotifKind } from './components/ResearchMotif'
+import { useAmbientMotion } from './hooks/useAmbientMotion'
 
 function motifForPath(path: string): MotifKind {
   if (path.startsWith('/history')) return 'archive'
@@ -30,6 +39,8 @@ const navigation: { to: string; label: string; end?: boolean; icon: AppIconName 
 ]
 
 export default function App() {
+  const queryClient = useQueryClient()
+  const [role, setRole] = useState('reader')
   const navigationId = useId()
   const [showLogin, setShowLogin] = useState(false)
   const [authStatus, setAuthStatus] = useState<'checking' | 'guest' | 'verified' | 'error'>(
@@ -38,7 +49,9 @@ export default function App() {
   const [authError, setAuthError] = useState('')
   const [authAttempt, setAuthAttempt] = useState(0)
   const [navOpen, setNavOpen] = useState(false)
-  const [atmospherePaused, setAtmospherePaused] = useState(false)
+  const motion = useAmbientMotion()
+  const headerRef = useRef<HTMLElement>(null)
+  const navToggleRef = useRef<HTMLButtonElement>(null)
   const [showTour, setShowTour] = useState(() => !hasSeenTour())
   const location = useLocation()
   const navigate = useNavigate()
@@ -66,59 +79,79 @@ export default function App() {
 
   useEffect(() => {
     const changed = (event: StorageEvent) => {
-      if (event.key === 'dr_api_key' || event.key === null) setAuthAttempt((attempt) => attempt + 1)
+      if (event.key === 'dr_api_key' || event.key === null) {
+        clearWorkspaceState()
+        queryClient.clear()
+        setAuthStatus('checking')
+        setAuthAttempt((attempt) => attempt + 1)
+      }
     }
     window.addEventListener('storage', changed)
     return () => window.removeEventListener('storage', changed)
-  }, [])
+  }, [queryClient])
 
   useEffect(() => {
     setNavOpen(false)
   }, [location.pathname])
 
   useEffect(() => {
+    if (!navOpen) return
+    const onPointer = (event: PointerEvent) => {
+      if (!headerRef.current?.contains(event.target as Node)) setNavOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setNavOpen(false)
+      navToggleRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [navOpen])
+
+  useEffect(() => {
     const onUnauthorized = () => {
       clearApiKey()
+      queryClient.clear()
       setAuthError('')
       setAuthStatus('guest')
       setShowLogin(true)
     }
     window.addEventListener('dr:unauthorized', onUnauthorized)
     return () => window.removeEventListener('dr:unauthorized', onUnauthorized)
-  }, [])
+  }, [queryClient])
 
   useEffect(() => {
     const controller = new AbortController()
     const key = getApiKey()
 
     setAuthStatus('checking')
-    fetch('/api/config', {
-      ...(key ? { headers: { Authorization: `Bearer ${key}` } } : {}),
-      signal: controller.signal,
-    })
-      .then((response) => {
+    getConfig(controller.signal)
+      .then((config) => {
         if (controller.signal.aborted) return
-        if (response.ok) {
-          setAuthError('')
-          setAuthStatus('verified')
-          return
-        }
-        if (response.status === 401) {
+        setRole(config.access?.role ?? 'admin')
+        setAuthError('')
+        setAuthStatus('verified')
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        if (error instanceof ApiError && error.status === 401) {
           clearApiKey()
+          queryClient.clear()
           setAuthError('')
           setAuthStatus('guest')
           setShowLogin(Boolean(key))
           return
         }
-        throw new Error(`无法加载服务配置（HTTP ${response.status}）`)
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') return
         setAuthError(error instanceof Error ? error.message : '无法连接服务端')
         setAuthStatus('error')
       })
     return () => controller.abort()
-  }, [authAttempt])
+  }, [authAttempt, queryClient])
 
   const retryAuth = () => {
     setAuthError('')
@@ -127,6 +160,7 @@ export default function App() {
   }
 
   const onAuthenticated = () => {
+    queryClient.clear()
     setShowLogin(false)
     if (location.pathname === '/welcome' && getApiKey()) navigate('/')
     retryAuth()
@@ -190,10 +224,13 @@ export default function App() {
   return (
     <div
       className="app-container top-navigation-layout signal-theme"
-      data-atmosphere-paused={atmospherePaused}
+      data-atmosphere-paused={motion.inactive}
     >
-      <WorkspaceAtmosphere kind={motifForPath(location.pathname)} paused={atmospherePaused} />
-      <header className="global-header">
+      <a className="skip-link" href="#workspace-main">
+        跳到页面内容
+      </a>
+      <WorkspaceAtmosphere kind={motifForPath(location.pathname)} paused={motion.inactive} />
+      <header className="global-header" ref={headerRef}>
         <NavLink to="/" className="top-brand" aria-label="Deep Research 首页">
           <span className="brand-icon" aria-hidden="true">
             <AppIcon name="network" size={24} strokeWidth={1.7} />
@@ -217,6 +254,7 @@ export default function App() {
         <button
           type="button"
           className="mobile-nav-toggle"
+          ref={navToggleRef}
           aria-controls={navigationId}
           aria-expanded={navOpen}
           aria-label={navOpen ? '关闭导航' : '打开导航'}
@@ -230,12 +268,19 @@ export default function App() {
           id={navigationId}
           aria-label="主导航"
         >
-          {navigation.map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.end} className={linkClass}>
-              <AppIcon name={item.icon} size={15} aria-hidden="true" />
-              {item.label}
-            </NavLink>
-          ))}
+          {navigation
+            .filter(
+              (item) =>
+                role === 'admin' ||
+                item.to === '/history' ||
+                (item.to === '/' && role === 'researcher'),
+            )
+            .map((item) => (
+              <NavLink key={item.to} to={item.to} end={item.end} className={linkClass}>
+                <AppIcon name={item.icon} size={15} aria-hidden="true" />
+                {item.label}
+              </NavLink>
+            ))}
           <button
             type="button"
             className="nav-link compact-nav-action"
@@ -250,13 +295,32 @@ export default function App() {
           <button
             type="button"
             className="nav-link compact-nav-action"
-            onClick={() => setAtmospherePaused((value) => !value)}
-            aria-pressed={atmospherePaused}
-            aria-label={atmospherePaused ? '播放背景动效' : '暂停背景动效'}
-            title={atmospherePaused ? '播放背景动效' : '暂停背景动效'}
+            onClick={motion.toggle}
+            disabled={motion.reduced}
+            aria-pressed={motion.paused}
+            aria-label={
+              motion.reduced
+                ? '背景动效已按系统设置暂停'
+                : motion.paused
+                  ? '播放背景动效'
+                  : '暂停背景动效'
+            }
+            title={
+              motion.reduced
+                ? '已跟随系统减少动态效果'
+                : motion.paused
+                  ? '播放背景动效'
+                  : '暂停背景动效'
+            }
           >
-            <AppIcon name={atmospherePaused ? 'play' : 'pause'} size={15} aria-hidden="true" />
-            <span>{atmospherePaused ? '播放背景动效' : '暂停背景动效'}</span>
+            <AppIcon name={motion.paused ? 'play' : 'pause'} size={15} aria-hidden="true" />
+            <span>
+              {motion.reduced
+                ? '已跟随系统减少动效'
+                : motion.paused
+                  ? '播放背景动效'
+                  : '暂停背景动效'}
+            </span>
           </button>
           <NavLink
             to="/welcome"
@@ -286,12 +350,25 @@ export default function App() {
           <button
             type="button"
             className="atmosphere-toggle"
-            onClick={() => setAtmospherePaused((value) => !value)}
-            aria-pressed={atmospherePaused}
-            aria-label={atmospherePaused ? '播放背景动效' : '暂停背景动效'}
-            title={atmospherePaused ? '播放背景动效' : '暂停背景动效'}
+            onClick={motion.toggle}
+            disabled={motion.reduced}
+            aria-pressed={motion.paused}
+            aria-label={
+              motion.reduced
+                ? '背景动效已按系统设置暂停'
+                : motion.paused
+                  ? '播放背景动效'
+                  : '暂停背景动效'
+            }
+            title={
+              motion.reduced
+                ? '已跟随系统减少动态效果'
+                : motion.paused
+                  ? '播放背景动效'
+                  : '暂停背景动效'
+            }
           >
-            <AppIcon name={atmospherePaused ? 'play' : 'pause'} size={15} aria-hidden="true" />
+            <AppIcon name={motion.paused ? 'play' : 'pause'} size={15} aria-hidden="true" />
           </button>
 
           <button
@@ -323,9 +400,19 @@ export default function App() {
         </div>
       </header>
 
-      <main className="main-content">
+      <main className="main-content" id="workspace-main" tabIndex={-1}>
         <div className="content-area route-enter" key={location.pathname}>
-          <Outlet />
+          {(role !== 'admin' &&
+            ['/settings', '/agents', '/workflows'].includes(location.pathname)) ||
+          (role === 'reader' && location.pathname === '/') ? (
+            <section className="panel panel-body stack" role="status">
+              <h1>当前身份没有此操作权限</h1>
+              <p>可以查看你有权访问的研究记录，或使用管理员分配的密钥切换身份。</p>
+              <NavLink to="/history">查看研究历史</NavLink>
+            </section>
+          ) : (
+            <Outlet context={{ role }} />
+          )}
           <div className="workspace-trail" aria-hidden="true">
             <span className="workspace-trail-line" />
             <ResearchMotif kind={motifForPath(location.pathname)} />

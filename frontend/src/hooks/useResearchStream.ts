@@ -53,6 +53,8 @@ export function reduceStream(prev: ResearchStreamState, ev: ResearchEvent): Rese
     tokens: ev.tokens ?? prev.tokens,
     tokensEstimated: ev.tokens_estimated ?? prev.tokensEstimated,
   }
+  const events =
+    ev.type === 'token' || ev.type === 'report' ? base.events : [...base.events.slice(-4999), ev]
   switch (ev.type) {
     case 'token': {
       const delta = (ev.data as { delta?: string } | null)?.delta ?? ''
@@ -64,36 +66,36 @@ export function reduceStream(prev: ResearchStreamState, ev: ResearchEvent): Rese
     }
     case 'finding': {
       const count = (ev.data as { count?: number } | null)?.count ?? 0
-      return { ...base, findings: base.findings + count, events: [...base.events, ev] }
+      return { ...base, findings: base.findings + count, events }
     }
     case 'done':
       if (!isTerminal(ev)) {
-        return { ...base, events: [...base.events, ev] }
+        return { ...base, events }
       }
       return {
         ...base,
         status: 'done',
         stats: (ev.data as unknown as RunStats | null) ?? base.stats,
-        events: [...base.events, ev],
+        events,
       }
     case 'error':
       if (!isTerminal(ev)) {
         // 非致命的单点失败：只进时间线，不终止整次运行的展示
-        return { ...base, events: [...base.events, ev] }
+        return { ...base, events }
       }
-      return { ...base, status: 'error', events: [...base.events, ev] }
+      return { ...base, status: 'error', events }
     case 'cancelled':
       if (!isTerminal(ev)) {
-        return { ...base, events: [...base.events, ev] }
+        return { ...base, events }
       }
-      return { ...base, status: 'cancelled', events: [...base.events, ev] }
+      return { ...base, status: 'cancelled', events }
     case 'info': {
       const dag = (ev.data as { dag?: DagData } | null)?.dag
-      return { ...base, dag: dag ?? base.dag, events: [...base.events, ev] }
+      return { ...base, dag: dag ?? base.dag, events }
     }
     default:
       // start / round → 时间线
-      return { ...base, events: [...base.events, ev] }
+      return { ...base, events }
   }
 }
 
@@ -116,6 +118,18 @@ export function useResearchStream(runId: string | null, restartToken = 0): Resea
     let disposed = false
     let terminal = false
     let lastEventId: string | undefined
+    let tokenParts: string[] = []
+    let tokenEvent: ResearchEvent | null = null
+    let tokenTimer: ReturnType<typeof setTimeout> | undefined
+    const flushTokens = () => {
+      clearTimeout(tokenTimer)
+      tokenTimer = undefined
+      if (!tokenEvent || disposed) return
+      const event = { ...tokenEvent, data: { ...tokenEvent.data, delta: tokenParts.join('') } }
+      tokenEvent = null
+      tokenParts = []
+      setState((prev) => reduceStream(prev, event))
+    }
 
     const onMessage = (data: string, eventId?: string) => {
       // streamRun may dispatch several already-buffered SSE events
@@ -129,6 +143,13 @@ export function useResearchStream(runId: string | null, restartToken = 0): Resea
         return
       }
       if (eventId) lastEventId = eventId
+      if (ev.type === 'token') {
+        tokenParts.push((ev.data as { delta?: string } | null)?.delta ?? '')
+        tokenEvent = ev
+        tokenTimer ??= setTimeout(flushTokens, 100)
+        return
+      }
+      flushTokens()
       setState((prev) => reduceStream(prev, ev))
       if (isTerminal(ev)) {
         terminal = true
@@ -155,6 +176,7 @@ export function useResearchStream(runId: string | null, restartToken = 0): Resea
         await new Promise((resolve) => window.setTimeout(resolve, Math.min(4000, 250 * 2 ** retry)))
       }
       if (!disposed && !terminal) {
+        flushTokens()
         setState((prev) =>
           prev.status === 'streaming' ? { ...prev, status: 'disconnected' } : prev,
         )
@@ -163,6 +185,7 @@ export function useResearchStream(runId: string | null, restartToken = 0): Resea
 
     return () => {
       disposed = true
+      clearTimeout(tokenTimer)
       controller.abort()
     }
   }, [restartToken, runId])

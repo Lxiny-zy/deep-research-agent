@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncGenerator, AsyncIterator
-from typing import cast
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from typing import ParamSpec, TypeVar, cast
 
+from anyio import CancelScope
+from anyio.lowlevel import checkpoint_if_cancelled
 from fastapi import FastAPI
 
 from ..observability import Event, EventHub, EventStreamGap
@@ -28,6 +30,25 @@ _REMOTE_STREAM_TERMINAL_GRACE_SECONDS = 2.0
 _SSE_HEARTBEAT_SECONDS = 15.0
 _SSE_EVENT_BATCH_SIZE = 512
 _SSE_DEDUP_WINDOW = 8192
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+async def _stream_read(
+    operation: Callable[_P, Awaitable[_T]], *args: _P.args, **kwargs: _P.kwargs
+) -> _T:
+    """Finish a repository read and session cleanup before handling disconnect.
+
+    StreamingResponse uses level cancellation: every await can be cancelled
+    again, including the database driver's rollback and connection return.
+    Protect only the current read; checkpoints on both sides stop a closed
+    stream before it starts another query or emits another frame.
+    """
+    await checkpoint_if_cancelled()
+    with CancelScope(shield=True):
+        result = await operation(*args, **kwargs)
+    await checkpoint_if_cancelled()
+    return result
 
 
 def _sse(event: Event) -> str:
@@ -107,14 +128,16 @@ async def _stream_run_sse(app: FastAPI, run_id: str, *, after_seq: int = 0) -> A
             # terminal hub event is still authoritative for that local stream.
             return True
         return (
-            await repo.get_run_status(run_id) == status
-            and (await repo.get_run_attempt(run_id) or 1) == attempt
+            await _stream_read(repo.get_run_status, run_id) == status
+            and (await _stream_read(repo.get_run_attempt, run_id) or 1) == attempt
         )
 
     async def emit_durable_batch(status: str | None, attempt: int) -> tuple[bool, bool]:
         """Replay one bounded durable batch; return ``(terminal, exhausted)``."""
         nonlocal cursor
-        events = await repo.get_events(run_id, after_seq=cursor, limit=_SSE_EVENT_BATCH_SIZE)
+        events = await _stream_read(
+            repo.get_events, run_id, after_seq=cursor, limit=_SSE_EVENT_BATCH_SIZE
+        )
         for event in events:
             if event.seq is not None and event.seq < cursor:
                 continue
@@ -147,8 +170,9 @@ async def _stream_run_sse(app: FastAPI, run_id: str, *, after_seq: int = 0) -> A
 
     hub: EventHub | None = app.state.live.get(run_id)
     if hub is not None:
-        status = await repo.get_run_status(run_id)
-        attempt = await repo.get_run_attempt(run_id) or 1
+        status = await _stream_read(repo.get_run_status, run_id)
+        attempt_value = await _stream_read(repo.get_run_attempt, run_id)
+        attempt = attempt_value or 1
         observe_state(status, attempt)
         while True:
             terminal, exhausted = await emit_durable_batch(status, attempt)
@@ -158,8 +182,9 @@ async def _stream_run_sse(app: FastAPI, run_id: str, *, after_seq: int = 0) -> A
                 return
             if exhausted:
                 break
-            status = await repo.get_run_status(run_id)
-            attempt = await repo.get_run_attempt(run_id) or 1
+            status = await _stream_read(repo.get_run_status, run_id)
+            attempt_value = await _stream_read(repo.get_run_attempt, run_id)
+            attempt = attempt_value or 1
             observe_state(status, attempt)
 
         live_stream = cast(AsyncGenerator[Event, None], hub.stream(after_seq=cursor))
@@ -183,8 +208,9 @@ async def _stream_run_sse(app: FastAPI, run_id: str, *, after_seq: int = 0) -> A
                 except EventStreamGap:
                     break
 
-                status = await repo.get_run_status(run_id)
-                attempt = await repo.get_run_attempt(run_id) or 1
+                status = await _stream_read(repo.get_run_status, run_id)
+                attempt_value = await _stream_read(repo.get_run_attempt, run_id)
+                attempt = attempt_value or 1
                 observe_state(status, attempt)
                 if event.seq is not None and event.seq < cursor:
                     emit = False
@@ -213,8 +239,8 @@ async def _stream_run_sse(app: FastAPI, run_id: str, *, after_seq: int = 0) -> A
         # Read attempt on both sides of the status query.  A recovery can bump
         # the attempt while a status read is in flight; detecting that race is
         # what prevents us from skipping a newly rewritten seq=0 event.
-        attempt_before = await repo.get_run_attempt(run_id) or 1
-        status = await repo.get_run_status(run_id)
+        attempt_before = await _stream_read(repo.get_run_attempt, run_id) or 1
+        status = await _stream_read(repo.get_run_status, run_id)
         if status is None:
             yield _sse(
                 Event(
@@ -225,12 +251,15 @@ async def _stream_run_sse(app: FastAPI, run_id: str, *, after_seq: int = 0) -> A
                 )
             )
             return
-        attempt = await repo.get_run_attempt(run_id) or 1
+        attempt_value = await _stream_read(repo.get_run_attempt, run_id)
+        attempt = attempt_value or 1
         if attempt != attempt_before:
             previous_attempt = attempt_before
         observe_state(status, attempt)
         batch_start_cursor = cursor
-        events = await repo.get_events(run_id, after_seq=cursor, limit=_SSE_EVENT_BATCH_SIZE)
+        events = await _stream_read(
+            repo.get_events, run_id, after_seq=cursor, limit=_SSE_EVENT_BATCH_SIZE
+        )
         expected_type = {
             "done": "done",
             "error": "error",

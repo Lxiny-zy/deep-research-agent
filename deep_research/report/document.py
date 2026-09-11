@@ -228,8 +228,16 @@ class Overview(BaseModel):
 DISCLAIMER = (
     "本报告展示的是检索服务返回的快照上下文，不等同于来源完整正文，也不等同于"
     "事实已获证实。系统保证的是出处可追溯、引用可逐字核验、单源/双源/冲突状态"
-    "可判定；不保证论断在开放世界为真。"
+    "可判定；不保证论断在开放世界为真。证据标签针对输入素材，正文的引用与数值检查"
+    "不等同于逐段语义审核。"
 )
+
+
+class FinalReportValidation(BaseModel):
+    scope: Literal["citation_and_numbers"] = "citation_and_numbers"
+    issues: list[str] = Field(default_factory=list)
+    fallback: bool = False
+    semantic_verification: bool = False
 
 
 class ReportDocument(BaseModel):
@@ -249,6 +257,7 @@ class ReportDocument(BaseModel):
     evidence: list[EvidenceRecord] = Field(default_factory=list)
     overview: Overview = Field(default_factory=Overview)
     disclaimer: str = DISCLAIMER
+    final_validation: FinalReportValidation | None = None
 
     def table(self, table_id: str) -> TableBlock | None:
         for block in self.blocks:

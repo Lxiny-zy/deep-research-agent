@@ -11,7 +11,9 @@ import httpx
 
 from ..models import Source
 from ..observability import Tracer
+from ..provider_limits import provider_request
 from ..security import provider_http_client, validate_provider_url
+from ..token_budget import TokenBudget, TokenReservation
 from .base import SearchTool
 
 
@@ -92,37 +94,76 @@ class ModelSearch(SearchTool):
         timeout: float = 60,
         allow_private: bool = False,
         tracer: Tracer | None = None,
+        max_input_chars: int = 100_000,
+        max_output_tokens: int = 4096,
     ) -> None:
         validate_provider_url(endpoint, allow_private=allow_private)
         self.endpoint, self.model, self.protocol = endpoint, model, protocol
+        self._api_key = api_key
         self._client = provider_http_client(allow_private=allow_private, timeout=timeout)
         self._client.headers["Authorization"] = f"Bearer {api_key}"
         # A separate public-only client: never forward model credentials to source URLs.
         self._pages = provider_http_client(timeout=min(timeout, 15))
         self._timeout = timeout
         self._tracer = tracer
+        self._max_input_chars = max_input_chars
+        self._max_output_tokens = max_output_tokens
         self._fetch_slots = asyncio.Semaphore(4)
 
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
         if max_results <= 0:
             return []
+        if len(query) > self._max_input_chars:
+            raise ValueError("搜索模型输入超过 LLM_MAX_INPUT_CHARS 限制")
+        budget = self._tracer.budget if self._tracer is not None else None
+        budget = budget or TokenBudget()
+        if self._tracer is not None:
+            budget.update(self._tracer.total_tokens)
+        reservation = budget.reserve(len(query.encode("utf-8")) + 128, self._max_output_tokens)
         if self.protocol == "chat_search":
-            body = {"model": self.model, "messages": [{"role": "user", "content": query}]}
+            body = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": query}],
+                "max_tokens": reservation.output_tokens,
+            }
         else:
-            body = {"model": self.model, "input": query, "tools": [{"type": "web_search"}]}
-        async with asyncio.timeout(self._timeout):
-            response = await self._client.post(self.endpoint, json=body)
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise ValueError("搜索模型响应必须是 JSON 对象")
-            self._record_usage(payload)
-            sources = cited_sources(payload, max_results)
-            if not sources:
-                raise ValueError("搜索模型未返回结构化引用 URL；请使用支持联网引用的模型与协议")
-            return await self.hydrate(sources)
+            body = {
+                "model": self.model,
+                "input": query,
+                "tools": [{"type": "web_search"}],
+                "max_output_tokens": reservation.output_tokens,
+            }
+        sent = accounted = False
+        try:
+            async with (
+                asyncio.timeout(self._timeout),
+                provider_request(self.endpoint, self._api_key),
+            ):
+                sent = True
+                response = await self._client.post(self.endpoint, json=body)
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("搜索模型响应必须是 JSON 对象")
+                self._record_usage(payload, reservation)
+                accounted = True
+        except BaseException as exc:
+            rejected = (
+                isinstance(exc, httpx.HTTPStatusError) and 400 <= exc.response.status_code < 500
+            )
+            if sent and not accounted and not rejected and self._tracer is not None:
+                self._tracer.add_tokens(reservation.total, estimated=True)
+            raise
+        finally:
+            budget.release(reservation)
+            if self._tracer is not None:
+                budget.update(self._tracer.total_tokens)
+        sources = cited_sources(payload, max_results)
+        if not sources:
+            raise ValueError("搜索模型未返回结构化引用 URL；请使用支持联网引用的模型与协议")
+        return await self.hydrate(sources)
 
-    def _record_usage(self, payload: dict) -> None:
+    def _record_usage(self, payload: dict, reservation: TokenReservation) -> None:
         if self._tracer is None:
             return
         usage = payload.get("usage")
@@ -141,14 +182,14 @@ class ModelSearch(SearchTool):
         total = count("total_tokens")
         if total is None and input_tokens is not None and output_tokens is not None:
             total = input_tokens + output_tokens
-        if total is not None:
-            self._tracer.add_tokens(total)
+        charged = total if total is not None else reservation.total
+        self._tracer.add_tokens(charged, estimated=total is None)
         self._tracer.emit(
             "RESEARCHER",
             "info",
             f"搜索模型用量：{total} Token"
             if total is not None
-            else "搜索模型未返回用量，总 Token 不含本次消耗",
+            else f"搜索模型未返回用量，保守计入 {charged} Token",
             data={
                 "category": "search_usage",
                 "model": self.model,
@@ -157,6 +198,7 @@ class ModelSearch(SearchTool):
                 "output_tokens": output_tokens,
                 "total_tokens": total,
                 "usage_known": total is not None,
+                "charged_tokens": charged,
                 "calls": 1,
             },
         )

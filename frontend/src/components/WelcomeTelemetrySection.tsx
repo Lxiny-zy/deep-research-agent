@@ -1,13 +1,31 @@
+import { useEffect, useRef, useState } from 'react'
 import { useLiveTelemetryDemo } from '../hooks/useLiveTelemetryDemo'
+import { useAmbientMotion } from '../hooks/useAmbientMotion'
 import OrchestrationPipeline from './OrchestrationPipeline'
 import StatsBar from './StatsBar'
 import { AppIcon } from './AppIcon'
 
 export default function WelcomeTelemetrySection() {
-  const demo = useLiveTelemetryDemo(true)
+  const ref = useRef<HTMLElement>(null)
+  const [inView, setInView] = useState(() => typeof IntersectionObserver === 'undefined')
+  const motion = useAmbientMotion()
+  useEffect(() => {
+    if (!ref.current || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), {
+      threshold: 0.05,
+    })
+    observer.observe(ref.current)
+    return () => observer.disconnect()
+  }, [])
+  const active = inView && !motion.inactive
+  const demo = useLiveTelemetryDemo(true, { active, staticPreview: motion.reduced })
 
   return (
-    <section className="welcome-telemetry-section" aria-labelledby="welcome-telemetry-title">
+    <section
+      className="welcome-telemetry-section"
+      aria-labelledby="welcome-telemetry-title"
+      ref={ref}
+    >
       <header className="welcome-telemetry-heading">
         <div>
           <span>02 / RESEARCH IN MOTION</span>
@@ -21,14 +39,22 @@ export default function WelcomeTelemetrySection() {
           stats={
             demo.done
               ? { elapsed: 26, total_tokens: 6384, sources: 12, tokens_estimated: false }
-              : null
+              : !active
+                ? {
+                    elapsed: demo.elapsed,
+                    total_tokens: demo.tokens,
+                    sources: demo.findings,
+                    tokens_estimated: true,
+                  }
+                : null
           }
           detail={null}
           progress={demo.progress}
           live={{ elapsed: demo.elapsed, tokens: demo.tokens, findings: demo.findings }}
-          liveActive={!demo.done}
+          liveActive={!demo.done && active}
           connectionStatus={demo.done ? 'done' : 'streaming'}
           tokensEstimated={!demo.done}
+          paused={!demo.done && !active}
         />
         <OrchestrationPipeline
           execution={demo.execution}

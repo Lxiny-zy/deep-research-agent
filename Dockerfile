@@ -58,6 +58,10 @@ RUN useradd --create-home --uid 10001 --user-group appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
+# Fontconfig may need a per-user cache when the container root is read-only.
+# Keep it in the bounded /tmp tmpfs instead of the immutable home directory.
+ENV XDG_CACHE_HOME=/tmp/.cache
+
 EXPOSE 8000
 
 # 容器探针：命中 /readyz，确保数据库也可用（slim 无 curl，用 stdlib urllib）

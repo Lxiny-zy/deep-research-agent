@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import type { AgentCard, AgentCardInput, ModelProfile, ModelProfileInput, RoleInfo } from '../types'
 import AgentSquarePage from './AgentSquarePage'
 
@@ -44,7 +45,13 @@ const agent: AgentCard = {
   model_profile_name: null,
 }
 
-vi.mock('react-router-dom', () => ({ useSearchParams: () => [new URLSearchParams()] }))
+function renderPage(path = '/agents') {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <AgentSquarePage />
+    </MemoryRouter>,
+  )
+}
 vi.mock('../hooks/useSearchProfiles', () => ({
   useSearchProfiles: () => ({ data: [] }),
   useSearchResourceImpact: () => ({ data: { profiles: {}, keys: {} } }),
@@ -128,7 +135,7 @@ vi.mock('../components/ModelProfileEditor', () => ({
 
 describe('AgentSquarePage builtin roles', () => {
   it('renders builtin role cards in pipeline order, read-only, with the report badge', () => {
-    const { container } = render(<AgentSquarePage />)
+    const { container } = renderPage()
 
     const cards = [...container.querySelectorAll<HTMLElement>('.builtin-role-card')]
     expect(cards).toHaveLength(5) // 自定义角色不进内置区
@@ -153,7 +160,7 @@ describe('AgentSquarePage builtin roles', () => {
 
 describe('AgentSquarePage custom role cards', () => {
   it('uses the fixed catalog-card layout while keeping all role actions', () => {
-    const { container } = render(<AgentSquarePage />)
+    const { container } = renderPage()
 
     const grid = container.querySelector('.custom-role-grid')
     expect(grid).toBeInTheDocument()
@@ -175,7 +182,7 @@ describe('AgentSquarePage edit sessions', () => {
   })
 
   it('does not leak an agent save failure into the next editor session', () => {
-    render(<AgentSquarePage />)
+    renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: /新建角色/ }))
     fireEvent.click(screen.getByTestId('agent-save'))
@@ -196,7 +203,7 @@ describe('AgentSquarePage edit sessions', () => {
   })
 
   it('keeps a stale agent failure out of a newer session and lets success close only its own', () => {
-    render(<AgentSquarePage />)
+    renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
     expect(screen.getByTestId('agent-editor')).toHaveAttribute('data-agent', 'my-researcher')
@@ -216,7 +223,7 @@ describe('AgentSquarePage edit sessions', () => {
   })
 
   it('does not leak a model save failure into the next editor session', () => {
-    render(<AgentSquarePage />)
+    renderPage()
 
     fireEvent.click(screen.getByRole('tab', { name: /模型档案/ }))
     fireEvent.click(screen.getByRole('button', { name: /新建档案/ }))
@@ -237,7 +244,7 @@ describe('AgentSquarePage edit sessions', () => {
   })
 
   it('closes the editor only after a successful save', () => {
-    render(<AgentSquarePage />)
+    renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: /新建角色/ }))
     fireEvent.click(screen.getByTestId('agent-save'))

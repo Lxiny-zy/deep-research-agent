@@ -1,4 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useModalFocus } from '../hooks/useModalFocus'
 import WorkflowFlowCanvas from './WorkflowFlowCanvas'
 import { AgentGlyph, AppIcon } from './AppIcon'
 import { allocateSemanticNodeIds } from './workflowCanvasLogic'
@@ -26,6 +28,8 @@ interface Props {
   onCancel: () => void
   pending?: boolean
   error?: string
+  conflict?: WorkflowDef
+  onReload?: () => void
 }
 
 /*
@@ -54,7 +58,11 @@ export default function WorkflowEditor({
   onCancel,
   pending,
   error,
+  conflict,
+  onReload,
 }: Props) {
+  const titleId = useId()
+  const dialogRef = useRef<HTMLDivElement>(null)
   const editing = !!initial
   const initialSteps = initial?.nodes?.length
     ? initial.nodes.map((node) => node.step)
@@ -114,6 +122,94 @@ export default function WorkflowEditor({
   const [mobilePane, setMobilePane] = useState<'library' | 'canvas' | 'inspector'>('canvas')
   const [graphError, setGraphError] = useState('')
   const nodeSequence = useRef(initialSteps.length)
+  const [baseVersion, setBaseVersion] = useState(initial?.version ?? 1)
+  const draftKey = `dr_workflow_draft_${initial?.id || 'new'}`
+  const snapshot = useMemo(
+    () => ({
+      name,
+      displayName,
+      description,
+      steps,
+      nodeKeys,
+      workflowEdges,
+      joinModes,
+      positions,
+      viewport,
+      version: baseVersion,
+    }),
+    [
+      name,
+      displayName,
+      description,
+      steps,
+      nodeKeys,
+      workflowEdges,
+      joinModes,
+      positions,
+      viewport,
+      baseVersion,
+    ],
+  )
+  const fingerprint = JSON.stringify({ ...snapshot, viewport: undefined })
+  const original = useRef(fingerprint)
+  const dirty = fingerprint !== original.current
+  const [savedDraft, setSavedDraft] = useState<typeof snapshot | null>(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(draftKey) ?? 'null')
+      return saved &&
+        typeof saved.name === 'string' &&
+        typeof saved.version === 'number' &&
+        Array.isArray(saved.steps) &&
+        Array.isArray(saved.nodeKeys) &&
+        Array.isArray(saved.workflowEdges) &&
+        saved.positions &&
+        saved.joinModes &&
+        saved.viewport
+        ? saved
+        : null
+    } catch {
+      return null
+    }
+  })
+  const [draftError, setDraftError] = useState(false)
+  useEffect(() => {
+    if (dirty) {
+      try {
+        sessionStorage.setItem(draftKey, JSON.stringify(snapshot))
+        setDraftError(false)
+      } catch {
+        setDraftError(true)
+      }
+    }
+    const leave = (event: BeforeUnloadEvent) => {
+      if (dirty) {
+        event.preventDefault()
+        event.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', leave)
+    return () => window.removeEventListener('beforeunload', leave)
+  }, [dirty, draftKey, snapshot])
+  function closeEditor() {
+    if (dirty && !window.confirm('编排尚未保存到服务器，确定关闭？本地草稿可在重新打开时恢复。'))
+      return
+    onCancel()
+  }
+  useModalFocus(dialogRef, closeEditor)
+  function restoreDraft() {
+    if (!savedDraft) return
+    setName(savedDraft.name)
+    setDisplayName(savedDraft.displayName)
+    setDescription(savedDraft.description)
+    setSteps(savedDraft.steps)
+    setNodeKeys(savedDraft.nodeKeys)
+    setWorkflowEdges(savedDraft.workflowEdges)
+    setJoinModes(savedDraft.joinModes)
+    setPositions(savedDraft.positions)
+    setViewport(savedDraft.viewport)
+    setBaseVersion(savedDraft.version)
+    setSavedDraft(null)
+  }
 
   const selected = selectedNodeId ? nodeKeys.indexOf(selectedNodeId) : -1
   const current = selected >= 0 ? steps[selected] : undefined
@@ -252,7 +348,7 @@ export default function WorkflowEditor({
     setGraphError('')
   }
 
-  function submit() {
+  function submit(version = baseVersion) {
     const nodes = steps.map((step, index) => ({
       id: nodeKeys[index],
       type: 'step',
@@ -280,34 +376,41 @@ export default function WorkflowEditor({
         input_position: positions[semanticNodeIds.input],
         output_position: positions[semanticNodeIds.output],
       },
-      version: initial?.version ?? 1,
+      version,
       enabled: initial?.enabled ?? true,
     }
     if (!editing) body.name = name.trim()
     onSubmit(body)
   }
 
-  return (
-    <div className="modal-backdrop workflow-studio-backdrop" onClick={onCancel}>
-      <div className="workflow-studio" onClick={(event) => event.stopPropagation()}>
+  return createPortal(
+    <div className="modal-backdrop workflow-studio-backdrop" onClick={closeEditor}>
+      <div
+        className="workflow-studio"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(event) => event.stopPropagation()}
+      >
         <header className="workflow-studio-head">
           <div>
             <span className="workflow-kicker">流程编排工作台</span>
-            <strong>{editing ? '编辑编排' : '创建编排'}</strong>
-            <span className="muted small">顺序管线模式 · 图分支能力即将接入</span>
+            <strong id={titleId}>{editing ? '编辑编排' : '创建编排'}</strong>
+            <span className="muted small">支持节点、依赖连线、分支汇合与反思循环</span>
           </div>
           <div className="row gap">
             <span className={`pipeline-health ${validation ? 'warning' : 'ready'}`}>
               {validation ?? '管线可运行'}
             </span>
-            <button className="btn ghost" onClick={onCancel} type="button">
+            <button className="btn ghost" onClick={closeEditor} type="button">
               <AppIcon name="x" size={14} aria-hidden="true" />
               关闭
             </button>
             <button
               className="btn btn-primary"
-              onClick={submit}
-              disabled={pending || !!validation || (!editing && !name.trim())}
+              onClick={() => submit()}
+              disabled={pending || !!conflict || !!validation || (!editing && !name.trim())}
             >
               <AppIcon
                 name={pending ? 'loader' : 'save'}
@@ -320,11 +423,67 @@ export default function WorkflowEditor({
           </div>
         </header>
 
+        <div className="workflow-notices">
+          {savedDraft && (
+            <div className="row gap" role="status">
+              <span>发现尚未提交的本地草稿（版本 {savedDraft.version}）。</span>
+              <button type="button" onClick={restoreDraft}>
+                恢复本地草稿
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  sessionStorage.removeItem(draftKey)
+                  setSavedDraft(null)
+                }}
+              >
+                丢弃本地草稿
+              </button>
+            </div>
+          )}
+          {dirty && (
+            <p className="hint" role="status">
+              {draftError
+                ? '无法保存本地草稿，请保持此页面。'
+                : '草稿已保留在当前标签页，尚未保存到服务器。'}
+            </p>
+          )}
+          {conflict && (
+            <section role="alert" className="panel panel-body">
+              <p>服务器已有版本 {conflict.version}。请比较后选择，不会自动覆盖。</p>
+              <p>
+                本地：{displayName || name}，{steps.length} 个节点；
+                {steps.map((step) => nodeTitle(step, roles)).join(' → ')}
+              </p>
+              <p>
+                服务器：{conflict.display_name || conflict.name}，
+                {(conflict.nodes?.length ? conflict.nodes.map((node) => node.step) : conflict.steps)
+                  .map((step) => nodeTitle(step, roles))
+                  .join(' → ')}
+              </p>
+              <p>
+                服务器说明：{conflict.description || '无'}；本地说明：{description || '无'}
+              </p>
+              <button type="button" disabled={pending} onClick={onReload}>
+                载入服务器版本
+              </button>
+              <button
+                type="button"
+                disabled={pending || !!validation}
+                onClick={() => submit(conflict.version)}
+              >
+                用当前草稿覆盖服务器版本
+              </button>
+            </section>
+          )}
+        </div>
         <nav className="workflow-mobile-tabs" aria-label="编排工作区切换">
           {(['library', 'canvas', 'inspector'] as const).map((pane) => (
             <button
               key={pane}
               className={mobilePane === pane ? 'active' : ''}
+              type="button"
+              aria-pressed={mobilePane === pane}
               onClick={() => setMobilePane(pane)}
             >
               {pane === 'library' ? '角色库' : pane === 'canvas' ? '画布' : '检查器'}
@@ -720,6 +879,7 @@ export default function WorkflowEditor({
           </aside>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

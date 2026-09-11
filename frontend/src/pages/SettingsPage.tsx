@@ -111,9 +111,9 @@ function EffectiveConfig({ config }: { config: ConfigView }) {
     .join('；')
 
   return (
-    <div className="panel" data-reveal="1">
+    <div className="panel effective-config-panel" data-reveal="1">
       <div className="row between">
-        <h3 className="panel-title">当前生效配置</h3>
+        <h2 className="panel-title">当前生效配置</h2>
         <Link to="/agents" className="nav-link inline-link">
           去角色广场管理 <AppIcon name="arrow-up-right" size={14} aria-hidden="true" />
         </Link>
@@ -122,28 +122,30 @@ function EffectiveConfig({ config }: { config: ConfigView }) {
         模型、检索档案与 Key
         在角色广场维护。研究角色可覆盖下方默认检索档案；自定义检索档案仅使用其绑定的 Key。
       </p>
-      <div className="list-row">
-        <div>
-          <strong>默认模型</strong>
-          <div className="muted small">{modelLine}</div>
+      <div className="effective-config-grid">
+        <div className="list-row">
+          <div>
+            <strong>默认模型</strong>
+            <div className="muted small">{modelLine}</div>
+          </div>
         </div>
-      </div>
-      <div className="list-row">
-        <div>
-          <strong>检索 Key</strong>
-          <div className="muted small">{keyLine}</div>
+        <div className="list-row">
+          <div>
+            <strong>检索 Key</strong>
+            <div className="muted small">{keyLine}</div>
+          </div>
         </div>
-      </div>
-      <div className="list-row">
-        <div>
-          <strong>默认检索档案</strong>
-          <div className="muted small">
-            {searchSelectionNames(
-              config.search_profile_ids?.length
-                ? config.search_profile_ids
-                : config.search_backends.map((p) => 'builtin:' + p),
-              searchProfiles.data ?? BUILTIN_SEARCH_PROFILES,
-            )}
+        <div className="list-row">
+          <div>
+            <strong>默认检索档案</strong>
+            <div className="muted small">
+              {searchSelectionNames(
+                config.search_profile_ids?.length
+                  ? config.search_profile_ids
+                  : config.search_backends.map((p) => 'builtin:' + p),
+                searchProfiles.data ?? BUILTIN_SEARCH_PROFILES,
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -159,6 +161,7 @@ export default function SettingsPage() {
   const searchProfiles = useSearchProfiles()
   const [form, setForm] = useState<FormState | null>(null)
   const [editingGlobalKey, setEditingGlobalKey] = useState(false)
+  const hasChanges = Boolean(form && data && JSON.stringify(form) !== JSON.stringify(toForm(data)))
 
   // 配置到达后初始化表单
   useEffect(() => {
@@ -175,6 +178,7 @@ export default function SettingsPage() {
   function save() {
     if (!form) return
     const body: ConfigUpdate = {
+      version: data?.version,
       llm_model: form.llm_model.trim(),
       llm_base_url: form.llm_base_url.trim() || null,
       search_profile_ids: form.search_profile_ids,
@@ -214,7 +218,7 @@ export default function SettingsPage() {
       {data && <EffectiveConfig config={data} />}
 
       <section className="settings-form-surface" data-reveal="2">
-        <h3 className="panel-title">研究行为默认值</h3>
+        <h2 className="panel-title">研究行为默认值</h2>
         <p className="hint" style={{ marginBottom: 18 }}>
           修改后持久化到服务端,对此后创建的研究生效（单次研究亦可在新建页临时覆盖）。
         </p>
@@ -228,200 +232,215 @@ export default function SettingsPage() {
         )}
 
         {form && data && (
-          <div className="stack">
-            <div className="global-model-config">
-              <div className="row between">
-                <div>
-                  <h3 className="panel-title">全局默认模型</h3>
-                  <p className="hint">模型档案不可用或未绑定角色时，系统使用这里的兜底配置。</p>
-                </div>
-                <span className={`badge ${data.llm_api_key_set ? 'success' : 'warning'}`}>
-                  {data.llm_api_key_set ? `密钥已设置 ${data.llm_api_key_hint}` : '尚未设置密钥'}
-                </span>
-              </div>
-              <div className="settings-grid global-model-grid">
-                <label className="settings-item">
-                  <span className="muted small">默认模型 ID</span>
-                  <input
-                    className="input"
-                    value={form.llm_model}
-                    onChange={(e) => setForm({ ...form, llm_model: e.target.value })}
-                    placeholder="gpt-4o-mini"
-                  />
-                </label>
-                <label className="settings-item">
-                  <span className="muted small">Base URL</span>
-                  <input
-                    className="input"
-                    value={form.llm_base_url}
-                    onChange={(e) => setForm({ ...form, llm_base_url: e.target.value })}
-                    placeholder="https://api.openai.com/v1"
-                  />
-                </label>
-              </div>
-              {!editingGlobalKey ? (
-                <div className="saved-credential-row">
+          <form
+            className="stack"
+            onSubmit={(event) => {
+              event.preventDefault()
+              save()
+            }}
+          >
+            <fieldset className="settings-fields" disabled={update.isPending}>
+              <div className="global-model-config">
+                <div className="row between">
                   <div>
-                    <strong>全局 API Key</strong>
-                    <small>密钥不会回显；更新后立即成为全局兜底凭据</small>
+                    <h3 className="panel-title">全局默认模型</h3>
+                    <p className="hint">模型档案不可用或未绑定角色时，系统使用这里的兜底配置。</p>
                   </div>
-                  <button
-                    type="button"
-                    className="btn ghost small"
-                    onClick={() => setEditingGlobalKey(true)}
-                  >
-                    {data.llm_api_key_set ? '更换密钥' : '设置密钥'}
-                  </button>
+                  <span className={`badge ${data.llm_api_key_set ? 'success' : 'warning'}`}>
+                    {data.llm_api_key_set ? `密钥已设置 ${data.llm_api_key_hint}` : '尚未设置密钥'}
+                  </span>
                 </div>
-              ) : (
-                <div className="credential-input-row">
-                  <input
-                    className="input"
-                    type="password"
-                    name="global-llm-key-new"
-                    autoComplete="new-password"
-                    data-lpignore="true"
-                    data-1p-ignore="true"
-                    value={form.llm_api_key}
-                    onChange={(e) => setForm({ ...form, llm_api_key: e.target.value })}
-                    placeholder="输入新的全局模型 API Key"
-                  />
-                  <button
-                    type="button"
-                    className="btn ghost small"
-                    onClick={() => {
-                      setForm({ ...form, llm_api_key: '' })
-                      setEditingGlobalKey(false)
-                    }}
-                  >
-                    取消
-                  </button>
-                </div>
-              )}
-            </div>
-            <section className="search-backend-config" aria-labelledby="search-backend-title">
-              <div className="row between">
-                <div>
-                  <h3 className="panel-title" id="search-backend-title">
-                    默认检索档案
-                  </h3>
-                  <p className="hint">
-                    未单独绑定检索服务的研究角色使用这些档案；多个档案并发检索后合并来源。
-                  </p>
-                </div>
-                <Link to="/agents?tab=keys" className="nav-link inline-link">
-                  管理检索档案与 Key
-                </Link>
-              </div>
-              {searchProfiles.isError && (
-                <p role="alert" className="error-text">
-                  无法加载检索档案，请重试。
-                </p>
-              )}
-              <div className="search-backend-options">
-                {(searchProfiles.data ?? BUILTIN_SEARCH_PROFILES).map((profile) => (
-                  <label className="search-backend-option" key={profile.id}>
+                <div className="settings-grid global-model-grid">
+                  <label className="settings-item">
+                    <span className="muted small">默认模型 ID</span>
                     <input
-                      type="checkbox"
-                      checked={form.search_profile_ids.includes(profile.id)}
-                      disabled={!profile.enabled}
-                      onChange={(event) => {
-                        const selected = new Set(form.search_profile_ids)
-                        if (event.target.checked) selected.add(profile.id)
-                        else if (selected.size > 1) selected.delete(profile.id)
-                        setForm({ ...form, search_profile_ids: [...selected] })
-                      }}
+                      className="input"
+                      required
+                      value={form.llm_model}
+                      onChange={(e) => setForm({ ...form, llm_model: e.target.value })}
+                      placeholder="gpt-4o-mini"
                     />
-                    <span>
-                      {profile.name}
-                      {!profile.enabled ? '（已停用）' : ''}
-                    </span>
+                  </label>
+                  <label className="settings-item">
+                    <span className="muted small">Base URL</span>
+                    <input
+                      className="input"
+                      value={form.llm_base_url}
+                      onChange={(e) => setForm({ ...form, llm_base_url: e.target.value })}
+                      placeholder="https://api.openai.com/v1"
+                    />
+                  </label>
+                </div>
+                {!editingGlobalKey ? (
+                  <div className="saved-credential-row">
+                    <div>
+                      <strong>全局 API Key</strong>
+                      <small>密钥不会回显；更新后立即成为全局兜底凭据</small>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn ghost small"
+                      onClick={() => setEditingGlobalKey(true)}
+                    >
+                      {data.llm_api_key_set ? '更换密钥' : '设置密钥'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="credential-input-row">
+                    <input
+                      className="input"
+                      type="password"
+                      aria-label="全局模型 API Key"
+                      name="global-llm-key-new"
+                      autoComplete="new-password"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
+                      value={form.llm_api_key}
+                      onChange={(e) => setForm({ ...form, llm_api_key: e.target.value })}
+                      placeholder="输入新的全局模型 API Key"
+                    />
+                    <button
+                      type="button"
+                      className="btn ghost small"
+                      onClick={() => {
+                        setForm({ ...form, llm_api_key: '' })
+                        setEditingGlobalKey(false)
+                      }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                )}
+              </div>
+              <section className="search-backend-config" aria-labelledby="search-backend-title">
+                <div className="row between">
+                  <div>
+                    <h3 className="panel-title" id="search-backend-title">
+                      默认检索档案
+                    </h3>
+                    <p className="hint">
+                      未单独绑定检索服务的研究角色使用这些档案；多个档案并发检索后合并来源。
+                    </p>
+                  </div>
+                  <Link to="/agents?tab=keys" className="nav-link inline-link">
+                    管理检索档案与 Key
+                  </Link>
+                </div>
+                {searchProfiles.isError && (
+                  <p role="alert" className="error-text">
+                    无法加载检索档案，请重试。
+                  </p>
+                )}
+                <div className="search-backend-options">
+                  {(searchProfiles.data ?? BUILTIN_SEARCH_PROFILES).map((profile) => (
+                    <label className="search-backend-option" key={profile.id}>
+                      <input
+                        type="checkbox"
+                        checked={form.search_profile_ids.includes(profile.id)}
+                        disabled={!profile.enabled}
+                        onChange={(event) => {
+                          const selected = new Set(form.search_profile_ids)
+                          if (event.target.checked) selected.add(profile.id)
+                          else if (selected.size > 1) selected.delete(profile.id)
+                          setForm({ ...form, search_profile_ids: [...selected] })
+                        }}
+                      />
+                      <span>
+                        {profile.name}
+                        {!profile.enabled ? '（已停用）' : ''}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <p className="hint">
+                  密钥只在检索资源页维护。内置档案的渠道 Key
+                  池为空时使用环境配置；自定义档案不会借用其他凭据。
+                </p>
+              </section>
+              <h3 className="settings-section-title">研究预算与验证</h3>
+              <div className="settings-grid">
+                {NUM_FIELDS.map((f) => (
+                  <label key={f.key} className="settings-item">
+                    <span className="muted small">{f.label}</span>
+                    <input
+                      className="input"
+                      type="number"
+                      required
+                      min={f.min}
+                      max={f.max}
+                      value={form[f.key]}
+                      onChange={(e) => setNum(f.key, e.target.value)}
+                    />
                   </label>
                 ))}
-              </div>
-              <p className="hint">
-                密钥只在检索资源页维护。内置档案的渠道 Key
-                池为空时使用环境配置；自定义档案不会借用其他凭据。
-              </p>
-            </section>
-            <div className="settings-grid">
-              {NUM_FIELDS.map((f) => (
-                <label key={f.key} className="settings-item">
-                  <span className="muted small">{f.label}</span>
+                <label className="safety-gate-setting global-gate">
+                  <span className="safety-gate-heading">
+                    <AppIcon name="file" size={18} aria-hidden="true" />
+                    <span className="safety-gate-copy">
+                      <strong>启用 arXiv LaTeX 全文</strong>
+                      <small id="global-fulltext-help">
+                        优先获取 e-print 并按章节筛选；下载或解析失败时自动回退到摘要。
+                      </small>
+                    </span>
+                  </span>
+                  <span className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-label="启用 arXiv LaTeX 全文"
+                      aria-describedby="global-fulltext-help"
+                      checked={form.fulltext_enabled}
+                      onChange={(event) =>
+                        setForm({ ...form, fulltext_enabled: event.target.checked })
+                      }
+                    />
+                    <span className="toggle-track" aria-hidden="true" />
+                  </span>
+                </label>
+                <label className="settings-item">
+                  <span className="muted small">请求超时（秒）</span>
                   <input
                     className="input"
                     type="number"
-                    min={f.min}
-                    max={f.max}
-                    value={form[f.key]}
-                    onChange={(e) => setNum(f.key, e.target.value)}
+                    required
+                    min={1}
+                    max={600}
+                    value={form.request_timeout}
+                    onChange={(e) => setNum('request_timeout', e.target.value)}
                   />
                 </label>
-              ))}
-              <label className="safety-gate-setting global-gate">
-                <span className="safety-gate-heading">
-                  <AppIcon name="file" size={18} aria-hidden="true" />
-                  <span className="safety-gate-copy">
-                    <strong>启用 arXiv LaTeX 全文</strong>
-                    <small id="global-fulltext-help">
-                      优先获取 e-print 并按章节筛选；下载或解析失败时自动回退到摘要。
-                    </small>
+                <label className="safety-gate-setting global-gate">
+                  <span className="safety-gate-heading">
+                    <AppIcon name="shield" size={18} aria-hidden="true" />
+                    <span className="safety-gate-copy">
+                      <strong>严格双源门禁</strong>
+                      <small id="global-corroboration-help">
+                        开启后，仅允许至少两个独立来源交叉印证且无冲突的论断进入报告。
+                      </small>
+                    </span>
                   </span>
-                </span>
-                <span className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    role="switch"
-                    aria-label="启用 arXiv LaTeX 全文"
-                    aria-describedby="global-fulltext-help"
-                    checked={form.fulltext_enabled}
-                    onChange={(event) =>
-                      setForm({ ...form, fulltext_enabled: event.target.checked })
-                    }
-                  />
-                  <span className="toggle-track" aria-hidden="true" />
-                </span>
-              </label>
-              <label className="settings-item">
-                <span className="muted small">请求超时（秒）</span>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  max={600}
-                  value={form.request_timeout}
-                  onChange={(e) => setNum('request_timeout', e.target.value)}
-                />
-              </label>
-              <label className="safety-gate-setting global-gate">
-                <span className="safety-gate-heading">
-                  <AppIcon name="shield" size={18} aria-hidden="true" />
-                  <span className="safety-gate-copy">
-                    <strong>严格双源门禁</strong>
-                    <small id="global-corroboration-help">
-                      开启后，仅允许至少两个独立来源交叉印证且无冲突的论断进入报告。
-                    </small>
+                  <span className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-label="严格双源门禁"
+                      aria-describedby="global-corroboration-help"
+                      checked={form.require_corroboration}
+                      onChange={(event) =>
+                        setForm({ ...form, require_corroboration: event.target.checked })
+                      }
+                    />
+                    <span className="toggle-track" aria-hidden="true" />
                   </span>
-                </span>
-                <span className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    role="switch"
-                    aria-label="严格双源门禁"
-                    aria-describedby="global-corroboration-help"
-                    checked={form.require_corroboration}
-                    onChange={(event) =>
-                      setForm({ ...form, require_corroboration: event.target.checked })
-                    }
-                  />
-                  <span className="toggle-track" aria-hidden="true" />
-                </span>
-              </label>
-            </div>
+                </label>
+              </div>
+            </fieldset>
 
-            <div className="row between" style={{ marginTop: 18 }}>
-              <span className="hint">
-                {update.isSuccess && !update.isPending && (
+            <div className="settings-savebar">
+              <span className="hint" role={update.isError ? 'alert' : 'status'}>
+                {!update.isError && hasChanges && !update.isPending && '有未保存的更改'}
+                {!hasChanges && !update.isSuccess && '保存后，对新建研究生效'}
+                {update.isSuccess && !update.isPending && !hasChanges && (
                   <>
                     <AppIcon name="check-circle" size={14} aria-hidden="true" />
                     已保存
@@ -434,12 +453,7 @@ export default function SettingsPage() {
                   </>
                 )}
               </span>
-              <button
-                className="btn btn-primary"
-                onClick={save}
-                disabled={update.isPending}
-                type="button"
-              >
+              <button className="btn btn-primary" disabled={update.isPending} type="submit">
                 <AppIcon
                   name={update.isPending ? 'loader' : 'save'}
                   size={15}
@@ -449,7 +463,7 @@ export default function SettingsPage() {
                 {update.isPending ? '保存中…' : '保存设置'}
               </button>
             </div>
-          </div>
+          </form>
         )}
       </section>
     </div>

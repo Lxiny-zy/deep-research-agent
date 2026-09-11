@@ -33,5 +33,5 @@ it('检查后展示角色实际资源和缺失凭据，并提供修复入口', a
     'href',
     '/agents?tab=keys',
   )
-  expect(checkResourcePreflight).toHaveBeenCalledWith('custom')
+  expect(checkResourcePreflight).toHaveBeenCalledWith('custom', expect.any(AbortSignal))
 })

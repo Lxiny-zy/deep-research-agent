@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import { memo, useId } from 'react'
 
 export type MotifKind = 'ribbons' | 'archive' | 'weave' | 'constellation' | 'orbit' | 'pulse'
 
@@ -64,13 +64,7 @@ const paths = Object.fromEntries(
   kinds.map((kind) => [kind, Array.from({ length: 32 }, (_, i) => strand(kind, i))]),
 ) as Record<MotifKind, string[]>
 
-export default function ResearchMotif({
-  kind,
-  className = '',
-}: {
-  kind: MotifKind
-  className?: string
-}) {
+function ResearchMotif({ kind, className = '' }: { kind: MotifKind; className?: string }) {
   const id = useId().replace(/:/g, '')
   return (
     <svg
@@ -115,6 +109,15 @@ export default function ResearchMotif({
           strokeWidth="1"
           opacity="0.75"
         />
+        <path
+          className="motif-signal"
+          d={paths[kind][kind === 'ribbons' ? 15 : 29]}
+          pathLength="100"
+          stroke="var(--motif-pearl)"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeDasharray="5 95"
+        />
       </g>
       <g className="motif-satellites" stroke="var(--motif-mint)" strokeWidth="0.7" opacity="0.65">
         <path d="M28 105v8m-4-4h8 M365 155v8m-4-4h8" />
@@ -124,3 +127,5 @@ export default function ResearchMotif({
     </svg>
   )
 }
+
+export default memo(ResearchMotif)

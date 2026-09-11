@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { deriveResearchProgress } from '../lib/runProgress'
 import type { ResearchEvent, RunStatus, StepRun, StepRunStatus, WorkflowRun } from '../types'
 
@@ -42,28 +42,38 @@ export function telemetryStageMessage(elapsed: number): string {
   return '研究任务已完成'
 }
 
-export function useLiveTelemetryDemo(autoReplay = false) {
+export function useLiveTelemetryDemo(
+  autoReplay = false,
+  { active = true, staticPreview = false }: { active?: boolean; staticPreview?: boolean } = {},
+) {
   const [cycle, setCycle] = useState(0)
-  const [elapsed, setElapsed] = useState(0)
-  const replay = useCallback(() => setCycle((value) => value + 1), [])
+  const [elapsedTime, setElapsed] = useState(0)
+  const clock = useRef(0)
+  const elapsed = staticPreview ? TOTAL_DURATION : elapsedTime
+  const replay = useCallback(() => {
+    clock.current = 0
+    setElapsed(0)
+    setCycle((value) => value + 1)
+  }, [])
 
   useEffect(() => {
-    const startedAt = performance.now()
+    if (!active || staticPreview) return
+    const startedAt = performance.now() - clock.current * 1000
     let replayTimer = 0
-    setElapsed(0)
     const timer = window.setInterval(() => {
       const next = Math.min(TOTAL_DURATION, (performance.now() - startedAt) / 1000)
+      clock.current = next
       setElapsed(next)
       if (next >= TOTAL_DURATION) {
         window.clearInterval(timer)
         if (autoReplay) replayTimer = window.setTimeout(replay, 2800)
       }
-    }, 100)
+    }, 200)
     return () => {
       window.clearInterval(timer)
       window.clearTimeout(replayTimer)
     }
-  }, [autoReplay, cycle, replay])
+  }, [active, autoReplay, cycle, replay, staticPreview])
 
   const done = elapsed >= 26
   const runStatus: RunStatus = done ? 'done' : 'running'

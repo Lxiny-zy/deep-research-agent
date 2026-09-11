@@ -31,7 +31,9 @@ async def test_planner_driven_run_persists_plan_manifest_and_handoffs(tmp_path: 
     finally:
         await agent.aclose()
 
-    root = Path(settings.artifact_root)
+    assert agent._artifact_store is not None
+    root = agent._artifact_store.workspace_root
+    assert root.parent == Path(settings.artifact_root) / "runs"
     slug = stable_slug(query)
     plan_path = root / ".framework" / "plans" / f"{slug}.json"
     manifest_path = root / ".framework" / "manifests" / f"{slug}.json"
@@ -41,6 +43,9 @@ async def test_planner_driven_run_persists_plan_manifest_and_handoffs(tmp_path: 
     assert (root / "work" / slug / "planner" / "plan.json").is_file()
     assert (root / "work" / slug / "researcher" / "results.json").is_file()
     assert (root / "output" / slug / "final" / "report.md").is_file()
+    assert (root / "output" / slug / "final" / "report.md").read_text(
+        encoding="utf-8"
+    ) == report.markdown
 
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

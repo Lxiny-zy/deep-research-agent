@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -106,7 +107,7 @@ async def test_create_run_persists_role_snapshot_before_background_start(catalog
         return None
 
     monkeypatch.setattr(api, "_execute", noop_execute)
-    monkeypatch.setattr(api, "_check_rate_limit", lambda request: None)
+    monkeypatch.setattr(api, "_check_rate_limit", AsyncMock(return_value=None))
     async with httpx.AsyncClient(
         transport=ASGITransport(app=api.app), base_url="http://test"
     ) as client:

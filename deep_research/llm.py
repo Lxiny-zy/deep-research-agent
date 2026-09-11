@@ -10,16 +10,19 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing
 from typing import Any, TypeVar
 
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel
 
 from .config import Settings
 from .observability import Tracer
 from .prompting import structured_system_prompt
+from .provider_limits import provider_request
 from .security import provider_http_client
+from .token_budget import TokenBudget, TokenReservation
 
 T = TypeVar("T", bound=BaseModel)  # 3.11 兼容写法（不用 3.12 的 def f[T]() 语法）
 
@@ -41,10 +44,13 @@ class LLM:
         self.settings = settings
         self.tracer = tracer
         self.model = settings.llm_model
+        if self.tracer.budget is None:
+            self.tracer.budget = TokenBudget(max_tokens=settings.max_tokens)
         self.client = AsyncOpenAI(
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
             timeout=settings.request_timeout,
+            max_retries=0,
             http_client=provider_http_client(
                 allow_private=settings.allow_private_provider_urls,
                 timeout=settings.request_timeout,
@@ -107,17 +113,57 @@ class LLM:
         await self.client.close()
 
     async def complete(self, system: str, user: str, *, temperature: float = 0.3) -> str:
-        resp = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            **self._generation_options(temperature),
+        for attempt in range(3):
+            try:
+                return await self._complete_once(system, user, temperature)
+            except Exception as exc:
+                if not _retryable(exc) or attempt == 2:
+                    raise
+                await asyncio.sleep(min(2**attempt, 8))
+        raise AssertionError("unreachable")
+
+    def _reserve(self, system: str, user: str) -> TokenReservation:
+        if len(system) + len(user) > self.settings.llm_max_input_chars:
+            raise ValueError("模型输入超过 LLM_MAX_INPUT_CHARS 限制")
+        assert self.tracer.budget is not None
+        self.tracer.budget.update(self.tracer.total_tokens)
+        # UTF-8 bytes plus framing are a conservative admission estimate, not a billing claim.
+        return self.tracer.budget.reserve(
+            len(system.encode()) + len(user.encode()) + 128, self.settings.llm_max_output_tokens
         )
-        content = resp.choices[0].message.content or ""
-        usage = _tokens(resp)
-        self.tracer.add_tokens(
-            usage or _estimate_tokens(system, user, content), estimated=usage == 0
-        )
-        return content
+
+    def _output_options(self, reservation: TokenReservation) -> dict[str, Any]:
+        key = "max_completion_tokens" if self.parameter_mode == "reasoning" else "max_tokens"
+        return {key: reservation.output_tokens}
+
+    async def _complete_once(self, system: str, user: str, temperature: float) -> str:
+        reservation = self._reserve(system, user)
+        assert self.tracer.budget is not None
+        try:
+            async with provider_request(
+                self.settings.llm_base_url or "https://api.openai.com", self.settings.llm_api_key
+            ):
+                resp = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    **self._generation_options(temperature),
+                    **self._output_options(reservation),
+                )
+            content = resp.choices[0].message.content or ""
+            usage = _tokens(resp)
+            self.tracer.add_tokens(
+                usage or _estimate_tokens(system, user, content), estimated=usage == 0
+            )
+            return content
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError) or _uncertain_usage(exc):
+                self.tracer.add_tokens(reservation.total, estimated=True)
+            raise
+        finally:
+            self.tracer.budget.release(reservation)
 
     async def parse(
         self, system: str, user: str, schema: type[T], *, temperature: float = 0.2, retries: int = 2
@@ -132,22 +178,12 @@ class LLM:
         attempts = max(1, retries + 1)
         for attempt in range(attempts):
             try:
-                resp = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": sys},
-                        {"role": "user", "content": user},
-                    ],
-                    **self._generation_options(temperature),
-                )
-            except Exception:  # 429/5xx/超时等瞬时故障：退避后重试，而非直接终结整个 run
-                if attempt < attempts - 1:
+                raw = await self._complete_once(sys, user, temperature)
+            except Exception as exc:
+                if _retryable(exc) and attempt < attempts - 1:
                     await asyncio.sleep(min(2**attempt, 8))
                     continue
                 raise  # 重试预算耗尽：原样抛出网络层异常，便于上层区分
-            raw = resp.choices[0].message.content or ""
-            usage = _tokens(resp)
-            self.tracer.add_tokens(usage or _estimate_tokens(sys, user, raw), estimated=usage == 0)
             try:
                 return schema.model_validate(extract_json(raw))
             except Exception as e:  # JSON 非法或字段缺失 → 把错误回灌再试
@@ -158,12 +194,26 @@ class LLM:
     async def stream(
         self, system: str, user: str, *, temperature: float = 0.4
     ) -> AsyncIterator[str]:
+        async with (
+            provider_request(
+                self.settings.llm_base_url or "https://api.openai.com", self.settings.llm_api_key
+            ),
+            aclosing(self._stream_once(system, user, temperature=temperature)) as stream,
+        ):
+            async for delta in stream:
+                yield delta
+
+    async def _stream_once(
+        self, system: str, user: str, *, temperature: float = 0.4
+    ) -> AsyncGenerator[str, None]:
         """流式补全：逐块产出文本增量。
 
         使用 OpenAI 兼容的标准 stream=True，不依赖任何 provider 私有扩展，
         DeepSeek / Qwen / GLM / Moonshot 等端点均可用。生成过程中按字符增量估算
         token 供 UI 实时展示；若端点最终返回 usage，则自动用精确值校准。
         """
+        reservation = self._reserve(system, user)
+        assert self.tracer.budget is not None
         request = {
             "model": self.model,
             "messages": [
@@ -171,44 +221,65 @@ class LLM:
                 {"role": "user", "content": user},
             ],
             **self._generation_options(temperature),
+            **self._output_options(reservation),
             "stream": True,
         }
+        resp = None
+        estimated_added = 0
         try:
-            resp = await self.client.chat.completions.create(
-                **request, stream_options={"include_usage": True}
-            )
-        except APIStatusError as exc:
-            # 部分兼容端点未实现 stream_options；只对参数不支持类错误降级重试。
-            if exc.status_code not in {400, 422}:
-                raise
-            resp = await self.client.chat.completions.create(**request)
+            try:
+                resp = await self.client.chat.completions.create(
+                    **request, stream_options={"include_usage": True}
+                )
+            except APIStatusError as exc:
+                if exc.status_code not in {400, 422} or "stream_options" not in str(exc):
+                    raise
+                resp = await self.client.chat.completions.create(**request)
+            input_estimate = _estimate_tokens(system, user)
+            self.tracer.add_tokens(input_estimate, estimated=True)
+            estimated_added = input_estimate
+            out_chars = accounted_output = exact_usage = 0
+            async for chunk in resp:
+                exact_usage = _tokens(chunk) or exact_usage
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    out_chars += len(delta)
+                    output_estimate = out_chars // 2
+                    increment = output_estimate - accounted_output
+                    if increment > 0:
+                        self.tracer.add_tokens(increment, estimated=True)
+                        estimated_added += increment
+                        accounted_output = output_estimate
+                    yield delta
+            tail = (out_chars + 1) // 2 - accounted_output
+            if tail > 0:
+                self.tracer.add_tokens(tail, estimated=True)
+                estimated_added += tail
+            if exact_usage > 0:
+                self.tracer.reconcile_tokens(estimated_added, exact_usage)
+        except BaseException as exc:
+            if isinstance(exc, (asyncio.CancelledError, GeneratorExit)) or _uncertain_usage(exc):
+                self.tracer.add_tokens(max(0, reservation.total - estimated_added), estimated=True)
+            raise
+        finally:
+            self.tracer.budget.release(reservation)
+            if resp is not None and hasattr(resp, "close"):
+                await resp.close()
 
-        input_estimate = _estimate_tokens(system, user)
-        self.tracer.add_tokens(input_estimate, estimated=True)
-        estimated_added = input_estimate
-        out_chars = 0
-        accounted_output = 0
-        exact_usage = 0
-        async for chunk in resp:
-            exact_usage = _tokens(chunk) or exact_usage
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta.content
-            if delta:
-                out_chars += len(delta)
-                output_estimate = out_chars // 2
-                increment = output_estimate - accounted_output
-                if increment > 0:
-                    self.tracer.add_tokens(increment, estimated=True)
-                    estimated_added += increment
-                    accounted_output = output_estimate
-                yield delta
-        tail = (out_chars + 1) // 2 - accounted_output
-        if tail > 0:
-            self.tracer.add_tokens(tail, estimated=True)
-            estimated_added += tail
-        if exact_usage > 0:
-            self.tracer.reconcile_tokens(estimated_added, exact_usage)
+
+def _retryable(error: BaseException) -> bool:
+    return isinstance(error, (APIConnectionError, TimeoutError)) or (
+        isinstance(error, APIStatusError)
+        and (error.status_code in {408, 409, 429} or error.status_code >= 500)
+    )
+
+
+def _uncertain_usage(error: BaseException) -> bool:
+    return isinstance(error, (APIConnectionError, TimeoutError)) or (
+        isinstance(error, APIStatusError) and error.status_code >= 500
+    )
 
 
 def _tokens(resp: object) -> int:

@@ -16,7 +16,7 @@ function AmbientParticles({ paused }: { paused: boolean }) {
     let last = 0
     let elapsed = elapsedRef.current
     // Deterministic positions prevent a distracting reshuffle when playback is toggled.
-    const particles = Array.from({ length: 52 }, (_, i) => ({
+    const particles = Array.from({ length: 36 }, (_, i) => ({
       x: ((i * 73 + 17) % 101) / 101,
       y: ((i * 43 + 7) % 103) / 103,
       radius: i % 7 === 0 ? 1.7 : 0.7 + (i % 3) * 0.25,
@@ -25,7 +25,7 @@ function AmbientParticles({ paused }: { paused: boolean }) {
     }))
     const draw = () => {
       ctx.clearRect(0, 0, width, height)
-      const count = width < 760 ? 22 : particles.length
+      const count = width < 760 ? 14 : particles.length
       particles.slice(0, count).forEach((p, i) => {
         const x = p.x * width + Math.sin(elapsed * 0.09 + p.phase) * 12
         const y = (((p.y * height - elapsed * p.speed) % height) + height) % height
@@ -46,7 +46,7 @@ function AmbientParticles({ paused }: { paused: boolean }) {
     const tick = (now: number) => {
       frame = 0
       if (paused || motion.matches || document.hidden) return
-      if (now - last >= 32) {
+      if (now - last >= 42) {
         elapsed += Math.min((now - last) / 1000, 0.1)
         last = now
         draw()

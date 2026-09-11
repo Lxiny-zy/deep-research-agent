@@ -1,8 +1,9 @@
 import ResearchMotif from '../components/ResearchMotif'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useOutletContext } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import StatusBadge from '../components/StatusBadge'
+import EmptyState from '../components/EmptyState'
 import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
 import { useBatchDeleteRuns, useDeleteRun, useRunsList, useTags } from '../hooks/useRuns'
 import type { RunStatus } from '../types'
@@ -33,6 +34,7 @@ function formatCreatedAt(value: string): string {
 }
 
 export default function HistoryPage() {
+  const access = useOutletContext<{ role: string } | undefined>()
   const pageRef = useRef<HTMLDivElement>(null)
   useRevealOnScroll(pageRef)
   const [offset, setOffset] = useState(0)
@@ -41,6 +43,7 @@ export default function HistoryPage() {
   const [q, setQ] = useState('')
   const [tag, setTag] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [deleteError, setDeleteError] = useState('')
 
   useEffect(() => {
     const id = setTimeout(() => setQ(qInput.trim()), 350)
@@ -52,7 +55,7 @@ export default function HistoryPage() {
     setSelected(new Set())
   }, [status, q, tag])
 
-  const { data, isLoading, isError, error } = useRunsList({
+  const { data, isLoading, isError, error, refetch } = useRunsList({
     limit: PAGE + 1,
     offset,
     status: status || undefined,
@@ -66,6 +69,10 @@ export default function HistoryPage() {
   const hasNext = (data?.length ?? 0) > PAGE
   const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.id))
   const filtersActive = Boolean(status || q || tag)
+
+  useEffect(() => {
+    if (data?.length === 0 && offset > 0) setOffset((value) => Math.max(0, value - PAGE))
+  }, [data, offset])
 
   function toggle(id: string) {
     setSelected((previous) => {
@@ -82,7 +89,13 @@ export default function HistoryPage() {
 
   async function removeOne(id: string, query: string) {
     if (!window.confirm(`删除这条研究记录？\n\n「${query}」\n\n此操作不可撤销。`)) return
-    await del.mutateAsync(id).catch(() => {})
+    setDeleteError('')
+    try {
+      await del.mutateAsync(id)
+    } catch (cause) {
+      setDeleteError(cause instanceof Error ? cause.message : '删除失败，请重试。')
+      return
+    }
     setSelected((previous) => {
       const next = new Set(previous)
       next.delete(id)
@@ -94,10 +107,18 @@ export default function HistoryPage() {
     const ids = [...selected]
     if (!ids.length) return
     if (!window.confirm(`删除选中的 ${ids.length} 条研究记录？此操作不可撤销。`)) return
-    const result = await batchDel.mutateAsync(ids).catch(() => null)
-    setSelected(new Set())
-    if (result && result.skipped > 0)
-      window.alert(`已删除 ${result.deleted} 条；${result.skipped} 条进行中已跳过。`)
+    setDeleteError('')
+    try {
+      const result = await batchDel.mutateAsync(ids)
+      const removed = new Set(result.deleted_ids ?? (result.skipped === 0 ? ids : []))
+      setSelected((previous) => new Set([...previous].filter((id) => !removed.has(id))))
+      if (result.skipped > 0)
+        setDeleteError(
+          `已删除 ${result.deleted} 条；${result.skipped} 条未删除，已保留选择。进行中的研究需先取消。`,
+        )
+    } catch (cause) {
+      setDeleteError(cause instanceof Error ? cause.message : '删除失败，请重试。')
+    }
   }
 
   return (
@@ -228,28 +249,54 @@ export default function HistoryPage() {
           </div>
 
           <div className="panel-body">
+            {deleteError && (
+              <p className="error-text" role="alert">
+                {deleteError}
+              </p>
+            )}
             {isLoading && (
               <div className="spinner-container">
                 <AppIcon name="loader" size={24} className="spin" aria-label="正在加载" />
               </div>
             )}
             {isError && (
-              <div className="badge error history-error">
-                <AppIcon name="circle-x" size={15} aria-hidden="true" />
-                {error instanceof Error ? error.message : '加载失败'}
+              <div className="workspace-load-error" role="alert">
+                <p>{error instanceof Error ? error.message : '加载失败'}</p>
+                <button className="btn btn-secondary small" onClick={() => void refetch()}>
+                  重新加载记录
+                </button>
               </div>
             )}
 
-            {!isLoading && rows.length === 0 && (
-              <div className="empty-state">
-                <div className="empty-state-icon">
-                  <AppIcon name="history" size={27} aria-hidden="true" />
-                </div>
-                <div className="empty-state-title">
-                  {filtersActive ? '没有符合条件的记录' : '还没有研究记录'}
-                </div>
-                <p>{filtersActive ? '尝试调整筛选条件' : '前往「新建研究」开始第一次深度研究'}</p>
-              </div>
+            {!isLoading && !isError && rows.length === 0 && (
+              <EmptyState
+                icon={filtersActive ? 'search' : 'history'}
+                title={filtersActive ? '没有符合条件的记录' : '还没有研究记录'}
+                description={
+                  filtersActive
+                    ? '换一个关键词，或清除筛选查看全部研究。'
+                    : '每一次探索的过程、证据与报告，都会保存在这里。'
+                }
+              >
+                {filtersActive ? (
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setStatus('')
+                      setQInput('')
+                      setTag('')
+                    }}
+                  >
+                    清除全部筛选
+                  </button>
+                ) : (
+                  access?.role !== 'reader' && (
+                    <Link className="btn btn-primary" to="/">
+                      <AppIcon name="plus" size={15} aria-hidden="true" /> 开始第一次研究
+                    </Link>
+                  )
+                )}
+              </EmptyState>
             )}
 
             {rows.length > 0 && (
@@ -289,7 +336,14 @@ export default function HistoryPage() {
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm icon-button"
-                      title="删除"
+                      title={
+                        ['pending', 'running', 'cancelling'].includes(run.status)
+                          ? '研究进行中，请先取消后再删除'
+                          : '删除'
+                      }
+                      disabled={
+                        del.isPending || ['pending', 'running', 'cancelling'].includes(run.status)
+                      }
                       aria-label={`删除研究：${run.query}`}
                       onClick={() => void removeOne(run.id, run.query)}
                     >

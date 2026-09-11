@@ -1,5 +1,7 @@
 # Deep Research Agent · 多 Agent 深度研究系统
 
+本轮工程修复及验收结果见 [修复记录](docs/REPAIR_REPORT_20260911.md)，部署与一致备份步骤见 [运行指南](docs/OPERATIONS.md)。
+
 把「一个问题」自动**拆解 → 并行检索 → 反思补洞 → 综合成带引用的研究报告**的多 Agent 系统。
 
 面向 AI Agent 工程岗位的简历项目，重点展示 **多 Agent 编排、并行 fan-out、来源安全策略、证据验证、流式可观测、自动化评估** 等工程能力（而非又一个对话机器人）。
@@ -13,7 +15,7 @@
 - **Workflow-as-Data 编排引擎**：工作流以带版本的图数据（节点 / 边 / 条件 / Join 模式）落库执行。用户界面提供 deep（完整深度研究）、quick（快速检索）和 hsi_review（HSI/AI4S 文献审查）三种公共模板；其它控制原语由默认 planner-driven 运行时统一编排，历史模板保留为兼容入口，也可在前端画布自组工作流。`guarded` 仅是内部兼容别名，不出现在 UI，也不作为自动路由目标。
 - **全局提示词与流程规则**：`framework/06_global_rules.md` 作为共享系统上下文注入内置、自定义和 planner-authored 的每个 Agent；默认 `DR_ORCHESTRATION_MODE=planner-driven`，因此提示词约束、计划与 artifact 交接对所有入口一致生效。
 - **可靠性设计**：节点级超时 / 重试 / 退避 / fallback、token 预算、Blackboard checkpoint、崩溃后启动自动恢复，多实例场景用可续期租约 fencing 防止旧实例写脏数据。
-- **API 与执行分离（可水平扩展）**：`DR_EXECUTION_MODE=worker` 时 API 只把研究入队，由独立 worker 进程抢占式领取执行（`SELECT … FOR UPDATE SKIP LOCKED` 选候选、租约条件更新做最终仲裁），可任意扩副本；全局并发＝副本数 × `MAX_ACTIVE_RUNS`。硬杀任一 worker，API 全程可用，另一个 worker 在租约过期后从 checkpoint 接管续跑。默认 `inline`（API 自执行），桌面版与单容器部署不受影响。
+- **API 与执行分离**：`DR_EXECUTION_MODE=worker` 时 API 入队，由独立 worker 领取执行，租约 fencing 防止旧执行者覆盖新结果。`MAX_ACTIVE_RUNS` 与 `MAX_QUEUED_RUNS` 由数据库协调，是整个服务的上限；增加副本不会放大此上限。worker 通过持久化心跳参与就绪检查，合并后的正文增量支持跨进程 SSE 回放。默认 `inline` 由 API 自己执行。
 - **角色广场与检索资源**：统一维护多渠道 Key 池与检索档案，研究角色可继承默认检索或绑定专属服务；支持外接 Responses / Chat Completions 搜索模型，并可预览含固定契约的角色提示词。详见 [检索与角色配置指南](docs/SEARCH_AND_ROLE_CONFIGURATION.md)。
 - **并行 fan-out**：子问题用 `asyncio` 并发检索，墙钟时间 ≈ 最慢的一条链，而非求和。
 - **反思循环**：Reflector 自评证据是否充分，不足则自动补洞（loop-until-sufficient）。
@@ -81,7 +83,7 @@ deep-research-agent/
 │   ├── dag.py               # 子问题依赖图：构建 / 环检测 / 拓扑分层
 │   ├── registry.py          # Agent 角色注册表
 │   ├── scheduler.py         # DAG 分层调度器
-│   ├── token_budget.py      # token 预算跟踪与软限制
+│   ├── token_budget.py      # 并行调用前预留预算、完成后按 usage 结算
 │   ├── tools/               # 检索后端抽象 + Tavily / Brave / OpenAlex / arXiv 实现（含 key 主备池）
 │   ├── agents/              # Planner / Researcher / Reflector / Synthesizer / Critic / Coordinator / IntentRouter …
 │   ├── orchestration/       # 工作流图模型：节点 / 边 / 条件解释器 / 图运行时
@@ -163,26 +165,27 @@ make down       # 停止服务，保留数据库与运行时配置
 ### 水平扩展：API 与执行分离
 
 默认 `inline`：API 进程自己执行研究任务，单容器即可跑通。改成 worker 拓扑后，API 只负责入队，
-执行交给独立进程，可任意扩副本：
+执行交给独立进程，可在宿主机资源允许的范围内扩副本：
 
 ```bash
 # .env 里设 DR_EXECUTION_MODE=worker，然后启用 worker profile
 DR_EXECUTION_MODE=worker docker compose --profile worker up --build --scale worker=3
 ```
 
-两种拓扑共用同一套租约 fencing 与 checkpoint 续跑语义，切换只改一个环境变量，
-任务本身的执行行为零变化——回滚同样只需改回 `inline`。
+两种拓扑共用租约 fencing、数据库配置和 checkpoint 续跑规则。切换时应先停止旧拓扑的
+所有执行者，统一配置后再启动，避免混用不同版本或不同产物根目录。
 
 - **谁执行**：worker 轮询 `(status, claimable_at)` 索引挑候选，用条件租约更新做最终仲裁。
   候选选择只是优化，租约才是跨进程的唯一裁决者——与崩溃恢复完全同源。
-- **取消与 SSE**：均已跨进程。取消经数据库状态生效（执行侧轮询到 `cancelling` 自行收尾）；
-  SSE 在本地没有事件中心时自动降级为仓储回放，浏览器无感。
+- **取消与 SSE**：取消经数据库状态生效（执行侧看到 `cancelling` 后收尾）；合并后的 token
+  增量与计数落库，SSE 使用稳定事件序号续传。`cancelled` 为终态，不能恢复；修复故障后可
+  对 `error` 运行请求 `/resume`，原始总截止时间仍然有效。
 - **毒任务熔断**：同一 run 被领取超过 `DR_MAX_CLAIM_ATTEMPTS`（默认 3）次仍失败即置终态，
   原因 `poison_run` 入审计，避免必然崩溃的任务在 worker 之间无限传递。
 - **优雅退出**：worker 收到 SIGTERM 后停止领取但**不打断**在跑的研究；被强杀也无妨，
   租约到期后由其他副本从 checkpoint 接管。
 
-实测（`make chaos-demo-worker`，deep 工作流跑到第 3 层时硬杀 worker）：
+历史合成演示（`make chaos-demo-worker`，不代表生产恢复时间承诺；deep 工作流跑到第 3 层时硬杀 worker）：
 **API 全程 /healthz 200，新 worker 启动后 4.7s 接管**，planner/researcher 两层断点续跑跳过，
 **节省 66.7% token**（对照全量 9000，恢复后仅新增 3000）。
 对照组 `make chaos-demo`（inline，杀 API 后重启）接管 2.3s、同样节省 66.7%。
@@ -197,26 +200,27 @@ LaTeX 等动作时，计划只声明稳定的 operation ID（以及结构化的�
 边界、拒绝 shell wrapper 与控制字符，限制超时、并发和 stdout/stderr 大小，并把退出码、
 参数摘要与产物哈希写入 manifest。
 
-基础镜像只包含 runner 的注册契约，不预装 `bsdtar`、`libreoffice` 或 `latexmk` 等重量级
-工具。启用对应 operation 前应构建受控的 runner/worker 镜像（安装所需包、为
-`appuser` 配置可写的 HOME/cache），然后在 `.env` 中收紧
-`DR_RUNNER_ALLOWED_OPERATIONS`；未安装工具时请求会得到可审计的失败状态，不会退化为
-执行任意命令。生产环境不要把 Docker socket 或宿主机根目录挂进容器，文件交接统一通过
-共享的 `artifacts` volume：
+默认 `DR_RUNNER_ISOLATION=required` 需要 Linux `bubblewrap`、`prlimit` 和可用的用户/网络
+命名空间：系统目录只读、只绑定当前工作区、网络隔离，并设置内存、CPU、进程数和文件大小
+限制。缺少工具或内核拒绝创建沙箱时操作失败。`trusted` 只适用于显式信任的本地开发，生产
+配置拒绝启用它。基础镜像不预装命令沙箱或转换工具；普通研究及报告 PDF/XLSX 导出不依赖
+这些命令。可选的 [runner 镜像](docker/runner.Dockerfile) 只安装解压所需工具；安装工具后
+仍必须运行实际沙箱验收。LibreOffice/LaTeX 需要另外安装并验收。
 
 ```bash
-# 例：只开放已经在自定义 worker 镜像中安装并验收过的转换操作
-DR_RUNNER_ALLOWED_OPERATIONS=pdf.convert
-DR_EXECUTION_MODE=worker
-DR_ORCHESTRATION_MODE=planner-driven
-docker compose --profile worker up --build --scale worker=3
+# 在已经支持命名空间隔离的 Linux worker 上验收
+python -m scripts.verify_runner_sandbox
+# .env 只开放已安装且通过验收的 operation
+# DR_RUNNER_ALLOWED_OPERATIONS=archive.unpack
 ```
 
 本地开发与 Linux Docker 使用同一套 operation 注册接口；如果需要新增文件处理能力，
 应在代码中新增一个固定的 `OperationDefinition` 并随镜像发布，而不是把命令字符串写进
 planner prompt 或运行时环境变量。
 
-安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问请经反向代理（TLS/限流）。Compose 为 API 设置 `APP_ENV=production`，启动时会强制校验 PostgreSQL、`API_KEY` 与 `CATALOG_ENCRYPTION_KEY`，缺一即失败。所有 `/api` 端点接受 `Authorization: Bearer <key>` 或 `X-API-Key` 请求头，不接受 URL 查询参数。前端 SSE 同样使用请求头。登录默认勾选「记住此设备」，验证成功后凭据保存在当前站点的 `localStorage`，重新打开浏览器会自动验证并进入；取消勾选则仅保存在当前标签页的 `sessionStorage`。公共设备请取消勾选。清除密钥或服务端返回 401 时会删除两处凭据；网络错误不会清除。浏览器禁用持久存储时会提示降级为会话或当前页面登录。不同域名、协议和端口的存储相互独立。
+安全默认值：容器以非 root 用户运行；`db` 不向宿主机发布端口；`api` 仅绑定 `127.0.0.1`，对外访问经反向代理（TLS/限流）。Compose 启用 `APP_ENV=production`，要求 PostgreSQL、API 凭据（`API_KEY` 或 `DR_API_KEYS`）和 `CATALOG_ENCRYPTION_KEY`。各 API/worker 容器默认限制 2 CPU、2 GiB 内存与 256 PID，可按宿主机容量调整。所有 `/api` 端点接受 `Authorization: Bearer <key>` 或 `X-API-Key` 请求头，不接受 URL 查询参数，SSE 同样使用请求头。登录默认勾选「记住此设备」，凭据保存在 `localStorage`；取消勾选使用当前标签页 `sessionStorage`。清除凭据或收到 401 时会清除两处存储和身份关联的查询缓存；网络故障不会清除凭据。
+
+共享服务可用 `DR_API_KEYS` 配置 `admin`、`researcher`、`reader`：管理员管理全部记录和配置；研究员只创建、修改自己的研究；只读身份只能查看归属于自己的记录。详情、SSE、导出、批量操作与标签均检查归属。`API_KEY` 保留为兼容管理员密钥。身份配置及能力矩阵见 [运行与恢复指南](docs/OPERATIONS.md)。
 
 Nginx 反向代理可从 `docker/nginx.conf.example` 起步。SSE 实时进度要求关闭 `proxy_buffering`，并把读写超时提高到覆盖最长研究任务。宿主机 Nginx 经 Docker bridge 访问 API 时，在 `APP_BIND` 保持 `127.0.0.1` 的前提下同时设置 `APP_TRUST_PROXY=true` 与 `FORWARDED_ALLOW_IPS=*`，分别让应用限流和 Uvicorn 信任代理覆盖的客户端 IP/协议；直接暴露 API 时两项都必须保持收紧，尤其不要把 `FORWARDED_ALLOW_IPS` 设为 `*`。若不用反向代理、明确要直接暴露端口，可在 `.env` 设置 `APP_BIND=0.0.0.0`，但仍应在安全组中限制来源并配置 HTTPS。
 
@@ -235,7 +239,7 @@ Nginx 反向代理可从 `docker/nginx.conf.example` 起步。SSE 实时进度�
 
 部署时主要维护以下文件：
 
-- `.env`：服务器私有配置，不提交 Git。生产必须设置 `POSTGRES_PASSWORD`、`API_KEY`、`CATALOG_ENCRYPTION_KEY`；使用内置后端时设置 `LLM_API_KEY`、`TAVILY_API_KEY`。
+- `.env`：服务器私有配置，不提交 Git。生产必须设置 `POSTGRES_PASSWORD`、`API_KEY` 或 `DR_API_KEYS`、`CATALOG_ENCRYPTION_KEY`；使用内置后端时设置 `LLM_API_KEY`、`TAVILY_API_KEY`。
 - `docker-compose.yml`：应用、PostgreSQL、数据卷和端口绑定。
 - `docker/nginx.conf.example`：Nginx 反向代理与 SSE 长连接示例；复制到服务器 Nginx 配置目录后修改域名。
 - `.env.example`：环境变量模板，不包含真实密钥。
@@ -255,47 +259,14 @@ curl http://127.0.0.1:8000/readyz
 
 ### 备份与恢复
 
-升级或执行 `make down-clean` 前，至少备份 PostgreSQL 和 `.env` 中的
-`CATALOG_ENCRYPTION_KEY`。数据库可在服务运行时导出为自包含归档：
-
-```bash
-mkdir -p backups  # Windows PowerShell 可用：New-Item -ItemType Directory -Force backups
-docker compose exec -T db sh -c 'umask 077; pg_dump -U dr -d deep_research -Fc -f /tmp/deep_research.dump'
-docker compose cp db:/tmp/deep_research.dump backups/deep_research.dump
-docker compose exec -T db rm -f /tmp/deep_research.dump
-```
-
-恢复前先停止 API 写入并确认目标库可以被覆盖；以下命令会清理归档中已有的数据库对象，
-不要指向仍需保留的数据：
-
-```bash
-docker compose cp backups/deep_research.dump db:/tmp/deep_research.dump
-docker compose exec -T --user root db chown postgres:postgres /tmp/deep_research.dump
-docker compose exec -T db pg_restore --list /tmp/deep_research.dump
-docker compose stop api
-docker compose exec -T db pg_restore -U dr -d deep_research --clean --if-exists /tmp/deep_research.dump
-docker compose exec -T db rm -f /tmp/deep_research.dump
-docker compose start api
-curl http://127.0.0.1:8000/readyz
-```
-
-`appdata` 仅保存 `/app/data/runtime_config.json` 的非密钥运行时覆盖，可用
-`docker compose cp api:/app/data/runtime_config.json backups/runtime_config.json` 备份；恢复时先停止
-`api`，再写回、校验 JSON 并恢复 UID 10001 的文件所有权后启动：
-
-```bash
-docker compose stop api
-docker compose cp backups/runtime_config.json api:/app/data/runtime_config.json
-docker compose run --rm --no-deps --user root --entrypoint sh api -c 'python -m json.tool /app/data/runtime_config.json >/dev/null && chown 10001:10001 /app/data/runtime_config.json && chmod 600 /app/data/runtime_config.json'
-docker compose start api
-```
-
-Catalog 凭据在 PostgreSQL 中加密，恢复数据库时必须同时恢复原 `CATALOG_ENCRYPTION_KEY`，否则已保存的
-模型与检索凭据无法解密。恢复后应实际读取一条历史 run 并验证 Catalog 凭据，而不只检查 `/readyz`。
+备份需要同时包含数据库、`artifacts`、`appdata`、部署配置及原 `CATALOG_ENCRYPTION_KEY`。
+先停止所有 API、worker 副本和其他写入者，再取得一致快照；只停止 API 不足以冻结 worker
+的写入。优先在新数据库和新数据卷演练恢复，校验迁移、历史报告、产物哈希和凭据解密后再
+接流量。完整步骤见 [运行与恢复指南](docs/OPERATIONS.md#一致备份与恢复)。
 
 ## 持久化 · 历史与回放
 
-经 API 提交的每次研究全过程会落库：计划、子问题、结果与发现、来源、报告、事件流（瞬态 token 事件不落库）。仓储抽象成 `ResearchRepository` 协议，两份实现行为对齐、可互换：
+经 API 提交的每次研究全过程会落库：计划、子问题、结果与发现、来源、报告、事件流。token 文本按批合并后持久化，保留累计计数与事件游标，可跨 API/worker 回放。仓储抽象成 `ResearchRepository` 协议：
 
 - **InMemoryRepository**：纯进程内存，离线单测零依赖，亦为 `ResearchRepository` 的参考实现。
 - **SqlRepository**：async SQLAlchemy 2.0，本地 SQLite、生产 PostgreSQL 通用；API 默认使用。
@@ -307,14 +278,14 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 | `POST` | `/api/runs` | 提交研究（支持 `Idempotency-Key`），返回 `run_id` |
 | `GET`  | `/api/runs` | 历史列表（分页 `limit`/`offset`，可按 `status`/`q`/`tag` 筛选） |
 | `GET`  | `/api/runs/{id}` | 单次详情（计划 + 结果 + 报告 + 标签） |
-| `DELETE` | `/api/runs/{id}` | 删除单条（进行中返回 409）；级联清子表 |
+| `DELETE` | `/api/runs/{id}` | 删除单条（进行中返回 409）；同一事务删除记录并排入可重试产物清理队列 |
 | `POST` | `/api/runs/batch_delete` | 批量删除（body `{ids:[...]}`，跳过进行中） |
 | `PUT`  | `/api/runs/{id}/tags` | 设置标签（替换语义，body `{tags:[...]}`） |
 | `GET`  | `/api/tags` | 全部标签 + 引用计数 |
 | `GET`  | `/api/runs/{id}/events` | 事件回放（支持 `after_seq` 增量） |
 | `GET`  | `/api/runs/{id}/stream` | SSE：支持 `Last-Event-ID` 断点续传与跨实例增量轮询 |
 | `POST` | `/api/runs/{id}/cancel` | 幂等请求取消运行，进入 `cancelling` / `cancelled` |
-| `POST` | `/api/runs/{id}/resume` | 从最近 checkpoint 手动恢复中断的 run |
+| `POST` | `/api/runs/{id}/resume` | 从 checkpoint 恢复可重试故障；`cancelled`/`done` 返回 409 |
 | `GET`  | `/api/workflows` | 可用工作流列表（内置模板 + 自定义） |
 | `GET`  | `/api/roles` | 可用 Agent 角色列表 |
 | `GET`  | `/api/config` | 当前全局配置（密钥脱敏） |
@@ -327,10 +298,10 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 
 前端「设置」页（`GET`/`PUT /api/config`）可在线修改默认模型、默认检索档案与研究行为参数，并对后续创建的研究生效。搜索 Key 统一在角色广场的「检索资源」维护；研究角色可覆盖默认检索选择。旧密钥 API 字段与环境变量保留兼容，详见 [检索与角色配置指南](docs/SEARCH_AND_ROLE_CONFIGURATION.md)。
 
-- **加载顺序**：环境变量（基础默认）→ `runtime_config.json`（前端写入的覆盖项）→ per-run `params`（本次运行覆盖）。
+- **加载顺序**：环境变量 → 旧 JSON 兼容配置 → 数据库版本化配置 → 本次请求允许覆盖的研究参数。API 与 worker 使用同一个配置解析入口；已有 run 保存非秘密设置快照，凭据从当前加密配置解析。全局端点变化时旧 run 拒绝恢复，避免向新端点发送旧配置的凭据。
 - **严格双源门禁**：设置页可全局开启，也可在新建研究的高级设置中按次覆盖；环境变量部署可使用 `REQUIRE_CORROBORATION=true`。默认关闭以兼容既有单来源报告，开启后关系验证失败、单一来源或争议论断均无法进入报告；若没有任何合格素材，Synthesizer 会跳过生成模型并返回确定性的无证据结果。
-- **密钥安全**：`GET` 只脱敏回显（`…末四位` + 是否已设置），表单留空＝保持不变；运行时输入的密钥只驻留进程内存，不写 `runtime_config.json`，重启后回到环境变量。Catalog 中的模型/检索凭据使用 `CATALOG_ENCRYPTION_KEY` 加密落库，启动时自动迁移旧明文。
-- **持久化位置**：非密钥配置默认写当前工作目录 `runtime_config.json`（已 gitignore），可经 `RUNTIME_CONFIG_PATH` 改路径。Docker Compose 已自动设置为 `/app/data/runtime_config.json` 并挂载 `appdata` 数据卷，容器重建后不会丢失。
+- **密钥安全**：`GET` 只脱敏回显，表单留空＝保持不变。在线保存的全局密钥和 Catalog 凭据使用 `CATALOG_ENCRYPTION_KEY` 加密落库；没有加密 key 时拒绝在线保存新密钥，可改用进程环境变量。所有 API/worker 必须持有相同解密 key，checkpoint 不包含密钥。
+- **版本与冲突**：SQL 部署在数据库中保存不可变配置版本，更新携带期望版本；并发修改返回 409，界面保留草稿并要求重新载入。`RUNTIME_CONFIG_PATH` 保留旧 JSON 导入和非 SQL 嵌入模式的兼容用途。
 - `database_url` 与服务端 `api_key` 不可经前端改（自举 / 鉴权安全），仍只来自环境变量。
 
 ## 数据库迁移（Alembic）
@@ -354,7 +325,7 @@ python -m eval.run_eval --workflows deep,quick,hsi_review --output
 默认把每个 `workflow × case` 作为独立研究运行写入 `DATABASE_URL`，并在指定
 `--output` 时同时生成 Markdown 和同名 JSON：Markdown 展示 judge 评分、确定性证据
 指标、成本/耗时与每格 `run_id`；JSON 保存完整矩阵、Run Manifest、质量指标和明细
-SHA-256。临时实验可用 `--no-persist-runs` 禁止落库。
+SHA-256，同时冻结报告正文与来源快照。临时实验可用 `--no-persist-runs` 禁止落库。
 
 每次持久化运行的 `GET /api/runs/{id}` 还会返回：
 
@@ -362,7 +333,10 @@ SHA-256。临时实验可用 `--no-persist-runs` 禁止落库。
 - `sources`：检索时实际交给来源安全门禁和 Researcher 的原文快照。
 - `metrics`：从 findings / citations / events 确定性计算的质量、来源与成本指标。
 
-这些字段用于比较工作流与模型版本；LLM-as-judge 负责主观质量维度，确定性指标负责证据链和工程回归，两者不互相替代。
+当前 Judge 协议为 `source-snapshots-v2`：评判时接收来源快照与哈希，并披露截断；没有来源时
+`groundedness=null`，不将缺失证据支持度混入均分。不同协议的基线禁止直接比较，旧基线需要
+重新生成并人工复核。仓库不自动生成“已复核”的 `main.json`；HSI gold 仍是待复核草稿。
+完整流程见 [评估基线说明](eval/baselines/README.md)。
 
 对内置用例集逐条研究并由 LLM-as-judge 打分；每个分数都能经 `run_id` 回溯到运行
 详情、检索快照和事件流，而不是只保留最终平均值。
@@ -428,4 +402,5 @@ make intent-eval     # 离线评测：准确率 / 混淆矩阵 / 拒识率 / 误
       对照表由代码渲染、系统综述工作流（分期见 [docs/AI4S_HSI_PLAN.md](docs/AI4S_HSI_PLAN.md)）
 - [ ] 检索后端增加 Bing / SerpAPI / 自建向量库
 - [ ] 评估接入 LangSmith / Phoenix 做 tracing 看板
-- [ ] 多用户与鉴权、报告 PDF 导出 / 分享链接
+- [x] 身份与角色权限、run 归属隔离；报告 PDF / CSV / XLSX 导出与能力发现
+- [ ] 组织租户、报告授权共享与分享链接；人工复核的通用质量发布基线

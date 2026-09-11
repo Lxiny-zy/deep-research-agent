@@ -159,6 +159,8 @@ async def build_profile_tool(
                 timeout=settings.request_timeout,
                 allow_private=settings.allow_private_provider_urls,
                 tracer=tracer,
+                max_input_chars=settings.llm_max_input_chars,
+                max_output_tokens=settings.llm_max_output_tokens,
             )
         raise ValueError(f"不支持的检索协议：{provider}")
 

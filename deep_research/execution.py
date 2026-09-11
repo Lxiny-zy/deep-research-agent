@@ -25,12 +25,15 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import ArtifactStore
+from .checkpoints import SCHEMA_VERSION, SETTING_FIELDS
 from .config import Settings
+from .config_service import effective_settings
 from .observability import Event, EventHub
 from .orchestration import WorkflowRun
 from .orchestrator import RUN_SETTINGS_CHECKPOINT_KEY, DeepResearchAgent
 from .persistence.repository import ResearchRepository
 from .planning import stable_slug
+from .provider_limits import coordinator_for, current_coordinator
 from .runner import CommandRunner
 from .security import validate_provider_url_resolved
 from .skills import SkillResolver, default_skill_resolver
@@ -43,25 +46,14 @@ _CANCEL_POLL_SECONDS = 0.5
 
 # 允许从 checkpoint 还原的 per-run 行为参数。密钥与端点**不在**其中：它们来自
 # 当前进程配置，恢复一个旧 run 不应复活一份旧凭据。
-_CHECKPOINT_SETTING_FIELDS = {
-    "max_sub_questions",
-    "max_rounds",
-    "max_concurrency",
-    "results_per_search",
-    "fulltext_enabled",
-    "fulltext_max_chars",
-    "require_corroboration",
-    "max_tokens",
-    "max_replans",
-    "request_timeout",
-    "max_run_seconds",
-    "orchestration_mode",
-}
+_CHECKPOINT_SETTING_FIELDS = SETTING_FIELDS
 
 
 def settings_for_resume(base: Settings, execution: WorkflowRun) -> Settings:
     """Restore the original non-secret run limits from a durable checkpoint."""
     scratch = execution.checkpoint.get("scratch", {})
+    if isinstance(scratch, dict) and scratch.get("_schema_version", 0) > SCHEMA_VERSION:
+        raise ValueError("checkpoint was created by a newer incompatible service version")
     raw = scratch.get(RUN_SETTINGS_CHECKPOINT_KEY, {}) if isinstance(scratch, dict) else {}
     if not isinstance(raw, dict):
         return base
@@ -254,6 +246,8 @@ class RunExecutor:
                         endpoint=settings.xai_base_url,
                         timeout=settings.request_timeout,
                         allow_private=settings.allow_private_provider_urls,
+                        max_input_chars=settings.llm_max_input_chars,
+                        max_output_tokens=settings.llm_max_output_tokens,
                     ),
                     display_name="XaiGrokSearch",
                 )
@@ -388,6 +382,7 @@ class RunExecutor:
         agent: DeepResearchAgent | None = None
         heartbeat: asyncio.Task[None] | None = None
         search_tool: SearchTool | None = None
+        provider_token = current_coordinator.set(coordinator_for(ctx.repo, settings))
 
         async def persist_cancellation() -> None:
             event = Event(
@@ -403,16 +398,35 @@ class RunExecutor:
                 await ctx.repo.set_status(run_id, "cancelled", lease_owner=lease_owner)
 
         try:
+            current_settings = await effective_settings(settings, ctx.catalog)
+            source_execution = resume_execution or initial_execution
+            if source_execution is not None:
+                restored = settings_for_resume(current_settings, source_execution)
+                if (
+                    current_settings.runtime_config_version
+                    and restored.llm_base_url != current_settings.llm_base_url
+                ):
+                    raise ValueError("全局模型端点已变更，请重新创建研究以使用新配置")
+                settings = restored
+            else:
+                settings = current_settings
             artifact_store: ArtifactStore | None = self.ctx.artifact_store
             command_runner: CommandRunner | None = self.ctx.command_runner
             skill_resolver: SkillResolver | None = self.ctx.skill_resolver
             if settings.orchestration_mode != "legacy":
                 if artifact_store is None:
-                    artifact_store = ArtifactStore(
-                        Path(settings.artifact_root),
-                        max_bytes=settings.artifact_max_bytes,
+                    scratch = (
+                        source_execution.checkpoint.get("scratch", {}) if source_execution else {}
                     )
-                    self.ctx.artifact_store = artifact_store
+                    root = Path(settings.artifact_root)
+                    if isinstance(scratch, dict) and scratch.get("_artifact_run_scoped"):
+                        root = root / "runs" / run_id
+                    artifact_store = ArtifactStore(
+                        root,
+                        max_bytes=settings.artifact_max_bytes,
+                        max_total_bytes=settings.artifact_total_bytes,
+                        quota_root=settings.artifact_root,
+                    )
                 if settings.runner_enabled and command_runner is None:
                     command_runner = CommandRunner(
                         workspace_root=artifact_store.workspace_root,
@@ -420,8 +434,9 @@ class RunExecutor:
                         default_timeout_seconds=settings.runner_default_timeout,
                         max_output_bytes=settings.runner_max_output_bytes,
                         max_processes=settings.runner_max_processes,
+                        isolation=settings.runner_isolation,
+                        memory_bytes=settings.runner_memory_bytes,
                     )
-                    self.ctx.command_runner = command_runner
                 if skill_resolver is None:
                     skill_resolver = default_skill_resolver(Path.cwd())
                     self.ctx.skill_resolver = skill_resolver
@@ -521,7 +536,13 @@ class RunExecutor:
                 for historical_event in replayable:
                     hub.publish(historical_event)
             agent.tracer.add_sink(hub.publish)
-            async with asyncio.timeout(settings.max_run_seconds):
+            remaining = settings.max_run_seconds - agent.tracer.elapsed
+            if source_execution is not None:
+                scratch = source_execution.checkpoint.get("scratch", {})
+                deadline = scratch.get("_deadline_at") if isinstance(scratch, dict) else None
+                if isinstance(deadline, (float, int)):
+                    remaining = min(remaining, deadline - time.time())
+            async with asyncio.timeout(max(0, remaining)):
                 await agent.run(query)
             status_reader = getattr(ctx.repo, "get_run_status", None)
             if status_reader is not None and await status_reader(run_id) == "cancelling":
@@ -569,6 +590,7 @@ class RunExecutor:
             except Exception:
                 logger.exception("run %s 兜底置 error 状态失败", run_id)
         finally:
+            current_coordinator.reset(provider_token)
 
             async def cleanup_resources() -> None:
                 if heartbeat is not None:

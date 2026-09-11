@@ -27,14 +27,14 @@ jobs:
       - name: 校验直接依赖与锁文件一致性
         run: python scripts/check_dependency_locks.py
       - name: 审计 Python 生产依赖
-        run: python -m pip_audit -r requirements.lock --progress-spinner off
+        run: python -m pip_audit -r requirements.lock -r requirements-pdf.lock --progress-spinner off
       - name: 审计前端依赖
         working-directory: frontend
-        run: npm audit --audit-level=high --package-lock-only
+        run: npm audit --audit-level=moderate --package-lock-only
       - name: 生成 CycloneDX SBOM
         run: |
           mkdir -p sbom
-          python -m pip_audit -r requirements.lock --progress-spinner off --format cyclonedx-json --output sbom/python-runtime.cdx.json
+          python -m pip_audit -r requirements.lock -r requirements-pdf.lock --progress-spinner off --format cyclonedx-json --output sbom/python-runtime.cdx.json
           cd frontend
           npm sbom --package-lock-only --sbom-format cyclonedx > ../sbom/frontend.cdx.json
       - name: 保存 SBOM
@@ -66,6 +66,15 @@ jobs:
       - name: Pytest（离线，跳过需要 PostgreSQL 的用例）
         run: |
           pytest -m "not pg" --cov=deep_research --cov-report=term-missing --cov-fail-under=80
+      - name: 独立 API / worker 的真实 HTTP 验收
+        run: python scripts/verify_worker_http.py
+      - name: 保存跨进程验收日志
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: worker-http
+          path: artifacts/worker-http/
+          retention-days: 14
 
   # 需要真实 PostgreSQL 的 repository 集成测试，独立 job 用 service container
   backend-pg:
@@ -129,6 +138,9 @@ jobs:
           npm run build
       - name: 安装构建依赖
         run: pip install --require-hashes -r requirements-dev.lock
+      - name: 检查 OpenAPI 生成类型
+        working-directory: frontend
+        run: npm run api:check
       - name: 构建 wheel
         run: python -m pip wheel . --no-deps --no-build-isolation --wheel-dir dist
       - name: 在隔离环境安装并冒烟
@@ -159,11 +171,13 @@ jobs:
         run: npm run lint
       - name: 类型检查与构建
         run: npm run build
+      - name: 首屏与分块体积门槛
+        run: npm run check:bundle
       - name: 单元测试
         run: npm run test
 
   browser:
-    name: 检索资源浏览器验收
+    name: 检索资源与工作区浏览器验收
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -181,11 +195,14 @@ jobs:
           npm ci
           npm run build
       - run: python scripts/verify_search_resources_ui.py
+      - run: python scripts/verify_workspace_ui.py --label ci
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: search-resource-browser
-          path: artifacts/ui-search/
+          name: browser-regressions
+          path: |
+            artifacts/ui-search/
+            artifacts/ui-workspace/
           retention-days: 14
 
   container:
@@ -219,6 +236,21 @@ jobs:
             echo "production image unexpectedly accepted missing deployment configuration" >&2
             exit 1
           fi
-          docker compose run --rm --no-deps api python -c "import os; from pathlib import Path; import deep_research.api; assert os.getuid() == 10001; assert Path('/app/alembic/versions').is_dir()"
-          docker compose run --rm --no-deps api python -c "from weasyprint import HTML; assert HTML(string='<p>PDF smoke test</p>').write_pdf().startswith(b'%PDF')"
+          docker compose exec -T api python - < scripts/smoke_container.py
+          docker compose exec -T api python - --expect-unavailable < scripts/verify_runner_sandbox.py
           docker compose exec -T api python -m alembic check
+
+  runner-sandbox:
+    name: Linux 命令沙箱与真实解压
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - run: pip install --require-hashes -r requirements.lock
+      - name: 安装隔离工具（不修改系统 namespace 策略）
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap libarchive-tools util-linux
+      - name: 验证文件/网络隔离、资源限制、超时与归档处理
+        run: python -m scripts.verify_runner_sandbox

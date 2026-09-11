@@ -9,7 +9,9 @@ from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from ..config_service import ConfigStore
 from ..persistence import orm
+from ..persistence.coordination import transaction_lock
 from ..security import SecretCipher
 from .dto import (
     AgentCardCreate,
@@ -138,6 +140,7 @@ class CatalogRepository:
     ) -> None:
         self._sm = sessionmaker
         self._cipher = secret_cipher or SecretCipher.from_env()
+        self.config_store = ConfigStore(sessionmaker, self._cipher)
 
     async def encrypt_legacy_secrets(self) -> int:
         """Encrypt legacy plaintext rows in place and verify encrypted rows."""
@@ -261,6 +264,7 @@ class CatalogRepository:
     ) -> ModelProfileView:
         async with self._sm() as s, s.begin():
             if is_default:  # 单一默认：先清掉其他默认标记
+                await transaction_lock(s, "model-default")
                 await s.execute(update(orm.ModelProfileRow).values(is_default=0))
             row = orm.ModelProfileRow(
                 name=name,
@@ -282,6 +286,7 @@ class CatalogRepository:
             if row is None:
                 return None
             if fields.get("is_default"):
+                await transaction_lock(s, "model-default")
                 await s.execute(update(orm.ModelProfileRow).values(is_default=0))
             for k, v in fields.items():
                 if k == "is_default":

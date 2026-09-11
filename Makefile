@@ -27,12 +27,12 @@ dependency-check:  ## 校验直接依赖均被锁文件以兼容版本覆盖
 	$(PYTHON) scripts/check_dependency_locks.py
 
 audit: dependency-check  ## 审计 Python 与前端依赖漏洞
-	$(PYTHON) -m pip_audit -r requirements.lock
-	cd frontend && npm audit --audit-level=high
+	$(PYTHON) -m pip_audit -r requirements.lock -r requirements-pdf.lock
+	cd frontend && npm audit --audit-level=moderate
 
 sbom:  ## 导出 Python 与前端依赖 SBOM 到 sbom/
 	$(PYTHON) -c "from pathlib import Path; Path('sbom').mkdir(exist_ok=True)"
-	$(PYTHON) -m pip_audit -r requirements.lock --progress-spinner off --format cyclonedx-json --output sbom/python-runtime.cdx.json
+	$(PYTHON) -m pip_audit -r requirements.lock -r requirements-pdf.lock --progress-spinner off --format cyclonedx-json --output sbom/python-runtime.cdx.json
 	cd frontend && npm sbom --package-lock-only --sbom-format cyclonedx > ../sbom/frontend.cdx.json
 
 lint:  ## ruff 检查 + ruff 格式校验 + mypy 类型检查

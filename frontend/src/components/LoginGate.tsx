@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { clearApiKey, getApiKey, isApiKeyRemembered, setApiKey } from '../api/client'
 import { AppIcon } from './AppIcon'
+import { verifyAccessKey } from '../api/transport'
 
 interface Props {
   onClose: () => void
@@ -10,7 +11,7 @@ interface Props {
 export default function LoginGate({ onClose, onAuthenticated }: Props) {
   const existing = getApiKey() ?? ''
   const [key, setKey] = useState(existing)
-  const [remember, setRemember] = useState(existing ? isApiKeyRemembered() : true)
+  const [remember, setRemember] = useState(existing ? isApiKeyRemembered() : false)
   const [visible, setVisible] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
@@ -38,18 +39,8 @@ export default function LoginGate({ onClose, onAuthenticated }: Props) {
     const controller = new AbortController()
     requestRef.current = controller
     try {
-      const response = await fetch('/api/config', {
-        headers: { Authorization: `Bearer ${value}` },
-        signal: controller.signal,
-      })
+      await verifyAccessKey(value, controller.signal)
       if (controller.signal.aborted) return
-      if (!response.ok) {
-        throw new Error(
-          response.status === 401
-            ? '访问密钥无效，请检查后重试。'
-            : `验证失败（HTTP ${response.status}）`,
-        )
-      }
       const storage = setApiKey(value, remember)
       if ((remember && storage !== 'local') || storage === 'memory') {
         setStorageNotice(
@@ -157,7 +148,7 @@ export default function LoginGate({ onClose, onAuthenticated }: Props) {
                 disabled={pending || Boolean(storageNotice)}
               />
               <span>
-                记住此设备<small>下次自动登录；公共设备请取消勾选。</small>
+                记住此设备<small>仅在私人设备上勾选；默认关闭页面后失效。</small>
               </span>
             </label>
             {error && (

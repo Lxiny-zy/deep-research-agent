@@ -17,14 +17,14 @@ describe('API key persistence', () => {
   })
 
   it('remembers a verified key after the tab session is discarded', () => {
-    setApiKey('  remembered-key  ')
+    setApiKey('  remembered-key  ', true)
     sessionStorage.clear()
     expect(getApiKey()).toBe('remembered-key')
     expect(isApiKeyRemembered()).toBe(true)
   })
 
   it('removes a remembered key when switching to a session-only login', () => {
-    setApiKey('old-key')
+    setApiKey('old-key', true)
     setApiKey('temporary-key', false)
     expect(isApiKeyRemembered()).toBe(false)
     expect(getApiKey()).toBe('temporary-key')
@@ -57,7 +57,7 @@ describe('API key persistence', () => {
       if (this === localStorage) throw new DOMException('Blocked', 'SecurityError')
       setItem.call(this, name, value)
     })
-    expect(setApiKey('fallback-key')).toBe('session')
+    expect(setApiKey('fallback-key', true)).toBe('session')
     expect(getApiKey()).toBe('fallback-key')
   })
 
@@ -72,7 +72,7 @@ describe('API key persistence', () => {
   })
 
   it('reads remembered credentials even when session storage is unavailable', () => {
-    setApiKey('saved-key')
+    setApiKey('saved-key', true)
     const getItem = Storage.prototype.getItem
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, name) {
       if (this === sessionStorage) throw new Error('Blocked')
@@ -92,6 +92,7 @@ describe('API key persistence', () => {
     setApiKey('old-key')
     const pending = createRun({ query: 'research question' })
     setApiKey('new-key')
+    dispatch.mockClear()
     finish(new Response(null, { status: 401 }))
     await expect(pending).rejects.toThrow()
     expect(dispatch).not.toHaveBeenCalled()
@@ -205,7 +206,7 @@ describe('getRunDocument', () => {
     await expect(getRunDocument('run/id', { includeHsiTables: true })).resolves.toEqual(document)
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/runs/run%2Fid/document?include_hsi_tables=true',
-      expect.objectContaining({ headers: { 'Content-Type': 'application/json' } }),
+      expect.objectContaining({ headers: expect.any(Headers) }),
     )
   })
 

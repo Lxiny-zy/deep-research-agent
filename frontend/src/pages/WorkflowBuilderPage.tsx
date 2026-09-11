@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import BuiltinTemplateGallery from '../components/BuiltinTemplateGallery'
 import Skeleton from '../components/Skeleton'
+import EmptyState from '../components/EmptyState'
 import WorkflowEditor from '../components/WorkflowEditor'
 import { AppIcon, type AppIconName } from '../components/AppIcon'
 import { ApiError, listWorkflows } from '../api/client'
@@ -61,22 +62,33 @@ export default function WorkflowBuilderPage() {
   const [savingSessionKey, setSavingSessionKey] = useState<number | null>(null)
   const [saveErrors, setSaveErrors] = useState<Record<number, string>>({})
   const [templates, setTemplates] = useState<WorkflowInfo[]>([])
+  const templatesRef = useRef<HTMLDetailsElement>(null)
+  const [templateAttempt, setTemplateAttempt] = useState(0)
+  const [templateLoading, setTemplateLoading] = useState(true)
+  const [templateError, setTemplateError] = useState('')
+  const [conflict, setConflict] = useState<{ key: number; latest: WorkflowDef } | null>(null)
 
   useEffect(() => {
     let cancelled = false
+    setTemplateLoading(true)
+    setTemplateError('')
     listWorkflows()
       .then((rows) => {
         if (!cancelled) setTemplates(rows)
       })
-      .catch(() => {
-        // 内置模板陈列加载失败不阻断页面主功能（自定义工作流增删改）。
+      .catch((error: unknown) => {
+        if (!cancelled) setTemplateError(errMsg(error))
+      })
+      .finally(() => {
+        if (!cancelled) setTemplateLoading(false)
       })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [templateAttempt])
 
   function openEditor(workflow: WorkflowDef | null) {
+    setConflict(null)
     const key = ++sessionSequence.current
     setEditSession({ key, workflow })
   }
@@ -116,6 +128,12 @@ export default function WorkflowBuilderPage() {
     })
     const options = {
       onSuccess: () => {
+        try {
+          sessionStorage.removeItem(`dr_workflow_draft_${session.workflow?.id || 'new'}`)
+        } catch {
+          /* Storage is optional. */
+        }
+        setConflict(null)
         setSavingSessionKey((current) => (current === sessionKey ? null : current))
         setEditSession((current) => (current?.key === sessionKey ? undefined : current))
       },
@@ -128,15 +146,10 @@ export default function WorkflowBuilderPage() {
           session.clone
         )
           return
-        // Refresh only the server version. The editor remains mounted, so its
-        // local draft stays intact and the next submit carries the new version.
         void workflows.refetch().then((result) => {
           const latest = result.data?.find((workflow) => workflow.id === session.workflow?.id)
           if (!latest) return
-          setEditSession((current) => {
-            if (current?.key !== sessionKey || !current.workflow) return current
-            return { ...current, workflow: { ...current.workflow, version: latest.version } }
-          })
+          setConflict({ key: sessionKey, latest })
         })
       },
       onSettled: () => {
@@ -158,7 +171,7 @@ export default function WorkflowBuilderPage() {
   }
 
   return (
-    <div className="stack">
+    <div className="stack page-stack workflow-page">
       <section className="page-intro workflow-intro page-intro-compact">
         <div>
           <span className="eyebrow">
@@ -174,31 +187,86 @@ export default function WorkflowBuilderPage() {
         <ResearchMotif kind="weave" className="page-motif" />
       </section>
 
-      <BuiltinTemplateGallery templates={templates} onClone={cloneTemplate} />
+      <details className="workflow-templates" ref={templatesRef}>
+        <summary>
+          <span className="workflow-template-icon">
+            <AppIcon name="stack" size={21} aria-hidden="true" />
+          </span>
+          <span className="workflow-template-copy">
+            <strong>参考内置模板</strong>
+            <span>从现成的研究流程开始，克隆后按需调整。</span>
+          </span>
+          <AppIcon
+            name="chevron-down"
+            size={19}
+            className="workflow-template-chevron"
+            aria-hidden="true"
+          />
+        </summary>
+        <div className="workflow-template-content">
+          {templateLoading && <Skeleton rows={3} />}
+          {templateError && (
+            <div className="workspace-load-error" role="alert">
+              <p>模板加载失败：{templateError}</p>
+              <button
+                className="btn btn-secondary small"
+                onClick={() => setTemplateAttempt((value) => value + 1)}
+              >
+                重试加载模板
+              </button>
+            </div>
+          )}
+          {!templateLoading && !templateError && (
+            <BuiltinTemplateGallery templates={templates} onClone={cloneTemplate} />
+          )}
+        </div>
+      </details>
 
-      <section className="builtin-rail workflow-custom-rail" aria-label="自定义工作流">
-        <div className="builtin-rail-head">
+      <section className="panel workflow-custom-rail" aria-label="自定义工作流">
+        <div className="panel-header">
           <div>
             <span className="panel-kicker">
               <AppIcon name="waypoints" size={12} aria-hidden="true" /> 自定义 / 工作流
             </span>
-            <h2 className="builtin-rail-title">自定义工作流</h2>
+            <h2 className="panel-title">自定义工作流</h2>
           </div>
           <button className="btn btn-primary" onClick={() => openEditor(null)} type="button">
             <AppIcon name="plus" size={15} aria-hidden="true" />
             新建工作流
           </button>
         </div>
-        <span className="hint">
-          把角色拼成你自己的多智能体流程，存库后可在「新建研究」中选用，也可从上方模板克隆起步。
-        </span>
-
         {workflows.isLoading && <Skeleton rows={3} />}
         {workflows.isError && (
-          <p className="error-text">
-            <AppIcon name="circle-x" size={14} aria-hidden="true" />
-            {errMsg(workflows.error)}
+          <div className="workspace-load-error" role="alert">
+            <p>{errMsg(workflows.error)}</p>
+            <button className="btn btn-secondary small" onClick={() => void workflows.refetch()}>
+              重试加载工作流
+            </button>
+          </div>
+        )}
+        {m.remove.isError && (
+          <p className="error-text" role="alert">
+            {errMsg(m.remove.error)}
           </p>
+        )}
+        {!workflows.isLoading && !workflows.isError && workflows.data?.length === 0 && (
+          <EmptyState
+            icon="workflow"
+            title="为你的研究，搭一条专属流程"
+            description="从空白画布自由连接角色，或以模板为起点。保存后即可在新建研究中使用。"
+          >
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                if (!templatesRef.current) return
+                templatesRef.current.open = true
+                templatesRef.current.querySelector('summary')?.focus({ preventScroll: true })
+                templatesRef.current.scrollIntoView({ block: 'start' })
+              }}
+            >
+              <AppIcon name="stack" size={15} aria-hidden="true" /> 浏览内置模板
+            </button>
+          </EmptyState>
         )}
 
         <div className="card-grid workflow-custom-grid">
@@ -281,6 +349,11 @@ export default function WorkflowBuilderPage() {
           }}
           pending={savingSessionKey === editSession.key}
           error={saveErrors[editSession.key]}
+          conflict={conflict?.key === editSession.key ? conflict.latest : undefined}
+          onReload={() => {
+            if (!conflict || conflict.key !== editSession.key) return
+            openEditor(conflict.latest)
+          }}
         />
       )}
     </div>

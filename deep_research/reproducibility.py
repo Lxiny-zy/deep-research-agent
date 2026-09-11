@@ -39,7 +39,7 @@ def build_run_manifest(
     query: str,
     workflow_name: str,
     workflow_definition: dict,
-    settings: dict[str, bool | int | float | str | None],
+    settings: dict[str, bool | int | float | str | list[str] | None],
     llm_model: str,
     llm_endpoint: str | None,
     search_backend: str,

@@ -64,6 +64,12 @@ data/
 runtime_config.json
 
 # Local assets and temporary audit output
+artifacts/
+.reasonix/
+.artifact-quota*
+.framework/
+work/
+output/
 *.png
 *.jpg
 *.jpeg

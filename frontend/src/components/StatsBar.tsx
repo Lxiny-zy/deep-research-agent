@@ -98,6 +98,7 @@ export default function StatsBar({
   liveActive = false,
   connectionStatus = 'idle',
   tokensEstimated = false,
+  paused = false,
 }: {
   stats: RunStats | null
   detail: RunDetail | null
@@ -106,6 +107,7 @@ export default function StatsBar({
   liveActive?: boolean
   connectionStatus?: 'idle' | 'streaming' | 'disconnected' | 'done' | 'error' | 'cancelled'
   tokensEstimated?: boolean
+  paused?: boolean
 }) {
   const liveElapsed = live?.elapsed ?? 0
   const anchor = useRef({ base: liveElapsed, at: Date.now() })
@@ -140,20 +142,23 @@ export default function StatsBar({
   const findingPulse = useChangePulse(findingTarget, liveActive)
   const progressPulse = useChangePulse(progress.percent, liveActive)
 
-  const connectionLabel =
-    connectionStatus === 'cancelled'
+  const connectionLabel = paused
+    ? '演示已暂停'
+    : connectionStatus === 'cancelled'
       ? '运行已取消'
-      : connectionStatus === 'disconnected'
-        ? '连接恢复中'
-        : liveActive
-          ? '实时同步'
-          : progress.percent >= 100
-            ? '统计已确认'
-            : '等待运行'
+      : connectionStatus === 'error'
+        ? '运行已停止'
+        : connectionStatus === 'disconnected'
+          ? '连接恢复中'
+          : liveActive
+            ? '实时同步'
+            : progress.percent >= 100
+              ? '统计已确认'
+              : '等待运行'
 
   return (
     <section
-      className={`research-live-overview${liveActive ? ' is-live' : ''}`}
+      className={`research-live-overview${liveActive ? ' is-live' : ''}${progress.terminal ? ' is-terminal' : ''}`}
       aria-label="研究实时统计"
     >
       <div className={`research-progress-summary${progressPulse ? ' is-updating' : ''}`}>
@@ -175,7 +180,9 @@ export default function StatsBar({
             <small>
               {progress.total > 0
                 ? `${progress.completed} / ${progress.total} 个阶段已处理`
-                : '正在确认工作流阶段'}
+                : progress.terminal
+                  ? '本次运行已结束'
+                  : '正在确认工作流阶段'}
               {progress.estimated && ' · 阶段估算'}
             </small>
           </div>

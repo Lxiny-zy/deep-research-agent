@@ -3,32 +3,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import App from './App'
-import './index.css'
-import './components-styles.css'
-import './run-page-styles.css'
-import './design-system.css'
-import './experience.css'
-import './motion.css'
-import './editorial.css'
-// Screen-only visual hierarchy; keep print overrides last.
-import './clarity.css'
-// Final high-contrast research workspace layer.
-import './visual-refresh.css'
-import './welcome.css'
-import './interactions.css'
-// Premium screen layer: atmospheric canvas, stronger hierarchy and restrained motion.
-import './premium-surface.css'
-import './research-atmosphere.css'
-import './search-resources.css'
-// Keep print overrides last so they can flatten the screen report layout.
-import './print.css'
-import AgentSquarePage from './pages/AgentSquarePage'
-import HistoryPage from './pages/HistoryPage'
-import LiveTelemetryPreviewPage from './pages/LiveTelemetryPreviewPage'
-import NewResearchPage from './pages/NewResearchPage'
-import RunPage from './pages/RunPage'
-import SettingsPage from './pages/SettingsPage'
-import WorkflowBuilderPage from './pages/WorkflowBuilderPage'
+import './styles/index.css'
+import ErrorPage, { NotFoundPage } from './pages/ErrorPage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 10_000, retry: 1 } },
@@ -36,19 +12,46 @@ const queryClient = new QueryClient({
 
 const router = createBrowserRouter([
   ...(import.meta.env.DEV
-    ? [{ path: '/preview/live-telemetry', element: <LiveTelemetryPreviewPage /> }]
+    ? [
+        {
+          path: '/preview/live-telemetry',
+          lazy: async () => ({
+            Component: (await import('./pages/LiveTelemetryPreviewPage')).default,
+          }),
+        },
+      ]
     : []),
   {
     path: '/',
     element: <App />,
+    errorElement: <ErrorPage />,
     children: [
-      { index: true, element: <NewResearchPage /> },
+      {
+        index: true,
+        lazy: async () => ({ Component: (await import('./pages/NewResearchPage')).default }),
+      },
       { path: 'welcome', element: null },
-      { path: 'runs/:id', element: <RunPage /> },
-      { path: 'history', element: <HistoryPage /> },
-      { path: 'workflows', element: <WorkflowBuilderPage /> },
-      { path: 'agents', element: <AgentSquarePage /> },
-      { path: 'settings', element: <SettingsPage /> },
+      {
+        path: 'runs/:id',
+        lazy: async () => ({ Component: (await import('./pages/RunPage')).default }),
+      },
+      {
+        path: 'history',
+        lazy: async () => ({ Component: (await import('./pages/HistoryPage')).default }),
+      },
+      {
+        path: 'workflows',
+        lazy: async () => ({ Component: (await import('./pages/WorkflowBuilderPage')).default }),
+      },
+      {
+        path: 'agents',
+        lazy: async () => ({ Component: (await import('./pages/AgentSquarePage')).default }),
+      },
+      {
+        path: 'settings',
+        lazy: async () => ({ Component: (await import('./pages/SettingsPage')).default }),
+      },
+      { path: '*', element: <NotFoundPage /> },
     ],
   },
 ])

@@ -89,6 +89,16 @@ def evaluate_regression(
 ) -> RegressionReport:
     policy = policy or RegressionPolicy()
     report = RegressionReport()
+    if baseline is not None and candidate.get("judge_protocol") != baseline.get("judge_protocol"):
+        report.failures.append(
+            RegressionFailure(
+                scope="benchmark",
+                metric="judge_protocol",
+                actual=str(candidate.get("judge_protocol")),
+                expected=str(baseline.get("judge_protocol")),
+                message="judge protocol differs; regenerate the baseline before comparing scores",
+            )
+        )
     candidate_rows = {
         _row_key(row): row for row in candidate.get("rows", []) if isinstance(row, dict)
     }

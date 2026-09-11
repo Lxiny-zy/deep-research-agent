@@ -1,4 +1,4 @@
-"""验证 orchestrator 注入 repo 后落库完整：计划/结果/报告/事件齐全，token 事件不落库。"""
+"""验证 orchestrator 注入 repo 后计划、结果、报告和合并正文增量均落库。"""
 
 from __future__ import annotations
 
@@ -30,8 +30,10 @@ async def test_run_persists_full_trace(settings):
     events = await repo.get_events(run_id)
     assert events
     assert {"start", "report", "done"} <= {e.type for e in events}
-    # token 事件是瞬态的，不落库
-    assert all(e.type != "token" for e in events)
+    text_events = [e for e in events if e.type == "token"]
+    assert text_events
+    assert all(e.data and e.data.get("delta") for e in text_events)
+    assert [e.seq for e in events] == list(range(len(events)))
 
 
 @pytest.mark.asyncio

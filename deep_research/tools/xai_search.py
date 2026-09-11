@@ -19,11 +19,19 @@ class XaiGrokSearch(ModelSearch):
         endpoint: str = _DEFAULT_ENDPOINT,
         timeout: float = 60.0,
         allow_private: bool = False,
+        max_input_chars: int = 100_000,
+        max_output_tokens: int = 4096,
     ) -> None:
         if not api_key.strip():
             raise ValueError("XaiGrokSearch requires an API key")
         super().__init__(
-            api_key, model=model, endpoint=endpoint, timeout=timeout, allow_private=allow_private
+            api_key,
+            model=model,
+            endpoint=endpoint,
+            timeout=timeout,
+            allow_private=allow_private,
+            max_input_chars=max_input_chars,
+            max_output_tokens=max_output_tokens,
         )
 
     @property

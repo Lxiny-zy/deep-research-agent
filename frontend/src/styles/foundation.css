@@ -60,9 +60,6 @@
   --shadow-xl: 0 16px 64px rgba(0, 0, 0, 0.7);
 
   /* —— 字体 —— */
-  --font-sans: Arial, Helvetica, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  --font-display: Georgia, 'Times New Roman', 'Noto Serif SC', 'Songti SC', serif;
 
   /* —— 几何 / 尺寸 —— */
   --radius-none: 0px;
@@ -85,18 +82,10 @@
 
 html {
   -webkit-text-size-adjust: 100%;
-  scroll-behavior: smooth;
 }
 
 body {
-  margin: 0;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: 15px;
   line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
   min-height: 100vh;
   overflow-x: hidden;
 }
@@ -156,9 +145,6 @@ body::after {
   width: 10px;
   height: 10px;
 }
-::-webkit-scrollbar-track {
-  background: transparent;
-}
 ::-webkit-scrollbar-thumb {
   background: linear-gradient(180deg, #8a6d1f, #3a3320);
   border-radius: 999px;
@@ -170,7 +156,6 @@ body::after {
 
 :focus-visible {
   outline: 2px solid var(--accent-primary);
-  outline-offset: 2px;
 }
 
 /* ============================================================================
@@ -182,10 +167,8 @@ h3,
 h4,
 h5,
 h6 {
-  font-family: var(--font-display);
   font-weight: 700;
   letter-spacing: -0.02em;
-  margin: 0;
   line-height: 1.2;
 }
 
@@ -201,7 +184,6 @@ h3 {
 
 a {
   color: var(--accent-primary);
-  text-decoration: none;
   transition: color 0.2s var(--ease-smooth);
 }
 a:hover {
@@ -318,7 +300,6 @@ p {
   flex: 1;
   padding: 32px;
   max-width: 1600px;
-  margin: 0 auto;
   width: 100%;
 }
 
@@ -326,21 +307,13 @@ p {
    组件：大块面板
    ========================================================================== */
 .panel {
-  background: var(--surface-1);
   border: 2px solid var(--border-primary);
   padding: 28px;
-  position: relative;
-  overflow: hidden;
   transition: all 0.3s var(--ease-smooth);
 }
 
 .panel::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
   right: 0;
-  height: 2px;
   background: var(--accent-gradient);
   transform: scaleX(0);
   transform-origin: left;
@@ -352,20 +325,14 @@ p {
 }
 
 .panel-header {
-  display: flex;
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 20px;
   padding-bottom: 16px;
-  border-bottom: 1px solid var(--border-secondary);
 }
 
 .panel-title {
   font-size: 1.3rem;
   font-weight: 600;
-  color: var(--text-primary);
-  display: flex;
-  align-items: center;
   gap: 12px;
 }
 
@@ -467,16 +434,11 @@ p {
    按钮系统
    ========================================================================== */
 .btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
   padding: 12px 24px;
   font-family: var(--font-sans);
   font-size: 0.9rem;
   font-weight: 600;
   border: 2px solid transparent;
-  cursor: pointer;
   transition: all 0.3s var(--ease-smooth);
   position: relative;
   overflow: hidden;
@@ -542,8 +504,6 @@ p {
 
 .btn:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
-  transform: none !important;
 }
 
 /* ============================================================================
@@ -690,7 +650,6 @@ input:disabled {
 }
 
 .textarea {
-  resize: vertical;
   min-height: 100px;
 }
 
@@ -698,7 +657,6 @@ input:disabled {
   display: block;
   font-size: 0.85rem;
   font-weight: 600;
-  color: var(--text-secondary);
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -708,9 +666,6 @@ input:disabled {
    状态徽章
    ========================================================================== */
 .badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   padding: 4px 12px;
   font-size: 0.75rem;
   font-weight: 600;
@@ -734,7 +689,6 @@ input:disabled {
 .badge.warning {
   background: rgba(255, 216, 115, 0.12);
   color: var(--warning);
-  border-color: var(--warning);
 }
 
 .badge.info {
@@ -798,12 +752,10 @@ input:disabled {
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 24px;
 }
 
 .row {
   display: flex;
-  gap: 16px;
   align-items: center;
 }
 
@@ -850,16 +802,5 @@ input:disabled {
 
   .content-area {
     padding: 18px 14px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    scroll-behavior: auto !important;
-    transition-duration: 0.001ms !important;
   }
 }

@@ -283,8 +283,8 @@ describe('ReportView 可审计证据链', () => {
 
     expect(screen.queryByRole('button', { name: /查看引用/ })).not.toBeInTheDocument()
     expect(screen.queryByTestId('evidence-overview')).not.toBeInTheDocument()
-    // [n] 仍以普通角标文本渲染
-    expect(screen.getAllByText('[1]').length).toBeGreaterThan(0)
+    // 流式阶段直接显示正文，避免每个增量重新解析整份 Markdown。
+    expect(screen.getByText(/GPU 出货量创新高/)).toHaveTextContent('[1]')
   })
 })
 

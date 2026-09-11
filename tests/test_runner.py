@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -34,14 +35,6 @@ def _python_operation(
     return OperationDefinition(name, build, max_timeout_seconds=max_timeout_seconds)
 
 
-def _require_process_spawn() -> None:
-    # The managed Windows test sandbox denies creation of overlapped pipe
-    # handles.  CI/Linux and normal deployments exercise these subprocess
-    # paths; keep policy-only tests runnable on every platform.
-    if sys.platform == "win32":
-        pytest.skip("asyncio subprocess pipes are unavailable in this sandbox")
-
-
 def test_child_environment_does_not_inherit_service_credentials(monkeypatch) -> None:
     monkeypatch.setenv("LLM_API_KEY", "must-not-leak")
     monkeypatch.setenv("TAVILY_API_KEY", "must-not-leak")
@@ -56,9 +49,38 @@ def test_child_environment_does_not_inherit_service_credentials(monkeypatch) -> 
     assert "API_KEY" not in child_env
 
 
+async def test_default_isolation_refuses_to_execute_without_os_sandbox(tmp_path, monkeypatch):
+    monkeypatch.setattr("deep_research.runner.shutil.which", lambda _: None)
+    operation = _python_operation(
+        "fixture.marker", "import pathlib; pathlib.Path('marker').touch()"
+    )
+    runner = CommandRunner(workspace_root=tmp_path, operations={operation.name: operation})
+    with pytest.raises(CommandPolicyError, match="bubblewrap"):
+        await runner.run(operation.name)
+    assert not (tmp_path / "marker").exists()
+
+
+async def test_separate_runners_share_process_concurrency_limit(tmp_path):
+    operation = _python_operation(
+        "fixture.interval", "import time; print(time.time()); time.sleep(0.1); print(time.time())"
+    )
+    runners = [
+        CommandRunner(
+            workspace_root=tmp_path / str(index),
+            isolation="trusted",
+            operations={operation.name: operation},
+            max_processes=1,
+        )
+        for index in range(2)
+    ]
+    results = await asyncio.gather(*(runner.run(operation.name) for runner in runners))
+    assert all(result.ok for result in results)
+    intervals = sorted(tuple(map(float, result.stdout.split())) for result in results)
+    assert intervals[0][1] <= intervals[1][0]
+
+
 @pytest.mark.asyncio
 async def test_registered_operation_executes_and_reports_output(tmp_path: Path) -> None:
-    _require_process_spawn()
     operation = _python_operation(
         "fixture.write",
         "import pathlib, sys; "
@@ -66,6 +88,7 @@ async def test_registered_operation_executes_and_reports_output(tmp_path: Path) 
     )
     runner = CommandRunner(
         workspace_root=tmp_path,
+        isolation="trusted",
         operations={operation.name: operation},
         allowed_operations=[operation.name],
     )
@@ -89,6 +112,7 @@ async def test_dry_run_validates_but_does_not_spawn_process(tmp_path: Path) -> N
     )
     runner = CommandRunner(
         workspace_root=tmp_path,
+        isolation="trusted",
         operations={operation.name: operation},
         allowed_operations=[operation.name],
     )
@@ -102,13 +126,13 @@ async def test_dry_run_validates_but_does_not_spawn_process(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_nonzero_exit_is_a_failed_audited_result(tmp_path: Path) -> None:
-    _require_process_spawn()
     operation = _python_operation(
         "fixture.fail",
         "import sys; print('bad', file=sys.stderr); sys.exit(7)",
     )
     runner = CommandRunner(
         workspace_root=tmp_path,
+        isolation="trusted",
         operations={operation.name: operation},
         allowed_operations=[operation.name],
     )
@@ -123,10 +147,10 @@ async def test_nonzero_exit_is_a_failed_audited_result(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_timeout_terminates_operation_and_marks_result(tmp_path: Path) -> None:
-    _require_process_spawn()
     operation = _python_operation("fixture.sleep", "import time; time.sleep(5)")
     runner = CommandRunner(
         workspace_root=tmp_path,
+        isolation="trusted",
         operations={operation.name: operation},
         allowed_operations=[operation.name],
         default_timeout_seconds=1,
@@ -141,10 +165,10 @@ async def test_timeout_terminates_operation_and_marks_result(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_stdout_is_bounded_and_truncation_is_recorded(tmp_path: Path) -> None:
-    _require_process_spawn()
     operation = _python_operation("fixture.noisy", "print('x' * 10_000)")
     runner = CommandRunner(
         workspace_root=tmp_path,
+        isolation="trusted",
         operations={operation.name: operation},
         allowed_operations=[operation.name],
         max_output_bytes=1024,
@@ -159,7 +183,6 @@ async def test_stdout_is_bounded_and_truncation_is_recorded(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_proxy_environment_is_removed_for_no_network_operation(tmp_path: Path) -> None:
-    _require_process_spawn()
     operation = _python_operation(
         "fixture.env",
         "import os; "
@@ -168,6 +191,7 @@ async def test_proxy_environment_is_removed_for_no_network_operation(tmp_path: P
     )
     runner = CommandRunner(
         workspace_root=tmp_path,
+        isolation="trusted",
         operations={operation.name: operation},
         allowed_operations=[operation.name],
     )
@@ -186,6 +210,7 @@ async def test_unknown_operation_and_escaping_paths_are_rejected(tmp_path: Path)
     operation = _python_operation("fixture.noop", "print('ok')")
     runner = CommandRunner(
         workspace_root=tmp_path,
+        isolation="trusted",
         operations={operation.name: operation},
         allowed_operations=[operation.name],
     )
@@ -210,6 +235,7 @@ async def test_shell_wrappers_and_control_characters_are_never_allowed(tmp_path:
     )
     runner = CommandRunner(
         workspace_root=tmp_path,
+        isolation="trusted",
         operations={
             shell_operation.name: shell_operation,
             control_operation.name: control_operation,
@@ -236,6 +262,7 @@ async def test_symlinked_workspace_path_cannot_escape(tmp_path: Path) -> None:
         operation = _python_operation("fixture.noop", "print('ok')")
         runner = CommandRunner(
             workspace_root=tmp_path,
+            isolation="trusted",
             operations={operation.name: operation},
             allowed_operations=[operation.name],
         )

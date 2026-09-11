@@ -46,7 +46,11 @@ call npm ci
 if errorlevel 1 (popd & goto :failed)
 call npm run lint
 if errorlevel 1 (popd & goto :failed)
+call npm run api:check
+if errorlevel 1 (popd & goto :failed)
 call npm run build
+if errorlevel 1 (popd & goto :failed)
+call npm run check:bundle
 if errorlevel 1 (popd & goto :failed)
 call npm run test
 if errorlevel 1 (popd & goto :failed)

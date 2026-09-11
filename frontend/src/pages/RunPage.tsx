@@ -268,7 +268,7 @@ export default function RunPage() {
     <div className={`stack run-workbench${liveActive ? ' is-live' : ''}`}>
       <div className="run-overview">
         <div className={`panel run-head${canFollowUp ? ' has-followup' : ''}`}>
-          <div className="run-q">{query || '加载中…'}</div>
+          <h1 className="run-q">{query || '加载中…'}</h1>
           <StatusBadge status={status} />
           {stream.status === 'disconnected' && !dbFinished && (
             <span className="muted small">实时连接已断开，正在轮询获取进度…</span>
@@ -378,6 +378,14 @@ export default function RunPage() {
             />
           ) : (
             <>
+              {!streaming && structuredDocument.data?.final_validation && (
+                <p className="hint" role="status">
+                  正文已完成引用与数值一致性检查。
+                  {structuredDocument.data.final_validation.fallback &&
+                    '生成内容未通过检查，已改为已验证素材摘要。'}
+                  证据标签说明输入素材的验证状态，不代表逐段语义审核。
+                </p>
+              )}
               <ReportView
                 markdown={markdown}
                 streaming={streaming}

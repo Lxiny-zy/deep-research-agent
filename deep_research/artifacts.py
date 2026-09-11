@@ -476,6 +476,8 @@ class ArtifactStore:
         max_size: int | None = None,
         max_file_size: int | None = None,
         allowed_mime_types: str | Iterable[str] | None = None,
+        max_total_bytes: int | None = None,
+        quota_root: str | os.PathLike[str] | None = None,
     ) -> None:
         aliases = [value for value in (root, base_dir) if value is not None]
         if aliases:
@@ -511,6 +513,10 @@ class ArtifactStore:
         # atomic replacement still leaves a valid manifest if a process crashes.
         self._lock = threading.RLock()
         self.max_bytes = max_bytes
+        self.max_total_bytes = max_total_bytes
+        self.quota_root = (
+            Path(quota_root).resolve() if quota_root is not None else self.workspace_root
+        )
         self.allowed_mime_types = _normalise_allowed_mimes(allowed_mime_types)
 
     # ---- path helpers -------------------------------------------------
@@ -738,6 +744,28 @@ class ArtifactStore:
         min_bytes: int = 0,
         max_bytes: int | None,
     ) -> tuple[int, str]:
+        from .artifact_lifecycle import quota_allowance
+
+        with quota_allowance(self.quota_root, self.max_total_bytes, path) as allowance:
+            limit = (
+                max_bytes
+                if allowance is None
+                else min(max_bytes, allowance)
+                if max_bytes is not None
+                else allowance
+            )
+            return self._atomic_write_file_unlocked(
+                path, chunks, min_bytes=min_bytes, max_bytes=limit
+            )
+
+    def _atomic_write_file_unlocked(
+        self,
+        path: Path,
+        chunks: Iterable[bytes],
+        *,
+        min_bytes: int,
+        max_bytes: int | None,
+    ) -> tuple[int, str]:
         path.parent.mkdir(parents=True, exist_ok=True)
         _contained(path.parent, self.workspace_root)
         fd: int | None = None
@@ -782,6 +810,14 @@ class ArtifactStore:
                     os.unlink(temp_name)
 
     def _atomic_write_json(self, path: Path, payload: str) -> None:
+        from .artifact_lifecycle import quota_allowance
+
+        with quota_allowance(self.quota_root, self.max_total_bytes, path) as allowance:
+            if allowance is not None and len(payload.encode("utf-8")) > allowance:
+                raise ArtifactValidationError("artifact storage quota exceeded")
+            self._atomic_write_json_unlocked(path, payload)
+
+    def _atomic_write_json_unlocked(self, path: Path, payload: str) -> None:
         # Manifest files live below the workspace's framework directory, not in
         # either artifact tree, but still receive the same atomic-write treatment.
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1068,6 +1104,11 @@ class ArtifactStore:
         path = self.path_for(safe_slug, safe_stage, safe_name, area=safe_area, create=False)
         if not path.is_file():
             raise FileNotFoundError(path)
+        if self.max_total_bytes is not None:
+            from .artifact_lifecycle import reconcile_quota
+
+            if reconcile_quota(self.quota_root) > self.max_total_bytes:
+                raise ArtifactValidationError("artifact storage quota exceeded")
         actual_mime, effective_max = self._validate_write_options(
             safe_name,
             mime_type=mime_type,
@@ -1216,15 +1257,18 @@ class ArtifactStore:
         update_manifest: bool = True,
         missing_ok: bool = False,
     ) -> bool:
+        from .artifact_lifecycle import quota_allowance
+
         path = self.absolute_path(artifact)
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            if not missing_ok:
-                raise
-            removed = False
-        else:
-            removed = True
+        with quota_allowance(self.quota_root, self.max_total_bytes, path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                if not missing_ok:
+                    raise
+                removed = False
+            else:
+                removed = True
         if update_manifest:
             target_slug = slug or (artifact.slug if isinstance(artifact, ArtifactRecord) else None)
             if target_slug:

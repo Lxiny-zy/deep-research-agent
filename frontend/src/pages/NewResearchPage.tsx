@@ -49,6 +49,12 @@ function ResearchComposer() {
   const [error, setError] = useState<string | null>(null)
   const [clarify, setClarify] = useState<ClarifyState | null>(null)
   const busy = submitting || clarify !== null
+  const requestRef = useRef<AbortController | null>(null)
+  useEffect(() => () => requestRef.current?.abort(), [])
+  function beginRequest() {
+    requestRef.current?.abort()
+    requestRef.current = new AbortController()
+  }
 
   useEffect(() => {
     let stale = false
@@ -83,13 +89,18 @@ function ResearchComposer() {
   async function launch(finalQuery: string, clarified = false) {
     setPhase('正在创建研究任务')
     const hasParams = Object.values(params).some((item) => item != null)
-    const { run_id } = await createRun({
-      query: finalQuery,
-      params: hasParams ? params : null,
-      workflow: workflow || null,
-      history: thread,
-      clarified,
-    })
+    const { run_id } = await createRun(
+      {
+        query: finalQuery,
+        params: hasParams ? params : null,
+        workflow: workflow || null,
+        history: thread,
+        clarified,
+      },
+      requestRef.current?.signal,
+      JSON.stringify({ query, params, workflow, thread }),
+    )
+    if (requestRef.current?.signal.aborted) return
     draft.discard()
     navigate('/runs/' + run_id)
   }
@@ -97,15 +108,20 @@ function ResearchComposer() {
   async function step(state: ClarifyState, allowFallback = false) {
     setPhase('正在确认研究范围')
     // Only assessment failures fall back; failed creation must not trigger another request.
-    const verdict = await assessIntent({
-      query: state.query,
-      answers: state.answers,
-      round: state.round,
-      history: thread,
-    }).catch((cause: unknown) => {
+    const verdict = await assessIntent(
+      {
+        query: state.query,
+        answers: state.answers,
+        round: state.round,
+        history: thread,
+      },
+      requestRef.current?.signal,
+    ).catch((cause: unknown) => {
+      if (requestRef.current?.signal.aborted) throw cause
       if (!allowFallback) throw cause
       return null
     })
+    if (requestRef.current?.signal.aborted) return
     if (!verdict || verdict.ready) {
       await launch(verdict?.resolved_query || state.query, Boolean(verdict))
       return
@@ -115,6 +131,7 @@ function ResearchComposer() {
   }
 
   function failed(cause: unknown) {
+    if (requestRef.current?.signal.aborted) return
     setError(cause instanceof Error ? cause.message : '提交失败，请重试')
     setSubmitting(false)
   }
@@ -122,6 +139,7 @@ function ResearchComposer() {
   async function start() {
     const value = query.trim()
     if (!value || busy) return
+    beginRequest()
     setSubmitting(true)
     setError(null)
     try {
@@ -136,6 +154,7 @@ function ResearchComposer() {
 
   async function answerClarification(answer: string) {
     if (!clarify || submitting) return
+    beginRequest()
     if (isSkip(answer)) {
       await skipClarification()
       return
@@ -151,16 +170,21 @@ function ResearchComposer() {
 
   async function skipClarification() {
     if (!clarify || submitting) return
+    beginRequest()
     setSubmitting(true)
     setError(null)
     setPhase('正在确认研究范围')
-    const verdict = await assessIntent({
-      query: clarify.query,
-      answers: clarify.answers,
-      round: clarify.round,
-      history: thread,
-      skip: true,
-    }).catch(() => null)
+    const verdict = await assessIntent(
+      {
+        query: clarify.query,
+        answers: clarify.answers,
+        round: clarify.round,
+        history: thread,
+        skip: true,
+      },
+      requestRef.current?.signal,
+    ).catch(() => null)
+    if (requestRef.current?.signal.aborted) return
     try {
       await launch(verdict?.resolved_query || clarify.query, true)
     } catch (cause) {
@@ -280,11 +304,11 @@ function ResearchComposer() {
                   }
                 />
               </label>
-              <div className="sample-block">
-                <div className="field-label sample-heading">
+              <details className="sample-block">
+                <summary className="field-label sample-heading">
                   <span>研究灵感</span>
                   <AppIcon name="arrow-down" size={13} aria-hidden="true" />
-                </div>
+                </summary>
                 <div className="sample-grid">
                   {SAMPLES.map((sample, index) => (
                     <button
@@ -299,7 +323,7 @@ function ResearchComposer() {
                     </button>
                   ))}
                 </div>
-              </div>
+              </details>
             </div>
             <aside className="composer-sidebar" aria-label="研究配置">
               <div className="composer-section-heading">

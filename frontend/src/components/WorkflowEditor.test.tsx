@@ -66,7 +66,7 @@ const initial: WorkflowDef = {
 describe('WorkflowEditor persistence', () => {
   it('edits parallel edge conditions independently and submits the current viewport', () => {
     const onSubmit = vi.fn()
-    const { container, getByTestId } = render(
+    const { baseElement: container, getByTestId } = render(
       <WorkflowEditor initial={initial} roles={roles} onSubmit={onSubmit} onCancel={vi.fn()} />,
     )
 
@@ -91,7 +91,7 @@ describe('WorkflowEditor persistence', () => {
 
   it('creates another edge for an already connected node pair', () => {
     const onSubmit = vi.fn()
-    const { container, getByTestId } = render(
+    const { baseElement: container, getByTestId } = render(
       <WorkflowEditor initial={initial} roles={roles} onSubmit={onSubmit} onCancel={vi.fn()} />,
     )
 
@@ -106,7 +106,7 @@ describe('WorkflowEditor persistence', () => {
 
   it('removes only one parallel edge when a dependency is unchecked', () => {
     const onSubmit = vi.fn()
-    const { container, getByTestId } = render(
+    const { baseElement: container, getByTestId } = render(
       <WorkflowEditor initial={initial} roles={roles} onSubmit={onSubmit} onCancel={vi.fn()} />,
     )
 
@@ -132,7 +132,7 @@ describe('WorkflowEditor persistence', () => {
       },
       { name: 'synthesizer', label: 'Synthesizer', icon: '', builtin: true, produces_report: true },
     ]
-    const { container, getByText } = render(
+    const { baseElement: container, getByText } = render(
       <WorkflowEditor
         initial={initial}
         roles={describedRoles}

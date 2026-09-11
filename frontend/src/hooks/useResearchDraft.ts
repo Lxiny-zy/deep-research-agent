@@ -25,9 +25,15 @@ export function useResearchDraft(defaultQuery: string, context: string) {
       if (dirty.current) saveResearchDraft(current.current, context)
     }
     window.addEventListener('pagehide', flush)
+    const clear = () => {
+      clearTimeout(timer.current)
+      dirty.current = false
+    }
+    window.addEventListener('dr:credentials-cleared', clear)
     return () => {
       flush()
       window.removeEventListener('pagehide', flush)
+      window.removeEventListener('dr:credentials-cleared', clear)
     }
   }, [context])
 

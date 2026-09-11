@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { checkResourcePreflight } from '../api/client'
 import type { ResourcePreflight } from '../types'
@@ -7,16 +7,40 @@ export default function ResourcePreflightPanel({ workflow }: { workflow: string 
   const [result, setResult] = useState<ResourcePreflight | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const requestRef = useRef<AbortController | null>(null)
+  useEffect(() => {
+    requestRef.current?.abort()
+    setResult(null)
+    setError('')
+    setPending(false)
+    const invalidate = () => {
+      requestRef.current?.abort()
+      setResult(null)
+      setPending(false)
+    }
+    window.addEventListener('dr:config-changed', invalidate)
+    window.addEventListener('focus', invalidate)
+    return () => {
+      requestRef.current?.abort()
+      window.removeEventListener('dr:config-changed', invalidate)
+      window.removeEventListener('focus', invalidate)
+    }
+  }, [workflow])
   async function check() {
+    requestRef.current?.abort()
+    const controller = new AbortController()
+    requestRef.current = controller
     setPending(true)
     setError('')
     setResult(null)
     try {
-      setResult(await checkResourcePreflight(workflow || 'deep'))
+      const next = await checkResourcePreflight(workflow || 'deep', controller.signal)
+      if (!controller.signal.aborted) setResult(next)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '无法检查配置')
+      if (!controller.signal.aborted)
+        setError(cause instanceof Error ? cause.message : '无法检查配置')
     } finally {
-      setPending(false)
+      if (!controller.signal.aborted) setPending(false)
     }
   }
   return (
@@ -28,6 +52,7 @@ export default function ResourcePreflightPanel({ workflow }: { workflow: string 
       {result && (
         <>
           <p role="status">{result.ok ? '配置检查通过' : '配置需要修正'}</p>
+          <p className="hint">结果仅代表本次检查；开始研究时会再次校验配置。</p>
           {result.errors.map((message) => (
             <p key={message} className="error-text">
               {message}
