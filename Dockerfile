@@ -9,7 +9,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---- 运行镜像：纯 Python，asyncpg/sqlalchemy 均有 manylinux wheel，无需编译器 ----
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
