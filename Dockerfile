@@ -1,7 +1,7 @@
 # Deep Research Agent —— 生产镜像（多阶段：前端 Vite 构建 → Python 运行）
 
 # ---- 前端构建：Vite 产出静态 SPA 到 /fe/dist ----
-FROM node:20-slim AS frontend
+FROM node:26-slim AS frontend
 WORKDIR /fe
 COPY frontend/package*.json ./
 RUN npm ci
