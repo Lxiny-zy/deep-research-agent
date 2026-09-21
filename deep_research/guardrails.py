@@ -246,6 +246,9 @@ class EvidenceVerifier:
             source_title=source.title,
             source_reference=format_reference(source.url, source.scholarly, title=source.title),
             evidence_context=_evidence_context(source.content, quote_start, quote_end),
+            # 同一个区间既截出上下文窗口，也作为可复核的引用锚点落库。
+            quote_start=quote_start,
+            quote_end=quote_end,
             reason=(
                 "source_retracted"
                 if source.scholarly and source.scholarly.retracted is True

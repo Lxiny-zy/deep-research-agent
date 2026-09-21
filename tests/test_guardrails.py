@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from deep_research.agents.researcher import Researcher
 from deep_research.agents.synthesizer import Synthesizer
@@ -202,6 +203,77 @@ def test_evidence_verifier_promotes_only_verbatim_quote() -> None:
     assert check.finding.verification.source_title == "Annual report"
     assert check.finding.evidence_quote in check.finding.verification.evidence_context
     assert check.finding.verification.reason == "quote_found_in_source"
+
+
+def test_evidence_verifier_persists_the_exact_quote_span() -> None:
+    """引用锚点从「哪一篇」升级为「哪一段」：区间必须能精确切回原文。
+
+    这是可审计性的关键一步。上下文窗口只是程序渲染好的一段文本，读者无法用它
+    独立复核；区间配合 source_content_hash 钉住的同一份快照，则让任何一条引用
+    都能被重新定位并逐字校验。
+    """
+    source = Source(
+        title="Snapshot spectral imaging",
+        url="https://example.com/dauhst",
+        content=(
+            "Intro prose first. Our best model DAUHST-9stg yields 38.36 dB in PSNR "
+            "on KAIST. Trailing discussion follows."
+        ),
+    )
+    candidate = Finding(
+        statement="DAUHST-9stg reaches 38.36 dB.",
+        source_url=source.url,
+        evidence_quote="yields 38.36 dB in PSNR",
+    )
+
+    check = EvidenceVerifier().verify(candidate, source)
+
+    assert check.accepted is True
+    assert check.finding is not None
+    verification = check.finding.verification
+    assert verification.quote_start is not None
+    assert verification.quote_end is not None
+    # 区间是可复核的锚点，不只是一个数字：切出来必须逐字等于证据原文。
+    assert (
+        source.content[verification.quote_start : verification.quote_end]
+        == check.finding.evidence_quote
+    )
+
+
+def test_quote_span_survives_a_normalized_match() -> None:
+    """归一化匹配后区间仍指向原文偏移，而不是归一化后文本的偏移。"""
+    source = Source(
+        title="Full-width typography",
+        url="https://example.com/normalized",
+        content="背景说明。Ｒｅｖｅｎｕｅ   increased by 25 percent。后续说明。",
+    )
+    candidate = Finding(
+        statement="Revenue increased.",
+        source_url=source.url,
+        evidence_quote="revenue increased by 25 percent",
+    )
+
+    check = EvidenceVerifier().verify(candidate, source)
+
+    assert check.accepted is True
+    assert check.finding is not None
+    verification = check.finding.verification
+    assert verification.quote_start is not None
+    assert verification.quote_end is not None
+    assert (
+        source.content[verification.quote_start : verification.quote_end]
+        == check.finding.evidence_quote
+    )
+
+
+def test_evidence_verification_rejects_a_half_quote_span() -> None:
+    """半个区间无法定位，比没有区间更糟——模型层直接拒绝。"""
+    with pytest.raises(ValidationError):
+        EvidenceVerification(quote_start=10)
+    with pytest.raises(ValidationError):
+        EvidenceVerification(quote_end=10)
+    with pytest.raises(ValidationError):
+        EvidenceVerification(quote_start=10, quote_end=10)
 
 
 def test_evidence_verifier_context_uses_original_text_after_normalized_match() -> None:

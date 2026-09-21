@@ -48,6 +48,34 @@ _CANCEL_POLL_SECONDS = 0.5
 # 当前进程配置，恢复一个旧 run 不应复活一份旧凭据。
 _CHECKPOINT_SETTING_FIELDS = SETTING_FIELDS
 
+# 学术工作流必须命中学术源：只有 openalex / arxiv 提供 DOI、机构、撤稿标记与开放
+# 全文位置，而全文解析、数值校验与「同一 work」独立性判定都依赖这些字段。二者均
+# 无需 API key，因此补齐不引入新的凭据要求。
+_SCHOLARLY_SEARCH_BACKENDS = ("openalex", "arxiv")
+_SCHOLARLY_WORKFLOWS = frozenset({"hsi_review"})
+
+
+def _with_scholarly_backends(settings: Settings, workflow: str | None) -> Settings:
+    """Ensure a scholarly workflow actually queries the scholarly backends.
+
+    The intent policies declare ``source_strategy="scholarly_multi_source"``, but
+    that string only reaches the Planner prompt; nothing downstream selects a
+    backend from it.  Without this, selecting ``hsi_review`` under the default
+    ``("tavily",)`` configuration silently runs an abstract-only web search and
+    ``fulltext_enabled`` has nothing to act on.
+
+    Backends the operator already configured are preserved and kept first, so an
+    explicit ``DR_SEARCH_BACKENDS`` still decides priority.  Only the missing
+    scholarly backends are appended.
+    """
+    if workflow not in _SCHOLARLY_WORKFLOWS:
+        return settings
+    configured = tuple(settings.search_backends)
+    missing = tuple(name for name in _SCHOLARLY_SEARCH_BACKENDS if name not in configured)
+    if not missing:
+        return settings
+    return replace(settings, search_backends=configured + missing)
+
 
 def settings_for_resume(base: Settings, execution: WorkflowRun) -> Settings:
     """Restore the original non-secret run limits from a durable checkpoint."""
@@ -180,17 +208,22 @@ class RunExecutor:
     def __init__(self, ctx: ExecutionContext) -> None:
         self.ctx = ctx
 
-    async def build_search_tool(self, settings: Settings) -> SearchTool | None:
+    async def build_search_tool(
+        self, settings: Settings, *, workflow: str | None = None
+    ) -> SearchTool | None:
         """按配置组装检索后端。
 
         返回 ``None`` 表示交给 ``DeepResearchAgent`` 用 ``settings.tavily_api_key``
         自建默认单后端——这是既有行为，只有显式配置了 key 池或多后端时才接管。
+
+        ``workflow`` 为学术工作流时补齐学术后端：见 ``_scholarly_backends``。
         """
         if settings.search_profile_ids:
             # CatalogRuntime restores frozen profile definitions and owns their clients.
             from .catalog.search import MissingSearchTool
 
             return MissingSearchTool()
+        settings = _with_scholarly_backends(settings, workflow)
         backends: list[SearchTool] = []
         tavily = await self._build_tavily(settings)
         if tavily is not None:
@@ -344,7 +377,11 @@ class RunExecutor:
             # Resolve defaults and role overrides from the same run snapshot.
             search_tool: SearchTool | None = MissingSearchTool()
         else:
-            search_tool = await self.build_search_tool(settings)
+            # Read the workflow without consuming it: DeepResearchAgent needs it too.
+            requested = agent_kwargs.get("workflow")
+            search_tool = await self.build_search_tool(
+                settings, workflow=requested if isinstance(requested, str) else None
+            )
         try:
             agent = DeepResearchAgent(
                 settings,

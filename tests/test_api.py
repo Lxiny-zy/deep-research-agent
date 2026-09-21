@@ -1807,7 +1807,7 @@ async def test_execute_cleanup_survives_lease_release_failure(monkeypatch) -> No
     monkeypatch.setattr(
         execution_module.RunExecutor,
         "build_search_tool",
-        lambda self, settings: asyncio.sleep(0, Search()),
+        lambda self, settings, **kwargs: asyncio.sleep(0, Search()),
     )
 
     await api._execute(app, run_id, "Q", Settings(), lease_owner="lease")
@@ -1844,7 +1844,7 @@ async def test_execute_persists_user_requested_cancellation(monkeypatch) -> None
     monkeypatch.setattr(
         execution_module.RunExecutor,
         "build_search_tool",
-        lambda self, settings: asyncio.sleep(0, None),
+        lambda self, settings, **kwargs: asyncio.sleep(0, None),
     )
 
     task = asyncio.create_task(api._execute(app, run_id, "cancel", Settings(), lease_owner=owner))
@@ -1890,7 +1890,7 @@ async def test_resume_does_not_replay_previous_terminal_event(monkeypatch) -> No
     monkeypatch.setattr(
         execution_module.RunExecutor,
         "build_search_tool",
-        lambda self, settings: asyncio.sleep(0, None),
+        lambda self, settings, **kwargs: asyncio.sleep(0, None),
     )
 
     await api._execute(
@@ -1941,7 +1941,7 @@ async def test_lease_renewal_failure_cancels_execution(monkeypatch) -> None:
     monkeypatch.setattr(
         execution_module.RunExecutor,
         "build_search_tool",
-        lambda self, settings: asyncio.sleep(0, None),
+        lambda self, settings, **kwargs: asyncio.sleep(0, None),
     )
 
     with pytest.raises(asyncio.CancelledError):
@@ -1989,7 +1989,7 @@ async def test_execute_cleanup_survives_second_cancellation(monkeypatch) -> None
     app = SimpleNamespace(state=SimpleNamespace(repo=Repo(), catalog=object(), live={run_id: hub}))
     monkeypatch.setattr(execution_module, "DeepResearchAgent", Agent)
 
-    async def build_search(self, settings):  # type: ignore[no-untyped-def]
+    async def build_search(self, settings, **kwargs):  # type: ignore[no-untyped-def]
         return search
 
     monkeypatch.setattr(execution_module.RunExecutor, "build_search_tool", build_search)
@@ -2038,7 +2038,7 @@ async def test_cancelled_execution_remains_recoverable(monkeypatch) -> None:
     monkeypatch.setattr(
         execution_module.RunExecutor,
         "build_search_tool",
-        lambda self, settings: asyncio.sleep(0, None),
+        lambda self, settings, **kwargs: asyncio.sleep(0, None),
     )
 
     task = asyncio.create_task(

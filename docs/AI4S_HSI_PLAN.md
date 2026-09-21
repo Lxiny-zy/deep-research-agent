@@ -423,14 +423,14 @@ Phase 1 收尾时的几处判断，写下来免得 Phase 2 重新纠结：
 与数值同等重要：同一个 PSNR 在 28 波段与 31 波段、不同 mask 与训练集下并不可比。
 抄了数字不抄条件，对照表越整齐越误导。原文没写就留空，不推测。
 
-## 8.9 待办（按依赖顺序）
+## 8.9 原待办四项（已全部完成）
 
-| 项 | 说明 |
+| 项 | 落地位置 |
 |---|---|
-| 同一 work 聚类 | 修 `guardrails.py` 按 registrable domain 判独立发布方导致的伪双源（arXiv + 期刊 + 机构库 = 3 个域，实为 1 篇） |
-| 撤稿硬门禁 | 撤稿标记已在 `ScholarlyMetadata` 里，尚未接成准入门禁 |
-| 全文解析 | arXiv LaTeX 源（表格是 `tabular` 结构化文本）+ OA PDF + 分节 + 节级筛选 |
-| `hsi_review` 工作流 | 检索策略 → 多库检索 → 去重 → 纳入/排除 → 抽取 → 综合 |
+| 同一 work 聚类 | `independence.py` 按 `same_doi` / `same_work_id` 判同一 work（work_id 剥 OpenAlex 前缀与 arXiv 版本号），不再只看 registrable domain |
+| 撤稿硬门禁 | `guardrails.py:250` 以 `source_retracted` 拒入，`:626` 在验证侧复核 |
+| 全文解析 | `tools/arxiv_fulltext.py` 解析 LaTeX e-print，`library/ingestion.py` 分节并记录 `section` / `page_start` / `page_end` 定位 |
+| `hsi_review` 工作流 | `workflows.py:57` 定义，`:130` 列入 `PUBLIC_WORKFLOW_NAMES` |
 
 ## 8.10 表格透视（已完成）
 

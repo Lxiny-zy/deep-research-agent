@@ -1,2 +1,11 @@
 # Server-side PDF export installed by the production image.
 weasyprint>=70,<71
+# Converts deterministic SVG charts to PDF assets that XeLaTeX can include
+# without enabling shell escape.
+CairoSVG>=2.8,<3
+# Parses open-access PDFs into section-scoped evidence.  Full-text parsing is a
+# required capability, so it ships in the production image rather than staying
+# an opt-in extra: without it OpenAlex OA fetches and library PDF uploads
+# degrade silently to abstract-only.  Keep the specifier equal to the
+# ``fulltext`` extra in pyproject.toml.
+PyMuPDF>=1.24,<2

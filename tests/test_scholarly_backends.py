@@ -69,17 +69,28 @@ _WORK = {
         },
     ],
     "cited_by_count": 812,
+    # 有向引用边：重复项与非字符串项都应被清掉，口径与 work_id 一致。
+    "referenced_works": [
+        "https://openalex.org/W100",
+        "https://openalex.org/W100",
+        "https://openalex.org/W101",
+        7,
+        None,
+    ],
     "is_retracted": False,
 }
 
 
 @pytest.mark.asyncio
 async def test_openalex_maps_a_work_to_a_scholarly_source() -> None:
+    request_select: dict[str, str] = {"value": ""}
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.params["search"] == "CASSI 重建"
         assert request.url.params["mailto"] == "who@example.org"
         # select 必须覆盖所有被读取的字段，否则解析出来全是空值。
         assert "abstract_inverted_index" in request.url.params["select"]
+        request_select["value"] = request.url.params["select"]
         return httpx.Response(200, json={"results": [_WORK]})
 
     tool = _openalex(handler)
@@ -108,6 +119,13 @@ async def test_openalex_maps_a_work_to_a_scholarly_source() -> None:
     assert meta.retracted is False
     assert meta.citation_count == 812
     assert meta.oa_pdf_url == "https://opg.optica.org/oe/1.pdf"
+    # citation_count 只说"被引多少次"；referenced_works 是有向边，才能回答
+    # "哪篇方法基于哪篇"。去重、保序、丢弃非字符串项，口径与 work_id 相同。
+    assert meta.referenced_works == [
+        "https://openalex.org/W100",
+        "https://openalex.org/W101",
+    ]
+    assert "referenced_works" in request_select["value"]
 
 
 def test_inverted_index_abstract_is_restored_in_word_order() -> None:
@@ -450,6 +468,47 @@ async def test_web_and_scholarly_backends_combine() -> None:
 async def test_default_configuration_is_unchanged_by_the_new_backends() -> None:
     """默认部署行为必须与引入学术源之前完全一致。"""
     assert await _executor().build_search_tool(Settings(tavily_api_key="t-key")) is None
+
+
+# ── 学术工作流强制补齐学术后端 ───────────────────────────────────────────────
+#
+# 意图策略里的 source_strategy="scholarly_multi_source" 只进 Planner 提示词，
+# 不选后端。若不在组装期补齐，选了 hsi_review 仍然只跑通用网页检索，
+# fulltext_enabled 也就无从生效——全文解析是本项目声明的必做能力。
+
+
+@pytest.mark.asyncio
+async def test_hsi_review_adds_scholarly_backends_to_the_default_configuration() -> None:
+    settings = Settings(tavily_api_key="t-key")
+    assert settings.search_backends == ("tavily",)
+
+    tool = await _executor().build_search_tool(settings, workflow="hsi_review")
+
+    assert tool is not None
+    # 已配置的后端保持在前，只把缺的学术源补在后面。
+    assert tool.backend_name == "TavilySearch+OpenAlexSearch+ArxivSearch"
+    await tool.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hsi_review_does_not_duplicate_already_configured_backends() -> None:
+    """已经配了学术源时补齐是空操作（组装顺序由 build_search_tool 固定，与配置顺序无关）。"""
+    settings = Settings(search_backends=("arxiv", "openalex"))
+
+    tool = await _executor().build_search_tool(settings, workflow="hsi_review")
+
+    assert tool is not None
+    assert tool.backend_name == "OpenAlexSearch+ArxivSearch"
+    await tool.aclose()
+
+
+@pytest.mark.asyncio
+async def test_non_scholarly_workflow_keeps_the_configured_backends() -> None:
+    """补齐只对学术工作流生效，deep/quick 的既有行为逐字不变。"""
+    assert (
+        await _executor().build_search_tool(Settings(tavily_api_key="t-key"), workflow="deep")
+        is None
+    )
 
 
 # ── 引用渲染 ─────────────────────────────────────────────────────────────────

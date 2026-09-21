@@ -101,6 +101,8 @@ async def test_crud_roundtrip(repo):
                         source_content_hash="abc123",
                         source_title="Annual report",
                         evidence_context="Context before verbatim source evidence and after.",
+                        quote_start=16,
+                        quote_end=40,
                         reason="quote_found_in_source",
                         semantic_status="supported",
                         semantic_confidence=0.87,
@@ -158,6 +160,9 @@ async def test_crud_roundtrip(repo):
         detail.results[0].findings[0].verification.evidence_context
         == "Context before verbatim source evidence and after."
     )
+    # 引用锚点必须整段往返：少了区间，读者就只能看程序渲染的窗口而无法自行复核。
+    assert detail.results[0].findings[0].verification.quote_start == 16
+    assert detail.results[0].findings[0].verification.quote_end == 40
     assert detail.results[0].findings[0].verification.semantic_status == "supported"
     assert detail.results[0].findings[0].verification.semantic_confidence == 0.87
     assert detail.results[0].findings[0].verification.claim_id == "claim-a"

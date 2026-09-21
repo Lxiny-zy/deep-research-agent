@@ -210,6 +210,11 @@ class FindingRow(Base):
     quantity: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True, default=None)
     conditions: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True, default=None)
     evidence_context: Mapped[str] = mapped_column(Text, default="")
+    # 逐字命中在来源正文里的字符区间。与 source_content_hash 配对使用：哈希钉住
+    # 「哪一份快照」，区间钉住「快照里的哪一段」，合起来让引用可被独立重新定位。
+    # 历史行为 NULL，回放时退回只有 evidence_context 窗口的既有行为。
+    quote_start: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    quote_end: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     verification_reason: Mapped[str] = mapped_column(Text, default="")
     semantic_status: Mapped[str] = mapped_column(String(16), default="not_checked")
     semantic_confidence: Mapped[float] = mapped_column(Float, default=0.0)
@@ -300,6 +305,10 @@ class WorkflowRunRow(Base):
     __table_args__ = (
         UniqueConstraint("research_run_id"),
         Index("ix_workflow_run_research_run_id", "research_run_id"),
+        # 每次 worker 领取任务、每次带租约围栏的写入都过滤这两列——是全系统最热的
+        # 谓词。顺序上 lease_expires_at 在前：领取查询按它做范围比较筛掉活跃租约，
+        # lease_owner 只做等值确认。
+        Index("ix_workflow_run_lease", "lease_expires_at", "lease_owner"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

@@ -51,6 +51,9 @@ _SELECT = ",".join(
         "best_oa_location",
         "authorships",
         "cited_by_count",
+        # 有向引用边，用于渲染谱系（哪篇方法基于哪篇）。与 cited_by_count 一起取，
+        # 同一个响应返回，不额外增加请求。
+        "referenced_works",
         "is_retracted",
         "type",
     )
@@ -185,6 +188,7 @@ def _to_source(item: dict[str, Any]) -> Source | None:
         peer_reviewed=_peer_reviewed(primary),
         retracted=bool(item.get("is_retracted")) if "is_retracted" in item else None,
         citation_count=_int_or_none(item.get("cited_by_count")),
+        referenced_works=_referenced_works(item.get("referenced_works")),
         oa_pdf_url=_text(best_oa.get("pdf_url")),
     )
     return Source(
@@ -240,6 +244,23 @@ def _authorships(raw: Any) -> tuple[list[str], list[str]]:
             if institution_name:
                 affiliations.setdefault(institution_name, None)
     return authors[:32], list(affiliations)[:32]
+
+
+def _referenced_works(raw: Any) -> list[str]:
+    """抽本文引用的 work ID 列表，去重并保持 OpenAlex 给出的顺序。
+
+    保持与 ``work_id`` 完全相同的字符串口径（OpenAlex 的完整 work URL），否则
+    谱系图两端连不上。非字符串项直接丢弃——编一个 ID 比缺一条边糟得多。
+    上限与 ``ScholarlyMetadata.referenced_works`` 的 max_length 对齐。
+    """
+    if not isinstance(raw, list):
+        return []
+    seen: dict[str, None] = {}
+    for entry in raw:
+        work_id = _text(entry) if isinstance(entry, str) else ""
+        if work_id:
+            seen.setdefault(work_id, None)
+    return list(seen)[:512]
 
 
 def _venue(primary: dict[str, Any]) -> str:

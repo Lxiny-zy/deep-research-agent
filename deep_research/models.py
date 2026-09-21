@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SubQuestion(BaseModel):
@@ -51,6 +51,11 @@ class ScholarlyMetadata(BaseModel):
     peer_reviewed: bool | None = Field(None, description="None＝未知，不是 False")
     retracted: bool | None = None
     citation_count: int | None = None
+    # 本文引用的其它工作（OpenAlex work_id 列表）。与 citation_count 的区别是方向：
+    # 后者只是「被引了多少次」这个标量，前者是有向边，能回答「哪篇方法基于哪篇」。
+    # 综述最需要的正是这个结构。OpenAlex 在同一个响应里免费返回该字段，所以取它
+    # 不增加任何 API 调用。上限防止一篇综述的数百条引用把单行元数据撑爆。
+    referenced_works: list[str] = Field(default_factory=list, max_length=512)
     oa_pdf_url: str = Field("", description="可合法获取的开放全文 PDF；全文解析阶段消费")
     section: str = Field("", description="该证据取自哪一节；全文分节后填充")
 
@@ -284,6 +289,24 @@ class EvidenceVerification(BaseModel):
         max_length=1200,
         description="程序从检索快照中截取的证据上下文，不由模型生成",
     )
+    # 逐字命中在来源正文里的精确字符区间（左闭右开，按归一化匹配后回填到原文偏移）。
+    # 校验时本来就算出了这个区间——evidence_context 正是用它截的窗口。把区间本身也
+    # 存下来，引用锚点就从「哪一篇」升级为「哪一段」：配合 source_content_hash 钉住
+    # 的同一份快照，任何一条引用都能被独立重新定位并复核，而不只是看程序渲染好的
+    # 上下文。历史记录为 None，此时退回只有窗口文本的既有行为。
+    quote_start: int | None = Field(default=None, ge=0)
+    quote_end: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _validate_quote_span(self) -> EvidenceVerification:
+        """区间要么完整且非退化，要么整体缺席——不接受半个区间。"""
+        start, end = self.quote_start, self.quote_end
+        if (start is None) != (end is None):
+            raise ValueError("quote_start 与 quote_end 必须同时存在或同时缺席")
+        if start is not None and end is not None and end <= start:
+            raise ValueError("quote_end 必须大于 quote_start")
+        return self
+
     reason: str = ""
     semantic_status: Literal["not_checked", "supported", "unsupported", "uncertain"] = "not_checked"
     semantic_confidence: float = Field(0.0, ge=0.0, le=1.0)
