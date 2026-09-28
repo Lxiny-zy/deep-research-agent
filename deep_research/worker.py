@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from .catalog.repository import CatalogRepository
 from .config import Settings
 from .execution import ExecutionContext, RunExecutor, settings_for_resume
+from .library.repository import SqlLibraryRepository
 from .observability import Event
 from .persistence.db import make_engine, make_sessionmaker, prepare_sqlite_schema
 from .persistence.repository import ClaimedRun, ResearchRepository
@@ -216,7 +217,8 @@ async def _build_worker(settings: Settings) -> tuple[Worker, AsyncEngine]:
     repo = SqlRepository(sessionmaker)
     catalog = CatalogRepository(sessionmaker)
     # live 为空字典：worker 没有 SSE 订阅者，事件经仓储落库供 API 侧读取。
-    executor = RunExecutor(ExecutionContext(repo=repo, catalog=catalog, live={}))
+    library = SqlLibraryRepository(sessionmaker)
+    executor = RunExecutor(ExecutionContext(repo=repo, catalog=catalog, library=library, live={}))
     return Worker(repo, executor, settings), engine
 
 

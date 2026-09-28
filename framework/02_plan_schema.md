@@ -1,5 +1,11 @@
 # 02 — Plan.json Schema 与验证
 
+> 以下为提取时的最小协议说明，示意验证代码不用于生产。
+> 当前严格模型是 `deep_research/planning.py` 的 `ExecutionPlan`；
+> `depends_on`、`artifacts`、`skills`、`resource` 和结构化响应契约见
+> [09_long_research.md](09_long_research.md)。状态由运行时根据实际产物投影，
+> 模型声明 `done` 不能跳过验收。
+
 ## Schema 定义
 
 ```json

@@ -99,6 +99,8 @@ _INFRA_FAILURE_MARKERS = (
     "operation runner",
     "required operation output",
     "path escapes",
+    "control file",
+    "control json",
 )
 
 
@@ -299,6 +301,7 @@ class DeepResearchAgent:
         skill_resolver: Any | None = None,
         artifact_slug: str | None = None,
         execution_plan: Any | None = None,
+        search_overlay: SearchTool | None = None,
     ) -> None:
         self.settings = settings
         self.tracer = Tracer()
@@ -323,6 +326,7 @@ class DeepResearchAgent:
         # fallback slug.  Validation then happens exactly once at the planner
         # boundary and the normalized model is persisted in the checkpoint.
         self._execution_plan_input = execution_plan
+        self._search_overlay = search_overlay
         self._persisted_event_count = 0
         existing_execution = resume_execution or initial_execution
         if existing_execution is not None:
@@ -374,6 +378,41 @@ class DeepResearchAgent:
         self.reflector = Reflector(self.llm, self.tracer, settings)
         self.synthesizer = Synthesizer(self.llm, self.tracer, settings)
         self._sem = asyncio.Semaphore(settings.max_concurrency)
+
+    async def one_shot_context(self) -> RunContext:
+        """为不经工作流引擎的一次性调用（学术问答）构造运行上下文。
+
+        与 ``_run_workflow`` 使用同一套解析：catalog 角色卡片绑定的模型档案、
+        检索档案与全局规则。它不创建 run、不写 checkpoint，调用方用完后照常
+        ``aclose()`` 本 agent 以归还连接池。
+        """
+        from .catalog.runtime import load_catalog_runtime
+
+        if self._catalog_runtime is None:
+            self._catalog_runtime = await load_catalog_runtime(
+                self._catalog_repo, self.tracer, self.settings
+            )
+        cr = self._catalog_runtime
+        if self._owns_llm and (cr is None or not cr.has_default_profile):
+            self.settings.validate_llm()
+        return RunContext(
+            llm=self.llm,
+            search_tool=self.search_tool,
+            tracer=self.tracer,
+            settings=self.settings,
+            llm_resolver=cr.resolve_llm if cr is not None else None,
+            search_resolver=(
+                (
+                    lambda name: cr.resolve_search(
+                        name, include_default=self._catalog_search_defaults
+                    )
+                )
+                if cr is not None
+                else None
+            ),
+            search_overlay=self._search_overlay,
+            global_rules=load_global_rules(),
+        )
 
     async def aclose(self) -> None:
         """释放自建 LLM client 的底层 HTTP 连接池。注入的 client 归调用方管。"""
@@ -688,6 +727,7 @@ class DeepResearchAgent:
             )
             if cr is not None
             else None,
+            search_overlay=self._search_overlay,
             artifact_store=self._artifact_store,
             command_runner=self._command_runner,
             skill_resolver=self._skill_resolver,
@@ -834,13 +874,16 @@ class DeepResearchAgent:
                 llm_model=self.settings.llm_model,
                 llm_endpoint=self.settings.llm_base_url,
                 search_backend=(
-                    "catalog:" + ",".join(cr.search_runtime.profiles)
-                    if cr is not None and cr.search_runtime.profiles
-                    else getattr(
-                        self.search_tool.delegate,
-                        "backend_name",
-                        type(self.search_tool.delegate).__name__,
+                    (
+                        "catalog:" + ",".join(cr.search_runtime.profiles)
+                        if cr is not None and cr.search_runtime.profiles
+                        else getattr(
+                            self.search_tool.delegate,
+                            "backend_name",
+                            type(self.search_tool.delegate).__name__,
+                        )
                     )
+                    + ("+ProjectCorpus" if self._search_overlay is not None else "")
                 ),
                 catalog_snapshot=catalog_snapshot,
                 catalog_model_profiles=(
@@ -915,7 +958,15 @@ class DeepResearchAgent:
                         if plan_id is not None:
                             partial_ids.add(plan_id)
                 output_by_step: dict[str, list[str]] = {}
+                raw_step_results = bb.scratch.get("plan_step_results", {})
+                step_results = raw_step_results if isinstance(raw_step_results, dict) else {}
                 for plan_step in runtime_plan.steps:
+                    result = step_results.get(plan_step.id, {})
+                    if result.get("status") == "partial":
+                        partial_ids.add(plan_step.id)
+                        plan_step.metadata["gap_note"] = "; ".join(result.get("gaps", []))
+                    if result:
+                        output_by_step[plan_step.id] = list(result.get("paths", []))
                     stage = (
                         str(
                             plan_step.metadata.get("workflow_agent")
@@ -926,9 +977,9 @@ class DeepResearchAgent:
                         .replace(" ", "-")
                     )
                     if stage:
-                        output_by_step[plan_step.id] = [
-                            path for path in output_paths if f"/{stage}/" in path
-                        ]
+                        output_by_step.setdefault(plan_step.id, []).extend(
+                            [path for path in output_paths if f"/{stage}/" in path]
+                        )
                 sync_plan_from_workflow(
                     runtime_plan,
                     execution,
@@ -1014,11 +1065,15 @@ class DeepResearchAgent:
         if bb.report is None:  # WorkflowEngine(require_report=True) should have raised first.
             raise RuntimeError("工作流结束但未生成报告")
         if bb.results or bb.report.citations:
+            from .workbench.scholarly import uncited_sections_for
+
             bb.report, check = await run_blocking(
                 finalize_report,
                 bb.report,
                 bb.results,
                 require_corroboration=effective_require_corroboration(bb, self.settings),
+                # 与写作者同一口径：任务契约规定不带引用的章节（摘要）不按「必须引用」判
+                uncited_sections=uncited_sections_for(bb.scratch),
             )
             prior_issues = [
                 issue

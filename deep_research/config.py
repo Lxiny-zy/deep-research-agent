@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass, field
+from typing import Any
 
 from .access import ApiCredential, load_api_credentials
 
@@ -161,6 +162,13 @@ class Settings:
     # 单次研究累计 token 预算上限（防反思/补洞无限烧）；None＝不限。引擎以 Tracer 累计为准，
     # 耗尽则跳过后续研究/反思但仍综合，产出尽力而为的部分报告而非报错。
     max_tokens: int | None = field(default_factory=lambda: _int_env_opt("MAX_TOKENS"))
+    # 每个身份每个自然日（UTC）的研究额度：运行次数与累计 token。None＝不限。
+    # 额度只在创建研究时检查（已开始的运行不会被中途打断），并在 /api/usage 中展示。
+    daily_run_quota: int | None = field(default_factory=lambda: _int_env_opt("DAILY_RUN_QUOTA"))
+    daily_token_quota: int | None = field(default_factory=lambda: _int_env_opt("DAILY_TOKEN_QUOTA"))
+    # 交付质量策略（workbench/quality.py 的 QualityPolicy，以 dict 保存便于持久化与冻结进
+    # checkpoint）。空 dict＝全部取默认值；前端「设置 → 交付质量」读写这一项。
+    quality: dict[str, Any] = field(default_factory=dict)
     # 自组合（auto 流程）生成的流程执行失败/零产出时，Coordinator 重规划的最大次数。
     max_replans: int = field(default_factory=lambda: _int_env("MAX_REPLANS", 1))
 
@@ -273,6 +281,13 @@ class Settings:
             raise ValueError("request_timeout 必须 > 0")
         if self.max_run_seconds < 1:
             raise ValueError("max_run_seconds 必须 >= 1")
+        if not isinstance(self.quality, dict):
+            raise ValueError("quality must be a mapping")
+        if self.quality:
+            from .workbench.quality import QualityPolicy
+
+            # 校验并规整：未知键丢弃、越界值直接报错（前端表单同样按 schema 限制）
+            self.quality = QualityPolicy.model_validate(self.quality).model_dump()
         if self.max_active_runs < 1:
             raise ValueError("max_active_runs must be >= 1")
         if self.max_queued_runs < 0:

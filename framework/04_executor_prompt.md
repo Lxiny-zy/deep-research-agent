@@ -1,118 +1,50 @@
-# 04 — Executor Prompt Template
+# 项目执行器契约
 
-每个 Step 执行时，将 step.prompt（来自 plan.json）与对应 SKILL.md 内容组合后发给 LLM API。
+生产执行器为 `deep_research/agents/plan_executor.py`，契约校验在
+`deep_research/plan_contract.py`。本文件说明真实行为，不提供另一套示意执行器。
 
-## 执行模板
+每次调用由当前任务、当前 step.prompt、显式技能和依赖交接组成。
+`reset` 保留兼容字段，执行始终使用新上下文；磁盘交接不会因 reset 而消失。
+上下文只包含依赖图上的祖先步骤，不读取所有工作区文件。
+缺失、失败、部分完成、二进制文件和被截断的节选会明确标注。
 
-```
-<system>
-你是一个自主执行 agent，正在执行一个多步任务中的一个步骤。
+## 模型响应
 
-## 全局规则（已注入）
+单文件步骤默认可直接返回文件文本；JSON 文件必须是严格 JSON。
+多文件步骤或 `metadata.result_contract: "research-step-v1"` 必须返回：
 
-{global_rules_summary}
-
-## 可用工具
-
-你可以在执行过程中使用以下工具:
-- 文件读写（创建/读取/修改文件）
-- 网络搜索（如需要检索资料）
-- 代码执行（如需要运行脚本）
-- 图片生成（如需要出图）
-
-## 运行环境
-
-- 工作目录: <WORK_DIR>
-- 当前时间: <TIMESTAMP>
-- 本步骤是第 {STEP_INDEX}/{TOTAL_STEPS} 步: {STEP_NAME}
-
-## 上一步产物（如有）
-
-{PREVIOUS_OUTPUTS}
-</system>
-
-<user>
-{STEP_PROMPT}
-
-{INJECTED_SKILLS}
-</user>
+```json
+{
+  "contract_version": 1,
+  "status": "partial",
+  "summary": "已完成证据比较，部分全文未取得",
+  "artifacts": [
+    {"path":"work/research-topic/review/assessment.md","content":"# 证据比较\n\n已确认事实及来源、不同解释、失败路线和未验证内容。"},
+    {"path":"work/research-topic/review/gaps.json","content":"{\"gaps\":[\"缺少全文\"]}"}
+  ],
+  "gaps": ["无法核对部分研究的实验条件"],
+  "next_actions": ["取得全文后复核实验条件"]
+}
 ```
 
-## 变量说明
+`done` 必须提供所有必需文件且没有未解决缺口。
+`partial` 必须提供至少一个有用文件和具体缺口，可省略暂时无法生成的文件。
+所有路径必须已声明；禁止重复路径、空内容、无效 JSON、NaN、重复 JSON 键和代码块包裹。
+支持 Markdown、JSON、TXT、HTML、CSV/TSV、TeX/Bib、Python/R/SQL、YAML 文本；
+写出代码文件不代表执行了代码。其他格式应走注册操作或报告导出。
 
-| 变量 | 来源 | 说明 |
-|------|------|------|
-| `{global_rules_summary}` | `06_global_rules.md` 的摘要 | 目录约定、交付规范等 |
-| `{WORK_DIR}` | 你的文件系统路径 | 当前工作目录 |
-| `{TIMESTAMP}` | 系统时间 | ISO 8601 格式 |
-| `{STEP_INDEX}` | plan.json 中的位置 | 从 1 开始 |
-| `{TOTAL_STEPS}` | plan.json steps 长度 | 总步数 |
-| `{STEP_NAME}` | step.name | UI 显示名 |
-| `{PREVIOUS_OUTPUTS}` | 上一步的 output_paths 内容 | 如果 reset=false 则包含上文 |
-| `{STEP_PROMPT}` | plan.json steps[i].prompt | Planner 生成的完整指令 |
-| `{INJECTED_SKILLS}` | 由 `03_skill_router.md` 的逻辑注入 | SKILL.md 的完整内容 |
+## 执行与恢复
 
-## 执行后处理
+1. 预检输出类型、路径、技能及依赖文件完整性。
+2. 保存 running 状态，调用模型。重试策略由步骤 resource 和工作流执行。
+3. 保存原始响应到 `work/<slug>/executor-journal/<step-id>/<attempt>.txt`。
+4. 整批检查响应；不将错误 JSON 包装成成功文件。
+5. 原子写入各文件，最后写入包含哈希、摘要、缺口、下一步建议的完成记录。
+6. 将完成/部分完成状态提交给黑板和计划检查点。
 
-```python
-def execute_step(step, previous_outputs, llm_api_call, skills_dir):
-    """Execute a single step using the LLM API."""
+如果模型完成并落盘后、工作流检查点提交前中断，重跑同一步会检查输入指纹和文件哈希，
+匹配时复用完成记录。输入变化时重新执行；文件损坏时报错，不把损坏文件当证据。
+写入多个文件不是数据库事务：完成记录是整步提交标志；失败尝试留下的文件不作为成功交接。
+取消或超时记录 interrupted，恢复从步骤边界开始。模型尚未返回的 token 不提供流式落盘保证。
 
-    # 1. Build the full prompt
-    system = EXECUTOR_SYSTEM_TEMPLATE.format(
-        global_rules_summary=load_global_rules(),
-        WORK_DIR=step.get('work_dir', '.'),
-        TIMESTAMP=get_timestamp(),
-        STEP_INDEX=step['index'],
-        TOTAL_STEPS=step['total'],
-        STEP_NAME=step['name']
-    )
-
-    user = step['prompt']
-    if previous_outputs:
-        user += f"\n\n## 上一步产物\n\n{previous_outputs}"
-
-    # 2. Inject skills
-    injected = inject_skills(user, skills_dir)
-
-    # 3. Call LLM API
-    response = llm_api_call(system=system, user=injected)
-
-    # 4. Parse output (look for file writes, tool calls, or final text)
-    output_files = parse_output_files(response)
-
-    return response, output_files
-```
-
-## Step Prompt 内部结构（Planner 生成时遵循的模板）
-
-每条 step.prompt 应该包含以下结构化段落:
-
-```
-[安全/合规边界]
-本步骤只做...不实现或指导...（如适用）
-
-[前置读取]
-先读 `skills/<name>.md`、`skills/<name>.md`...
-再读取以下上一步产物: `work/<slug>/<stage>/<file>`...
-
-[执行动作]
-1. 具体动作 A...
-2. 具体动作 B...
-
-[输出路径]
-将结果写入: `work/<slug>/<stage>/<filename>`
-格式: markdown / json / code / ...
-
-[验收条件]
-完成标志: 文件存在 + 格式正确 + 内容覆盖 [X] 和 [Y]
-```
-
-## 失败处理
-
-| 情况 | 处理 |
-|------|------|
-| LLM 返回不完整/截断 | 重试一次，prompt 中加"继续" |
-| LLM 拒绝执行 | 记录拒绝原因，标记 step 为 partial，说明缺口 |
-| 文件写入失败 | 重试一次；仍失败则标记 partial |
-| step 超时（如 4 小时） | 保存进度，标记 partial，继续下一步 |
+模型不能自行宣布存储、权限或格式错误已经修复。框架只在现有权限和预算内重试。

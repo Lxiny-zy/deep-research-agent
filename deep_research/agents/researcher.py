@@ -21,6 +21,7 @@ from ..observability import Tracer
 from ..registry import register
 from ..scheduler import research_dag
 from ..tools.base import SearchTool
+from ..workflow import ATTEMPTED_SCRATCH_KEY
 from .base import Blackboard, RunContext, direct_system_prompt, effective_require_corroboration
 
 SYSTEM = (
@@ -98,15 +99,22 @@ class Researcher:
         if sem is None:
             sem = asyncio.Semaphore(ctx.settings.max_concurrency)
 
+        # 每个被研究过的子问题都留痕，包括零发现的那些。research_dag 只把有发现
+        # 的结果交回 results；若不在这里记下「试过但无果」，Reflector 看不到它们，
+        # 下一轮很可能原样再提一遍，白白重跑检索与抽取。
+        attempted: dict[str, int] = bb.scratch.setdefault(ATTEMPTED_SCRATCH_KEY, {})
+
         async def _one(
             question: str, context_findings: list[Finding] | None
         ) -> ResearchResult | None:
             async with sem:  # 限流，避免打爆检索 API
-                return await self.run(
+                result = await self.run(
                     question,
                     context_findings=context_findings,
                     require_corroboration=require_corroboration,
                 )
+            attempted[question] = len(result.findings) if result is not None else 0
+            return result
 
         bb.results += await research_dag(pending, _one, ctx.tracer)
         await verify_claim_consistency(
@@ -123,14 +131,9 @@ class Researcher:
         sub_question: str,
         context_findings: list[Finding] | None = None,
         *,
-        require_corroboration: bool | None = None,
+        require_corroboration: bool | None = None,  # 保留签名兼容；背景过滤不再依赖印证
     ) -> ResearchResult | None:
         self.tracer.emit("RESEARCHER", "start", f"检索：{sub_question}")
-        corroboration = (
-            self.settings.require_corroboration
-            if require_corroboration is None
-            else require_corroboration
-        )
         try:
             candidate_sources = await self.search.search(
                 sub_question, max_results=self.settings.results_per_search
@@ -147,10 +150,17 @@ class Researcher:
         if self.settings.intent_source_screening:
             # 第二道：意图审查。只对规则放行的来源做，且只能把 allow 收紧为
             # quarantine（见 guardrails.screen_source_intent 的单向约束）。
-            policy_decisions = [
-                await screen_source_intent(source, decision)
-                for source, decision in zip(candidate_sources, policy_decisions, strict=True)
-            ]
+            # 各来源互相独立，并发审查；gather 保持输入顺序，与 candidate_sources 一一对应。
+            policy_decisions = list(
+                await asyncio.gather(
+                    *[
+                        screen_source_intent(source, decision)
+                        for source, decision in zip(
+                            candidate_sources, policy_decisions, strict=True
+                        )
+                    ]
+                )
+            )
         sources = [
             source
             for source, decision in zip(candidate_sources, policy_decisions, strict=True)
@@ -181,15 +191,12 @@ class Researcher:
         )
         user_parts = [f"子问题：{sub_question}"]
         if context_findings:
-            # 前驱子问题的发现仅作背景，帮助理解；不得作为本子问题新发现的来源
-            eligible_context = [
-                f
-                for f in context_findings
-                if report_eligible(
-                    f,
-                    require_corroboration=corroboration,
-                )
-            ]
+            # 前驱子问题的发现仅作背景，帮助理解；不得作为本子问题新发现的来源。
+            # 这里刻意不要求交叉印证：印证状态要等整个 researcher 步结束后由
+            # verify_claim_consistency 统一计算，此刻前驱发现一律还是未印证，
+            # 若按报告门槛过滤，开启 corroboration 后 DAG 依赖会整体失效。
+            # 印证是「能否进报告」的门槛，不是「能否当背景」的门槛。
+            eligible_context = [f for f in context_findings if report_eligible(f)]
             prior = "\n".join(f"- {f.statement}" for f in eligible_context[:20])
             if prior:
                 user_parts.append(

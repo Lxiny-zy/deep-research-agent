@@ -305,7 +305,7 @@ def sync_plan_from_workflow(
         target = status_map.get(getattr(runtime_step.status, "value", runtime_step.status))
         if target is None:
             continue
-        if target == StepStatus.FAILED and plan_step.id in partial_ids:
+        if target in {StepStatus.FAILED, StepStatus.DONE} and plan_step.id in partial_ids:
             target = StepStatus.PARTIAL
         # Direct assignment is intentional here: the runtime may recover from
         # a prior ``partial``/``running`` snapshot, while transition rules are
@@ -317,6 +317,10 @@ def sync_plan_from_workflow(
             plan_step.metadata["gap_note"] = (
                 runtime_step.error or plan_step.metadata.get("gap_note") or "incomplete output"
             )
+            plan_step.metadata.pop("failure", None)
+        elif target == StepStatus.DONE:
+            plan_step.metadata.pop("failure", None)
+            plan_step.metadata.pop("gap_note", None)
         if output_paths_by_step and plan_step.id in output_paths_by_step:
             existing = {artifact.path for artifact in plan_step.artifacts}
             for path in output_paths_by_step[plan_step.id]:

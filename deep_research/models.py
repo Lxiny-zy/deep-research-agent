@@ -65,6 +65,9 @@ class Source(BaseModel):
     url: str
     content: str = ""
     content_hash: str = ""
+    # Generic page/section/paragraph locator. Unlike ``scholarly.section`` it
+    # also applies to uploaded reports, internal notes and ordinary web pages.
+    locator: str = ""
     # 非空即表示「这是一条学术来源」。通用网页后端保持 None，因此既有部署的
     # 行为与产物完全不变——学术元数据是增量信息，不是新的必填契约。
     scholarly: ScholarlyMetadata | None = None
@@ -78,8 +81,11 @@ class RunManifest(BaseModel):
     workflow_name: str
     workflow_hash: str
     query_hash: str
-    # Search selections are lists; the remaining non-secret settings are scalars.
-    settings: dict[str, bool | int | float | str | list[str] | None] = Field(default_factory=dict)
+    # Search selections are lists; the quality policy is a flat mapping of scalars;
+    # the remaining non-secret settings are scalars.
+    settings: dict[str, bool | int | float | str | list[str] | dict[str, bool | int] | None] = (
+        Field(default_factory=dict)
+    )
     llm_model: str = ""
     llm_endpoint: str = ""
     search_backend: str = ""

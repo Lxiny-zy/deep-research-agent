@@ -110,11 +110,9 @@ class OperationRunnerAgent:
         raw_operations = metadata.get("operations", [])
         if not isinstance(raw_operations, list) or not raw_operations:
             raise RuntimeError("operation step has no operations")
-        store = getattr(ctx, "artifact_store", None)
         artifact_slug = getattr(ctx, "artifact_slug", None)
         if artifact_slug is not None and not isinstance(artifact_slug, str):
             raise CommandPolicyError("current run artifact slug must be a string")
-        audits: list[dict[str, Any]] = []
         # Step-level artifact declarations are the canonical Vela shorthand.
         # Older plans often put ``outputs``/``input_paths`` beside the
         # operation rather than inside it.  Preserve those declarations when
@@ -129,6 +127,29 @@ class OperationRunnerAgent:
             step_outputs = []
         if not isinstance(step_inputs, list) or not isinstance(step_outputs, list):
             raise CommandPolicyError("operation step inputs/outputs must be lists")
+        raw_resource = metadata.get("resource")
+        resource: Mapping[str, Any] = raw_resource if isinstance(raw_resource, Mapping) else {}
+        if str(resource.get("gpu", "none")) != "none":
+            # 本项目只通过 API 调用云端模型，部署侧没有 GPU 运行时；
+            # 入口已拒绝 GPU 计划，这里再兜一层，绝不静默降级到 CPU。
+            raise CommandPolicyError("GPU steps are not supported by this deployment")
+        return await self._run_operations(
+            bb, ctx, runner, metadata, raw_operations, step_inputs, step_outputs
+        )
+
+    async def _run_operations(
+        self,
+        bb: Blackboard,
+        ctx: RunContext,
+        runner: Any,
+        metadata: Mapping[str, Any],
+        raw_operations: list[Any],
+        step_inputs: list[Any],
+        step_outputs: list[Any],
+    ) -> Blackboard:
+        store = getattr(ctx, "artifact_store", None)
+        artifact_slug = getattr(ctx, "artifact_slug", None)
+        audits: list[dict[str, Any]] = []
         fallback_inputs = [_declared_path(item) for item in step_inputs]
         fallback_outputs = [_declared_path(item) for item in step_outputs]
         fallback_required = {

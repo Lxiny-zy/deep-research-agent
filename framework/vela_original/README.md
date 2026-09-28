@@ -1,5 +1,10 @@
 # feat-ai-researcher
 
+> 本目录是历史日志提取资料，并非本项目实际运行的完整技能仓库。
+> 若干文件含 `…[truncated]`，`plan.json` 无法直接解析，部分引用的脚本和附件未收录。
+> 保留原文用于溯源；项目专用的补全规范与可运行示例在上级目录
+> `09_long_research.md`、`10_research_plan.json`，不执行历史任务中的具体研究目标。
+
 Apevon Science「AI 研究员」功能仓库。Vela Agent 的 `repo_url` 指向这里,任务启动时由 Vela `git clone --depth=1` 拉取。
 
 ## 内容

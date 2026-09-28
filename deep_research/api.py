@@ -29,7 +29,7 @@ from dataclasses import replace
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -103,15 +103,24 @@ from .report import (
     ChartDataError,
     CsvTableNotFoundError,
     CsvTableSelectionError,
+    ExportProfile,
+    LatexExportUnavailable,
+    LatexRenderError,
+    LatexTemplateName,
     PdfExportUnavailable,
+    PdfRenderError,
     ReportDocument,
     XlsxDependencyError,
     XlsxTableNotFoundError,
     XlsxTableSelectionError,
     assemble_document,
+    render_bibtex,
     render_csv,
+    render_latex,
+    render_latex_pdf,
     render_markdown,
     render_pdf,
+    render_reproducibility_bundle,
     render_xlsx,
 )
 from .report.service import ReportNotFoundError, ReportService
@@ -182,6 +191,7 @@ class ResearchParams(BaseModel):
 
 class CreateRunRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)  # 限长：query 全文进 prompt，防成本放大
+    project_id: str | None = Field(default=None, max_length=36)
     params: ResearchParams | None = None
     # Optional trusted planner document. ``plan`` remains an input alias for
     # clients using the extracted Vela terminology.
@@ -190,6 +200,19 @@ class CreateRunRequest(BaseModel):
         validation_alias=AliasChoices("execution_plan", "plan"),
     )
     workflow: str | None = Field(default=None, max_length=64)  # 任务流程选择；None＝默认 deep
+    # 科研任务模板（见 workbench/templates.py）。给定模板时它决定工作流与交付契约，
+    # 并把规整后的任务契约写入初始 checkpoint；与 workflow 同时给出时以模板为准。
+    template: str | None = Field(default=None, max_length=40)
+    # 研究策略（none / quick / deep）：任务「怎么找证据」。与模板组合决定工作流；
+    # 缺省取模板的默认策略。深度检索只是一种策略，不再是独立的任务类型。
+    strategy: Literal["none", "quick", "deep"] | None = None
+    # 模板为数据分析时可附带的表格数据（CSV/TSV 文本）；其它模板忽略。
+    dataset: str | None = Field(default=None, max_length=2_000_000)
+    # 已解析的上传文件（由 POST /api/attachments 返回，前端原样提交）。模型会先阅读这些
+    # 文件再检索；片段随任务冻结进 checkpoint，与检索来源走同一套逐字核验。
+    attachments: list[dict[str, Any]] = Field(default_factory=list, max_length=8)
+    # 研究档位（light / standard / deep）：一组运行上限的快捷选择，显式 params 优先。
+    tier: Literal["light", "standard", "deep"] | None = None
     # 多轮上下文由客户端携带，服务端不存会话：run 之间无状态是这个系统的既有性质
     # （崩溃恢复、租约 fencing、回放都建立在「一个 run 自包含」之上）；加一张会话表
     # 会把这些不变量全部拖进多轮语义里。限长 6 轮：消解只依赖最近的话题焦点。
@@ -290,6 +313,8 @@ class ConfigView(BaseModel):
     require_corroboration: bool
     request_timeout: float
     max_run_seconds: int
+    # 交付质量策略（全部字段带默认值，见 workbench/quality.py）
+    quality: dict[str, Any] = Field(default_factory=dict)
     access: dict[str, str] = Field(default_factory=dict)
     version: int = 0
 
@@ -317,6 +342,8 @@ class ConfigUpdate(BaseModel):
     require_corroboration: bool | None = None
     request_timeout: float | None = Field(default=None, gt=0, le=600)
     max_run_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    # 交付质量策略的部分字段：与当前值合并，未给出的字段保持不变
+    quality: dict[str, Any] | None = None
     version: int | None = Field(default=None, ge=0)
 
     @field_validator(
@@ -330,6 +357,7 @@ class ConfigUpdate(BaseModel):
         "require_corroboration",
         "request_timeout",
         "max_run_seconds",
+        "quality",
         mode="before",
     )
     @classmethod
@@ -530,7 +558,22 @@ def _config_view(s: Settings) -> ConfigView:
         require_corroboration=s.require_corroboration,
         request_timeout=s.request_timeout,
         max_run_seconds=s.max_run_seconds,
+        quality=_quality_view(s),
     )
+
+
+def _quality_view(s: Settings) -> dict[str, Any]:
+    from .workbench.quality import policy_from
+
+    return policy_from(s).model_dump()
+
+
+def _merge_quality(current: Settings, patch: dict[str, Any]) -> dict[str, Any]:
+    """部分更新质量策略：与当前生效值合并后整体校验（越界值 422）。"""
+    from .workbench.quality import QualityPolicy, policy_from
+
+    merged = {**policy_from(current).model_dump(), **patch}
+    return QualityPolicy.model_validate(merged).model_dump()
 
 
 async def _validate_runtime_provider_url(settings: Settings) -> None:
@@ -827,8 +870,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await prepare_sqlite_schema(engine, settings.database_url)
         app.state.settings = settings
         app.state.engine = engine
-        app.state.repo = SqlRepository(make_sessionmaker(engine))
-        app.state.catalog = CatalogRepository(make_sessionmaker(engine))  # 角色广场 catalog 仓储
+        sessions = make_sessionmaker(engine)
+        app.state.repo = SqlRepository(sessions)
+        app.state.catalog = CatalogRepository(sessions)  # 角色广场 catalog 仓储
+        from .library.repository import SqlLibraryRepository
+
+        app.state.library = SqlLibraryRepository(sessions)
+        from .workbench.qa_store import SqlQaStore
+
+        app.state.qa_store = SqlQaStore(sessions)
         settings = await effective_settings(settings, app.state.catalog)
         if settings.runtime_config_version == 0 and isinstance(
             getattr(app.state.catalog, "config_store", None), ConfigStore
@@ -894,12 +944,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await engine.dispose()
 
 
-app = FastAPI(title="Deep Research Agent", lifespan=lifespan)
+app = FastAPI(title="Science Research", lifespan=lifespan)
 
 # 角色广场 catalog 路由（模型档案 / 角色卡片 / 搜索 key），统一套用 API key 鉴权
 from .catalog_api import router as catalog_router  # noqa: E402 避免与 app 定义循环
+from .library.api import router as library_router  # noqa: E402
+from .workbench.api import router as workbench_router  # noqa: E402
+from .workbench.qa_api import router as qa_router  # noqa: E402
 
 app.include_router(catalog_router, dependencies=[Depends(require_api_key)])
+app.include_router(library_router, dependencies=[Depends(require_api_key)])
+app.include_router(workbench_router, dependencies=[Depends(require_api_key)])
+app.include_router(qa_router, dependencies=[Depends(require_api_key)])
 
 
 @app.middleware("http")
@@ -1009,6 +1065,7 @@ async def _enqueue_run(
             execution=execution,
             claimable=True,
             owner_id=principal_for(request).id,
+            project_id=req.project_id,
             max_inflight=request.app.state.settings.max_active_runs
             + request.app.state.settings.max_queued_runs,
         )
@@ -1035,6 +1092,7 @@ def _executor(app: FastAPI) -> RunExecutor:
             ExecutionContext(
                 repo=app.state.repo,
                 catalog=getattr(app.state, "catalog", None),
+                library=getattr(app.state, "library", None),
                 live=app.state.live,
             )
         )
@@ -1043,6 +1101,7 @@ def _executor(app: FastAPI) -> RunExecutor:
         # 配置中心可在运行期换掉仓储/目录（见 update_config），执行器必须跟着更新。
         executor.ctx.repo = app.state.repo
         executor.ctx.catalog = getattr(app.state, "catalog", None)
+        executor.ctx.library = getattr(app.state, "library", None)
         executor.ctx.live = app.state.live
     return executor
 
@@ -1217,8 +1276,7 @@ async def index() -> str:
         if path.exists():
             return _read_frontend(str(path), path.stat().st_mtime)
     return (
-        "<h1>Deep Research Agent</h1>"
-        "<p>未找到前端页面（缺少 <code>frontend/index.html</code>）。</p>"
+        "<h1>Science Research</h1><p>未找到前端页面（缺少 <code>frontend/index.html</code>）。</p>"
     )
 
 
@@ -1432,8 +1490,43 @@ async def create_run(
         if existing_id:
             response.headers["Idempotency-Replayed"] = "true"
             return CreateRunResponse(run_id=existing_id)
+    project = None
+    if req.project_id is not None:
+        library = getattr(request.app.state, "library", None)
+        project = await library.get_project(req.project_id) if library is not None else None
+        if project is None or (not principal.can_manage and project.owner_id != principal.id):
+            raise HTTPException(404, "project not found")
     await _check_rate_limit(request)
-    settings = _settings_for(request.app.state.settings, req.params)
+    base_settings = request.app.state.settings
+    if base_settings.daily_run_quota is not None or base_settings.daily_token_quota is not None:
+        from .workbench.usage import quota_view, usage_today
+
+        quota = quota_view(await usage_today(repo, principal.id), base_settings)
+        if quota["exhausted"]:
+            raise HTTPException(
+                429,
+                {
+                    "code": "quota_exhausted",
+                    "message": "今日研究额度已用完，将于 UTC 零点重置",
+                    "quota": quota,
+                },
+            )
+    tier_key = req.tier
+    if tier_key is None and req.template:
+        from .workbench.templates import get_template as _template_for_tier
+
+        chosen_template = _template_for_tier(req.template)
+        tier_key = chosen_template.tier_default if chosen_template else None
+    if tier_key is not None:
+        from .workbench.tiers import tier_overrides
+
+        explicit = req.params.model_dump() if req.params is not None else {}
+        overrides = tier_overrides(
+            tier_key, explicit=explicit, ceilings={"max_tokens": base_settings.max_tokens}
+        )
+        if overrides:
+            base_settings = replace(base_settings, **overrides)
+    settings = _settings_for(base_settings, req.params)
     supplied_plan = None
     if req.execution_plan is not None:
         try:
@@ -1450,11 +1543,49 @@ async def create_run(
                     "message": str(exc),
                 },
             ) from exc
+        gpu_steps = [step.id for step in supplied_plan.steps if step.resource.gpu.value != "none"]
+        if gpu_steps:
+            # 部署形态只调用云端 LLM API，没有本地 GPU 运行时。
+            raise HTTPException(
+                422,
+                {
+                    "code": "gpu_unsupported",
+                    "message": "本部署只调用云端模型，不支持声明 GPU 的计划步骤",
+                    "steps": gpu_steps,
+                },
+            )
         # An explicit plan upgrades an explicitly legacy deployment to the
         # artifact/planner runtime so the caller's execution contract is honored.
         if settings.orchestration_mode == "legacy":
             settings = replace(settings, orchestration_mode="planner-driven")
     lease_owner = uuid4().hex
+
+    from .workbench.contract import CONTRACT_SCRATCH_KEY, build_contract
+    from .workbench.templates import get_template
+
+    task_template = get_template(req.template) if req.template else None
+    if req.template and task_template is None:
+        raise HTTPException(
+            422, {"code": "unknown_template", "message": f"未知任务模板：{req.template}"}
+        )
+    if task_template is not None and not task_template.supports(req.strategy):
+        raise HTTPException(
+            422,
+            {
+                "code": "unsupported_strategy",
+                "message": f"「{task_template.title}」不支持检索策略 {req.strategy}",
+                "strategies": list(task_template.strategies),
+            },
+        )
+    if task_template is not None and (
+        task_template.key != "autoResearch" or req.strategy is not None or not req.workflow
+    ):
+        # 模板 + 策略是用户显式选择的任务：它们决定的工作流优先于 workflow 字段。
+        # 课题调研在未显式选策略时仍允许沿用请求里的自定义工作流。
+        update: dict[str, Any] = {"workflow": task_template.workflow_for(req.strategy)}
+        if task_template.key != "autoResearch":
+            update["clarified"] = True
+        req = req.model_copy(update=update)
 
     # 意图预路由必须在 create_initial_execution 之前：工作流定义会被写进初始
     # checkpoint 且崩溃恢复直接读它，等流程跑起来再路由就改不动执行路径了。
@@ -1565,6 +1696,43 @@ async def create_run(
             policy = route_policy if route.applied else None
             if policy is not None:
                 scratch[INTENT_POLICY_KEY] = policy.model_dump(mode="json")
+    if task_template is not None:
+        contract = build_contract(
+            task_template,
+            req.query,
+            attachments_csv=req.dataset or "",
+            strategy=req.strategy,
+        )
+        scratch = execution.checkpoint.setdefault("scratch", {})
+        if isinstance(scratch, dict):
+            # 契约与模板一起冻结进初始 checkpoint：恢复后的尝试、worker 与交付层
+            # 读到的都是创建时的同一份任务理解，不会因模板表后续调整而漂移。
+            scratch[CONTRACT_SCRATCH_KEY] = contract.model_dump(mode="json")
+    if req.attachments:
+        from .workbench.attachments import (
+            ATTACHMENTS_SCRATCH_KEY,
+            Attachment,
+            limit_attachments,
+        )
+
+        try:
+            parsed = [Attachment.model_validate(item) for item in req.attachments]
+        except ValidationError as exc:
+            raise HTTPException(
+                422, {"code": "invalid_attachment", "message": "附件数据无效，请重新上传"}
+            ) from exc
+        scratch = execution.checkpoint.setdefault("scratch", {})
+        if isinstance(scratch, dict):
+            scratch[ATTACHMENTS_SCRATCH_KEY] = [
+                item.model_dump(mode="json") for item in limit_attachments(parsed)
+            ]
+    if project is not None:
+        scratch = execution.checkpoint.setdefault("scratch", {})
+        if isinstance(scratch, dict):
+            # The project binding is part of the immutable run checkpoint so
+            # external workers and resumed attempts query the same corpus.
+            scratch["project_id"] = project.id
+            scratch["project_owner_id"] = project.owner_id
     catalog = getattr(request.app.state, "catalog", None)
     if not execution.definition:
         workflow_def = None
@@ -1637,6 +1805,7 @@ async def create_run(
             execution=execution,
             lease_owner=lease_owner,
             owner_id=principal.id,
+            project_id=req.project_id,
             max_inflight=settings.max_active_runs + settings.max_queued_runs,
         )
     except RunQueueFullError as exc:
@@ -1955,6 +2124,11 @@ async def _update_config_unlocked(req: ConfigUpdate, request: Request) -> Config
     if isinstance(store, ConfigStore):
         current = await store.load(request.app.state.settings)
         changes = req.model_dump(exclude_unset=True, exclude={"version"})
+        if "quality" in changes:
+            try:
+                changes["quality"] = _merge_quality(current, changes["quality"])
+            except ValueError as exc:
+                raise HTTPException(422, f"配置非法：{exc}") from exc
         changes = {
             name: value
             for name, value in changes.items()
@@ -1998,6 +2172,11 @@ async def _update_config_unlocked(req: ConfigUpdate, request: Request) -> Config
                 overrides[key] = value
         elif key == "llm_base_url":
             overrides[key] = value or None  # 显式空串＝清空回默认端点
+        elif key == "quality":
+            try:
+                overrides[key] = _merge_quality(request.app.state.settings, value)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=f"配置非法：{e}") from e
         else:
             overrides[key] = value
     # 以「环境变量 + 新覆盖」重建，复用 Settings.__post_init__ 范围校验；
@@ -2303,11 +2482,116 @@ async def get_run_document_pdf(
         pdf_bytes = await run_blocking(render_pdf, document)
     except PdfExportUnavailable as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except PdfRenderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}.pdf"'},
+    )
+
+
+@app.get("/api/runs/{run_id}/document.tex", dependencies=[Depends(require_api_key)])
+async def get_run_document_latex(
+    run_id: str,
+    request: Request,
+    profile: str = Query(default="academic", pattern="^(academic|technical|executive|appendix)$"),
+    template: str = Query(default="ctexart", pattern="^(ctexart|ctexrep|ieeetran|acmart)$"),
+    include_hsi_tables: bool = Query(default=False),
+) -> PlainTextResponse:
+    """Download the reproducible LaTeX source for an academic-style report."""
+    document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
+    latex_options: dict[str, object] = {"profile": cast(ExportProfile, profile)}
+    if template != "ctexart":
+        latex_options["template"] = cast(LatexTemplateName, template)
+    source = await run_blocking(render_latex, document, **latex_options)
+    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
+    return PlainTextResponse(
+        source,
+        media_type="application/x-tex; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}.tex"'},
+    )
+
+
+@app.get("/api/runs/{run_id}/document.bib", dependencies=[Depends(require_api_key)])
+async def get_run_document_bib(
+    run_id: str,
+    request: Request,
+    include_hsi_tables: bool = Query(default=False),
+) -> PlainTextResponse:
+    """Download the same run's references as a deterministic BibTeX file."""
+    document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
+    detail = await request.app.state.repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    bibtex = await run_blocking(render_bibtex, document, sources=detail.sources)
+    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
+    return PlainTextResponse(
+        bibtex,
+        media_type="application/x-bibtex; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}.bib"'},
+    )
+
+
+@app.get("/api/runs/{run_id}/document.bundle.zip", dependencies=[Depends(require_api_key)])
+async def get_run_document_bundle(
+    run_id: str,
+    request: Request,
+    profile: str = Query(default="academic", pattern="^(academic|technical|executive|appendix)$"),
+    template: str = Query(default="ctexart", pattern="^(ctexart|ctexrep|ieeetran|acmart)$"),
+) -> Response:
+    """Download the complete non-secret reproducibility bundle for a run."""
+    document = await _load_report_document(request, run_id, include_hsi_tables=True)
+    detail = await request.app.state.repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    detail = await _enrich_run_detail(request.app.state.repo, detail)
+    bundle = await run_blocking(
+        render_reproducibility_bundle,
+        document,
+        run_id=run_id,
+        manifest=detail.manifest,
+        sources=detail.sources,
+        profile=cast(ExportProfile, profile),
+        template=cast(LatexTemplateName, template),
+    )
+    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
+    return Response(
+        content=bundle,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="research-{safe_run_id}-bundle.zip"'
+        },
+    )
+
+
+@app.get("/api/runs/{run_id}/document.paper.pdf", dependencies=[Depends(require_api_key)])
+async def get_run_document_paper_pdf(
+    run_id: str,
+    request: Request,
+    profile: str = Query(default="academic", pattern="^(academic|technical|executive|appendix)$"),
+    template: str = Query(default="ctexart", pattern="^(ctexart|ctexrep|ieeetran|acmart)$"),
+    include_hsi_tables: bool = Query(default=False),
+) -> Response:
+    """Compile a paper-style PDF from the fixed XeLaTeX template."""
+    document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
+    try:
+        pdf_bytes = await run_blocking(
+            render_latex_pdf,
+            document,
+            profile=cast(ExportProfile, profile),
+            template=cast(LatexTemplateName, template),
+        )
+    except LatexExportUnavailable as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except LatexRenderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}-paper.pdf"'},
     )
 
 
@@ -2402,6 +2686,7 @@ async def spa_fallback(full_path: str) -> Response:
     ):
         raise HTTPException(404, "not found")
     if candidate.suffix.lower() in {
+        ".js",
         ".svg",
         ".png",
         ".ico",

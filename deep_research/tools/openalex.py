@@ -32,6 +32,7 @@ import httpx
 
 from ..models import ScholarlyMetadata, Source
 from .base import SearchTool
+from .fanout import expand_in_order
 from .oa_pdf_fulltext import OaPdfFetcher, OaPdfFulltextError
 
 logger = logging.getLogger(__name__)
@@ -111,25 +112,24 @@ class OpenAlexSearch(SearchTool):
         if not isinstance(payload, dict):
             raise RuntimeError("OpenAlex returned a non-object JSON payload")
         results = payload.get("results") or []
-        sources: list[Source] = []
-        for item in results:
-            if not isinstance(item, dict):
-                continue
-            source = _to_source(item)
-            if source is not None:
-                if self._pdf_fetcher is not None:
-                    try:
-                        sources.extend(await self._fulltext_sources(source, query))
-                    except (OaPdfFulltextError, RuntimeError) as exc:
-                        # OA metadata/abstract remains a valid source when the
-                        # optional PDF dependency or remote document is unavailable.
-                        logger.warning("OA PDF unavailable for %s: %s", source.url, exc)
-                        sources.append(source)
-                else:
-                    sources.append(source)
-            if len(sources) >= requested:
-                break
-        return sources[:requested]
+        candidates = [
+            source
+            for source in (_to_source(item) for item in results if isinstance(item, dict))
+            if source is not None
+        ]
+        if self._pdf_fetcher is None:
+            return candidates[:requested]
+
+        async def expand(source: Source) -> list[Source]:
+            try:
+                return await self._fulltext_sources(source, query)
+            except (OaPdfFulltextError, RuntimeError) as exc:
+                # OA metadata/abstract remains a valid source when the
+                # optional PDF dependency or remote document is unavailable.
+                logger.warning("OA PDF unavailable for %s: %s", source.url, exc)
+                return [source]
+
+        return await expand_in_order(candidates, expand, limit=requested)
 
     async def aclose(self) -> None:
         await self._client.aclose()

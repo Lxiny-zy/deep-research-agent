@@ -158,6 +158,38 @@ class ProseBlock(BaseModel):
 Block = ProseBlock | TableBlock | ChartBlock
 
 
+SectionKind = Literal[
+    "abstract",
+    "introduction",
+    "related_work",
+    "methods",
+    "experiments",
+    "results",
+    "limitations",
+    "conclusion",
+    "data_availability",
+    "ethics",
+    "other",
+]
+
+
+class PaperSection(BaseModel):
+    """A bounded paper section containing the same typed blocks as a report.
+
+    ``ReportDocument.blocks`` remains the compatibility projection used by old
+    clients.  New assemblies additionally populate ``sections`` so publication
+    exports do not have to infer chapter boundaries independently.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    title: str
+    kind: SectionKind = "other"
+    level: int = Field(1, ge=1, le=3)
+    blocks: list[Block] = Field(default_factory=list)
+
+
 class ReferenceEntry(BaseModel):
     """参考来源一条。``reference`` 是学术引用文本，为空则回退裸 ``url``。"""
 
@@ -241,7 +273,7 @@ class FinalReportValidation(BaseModel):
 
 
 class ReportDocument(BaseModel):
-    """一份报告的完整结构。三个渲染器（Markdown / HTML / 打印）都只消费它。
+    """一份报告的完整结构。所有导出渲染器都只消费它。
 
     ``Report``（``{query, markdown, citations}``）**继续保留且语义不变**：前端按
     下标做 [n] 跳转、质量指标按 URL 与检索快照比对覆盖率，都依赖它。本模型是
@@ -252,7 +284,16 @@ class ReportDocument(BaseModel):
 
     schema_version: int = 1
     query: str = ""
+    # Optional publication metadata.  Keeping these fields on the shared
+    # intermediate representation lets Markdown, HTML, and LaTeX exports use
+    # the same title without asking a renderer to infer it independently.
+    title: str = ""
+    abstract: str = ""
+    keywords: list[str] = Field(default_factory=list)
+    authors: list[str] = Field(default_factory=list)
+    institution: str = ""
     blocks: list[Block] = Field(default_factory=list)
+    sections: list[PaperSection] = Field(default_factory=list)
     references: list[ReferenceEntry] = Field(default_factory=list)
     evidence: list[EvidenceRecord] = Field(default_factory=list)
     overview: Overview = Field(default_factory=Overview)
@@ -260,10 +301,27 @@ class ReportDocument(BaseModel):
     final_validation: FinalReportValidation | None = None
 
     def table(self, table_id: str) -> TableBlock | None:
-        for block in self.blocks:
+        blocks = list(self.blocks)
+        for section in self.sections:
+            blocks.extend(section.blocks)
+        for block in blocks:
             if isinstance(block, TableBlock) and block.id == table_id:
                 return block
         return None
+
+    def chart_blocks(self) -> list[ChartBlock]:
+        """Return unique chart blocks in document order for export assets."""
+
+        blocks = list(self.blocks)
+        for section in self.sections:
+            blocks.extend(section.blocks)
+        charts: list[ChartBlock] = []
+        seen: set[str] = set()
+        for block in blocks:
+            if isinstance(block, ChartBlock) and block.id not in seen:
+                charts.append(block)
+                seen.add(block.id)
+        return charts
 
     def evidence_for(self, citation: int) -> list[EvidenceRecord]:
         return [record for record in self.evidence if record.citation == citation]

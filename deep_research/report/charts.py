@@ -118,6 +118,10 @@ class ChartDataError(ValueError):
     """
 
 
+class ChartAssetUnavailable(RuntimeError):
+    """Raised when the optional SVG-to-PDF converter is unavailable."""
+
+
 def render_chart(chart: ChartBlock, table: TableBlock) -> str:
     """把 ChartBlock 渲染成内联 SVG ``<figure>``。
 
@@ -153,6 +157,60 @@ def render_chart(chart: ChartBlock, table: TableBlock) -> str:
         f'<figure class="dr-chart" data-chart-id="{escape(chart.id)}">'
         f"{legend}{svg}{caption}</figure>"
     )
+
+
+def render_chart_svg(chart: ChartBlock, table: TableBlock) -> str:
+    """Return the standalone SVG asset from the controlled chart projection."""
+
+    figure = render_chart(chart, table)
+    start = figure.find("<svg ")
+    end = figure.rfind("</svg>")
+    if start < 0 or end < 0:
+        raise ChartDataError(f"图 {chart.id} 未生成有效 SVG")
+    svg = figure[start : end + len("</svg>")]
+    colours = {
+        "var(--dr-surface)": "#ffffff",
+        "var(--dr-ink-1)": "#111111",
+        "var(--dr-ink-2)": "#454545",
+        "var(--dr-ink-3)": "#707070",
+        "var(--dr-grid)": "#dedede",
+        "var(--dr-axis)": "#a8a8a8",
+        "var(--dr-muted-mark)": "#b8b8b8",
+        "var(--dr-s1)": "#1f70c1",
+        "var(--dr-s2)": "#d75525",
+        "var(--dr-s3)": "#12835a",
+    }
+    for token, value in colours.items():
+        svg = svg.replace(token, value)
+    style = (
+        "<style>"
+        ".dr-chart-grid line{stroke:#dedede;stroke-width:1}"
+        ".dr-chart-axis line{stroke:#a8a8a8;stroke-width:1}"
+        ".dr-chart-tick{fill:#707070;font:11px sans-serif}"
+        ".dr-chart-cat{fill:#454545;font:12px sans-serif}"
+        ".dr-chart-value{fill:#111111;font:600 11px sans-serif}"
+        ".dr-chart-unreported{fill:#707070;font:italic 11px sans-serif}"
+        ".dr-chart-mark{stroke:none}"
+        ".dr-chart-dot{stroke:#fff;stroke-width:2}"
+        ".dr-chart-line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}"
+        "</style>"
+    )
+    first_close = svg.find(">")
+    return svg[: first_close + 1] + style + svg[first_close + 1 :] + "\n"
+
+
+def render_chart_pdf(chart: ChartBlock, table: TableBlock) -> bytes:
+    """Convert the controlled SVG projection to a LaTeX-safe PDF asset."""
+
+    try:
+        import cairosvg
+    except (ImportError, OSError) as exc:  # pragma: no cover - optional runtime
+        raise ChartAssetUnavailable("CairoSVG is required for PDF chart assets") from exc
+    try:
+        svg = render_chart_svg(chart, table).encode("utf-8")
+        return bytes(cairosvg.svg2pdf(bytestring=svg))
+    except Exception as exc:  # pragma: no cover - converter/platform dependent
+        raise ChartAssetUnavailable(f"chart PDF conversion failed: {exc}") from exc
 
 
 # --- 横向类别图：bar / dot / grouped_bar ---------------------------------------

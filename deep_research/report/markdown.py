@@ -53,18 +53,30 @@ _CORROBORATION_LABEL = {
 def render_markdown(doc: ReportDocument) -> str:
     """把结构化文档投影成 Markdown。"""
     sections: list[str] = []
-    if doc.query:
-        sections.append(f"# {_inline(doc.query)}")
+    title = doc.title.strip() or doc.query.strip()
+    if title:
+        sections.append(f"# {_inline(title)}")
+    if doc.abstract:
+        sections.append("## 摘要\n\n" + doc.abstract.strip())
+    if doc.keywords:
+        sections.append("**关键词**：" + "；".join(_inline(value) for value in doc.keywords))
     sections.append(f"> {_inline(doc.disclaimer)}")
 
     overview = _overview(doc)
     if overview:
         sections.append(overview)
 
-    for block in doc.blocks:
-        rendered = _block(block, doc)
-        if rendered:
-            sections.append(rendered)
+    if doc.sections:
+        for section in doc.sections:
+            heading = "#" * min(section.level + 1, 4)
+            content = [f"{heading} {_inline(section.title)}"]
+            content.extend(rendered for block in section.blocks if (rendered := _block(block, doc)))
+            sections.append("\n\n".join(content))
+    else:
+        for block in doc.blocks:
+            rendered = _block(block, doc)
+            if rendered:
+                sections.append(rendered)
 
     if doc.references:
         lines = [f"[{entry.index}] {_inline(entry.render())}" for entry in doc.references]
@@ -141,7 +153,7 @@ def _cell_text(cell: TableCell) -> str:
     if cell.note_ref:
         text = f"{text}（注 {cell.note_ref}）"
     if cell.disputed:
-        text = f"{text} ⚠"
+        text = f"{text}（存疑）"
     return text
 
 

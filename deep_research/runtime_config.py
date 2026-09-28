@@ -39,6 +39,7 @@ EDITABLE_FIELDS: tuple[str, ...] = (
     "require_corroboration",
     "request_timeout",
     "max_run_seconds",
+    "quality",
 )
 
 # 密钥字段：API 层脱敏回显、空值＝保持不变

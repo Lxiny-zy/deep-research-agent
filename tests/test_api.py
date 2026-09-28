@@ -2305,10 +2305,85 @@ async def test_report_pdf_endpoint_returns_optional_dependency_status(repo, monk
 
 
 @pytest.mark.asyncio
+async def test_report_pdf_endpoint_returns_renderer_failure(repo, monkeypatch):
+    run_id = await repo.create_run("server pdf renderer failure")
+    monkeypatch.setattr(
+        api,
+        "render_pdf",
+        lambda *args, **kwargs: (_ for _ in ()).throw(api.PdfRenderError("font failure")),
+    )
+
+    async with _client() as c:
+        resp = await c.get(f"/api/runs/{run_id}/document.pdf")
+
+    assert resp.status_code == 502
+    assert "font failure" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_report_pdf_endpoint_404s_for_an_unknown_run(repo):
     async with _client() as c:
         resp = await c.get("/api/runs/does-not-exist/document.pdf")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_report_latex_source_endpoint_returns_academic_source(repo, monkeypatch):
+    run_id = await repo.create_run("academic source")
+    monkeypatch.setattr(api, "render_latex", lambda document, *, profile: "% academic source")
+
+    async with _client() as c:
+        response = await c.get(f"/api/runs/{run_id}/document.tex?profile=academic")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-tex")
+    assert response.headers["content-disposition"].endswith('.tex"')
+    assert response.text == "% academic source"
+
+
+@pytest.mark.asyncio
+async def test_report_bib_endpoint_returns_references(repo, monkeypatch):
+    run_id = await repo.create_run("academic bib")
+    monkeypatch.setattr(api, "render_bibtex", lambda document, *, sources: "@misc{ref1}\n")
+
+    async with _client() as c:
+        response = await c.get(f"/api/runs/{run_id}/document.bib")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-bibtex")
+    assert response.text == "@misc{ref1}\n"
+
+
+@pytest.mark.asyncio
+async def test_report_bundle_endpoint_returns_zip(repo, monkeypatch):
+    run_id = await repo.create_run("academic bundle")
+    monkeypatch.setattr(api, "render_reproducibility_bundle", lambda *args, **kwargs: b"PK bundle")
+
+    async with _client() as c:
+        response = await c.get(f"/api/runs/{run_id}/document.bundle.zip")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/zip")
+    assert response.headers["content-disposition"].endswith('-bundle.zip"')
+    assert response.content == b"PK bundle"
+
+
+@pytest.mark.asyncio
+async def test_report_paper_pdf_endpoint_exposes_missing_tex_runtime(repo, monkeypatch):
+    run_id = await repo.create_run("academic pdf")
+    monkeypatch.setattr(
+        api,
+        "render_latex_pdf",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            api.LatexExportUnavailable("latexmk is not installed")
+        ),
+    )
+
+    async with _client() as c:
+        response = await c.get(f"/api/runs/{run_id}/document.paper.pdf")
+
+    assert response.status_code == 501
+    assert "latexmk" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

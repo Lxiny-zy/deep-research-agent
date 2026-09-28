@@ -27,11 +27,15 @@ from ..models import Finding, Quantity, Report, ResearchResult
 from ..observability import Event
 from .document import (
     Block,
+    ChartBlock,
     EvidenceRecord,
     Overview,
+    PaperSection,
     ProseBlock,
     ReferenceEntry,
     ReportDocument,
+    SectionKind,
+    TableBlock,
 )
 from .hsi_tables import hsi_tables_from_results
 from .pivot import pivot_tables
@@ -39,6 +43,30 @@ from .pivot import pivot_tables
 # Synthesizer 会在正文末尾追加 "## 参考来源" 段落（``synthesizer._finalize``）。
 # 结构化文档里参考来源是独立字段，正文若把那一段带进来就会渲染两遍。
 _REFERENCES_HEADING = re.compile(r"\n#{2,3}\s*参考来源\s*\n.*\Z", re.DOTALL)
+_ATX_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+
+_SECTION_ALIASES: dict[str, SectionKind] = {
+    "摘要": "abstract",
+    "引言": "introduction",
+    "绪论": "introduction",
+    "介绍": "introduction",
+    "相关工作": "related_work",
+    "文献综述": "related_work",
+    "方法": "methods",
+    "研究方法": "methods",
+    "实验": "experiments",
+    "实验设置": "experiments",
+    "结果": "results",
+    "实验结果": "results",
+    "讨论": "results",
+    "局限": "limitations",
+    "局限性": "limitations",
+    "结论": "conclusion",
+    "数据与代码可用性": "data_availability",
+    "数据可用性": "data_availability",
+    "伦理声明": "ethics",
+    "利益冲突": "ethics",
+}
 
 
 def assemble_document(
@@ -84,13 +112,94 @@ def assemble_document(
         )
     blocks.extend(extra_blocks or [])
 
+    sections = _paper_sections(body, blocks)
+    abstract = _take_abstract(sections)
+
     return ReportDocument(
         query=query or (report.query if report is not None else ""),
+        abstract=abstract,
         blocks=blocks,
+        sections=sections,
         references=references,
         evidence=_evidence(findings, index_by_url),
         overview=_overview(findings, events),
     )
+
+
+def _take_abstract(sections: list[PaperSection]) -> str:
+    """Promote one explicit abstract heading to publication front matter."""
+
+    for index, section in enumerate(sections):
+        if section.kind != "abstract":
+            continue
+        prose = next(
+            (block.markdown for block in section.blocks if isinstance(block, ProseBlock)),
+            "",
+        )
+        sections.pop(index)
+        return prose.strip()
+    return ""
+
+
+def _paper_sections(body: str, blocks: list[Block]) -> list[PaperSection]:
+    """Split report prose into controlled paper chapters.
+
+    Headings remain ordinary Markdown in the compatibility ``blocks`` view.
+    The section projection strips only the heading line and keeps all other
+    text byte-for-byte, so every renderer gets the same source content.
+    """
+
+    prose_sections: list[PaperSection] = []
+    current_title = "引言"
+    current_kind: SectionKind = "introduction"
+    current_level = 1
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_lines
+        markdown = "\n".join(current_lines).strip()
+        if markdown:
+            prose_sections.append(
+                PaperSection(
+                    id=f"section-{len(prose_sections) + 1}",
+                    title=current_title,
+                    kind=current_kind,
+                    level=current_level,
+                    blocks=[ProseBlock(markdown=markdown)],
+                )
+            )
+        current_lines = []
+
+    for raw in body.replace("\r\n", "\n").splitlines():
+        match = _ATX_HEADING.match(raw.strip())
+        if match:
+            flush()
+            title = match.group(2).strip().strip("#").strip()
+            current_title = title or "引言"
+            current_kind = _SECTION_ALIASES.get(title, "other")
+            current_level = min(len(match.group(1)), 3)
+            continue
+        current_lines.append(raw)
+    flush()
+
+    table_blocks = [block for block in blocks if isinstance(block, TableBlock)]
+    chart_blocks = [block for block in blocks if isinstance(block, ChartBlock)]
+    result_section = next(
+        (section for section in prose_sections if section.kind == "results"),
+        None,
+    )
+    if table_blocks or chart_blocks:
+        if result_section is None:
+            result_section = PaperSection(
+                id=f"section-{len(prose_sections) + 1}",
+                title="结果",
+                kind="results",
+                level=1,
+            )
+            prose_sections.append(result_section)
+        result_section.blocks.extend(table_blocks)
+        result_section.blocks.extend(chart_blocks)
+    return prose_sections
 
 
 def _body(report: Report | None) -> str:

@@ -54,6 +54,7 @@ class RunSummary:
     query: str
     status: str
     owner_id: str | None = None
+    project_id: str | None = None
     created_at: datetime | None = None
     total_tokens: int = 0
     elapsed: float = 0.0
@@ -68,6 +69,7 @@ class RunDetail:
     query: str
     status: str
     owner_id: str | None = None
+    project_id: str | None = None
     interpretation: str = ""
     sub_questions: list[SubQuestion] = field(default_factory=list)
     results: list[ResearchResult] = field(default_factory=list)
@@ -134,6 +136,7 @@ class ResearchRepository(Protocol):
         lease_owner: str | None = None,
         claimable: bool = False,
         owner_id: str | None = None,
+        project_id: str | None = None,
         max_inflight: int | None = None,
     ) -> tuple[str, bool]:
         """Create a run once; return ``(run_id, created)``.
@@ -205,13 +208,23 @@ class ResearchRepository(Protocol):
         """Atomically mark a new attempt active and return its number."""
         ...
 
-    async def save_plan(self, run_id: str, plan: ResearchPlan) -> None: ...
-
-    async def add_sub_questions(
-        self, run_id: str, sub_questions: list[SubQuestion], *, origin: str, round: int
+    async def save_plan(
+        self, run_id: str, plan: ResearchPlan, *, lease_owner: str | None = None
     ) -> None: ...
 
-    async def save_result(self, run_id: str, result: ResearchResult) -> None: ...
+    async def add_sub_questions(
+        self,
+        run_id: str,
+        sub_questions: list[SubQuestion],
+        *,
+        origin: str,
+        round: int,
+        lease_owner: str | None = None,
+    ) -> None: ...
+
+    async def save_result(
+        self, run_id: str, result: ResearchResult, *, lease_owner: str | None = None
+    ) -> None: ...
 
     async def save_sources(
         self, run_id: str, sources: list[Source], *, lease_owner: str | None = None

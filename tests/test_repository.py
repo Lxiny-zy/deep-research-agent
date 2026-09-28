@@ -328,11 +328,48 @@ async def test_lease_fences_writes_after_ownership_changes(repo):
             total_tokens=99,
             lease_owner="worker-a",
         )
+    # Intermediate artifacts are fenced too: a zombie must not leak plan rows,
+    # reflection sub-questions or results into a run it no longer owns.
+    zombie_q = SubQuestion(question="zombie question")
+    with pytest.raises(LeaseLostError):
+        await repo.save_plan(
+            run_id,
+            ResearchPlan(interpretation="zombie", sub_questions=[zombie_q]),
+            lease_owner="worker-a",
+        )
+    with pytest.raises(LeaseLostError):
+        await repo.add_sub_questions(
+            run_id, [zombie_q], origin="reflection", round=1, lease_owner="worker-a"
+        )
+    with pytest.raises(LeaseLostError):
+        await repo.save_result(
+            run_id,
+            ResearchResult(sub_question="zombie question", findings=[]),
+            lease_owner="worker-a",
+        )
 
     detail = await repo.get_run(run_id)
     assert detail is not None
     assert detail.status == "running"
     assert detail.total_tokens == 0
+    assert detail.sub_questions == []
+    assert detail.results == []
+
+    await repo.save_plan(
+        run_id,
+        ResearchPlan(interpretation="owned", sub_questions=[SubQuestion(question="q0")]),
+        lease_owner="worker-b",
+    )
+    await repo.add_sub_questions(
+        run_id,
+        [SubQuestion(question="q1")],
+        origin="reflection",
+        round=1,
+        lease_owner="worker-b",
+    )
+    await repo.save_result(
+        run_id, ResearchResult(sub_question="q0", findings=[]), lease_owner="worker-b"
+    )
 
     await repo.finalize(
         run_id,

@@ -78,6 +78,7 @@ def main() -> int:
     lock_pairs = (
         ("requirements.txt", "requirements.lock"),
         ("requirements-pdf.txt", "requirements-pdf.lock"),
+        ("requirements-workbench.txt", "requirements-workbench.lock"),
         ("requirements-dev.txt", "requirements-dev.lock"),
     )
     for requirements_name, lock_name in lock_pairs:

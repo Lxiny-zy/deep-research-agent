@@ -175,6 +175,7 @@ class SqlRepository:
         lease_owner: str | None = None,
         claimable: bool = False,
         owner_id: str | None = None,
+        project_id: str | None = None,
         max_inflight: int | None = None,
     ) -> tuple[str, bool]:
         """Insert a run and its initial workflow atomically.
@@ -200,6 +201,7 @@ class SqlRepository:
                 run = orm.ResearchRun(
                     query=query,
                     owner_id=owner_id,
+                    project_id=project_id,
                     status="pending",
                     idempotency_key=idempotency_key,
                     request_hash=request_hash or None,
@@ -434,8 +436,11 @@ class SqlRepository:
             workflow.attempt = max(1, workflow.attempt or 1) + 1
             return workflow.attempt
 
-    async def save_plan(self, run_id: str, plan: ResearchPlan) -> None:
+    async def save_plan(
+        self, run_id: str, plan: ResearchPlan, *, lease_owner: str | None = None
+    ) -> None:
         async with self._sm() as s, s.begin():
+            await self._owned_workflow_row(s, run_id, lease_owner)
             run = await s.get(orm.ResearchRun, run_id)
             if run is not None:
                 run.interpretation = plan.interpretation
@@ -453,15 +458,24 @@ class SqlRepository:
                 )
 
     async def add_sub_questions(
-        self, run_id: str, sub_questions: list[SubQuestion], *, origin: str, round: int
+        self,
+        run_id: str,
+        sub_questions: list[SubQuestion],
+        *,
+        origin: str,
+        round: int,
+        lease_owner: str | None = None,
     ) -> None:
         async with self._sm() as s, s.begin():
-            count = await s.scalar(
-                select(func.count())
-                .select_from(orm.SubQuestionRow)
-                .where(orm.SubQuestionRow.run_id == run_id)
+            # The fenced no-op UPDATE also serialises concurrent writers on this
+            # run, so the max(idx) read below cannot race another append.
+            await self._owned_workflow_row(s, run_id, lease_owner)
+            # max(idx)+1 rather than count(): a gap left by a deleted row would
+            # otherwise make count() hand out an idx that is already taken.
+            highest = await s.scalar(
+                select(func.max(orm.SubQuestionRow.idx)).where(orm.SubQuestionRow.run_id == run_id)
             )
-            base = int(count or 0)
+            base = 0 if highest is None else int(highest) + 1
             for j, sq in enumerate(sub_questions):
                 s.add(
                     orm.SubQuestionRow(
@@ -475,8 +489,11 @@ class SqlRepository:
                     )
                 )
 
-    async def save_result(self, run_id: str, result: ResearchResult) -> None:
+    async def save_result(
+        self, run_id: str, result: ResearchResult, *, lease_owner: str | None = None
+    ) -> None:
         async with self._sm() as s, s.begin():
+            await self._owned_workflow_row(s, run_id, lease_owner)
             row = orm.ResearchResultRow(run_id=run_id, sub_question=result.sub_question)
             s.add(row)
             await s.flush()
@@ -541,6 +558,7 @@ class SqlRepository:
                         "url": source.url,
                         "content": source.content,
                         "content_hash": content_hash,
+                        "locator": source.locator,
                         "scholarly": (
                             source.scholarly.model_dump(mode="json")
                             if source.scholarly is not None
@@ -558,6 +576,7 @@ class SqlRepository:
                 set_={
                     "title": statement.excluded.title,
                     "content": statement.excluded.content,
+                    "locator": statement.excluded.locator,
                     "scholarly": statement.excluded.scholarly,
                 },
             )
@@ -1110,6 +1129,7 @@ class SqlRepository:
                     query=r.query,
                     status=r.status,
                     owner_id=r.owner_id,
+                    project_id=r.project_id,
                     created_at=r.created_at,
                     total_tokens=r.total_tokens,
                     elapsed=r.elapsed,
@@ -1218,6 +1238,7 @@ class SqlRepository:
             return RunDetail(
                 id=run.id,
                 owner_id=run.owner_id,
+                project_id=run.project_id,
                 query=run.query,
                 status=run.status,
                 interpretation=run.interpretation,
@@ -1234,6 +1255,7 @@ class SqlRepository:
                         url=source.url,
                         content=source.content,
                         content_hash=source.content_hash,
+                        locator=source.locator,
                         scholarly=(
                             ScholarlyMetadata.model_validate(source.scholarly)
                             if isinstance(source.scholarly, dict)

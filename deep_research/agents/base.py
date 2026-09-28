@@ -71,6 +71,7 @@ class RunContext:
         settings: Settings,
         llm_resolver: Callable[[str], LLM | None] | None = None,
         search_resolver: Any | None = None,
+        search_overlay: SearchTool | None = None,
         # Optional execution capabilities are injected by the runner.  They
         # stay typed as ``Any`` here to avoid importing filesystem/process
         # adapters into every agent (and to keep the legacy constructor intact).
@@ -88,6 +89,7 @@ class RunContext:
         self.settings = settings
         self._llm_resolver = llm_resolver
         self._search_resolver = search_resolver
+        self._search_overlay = search_overlay
         self.artifact_store = artifact_store
         self.command_runner = command_runner
         self.skill_resolver = skill_resolver
@@ -108,14 +110,23 @@ class RunContext:
         return self.llm
 
     async def search_for(self, agent_name: str) -> SearchTool:
+        resolved = None
         if self._search_resolver is not None:
             resolved = await self._search_resolver(agent_name)
-            if resolved is not None:
-                from ..reproducibility import RecordingSearchTool
+        from ..reproducibility import RecordingSearchTool
 
-                if isinstance(self.search_tool, RecordingSearchTool):
-                    return self.search_tool.for_delegate(resolved)
-                return resolved
+        recorder = self.search_tool if isinstance(self.search_tool, RecordingSearchTool) else None
+        delegate = resolved
+        if delegate is None:
+            delegate = recorder.delegate if recorder is not None else self.search_tool
+        if self._search_overlay is not None:
+            from ..tools.composite import MultiBackendSearch
+
+            delegate = MultiBackendSearch([self._search_overlay, delegate])
+        if recorder is not None and delegate is not recorder.delegate:
+            return recorder.for_delegate(delegate)
+        if resolved is not None:
+            return resolved
         return self.search_tool
 
     def system_prompt(self, role_prompt: str) -> str:

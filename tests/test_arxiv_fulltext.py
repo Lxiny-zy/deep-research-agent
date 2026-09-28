@@ -242,6 +242,100 @@ async def test_fetcher_stops_streaming_as_soon_as_body_exceeds_limit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetcher_follows_redirects_only_within_arxiv() -> None:
+    raw = _tar({"main.tex": b"\\section{A}\ntext"})
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.host == "export.arxiv.org":
+            return httpx.Response(302, headers={"Location": "https://arxiv.org/e-print/1"})
+        return httpx.Response(200, content=raw)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        assert await ArxivEprintFetcher(client=client).fetch("arxiv:2205.10102") == raw
+    finally:
+        await client.aclose()
+    assert seen[-1] == "https://arxiv.org/e-print/1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "location",
+    ["http://arxiv.org/e-print/1", "https://169.254.169.254/latest", "https://evil.example/x", ""],
+)
+async def test_fetcher_rejects_redirects_that_leave_arxiv(location: str) -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(302, headers={"Location": location})
+        )
+    )
+    try:
+        with pytest.raises(ArxivFulltextFetchError, match="redirect"):
+            await ArxivEprintFetcher(client=client).fetch("arxiv:2205.10102")
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_fetcher_caps_redirect_loops() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                302, headers={"Location": "https://export.arxiv.org/e-print/loop"}
+            )
+        )
+    )
+    try:
+        with pytest.raises(ArxivFulltextFetchError, match="too many times"):
+            await ArxivEprintFetcher(client=client).fetch("arxiv:2205.10102")
+    finally:
+        await client.aclose()
+
+
+def test_default_fetcher_uses_egress_policy_client() -> None:
+    fetcher = ArxivEprintFetcher()
+    # provider_http_client disables auto-redirects and env proxies; a bare
+    # httpx.AsyncClient would silently regain both.
+    assert fetcher._client.follow_redirects is False
+    assert fetcher._client._trust_env is False
+
+
+@pytest.mark.asyncio
+async def test_sections_parses_eprint_off_the_event_loop(monkeypatch) -> None:
+    import threading
+
+    from deep_research.tools import arxiv_fulltext
+
+    loop_thread = threading.get_ident()
+    parsed_on: list[int] = []
+    original = arxiv_fulltext.parse_arxiv_eprint
+
+    def spy(raw, limits=None):
+        parsed_on.append(threading.get_ident())
+        return original(raw, limits)
+
+    monkeypatch.setattr(arxiv_fulltext, "parse_arxiv_eprint", spy)
+    raw = _tar({"main.tex": b"\\section{Results}\nPSNR 38.36 dB"})
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=raw))
+    )
+    fetcher = ArxivEprintFetcher(client=client)
+    source = Source(
+        title="MST",
+        url="https://arxiv.org/abs/2205.10102",
+        content="abstract fallback",
+        scholarly={"work_id": "arxiv:2205.10102"},
+    )
+    try:
+        await fetcher.sections(source, "PSNR")
+    finally:
+        await client.aclose()
+    assert parsed_on and parsed_on[0] != loop_thread
+
+
+@pytest.mark.asyncio
 async def test_arxiv_search_expands_sources_with_an_injected_fetcher() -> None:
     feed = """<?xml version="1.0"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">

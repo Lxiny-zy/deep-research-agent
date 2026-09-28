@@ -97,7 +97,7 @@ class AgentCardView(BaseModel):
     system_prompt: str = ""
     prompt_mode: PromptMode = "replace"
     search_profile_ids: list[str] | None = None
-    icon: str = "🧩"
+    icon: str = "bot"
     enabled: bool = True
     model_profile_id: str | None = None
     model_profile_name: str | None = None  # 便于前端卡片直接显示绑定模型名
@@ -162,7 +162,7 @@ class AgentCardCreate(BaseModel):
     system_prompt: str = Field("", max_length=8000)
     prompt_mode: PromptMode = "append"
     search_profile_ids: list[str] | None = Field(None, min_length=1, max_length=12)
-    icon: str = Field("🧩", max_length=16)
+    icon: str = Field("bot", max_length=16)
     enabled: bool = True
     model_profile_id: str | None = None
 

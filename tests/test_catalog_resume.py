@@ -246,7 +246,14 @@ async def test_snapshot_runtime_restores_terminal_role_after_card_delete(catalog
         assert restored.behavior == "synthesize"
         assert "terminal prompt" in restored._impl.system
         assert "固定行为契约" in restored._impl.system
-        assert runtime.terminal_roles == {"synthesizer", "aggregator", card.name}
+        from deep_research.workbench.roles import WORKBENCH_WRITER_ROLES
+
+        assert runtime.terminal_roles == {
+            "synthesizer",
+            "aggregator",
+            card.name,
+            *WORKBENCH_WRITER_ROLES,
+        }
         assert profile.id in runtime._profiles
     finally:
         await runtime.aclose()

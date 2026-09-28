@@ -212,6 +212,18 @@ class EvidenceCheck:
     finding: Finding | None = None
 
 
+_LOCAL_SOURCE_PREFIX = "https://workspace.invalid/"
+
+
+def _local_reference(source: Source) -> str:
+    """上传文件与资料库本地来源：参考来源显示「文件名，定位」，而不是内部占位 URL。"""
+    if not source.url.startswith(_LOCAL_SOURCE_PREFIX):
+        return ""
+    locator = (source.locator or "").strip()
+    title = (source.title or "未命名文件").strip()
+    return f"{title}（{locator}）" if locator else title
+
+
 class EvidenceVerifier:
     """Verify that a candidate quote occurs in the selected source content."""
 
@@ -244,7 +256,8 @@ class EvidenceVerifier:
             method="normalized_quote",
             source_content_hash=content_hash,
             source_title=source.title,
-            source_reference=format_reference(source.url, source.scholarly, title=source.title),
+            source_reference=_local_reference(source)
+            or format_reference(source.url, source.scholarly, title=source.title),
             evidence_context=_evidence_context(source.content, quote_start, quote_end),
             # 同一个区间既截出上下文窗口，也作为可复核的引用锚点落库。
             quote_start=quote_start,
@@ -827,7 +840,7 @@ def _source_identity(source: Source) -> SourceIdentity:
         domain=publisher_identity(source.url),
         peer_reviewed=scholarly.peer_reviewed if scholarly else None,
         retracted=scholarly.retracted if scholarly else None,
-        section=scholarly.section if scholarly else "",
+        section=source.locator or (scholarly.section if scholarly else ""),
     )
 
 

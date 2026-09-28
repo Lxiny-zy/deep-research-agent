@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "deep-research-agent"
 version = "0.1.0"
-description = "多 Agent 深度研究系统（Planner / Researcher / Reflector / Synthesizer）"
+description = "Science Research：面向科研人员的研究工作台（文献综述、论文精读、审稿、数据分析、汇报材料）"
 readme = "README.md"
 requires-python = ">=3.11"
 dynamic = ["dependencies"]
@@ -13,7 +13,7 @@ dynamic = ["dependencies"]
 [project.optional-dependencies]
 # Keep heavyweight document/full-text libraries out of the service startup
 # path.  Install only the export/parser capabilities needed by a deployment.
-pdf = ["weasyprint>=70,<71"]
+pdf = ["weasyprint>=70,<71", "CairoSVG>=2.8,<3"]
 xlsx = ["openpyxl>=3.1,<4"]
 fulltext = ["PyMuPDF>=1.24,<2"]
 
@@ -33,9 +33,9 @@ deep_research = ["py.typed"]
 "share/deep-research-agent" = ["alembic.ini"]
 "share/deep-research-agent/alembic" = ["alembic/env.py", "alembic/script.py.mako"]
 "share/deep-research-agent/alembic/versions" = ["alembic/versions/*.py"]
-"share/deep-research-agent/framework" = ["framework/06_global_rules.md"]
+"share/deep-research-agent/framework" = ["framework/01_planner_system_prompt.md", "framework/04_executor_prompt.md", "framework/05_aggregator_prompt.md", "framework/06_global_rules.md", "framework/09_long_research.md", "framework/10_research_plan.json"]
 "share/deep-research-agent/framework/skills" = ["framework/skills/*.md"]
-"share/deep-research-agent/frontend" = ["frontend/dist/index.html", "frontend/dist/*.svg", "frontend/dist/*.png", "frontend/dist/*.ico", "frontend/dist/*.webp"]
+"share/deep-research-agent/frontend" = ["frontend/dist/index.html", "frontend/dist/*.js", "frontend/dist/*.svg", "frontend/dist/*.png", "frontend/dist/*.ico", "frontend/dist/*.webp"]
 "share/deep-research-agent/frontend/assets" = ["frontend/dist/assets/*"]
 
 [tool.setuptools.dynamic]
@@ -44,6 +44,8 @@ dependencies = { file = ["requirements.txt"] }
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# 本地参考资料包与遗留脚本不属于项目源码，CI 也只检查 deep_research/tests/alembic/scripts/eval
+extend-exclude = ["apevon-full-package", "framework/run.py"]
 
 [tool.ruff.lint]
 # E/F: pycodestyle+pyflakes，I: isort，UP: pyupgrade，B: bugbear，ASYNC: 异步陷阱

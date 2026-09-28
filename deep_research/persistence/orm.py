@@ -92,6 +92,102 @@ class ArtifactCleanupRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ResearchProjectRow(Base):
+    __tablename__ = "research_project"
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_research_project_owner_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    corpora: Mapped[list[CorpusRow]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", order_by="CorpusRow.created_at"
+    )
+    sources: Mapped[list[LibrarySourceRow]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    runs: Mapped[list[ResearchRun]] = relationship(back_populates="project")
+
+
+class CorpusRow(Base):
+    __tablename__ = "corpus"
+    __table_args__ = (UniqueConstraint("project_id", "name", name="uq_corpus_project_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("research_project.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped[ResearchProjectRow] = relationship(back_populates="corpora")
+    sources: Mapped[list[LibrarySourceRow]] = relationship(
+        back_populates="corpus", cascade="all, delete-orphan"
+    )
+
+
+class LibrarySourceRow(Base):
+    __tablename__ = "library_source"
+    __table_args__ = (
+        UniqueConstraint("corpus_id", "content_hash", name="uq_library_source_snapshot"),
+        Index("ix_library_source_project_status", "project_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("research_project.id", ondelete="CASCADE"), index=True
+    )
+    corpus_id: Mapped[str] = mapped_column(ForeignKey("corpus.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    kind: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="included")
+    origin_url: Mapped[str] = mapped_column(Text, default="")
+    mime_type: Mapped[str] = mapped_column(String(100), default="text/plain")
+    content_hash: Mapped[str] = mapped_column(String(64))
+    char_count: Mapped[int] = mapped_column(Integer)
+    source_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped[ResearchProjectRow] = relationship(back_populates="sources")
+    corpus: Mapped[CorpusRow] = relationship(back_populates="sources")
+    chunks: Mapped[list[SourceChunkRow]] = relationship(
+        back_populates="source", cascade="all, delete-orphan", order_by="SourceChunkRow.ordinal"
+    )
+
+
+class SourceChunkRow(Base):
+    __tablename__ = "source_chunk"
+    __table_args__ = (UniqueConstraint("source_id", "ordinal", name="uq_source_chunk_ordinal"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    source_id: Mapped[str] = mapped_column(
+        ForeignKey("library_source.id", ondelete="CASCADE"), index=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    locator: Mapped[str] = mapped_column(String(300))
+    start_char: Mapped[int] = mapped_column(Integer, default=0)
+    end_char: Mapped[int] = mapped_column(Integer, default=0)
+    page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    section: Mapped[str] = mapped_column(String(300), default="")
+
+    source: Mapped[LibrarySourceRow] = relationship(back_populates="chunks")
+
+
 class ResearchRun(Base):
     __tablename__ = "research_run"
     __table_args__ = (
@@ -102,6 +198,9 @@ class ResearchRun(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     query: Mapped[str] = mapped_column(Text)
     owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("research_project.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/running/done/error
     # 队列语义（``execution_mode=worker``）：
     #   status=pending 且 claimable_at 非空  → 待领取，**不是孤儿**
@@ -145,6 +244,7 @@ class ResearchRun(Base):
     orchestration: Mapped[WorkflowRunRow | None] = relationship(
         back_populates="research_run", cascade="all, delete-orphan", uselist=False
     )
+    project: Mapped[ResearchProjectRow | None] = relationship(back_populates="runs")
 
 
 class SubQuestionRow(Base):
@@ -245,6 +345,7 @@ class SourceRow(Base):
     url: Mapped[str] = mapped_column(Text)
     content: Mapped[str] = mapped_column(Text, default="")
     content_hash: Mapped[str] = mapped_column(String(64), default="")
+    locator: Mapped[str] = mapped_column(String(300), default="")
     # 学术元数据（DOI / 作者 / 机构 / 期刊 / 撤稿标记…）。存成 JSON 而不是拆成十几列：
     # 它整体来自单个检索后端的一次响应、整体被消费，没有任何按单字段查询的需求，
     # 而拆列会让每加一个字段都要一次迁移。非学术来源为 NULL。
@@ -403,7 +504,8 @@ class AgentCardRow(Base):
         String(16), default="replace", server_default="replace"
     )
     search_profile_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    icon: Mapped[str] = mapped_column(String(16), default="🧩")  # 卡片图标（emoji）
+    # 卡片图标：图标名（bot / route / search 等），前端映射为线性图标
+    icon: Mapped[str] = mapped_column(String(16), default="bot")
     enabled: Mapped[bool] = mapped_column(Integer, default=1)
     # 绑定的模型档案；NULL=用全局默认档案兜底（按角色绑模型）
     model_profile_id: Mapped[str | None] = mapped_column(
@@ -464,3 +566,47 @@ class WorkflowDefRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class QaConversationRow(Base):
+    """学术问答会话：一个用户的一串多轮问答。"""
+
+    __tablename__ = "qa_conversation"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    messages: Mapped[list[QaMessageRow]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="QaMessageRow.position",
+    )
+
+
+class QaMessageRow(Base):
+    """一轮问答：问句、带引用的答句、引用来源与思考过程（检索 / 核验 / 复核的留痕）。"""
+
+    __tablename__ = "qa_message"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "position", name="uq_qa_message_position"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("qa_conversation.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    query: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text, default="")
+    citations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    evidence: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    thoughts: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="done")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    conversation: Mapped[QaConversationRow] = relationship(back_populates="messages")

@@ -65,7 +65,7 @@ def test_render_csv_preserves_values_provenance_and_notes() -> None:
 
     assert rows[0] == ["对象", "PSNR (dB) [注 1]", "SSIM"]
     assert rows[1] == ["MST-L [1]", "38.36 [1] [注 1]", "未报告"]
-    assert rows[2] == ["TSA-Net", "38.40 / 37.90 [1] [2] ⚠", "0.95 [2]"]
+    assert rows[2] == ["TSA-Net", "38.40 / 37.90 [1] [2] （存疑）", "0.95 [2]"]
     assert ["口径脚注", "", ""] in rows
     assert ["[1] KAIST, 28 bands", "", ""] in rows
     assert ["说明: Values are reported by the cited sources.", "", ""] in rows

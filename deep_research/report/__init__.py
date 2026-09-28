@@ -3,18 +3,28 @@
 设计要点在 ``document`` 的模块 docstring 里：**报告先是结构，再是文本**，且
 **图表结构上必须指向源表**，所以"凭空画一张图"不可表达。
 
-三种格式的分工：
+格式的分工：
 
 * ``markdown``——最保守子集（标题 / GFM 表格 / 链接 / 引用块），图降级成源表；
 * ``charts``——内联 SVG，HTML 与打印共用同一份矢量图；
 * HTML / 打印布局——由前端消费本模型渲染（复用已有的 react-markdown 管线），
   因此不需要在 Python 侧引入 Markdown→HTML 依赖。
+* ``latex``——固定的 ctexart/XeLaTeX 模板，面向论文和文献综述；没有 TeX
+  运行时仍可下载源码，不把不可用的编译器伪装成可用能力。
 """
 
 from __future__ import annotations
 
 from .assemble import assemble_document
-from .charts import CHART_CSS, ChartDataError, render_chart
+from .bundle import render_reproducibility_bundle
+from .charts import (
+    CHART_CSS,
+    ChartAssetUnavailable,
+    ChartDataError,
+    render_chart,
+    render_chart_pdf,
+    render_chart_svg,
+)
 from .csv import (
     CsvExportError,
     CsvTableNotFoundError,
@@ -29,9 +39,11 @@ from .document import (
     ChartForm,
     EvidenceRecord,
     Overview,
+    PaperSection,
     ProseBlock,
     ReferenceEntry,
     ReportDocument,
+    SectionKind,
     TableBlock,
     TableCell,
     TableColumn,
@@ -47,9 +59,19 @@ from .hsi_tables import (
     hsi_table_schemas,
     hsi_tables_from_results,
 )
+from .latex import (
+    ExportProfile,
+    LatexExportError,
+    LatexExportUnavailable,
+    LatexRenderError,
+    render_bibtex,
+    render_latex,
+    render_latex_pdf,
+)
 from .markdown import render_markdown
 from .pdf import PdfExportError, PdfExportUnavailable, PdfRenderError, render_pdf, render_pdf_html
 from .pivot import pivot_tables
+from .templates import LatexTemplate, LatexTemplateName, get_latex_template, latex_template_names
 from .xlsx import (
     XlsxDependencyError,
     XlsxExportError,
@@ -64,6 +86,7 @@ __all__ = [
     "MAX_CHART_SERIES",
     "Block",
     "ChartBlock",
+    "ChartAssetUnavailable",
     "ChartDataError",
     "ChartForm",
     "CsvExportError",
@@ -75,6 +98,7 @@ __all__ = [
     "XlsxTableSelectionError",
     "EvidenceRecord",
     "Overview",
+    "PaperSection",
     "HsiDomainRecord",
     "OPTICAL_CODING_TABLE_ID",
     "RECONSTRUCTION_TABLE_ID",
@@ -86,18 +110,33 @@ __all__ = [
     "ProseBlock",
     "ReferenceEntry",
     "ReportDocument",
+    "SectionKind",
     "TableBlock",
     "TableCell",
     "TableColumn",
     "TableRow",
     "assemble_document",
+    "render_reproducibility_bundle",
     "pivot_tables",
     "render_chart",
+    "render_chart_pdf",
+    "render_chart_svg",
     "render_csv",
     "render_pdf",
     "render_pdf_html",
     "render_xlsx",
     "render_markdown",
+    "ExportProfile",
+    "LatexExportError",
+    "LatexExportUnavailable",
+    "LatexRenderError",
+    "LatexTemplate",
+    "LatexTemplateName",
+    "get_latex_template",
+    "latex_template_names",
+    "render_latex",
+    "render_latex_pdf",
+    "render_bibtex",
     "build_hsi_tables",
     "hsi_table_schemas",
     "hsi_tables_from_results",

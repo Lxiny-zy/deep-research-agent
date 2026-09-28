@@ -52,7 +52,18 @@ _CHECKPOINT_SETTING_FIELDS = SETTING_FIELDS
 # 全文位置，而全文解析、数值校验与「同一 work」独立性判定都依赖这些字段。二者均
 # 无需 API key，因此补齐不引入新的凭据要求。
 _SCHOLARLY_SEARCH_BACKENDS = ("openalex", "arxiv")
-_SCHOLARLY_WORKFLOWS = frozenset({"hsi_review"})
+# 学术写作类工作台任务（综述 / 汇报 / 知识导图）的证据应首选论文，而不是通用网页。
+_SCHOLARLY_WORKFLOWS = frozenset(
+    {
+        "hsi_review",
+        "lit_review",
+        "lit_review_quick",
+        "slides",
+        "slides_deep",
+        "mindmap",
+        "mindmap_deep",
+    }
+)
 
 
 def _with_scholarly_backends(settings: Settings, workflow: str | None) -> Settings:
@@ -106,6 +117,7 @@ class ExecutionContext:
 
     repo: ResearchRepository
     catalog: Any | None = None
+    library: Any | None = None
     live: dict[str, EventHub] = field(default_factory=dict)
     # Planner/artifact capabilities are initialized lazily by ``RunExecutor``
     # so an explicitly legacy deployment can still avoid artifact folders and
@@ -541,6 +553,19 @@ class RunExecutor:
                     raise
             # 构造必须在 try 内：缺 API key 等构造期异常同样要走 finally 收尾，
             # 否则 EventHub 泄漏、SSE 订阅者永久挂起、run 卡死在 pending
+            search_overlay = None
+            source_scratch = (
+                source_execution.checkpoint.get("scratch", {}) if source_execution else {}
+            )
+            if self.ctx.library is not None and isinstance(source_scratch, dict):
+                project_id = source_scratch.get("project_id")
+                project_owner_id = source_scratch.get("project_owner_id")
+                if isinstance(project_id, str) and isinstance(project_owner_id, str):
+                    from .library.search import ProjectCorpusSearch
+
+                    search_overlay = ProjectCorpusSearch(
+                        self.ctx.library, project_id, project_owner_id
+                    )
             agent, search_tool = await self.build_agent(
                 settings,
                 repo=ctx.repo,
@@ -555,6 +580,7 @@ class RunExecutor:
                 skill_resolver=skill_resolver,
                 artifact_slug=artifact_slug,
                 execution_plan=execution_plan,
+                search_overlay=search_overlay,
             )
             if resume_execution is not None:
                 # Replay useful prior progress locally, but never put historical

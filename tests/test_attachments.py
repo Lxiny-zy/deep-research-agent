@@ -1,0 +1,223 @@
+"""任务附件回归：上传解析（PDF / Word / PPT / Excel / 文本）、接口、模型阅读并逐字核验。"""
+
+from __future__ import annotations
+
+import base64
+import io
+import tempfile
+
+import httpx
+import pytest
+from httpx import ASGITransport
+
+from deep_research.models import FindingList
+from deep_research.workbench.attachments import (
+    ATTACHMENT_URL_PREFIX,
+    ATTACHMENTS_SCRATCH_KEY,
+    AttachmentError,
+    limit_attachments,
+    parse_attachment,
+)
+from tests.fakes import FakeLLM, FakeSearch
+
+
+def _docx() -> bytes:
+    from docx import Document
+
+    document = Document()
+    document.add_heading("实验结果", 1)
+    document.add_paragraph("在 CAVE 数据集上，重建 PSNR 达到 38.4 dB，优于基线 1.2 dB。")
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text, table.cell(0, 1).text = "方法", "PSNR"
+    table.cell(1, 0).text, table.cell(1, 1).text = "Ours", "38.4"
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def _pptx() -> bytes:
+    from pptx import Presentation
+
+    deck = Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[1])
+    slide.shapes.title.text = "方法概述"
+    slide.placeholders[1].text = "深度展开网络将迭代优化映射为可学习层"
+    slide.notes_slide.notes_text_frame.text = "强调物理先验"
+    buffer = io.BytesIO()
+    deck.save(buffer)
+    return buffer.getvalue()
+
+
+def _xlsx() -> bytes:
+    from openpyxl import Workbook
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "结果"
+    sheet.append(["method", "psnr"])
+    sheet.append(["A", 30.1])
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def _pdf() -> bytes:
+    import pymupdf
+
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "Snapshot spectral imaging reconstruction reaches 38.4 dB PSNR.")
+    data = document.tobytes()
+    document.close()
+    return bytes(data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filename", "builder", "kind", "expected", "locator"),
+    [
+        ("实验记录.docx", _docx, "docx", "38.4 dB", "实验结果"),
+        ("组会.pptx", _pptx, "pptx", "可学习层", "第 1 张幻灯片"),
+        ("结果.xlsx", _xlsx, "xlsx", "30.1", "工作表 结果"),
+        ("paper.pdf", _pdf, "pdf", "38.4 dB", ""),
+    ],
+)
+async def test_parse_supported_formats_with_locators(filename, builder, kind, expected, locator):  # type: ignore[no-untyped-def]
+    raw = builder()
+    attachment = await parse_attachment(raw, filename)
+    assert attachment.kind == kind
+    text = "\n".join(chunk.content for chunk in attachment.chunks)
+    assert expected in text
+    assert locator in attachment.chunks[0].locator
+    source = attachment.sources()[0]
+    assert source.url.startswith(ATTACHMENT_URL_PREFIX) and source.title == filename
+    # 同一文件重复上传得到同一 id（内容摘要）
+    assert (await parse_attachment(raw, filename)).id == attachment.id
+
+
+@pytest.mark.asyncio
+async def test_parse_text_and_reject_unsupported_or_empty():  # type: ignore[no-untyped-def]
+    note = await parse_attachment("# 笔记\n\n快照光谱成像的误差来源。".encode(), "note.md")
+    assert note.kind == "markdown" and "误差来源" in note.chunks[0].content
+    with pytest.raises(AttachmentError, match="不支持"):
+        await parse_attachment(b"MZ\x00\x00", "tool.exe")
+    with pytest.raises(AttachmentError, match="为空"):
+        await parse_attachment(b"", "empty.txt")
+
+
+@pytest.mark.asyncio
+async def test_limit_attachments_dedupes_and_bounds_chunks():  # type: ignore[no-untyped-def]
+    note = await parse_attachment("正文".encode(), "a.txt")
+    kept = limit_attachments([note, note])
+    assert len(kept) == 1
+
+
+def _client(app) -> httpx.AsyncClient:  # type: ignore[no-untyped-def]
+    return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.mark.asyncio
+async def test_upload_endpoint_and_run_creation_freeze_attachments(monkeypatch):  # type: ignore[no-untyped-def]
+    import asyncio
+
+    from deep_research import api
+    from deep_research.config import Settings
+    from deep_research.persistence.memory_repository import InMemoryRepository
+
+    repo = InMemoryRepository()
+    monkeypatch.setattr(api.app.state, "catalog", None, raising=False)
+    monkeypatch.setattr(api, "_run_limiter", api._RateLimiter(1000, 60), raising=False)
+    api.app.state.settings = Settings()
+    api.app.state.repo = repo
+    api.app.state.live, api.app.state.tasks = {}, set()
+    api.app.state.run_tasks, api.app.state.cancellation_requested = {}, set()
+    api.app.state.config_lock = asyncio.Lock()
+    payload = {"filename": "实验记录.docx", "data_base64": base64.b64encode(_docx()).decode()}
+    async with _client(api.app) as client:
+        uploaded = await client.post("/api/attachments", json=payload)
+        bad = await client.post(
+            "/api/attachments", json={"filename": "x.exe", "data_base64": "TVo="}
+        )
+        body = uploaded.json()
+        created = await client.post(
+            "/api/runs",
+            json={
+                "query": "总结实验结果",
+                "template": "autoResearch",
+                "strategy": "quick",
+                "clarified": True,
+                "attachments": [body["attachment"]],
+            },
+        )
+    assert uploaded.status_code == 201, uploaded.text
+    assert body["summary"]["kind"] == "docx" and body["summary"]["chunk_count"] >= 1
+    assert bad.status_code == 422
+    assert created.status_code == 202, created.text
+    detail = await repo.get_run(created.json()["run_id"])
+    assert detail is not None and detail.orchestration is not None
+    frozen = detail.orchestration.checkpoint["scratch"][ATTACHMENTS_SCRATCH_KEY]
+    assert frozen[0]["filename"] == "实验记录.docx"
+
+
+class AttachmentLLM(FakeLLM):
+    """抽取时引用附件片段 URL 与其中逐字出现的原文。"""
+
+    async def parse(self, system, user, schema, *, temperature=0.2, retries=2):  # type: ignore[no-untyped-def]
+        if schema is FindingList and ATTACHMENT_URL_PREFIX in user:
+            start = user.index(ATTACHMENT_URL_PREFIX)
+            url = user[start:].split()[0].rstrip("）)]，,")
+            return FindingList(
+                findings=[
+                    {
+                        "statement": "方法在 CAVE 数据集上达到 38.4 dB PSNR",
+                        "source_url": url,
+                        "evidence_quote": "重建 PSNR 达到 38.4 dB",
+                        "confidence": 0.9,
+                    }
+                ]
+            )
+        return await super().parse(system, user, schema, temperature=temperature, retries=retries)
+
+
+@pytest.mark.asyncio
+async def test_model_reads_attachment_and_cites_it_after_verification():  # type: ignore[no-untyped-def]
+    from deep_research.config import Settings
+    from deep_research.orchestrator import DeepResearchAgent, create_initial_execution
+    from deep_research.persistence.memory_repository import InMemoryRepository
+    from deep_research.workbench.contract import CONTRACT_SCRATCH_KEY, build_contract
+    from deep_research.workbench.templates import get_template
+
+    attachment = await parse_attachment(_docx(), "实验记录.docx")
+    settings = Settings(artifact_root=tempfile.mkdtemp())
+    settings.max_rounds = 0
+    template = get_template("autoResearch")
+    assert template is not None
+    workflow = template.workflow_for("quick")
+    execution = create_initial_execution("总结实验结果", workflow, settings)
+    scratch = execution.checkpoint.setdefault("scratch", {})
+    scratch[CONTRACT_SCRATCH_KEY] = build_contract(template, "总结实验结果").model_dump(mode="json")
+    scratch[ATTACHMENTS_SCRATCH_KEY] = [attachment.model_dump(mode="json")]
+    repo = InMemoryRepository()
+    run_id = await repo.create_run("总结实验结果", execution=execution)
+    agent = DeepResearchAgent(
+        settings,
+        llm=AttachmentLLM(),
+        search_tool=FakeSearch(),
+        workflow=workflow,
+        repo=repo,
+        run_id=run_id,
+        initial_execution=execution,
+    )
+    await agent.run("总结实验结果")
+    detail = await repo.get_run(run_id)
+    assert detail is not None
+    verified = [
+        f
+        for r in detail.results
+        for f in r.findings
+        if f.source_url.startswith(ATTACHMENT_URL_PREFIX) and f.verification.status == "verified"
+    ]
+    assert verified, "附件中的原文必须能通过逐字核验"
+    assert verified[0].verification.source_title == "实验记录.docx"
+    # 参考来源显示文件名与定位，而不是内部占位 URL
+    assert verified[0].verification.source_reference.startswith("实验记录.docx（实验结果")

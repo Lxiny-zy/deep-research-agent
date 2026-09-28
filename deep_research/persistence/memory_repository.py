@@ -27,6 +27,7 @@ class _RunRecord:
     id: str
     query: str
     owner_id: str | None = None
+    project_id: str | None = None
     status: str = "pending"
     interpretation: str = ""
     sub_questions: list[SubQuestion] = field(default_factory=list)
@@ -82,6 +83,7 @@ class InMemoryRepository:
         lease_owner: str | None = None,
         claimable: bool = False,
         owner_id: str | None = None,
+        project_id: str | None = None,
         max_inflight: int | None = None,
     ) -> tuple[str, bool]:
         if idempotency_key:
@@ -99,6 +101,7 @@ class InMemoryRepository:
             id=run_id,
             query=query,
             owner_id=owner_id,
+            project_id=project_id,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
             attempt=execution.attempt if execution is not None else 1,
@@ -210,17 +213,30 @@ class InMemoryRepository:
             rec.status = "cancelling"
         return rec.status
 
-    async def save_plan(self, run_id: str, plan: ResearchPlan) -> None:
+    async def save_plan(
+        self, run_id: str, plan: ResearchPlan, *, lease_owner: str | None = None
+    ) -> None:
+        self._assert_lease(run_id, lease_owner)
         rec = self._runs[run_id]
         rec.interpretation = plan.interpretation
         rec.sub_questions.extend(plan.sub_questions)
 
     async def add_sub_questions(
-        self, run_id: str, sub_questions: list[SubQuestion], *, origin: str, round: int
+        self,
+        run_id: str,
+        sub_questions: list[SubQuestion],
+        *,
+        origin: str,
+        round: int,
+        lease_owner: str | None = None,
     ) -> None:
+        self._assert_lease(run_id, lease_owner)
         self._runs[run_id].sub_questions.extend(sub_questions)
 
-    async def save_result(self, run_id: str, result: ResearchResult) -> None:
+    async def save_result(
+        self, run_id: str, result: ResearchResult, *, lease_owner: str | None = None
+    ) -> None:
+        self._assert_lease(run_id, lease_owner)
         self._runs[run_id].results.append(result)
 
     async def save_sources(
@@ -476,6 +492,7 @@ class InMemoryRepository:
                 query=rec.query,
                 status=rec.status,
                 owner_id=rec.owner_id,
+                project_id=rec.project_id,
                 total_tokens=rec.total_tokens,
                 elapsed=rec.elapsed,
                 tags=list(rec.tags),
@@ -492,6 +509,7 @@ class InMemoryRepository:
             query=rec.query,
             status=rec.status,
             owner_id=rec.owner_id,
+            project_id=rec.project_id,
             interpretation=rec.interpretation,
             sub_questions=list(rec.sub_questions),
             results=list(rec.results),

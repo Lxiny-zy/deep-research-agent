@@ -106,6 +106,141 @@ MONITORING = Workflow(
     ],
 )
 
+# ---- 科研工作台任务流程（见 workbench/templates.py）------------------------
+# 调研类统一为「检索 → 核验 → 补洞 → 按模板章节写作」；论文类以用户点名的论文
+# 为证据源（paper_intake），不做开放检索替换；数据分析与导图各自有专属终端角色。
+
+LIT_REVIEW = Workflow(
+    name="lit_review",
+    description="文献综述：多子问题检索、证据补洞后按主题撰写带引用的结构化综述",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="planner"),
+        Step(agent="researcher"),
+        Step(kind="reflect_loop", reflector="reflector", researcher="researcher"),
+        Step(agent="survey_writer"),
+    ],
+)
+
+PEER_REVIEW = Workflow(
+    name="peer_review",
+    description="同行评审：取回指定论文并核验证据，按五段式给出评审意见与 1–10 分",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="paper_intake"),
+        Step(agent="peer_reviewer"),
+    ],
+)
+
+PAPER_READ = Workflow(
+    name="paper_read",
+    description="论文精读：取回指定论文并核验证据，输出贡献、方法、结果、局限与摘要翻译",
+    steps=[Step(agent="attachment_reader"), Step(agent="paper_intake"), Step(agent="paper_reader")],
+)
+
+DATA_ANALYSIS = Workflow(
+    name="data_analysis",
+    description="数据分析：确定性统计与显著性检验、生成图表，并撰写只解释给定数字的报告",
+    steps=[Step(agent="attachment_reader"), Step(agent="data_analyst")],
+)
+
+SLIDES = Workflow(
+    name="slides",
+    description="幻灯片：检索并核验要点，生成带演讲备注的 PPTX 演示文稿",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="planner"),
+        Step(agent="researcher"),
+        Step(agent="slide_writer"),
+    ],
+)
+
+MINDMAP = Workflow(
+    name="mindmap",
+    description="思维导图：检索主题核心概念，整理为多分支知识结构并渲染交互导图",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="planner"),
+        Step(agent="researcher"),
+        Step(agent="mindmap_writer"),
+    ],
+)
+
+# 同一任务的其它检索策略：交付角色不变，只替换「怎么找证据」这一段。
+LIT_REVIEW_QUICK = Workflow(
+    name="lit_review_quick",
+    description="文献综述（快速检索）：检索一轮后按主题撰写综述，不做反思补洞",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="planner"),
+        Step(agent="researcher"),
+        Step(agent="survey_writer"),
+    ],
+)
+
+SLIDES_DEEP = Workflow(
+    name="slides_deep",
+    description="幻灯片（深度检索）：多轮检索与证据补洞后生成演示文稿",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="planner"),
+        Step(agent="researcher"),
+        Step(kind="reflect_loop", reflector="reflector", researcher="researcher"),
+        Step(agent="slide_writer"),
+    ],
+)
+
+MINDMAP_DEEP = Workflow(
+    name="mindmap_deep",
+    description="思维导图（深度检索）：多轮检索补全概念后整理知识结构",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="planner"),
+        Step(agent="researcher"),
+        Step(kind="reflect_loop", reflector="reflector", researcher="researcher"),
+        Step(agent="mindmap_writer"),
+    ],
+)
+
+# 课题调研：与 deep / quick 同一条检索链，终端换成带质量管线的调研写作者。
+# deep / quick 本身保持不变（CLI、评测与历史运行依赖它们的既有行为）。
+RESEARCH = Workflow(
+    name="research",
+    description="课题调研（深度检索）：多子问题检索、反思补洞后按章节撰写并经质量返工",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="planner"),
+        Step(agent="researcher"),
+        Step(kind="reflect_loop", reflector="reflector", researcher="researcher"),
+        Step(agent="research_writer"),
+    ],
+)
+
+RESEARCH_QUICK = Workflow(
+    name="research_quick",
+    description="课题调研（快速检索）：检索一轮后按章节撰写并经质量返工",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="planner"),
+        Step(agent="researcher"),
+        Step(agent="research_writer"),
+    ],
+)
+
+WORKBENCH_WORKFLOWS = (
+    RESEARCH,
+    RESEARCH_QUICK,
+    LIT_REVIEW,
+    LIT_REVIEW_QUICK,
+    PEER_REVIEW,
+    PAPER_READ,
+    DATA_ANALYSIS,
+    SLIDES,
+    SLIDES_DEEP,
+    MINDMAP,
+    MINDMAP_DEEP,
+)
+
 WORKFLOWS = {
     wf.name: wf
     for wf in (
@@ -119,6 +254,7 @@ WORKFLOWS = {
         GUARDED,
         FACT_CHECK,
         MONITORING,
+        *WORKBENCH_WORKFLOWS,
     )
 }
 

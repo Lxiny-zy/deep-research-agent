@@ -20,6 +20,7 @@ from ..observability import Tracer
 from ..registry import create as registry_create
 from ..security import validate_provider_url_resolved
 from ..tools.base import SearchTool
+from ..workbench.roles import WORKBENCH_WRITER_ROLES
 from .dto import (
     AgentCardSnapshot,
     AgentCardView,
@@ -41,7 +42,7 @@ class CatalogSource(Protocol):
     async def get_workflow_def(self, name: str) -> WorkflowDefView | None: ...
 
 
-_BUILTIN_TERMINAL_ROLES = {"synthesizer", "aggregator"}
+_BUILTIN_TERMINAL_ROLES = {"synthesizer", "aggregator", *WORKBENCH_WRITER_ROLES}
 
 
 async def _validate_profile_endpoints(

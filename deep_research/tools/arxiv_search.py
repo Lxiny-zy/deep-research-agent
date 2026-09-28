@@ -28,6 +28,7 @@ import httpx
 from ..models import ScholarlyMetadata, Source
 from .arxiv_fulltext import ArxivEprintFetcher, ArxivFulltextError
 from .base import SearchTool
+from .fanout import expand_in_order
 
 logger = logging.getLogger(__name__)
 
@@ -89,23 +90,44 @@ class ArxivSearch(SearchTool):
         )
         response.raise_for_status()
         entries = _parse_feed(response.content)
-        sources: list[Source] = []
-        for entry in entries:
-            source = _to_source(entry)
-            if source is not None:
-                if self._eprint_fetcher is not None:
-                    try:
-                        sources.extend(await self._fulltext_sources(source, query))
-                    except (ArxivFulltextError, RuntimeError) as exc:
-                        # Metadata/abstract remains a valid fallback. Full-text coverage is
-                        # observable in the source section field and never claimed on failure.
-                        logger.warning("arXiv full-text unavailable for %s: %s", source.url, exc)
-                        sources.append(source)
-                else:
-                    sources.append(source)
-            if len(sources) >= requested:
-                break
-        return sources[:requested]
+        candidates = [source for source in map(_to_source, entries) if source is not None]
+        if self._eprint_fetcher is None:
+            return candidates[:requested]
+
+        async def expand(source: Source) -> list[Source]:
+            try:
+                return await self._fulltext_sources(source, query)
+            except (ArxivFulltextError, RuntimeError) as exc:
+                # Metadata/abstract remains a valid fallback. Full-text coverage is
+                # observable in the source section field and never claimed on failure.
+                logger.warning("arXiv full-text unavailable for %s: %s", source.url, exc)
+                return [source]
+
+        return await expand_in_order(candidates, expand, limit=requested)
+
+    async def lookup(self, identifier: str) -> list[Source]:
+        """按 arXiv 编号精确取一篇论文（元数据 + 可用时的全文章节）。
+
+        检索接口是按相关性排序的开放查询，拿「这一篇」要走 ``id_list``：
+        同行评审 / 论文精读的输入是用户点名的论文，不能被相关性排序换成别的工作。
+        """
+        ident = identifier.strip()
+        if not re.fullmatch(r"\d{4}\.\d{4,5}(?:v\d+)?", ident):
+            raise ArxivFeedError(f"不是有效的 arXiv 编号：{identifier!r}")
+        response = await self._client.get(_ENDPOINT, params={"id_list": ident, "max_results": 1})
+        response.raise_for_status()
+        entries = _parse_feed(response.content)
+        candidates = [source for source in map(_to_source, entries) if source is not None]
+        if not candidates or self._eprint_fetcher is None:
+            return candidates
+        try:
+            # 精读/评审要覆盖全文骨架：摘要、引言、方法、实验、结果、结论一并取回。
+            return await self._eprint_fetcher.sections(
+                candidates[0], "", max_chars=self._fulltext_max_chars * 3, required=True
+            )
+        except (ArxivFulltextError, RuntimeError) as exc:
+            logger.warning("arXiv full-text unavailable for %s: %s", candidates[0].url, exc)
+            return candidates[:1]
 
     async def aclose(self) -> None:
         await self._client.aclose()

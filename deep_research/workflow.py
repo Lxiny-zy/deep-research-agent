@@ -20,7 +20,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from .guardrails import ClaimConsistencyVerifier, verify_claim_consistency
+from .guardrails import ClaimConsistencyVerifier, report_eligible, verify_claim_consistency
 from .models import SubQuestion
 from .orchestration import (
     OrchestrationRuntime,
@@ -34,6 +34,7 @@ from .orchestration import (
 from .persistence.repository import LeaseLostError
 from .prompting import load_global_rules
 from .registry import available, create
+from .workbench.roles import WORKBENCH_WRITER_ROLES
 
 if TYPE_CHECKING:
     # 仅类型注解需要（本模块所有用法都在 `from __future__ import annotations` 的注解里）。
@@ -83,7 +84,7 @@ MAX_GENERATED_STEPS = 8
 MAX_STEP_ATTEMPTS = 5
 MAX_TOTAL_BACKOFF_SECONDS = 120.0
 # 能产出报告的终端角色：预算耗尽时仍会执行这些步骤，保证尽力而为的报告。
-_TERMINAL_ROLES = {"synthesizer", "aggregator"}
+_TERMINAL_ROLES = {"synthesizer", "aggregator", *WORKBENCH_WRITER_ROLES}
 # 角色请求提前终止的黑板标记：任一角色把它设为真值，引擎即跳过后续非终端步骤。
 # 通用原语而非「意图专用」——引擎不需要知道谁因为什么要求停下（当前使用方是
 # IntentRouter 的风险拒识；将来的合规/配额检查可复用同一机制）。角色在设置它
@@ -95,6 +96,9 @@ HALT_REASON_KEY = "_halt_reason"
 # checkpoints and custom callers remain valid even when the intent package is
 # disabled or unavailable.
 INTENT_POLICY_SCRATCH_KEY = "intent_execution_policy"
+# {子问题: 已验证发现数}：本次运行研究过的全部子问题（含零发现），由 Researcher 写入，
+# 供反思循环去重、供 Reflector 看到「试过但无果」的方向。
+ATTEMPTED_SCRATCH_KEY = "attempted_sub_questions"
 # 子团队默认内部流程：在隔离子黑板上对其 focus 做一次检索（可被 SubTask.steps 覆盖）。
 _DEFAULT_TEAM_STEPS = [Step(kind="agent", agent="researcher")]
 _INCOMING_CONDITIONS_SKIP_REASON = "incoming conditions not matched"
@@ -213,6 +217,39 @@ def _merge_parallel_blackboard(base: Blackboard, current: Blackboard, branch: Bl
     )
     merged_scratch = _merge_parallel_value(base.scratch, current.scratch, branch.scratch)
     current.scratch = {} if merged_scratch is _MISSING else merged_scratch
+
+
+def _eligible_finding_count(bb: Blackboard) -> int:
+    return sum(
+        1 for result in bb.results for finding in result.findings if report_eligible(finding)
+    )
+
+
+def _normalize_question(text: str) -> str:
+    return "".join(text.casefold().split()).rstrip("?？。.")
+
+
+def _unseen_sub_questions(bb: Blackboard, questions: list[str]) -> list[SubQuestion]:
+    """过滤掉本次运行已研究过的子问题（含零发现的），并对新问题自身去重。"""
+    seen = {_normalize_question(sq.question) for sq in (bb.plan.sub_questions if bb.plan else [])}
+    seen.update(_normalize_question(result.sub_question) for result in bb.results)
+    attempted = bb.scratch.get(ATTEMPTED_SCRATCH_KEY)
+    if isinstance(attempted, dict):
+        seen.update(_normalize_question(str(question)) for question in attempted)
+    for raw_round in bb.scratch.get("reflection_rounds", []):
+        if isinstance(raw_round, dict):
+            for item in raw_round.get("sub_questions", []):
+                question = item.question if isinstance(item, SubQuestion) else item.get("question")
+                if question:
+                    seen.add(_normalize_question(str(question)))
+    fresh: list[SubQuestion] = []
+    for question in questions:
+        key = _normalize_question(question)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        fresh.append(SubQuestion(question=question))
+    return fresh
 
 
 def _commit_blackboard(target: Blackboard, source: Blackboard) -> Blackboard:
@@ -546,6 +583,33 @@ class WorkflowEngine:
                 self.runtime.cancel_step(step_run)
             raise
 
+    def _run_output(self, bb: Blackboard) -> dict[str, Any]:
+        """运行终态摘要；有步骤被隔离失败时显式标记 degraded。
+
+        failure_policy=continue 让单步失败不拖垮整条链路，但代价是「Planner 挂了、
+        报告只剩一句无可用素材」的运行仍以 succeeded 收尾。监控只看状态会以为一切
+        正常，所以把失败步骤列进 output，并发一条可检索的告警事件。
+        """
+        run = self.runtime.run
+        failed = [
+            step.label or step.node_id
+            for step in (run.steps if run is not None else [])
+            if step.status == StepStatus.FAILED
+        ]
+        if failed:
+            self.ctx.tracer.emit(
+                "ORCHESTRATOR",
+                "info",
+                f"运行以降级方式完成，失败步骤：{'、'.join(failed)}",
+                data={"event_name": "run.degraded", "failed_steps": failed},
+            )
+        return {
+            "has_report": bb.report is not None,
+            "result_count": len(bb.results),
+            "degraded": bool(failed),
+            "failed_steps": failed,
+        }
+
     def _exhausted(self) -> bool:
         if self.budget is None:
             return False
@@ -704,10 +768,7 @@ class WorkflowEngine:
                 and self.runtime.run is not None
                 and self.runtime.run.status == RunStatus.RUNNING
             ):
-                run = self.runtime.finish(
-                    RunStatus.SUCCEEDED,
-                    output={"has_report": bb.report is not None, "result_count": len(bb.results)},
-                )
+                run = self.runtime.finish(RunStatus.SUCCEEDED, output=self._run_output(bb))
                 bb.scratch["_orchestration_run"] = run.model_dump(
                     mode="json", exclude={"checkpoint", "definition", "steps"}
                 )
@@ -921,10 +982,7 @@ class WorkflowEngine:
                 and self.runtime.run is not None
                 and self.runtime.run.status == RunStatus.RUNNING
             ):
-                run = self.runtime.finish(
-                    RunStatus.SUCCEEDED,
-                    output={"has_report": bb.report is not None, "result_count": len(bb.results)},
-                )
+                run = self.runtime.finish(RunStatus.SUCCEEDED, output=self._run_output(bb))
                 bb.scratch["_orchestration_run"] = run.model_dump(
                     mode="json", exclude={"checkpoint", "definition", "steps"}
                 )
@@ -1065,17 +1123,50 @@ class WorkflowEngine:
             step.max_rounds if step.max_rounds is not None else self.ctx.settings.max_rounds
         )
         rounds = _policy_limit(bb, "max_rounds", configured_rounds)
+        # 每一轮都是独立的提交单元：本轮在副本上执行，成功才并回 bb。整个循环是
+        # 一个 step，若让异常逃出去，_execute_with_policy 会丢弃整块候选黑板——
+        # 前几轮已经补到、验证过的证据会连同失败的这一轮一起消失。因此轮内失败
+        # 一律视为「无法继续补洞」并停在最后一次成功提交的状态上。
         for rnd in range(rounds):
-            bb = await reflector.step(bb, self.ctx)
-            reflection = bb.reflections[-1] if bb.reflections else None
+            if self._exhausted():
+                self.ctx.tracer.emit("ORCHESTRATOR", "info", "token 预算耗尽，停止反思补洞")
+                break
+            before = _eligible_finding_count(bb)
+            candidate = bb.model_copy(deep=True)
+            try:
+                candidate = await reflector.step(candidate, self.ctx)
+            except Exception as exc:
+                self.ctx.tracer.emit(
+                    "REFLECTOR", "error", f"第 {rnd + 1} 轮反思失败，保留已有证据进入综合：{exc}"
+                )
+                break
+            reflection = candidate.reflections[-1] if candidate.reflections else None
             if reflection is None or reflection.is_sufficient or not reflection.new_sub_questions:
+                _commit_blackboard(bb, candidate)
+                break
+            new_subs = _unseen_sub_questions(candidate, reflection.new_sub_questions)
+            if not new_subs:
+                # 反思提出的全是已研究过的问题：再跑只会重复同样的检索与抽取。
+                _commit_blackboard(bb, candidate)
+                self.ctx.tracer.emit("REFLECTOR", "info", "新增子问题均已研究过，停止补洞")
                 break
             self.ctx.tracer.emit("ORCHESTRATOR", "round", f"第 {rnd + 1} 轮补洞")
-            new_subs = [SubQuestion(question=q) for q in reflection.new_sub_questions]
             # 记录补洞轮次，供编排器落库（origin="reflection"）；不影响无 repo 运行
-            bb.scratch.setdefault("reflection_rounds", []).append(
+            candidate.scratch.setdefault("reflection_rounds", []).append(
                 {"round": rnd + 1, "sub_questions": new_subs}
             )
             # 把补洞子问题交给 researcher 增量研究（经 scratch 传递，不重研已做过的）
-            bb.scratch["pending_sub_questions"] = new_subs
-            bb = await researcher.step(bb, self.ctx)
+            candidate.scratch["pending_sub_questions"] = new_subs
+            try:
+                candidate = await researcher.step(candidate, self.ctx)
+            except Exception as exc:
+                self.ctx.tracer.emit(
+                    "RESEARCHER", "error", f"第 {rnd + 1} 轮补洞研究失败，保留已有证据：{exc}"
+                )
+                break
+            _commit_blackboard(bb, candidate)
+            gained = _eligible_finding_count(bb) - before
+            if gained <= 0:
+                # 收敛判据：这一轮没有带来任何可进报告的新证据，继续补洞的边际收益为零。
+                self.ctx.tracer.emit("ORCHESTRATOR", "info", "本轮未新增合格证据，停止补洞")
+                break

@@ -12,10 +12,18 @@ import tarfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from ..blocking import run_blocking
 from ..models import Source
+from ..security import provider_http_client
+
+# The egress client never follows redirects on its own; arXiv mirrors hand
+# e-prints between these hosts, so hops are followed manually and only here.
+_ARXIV_HOSTS = frozenset({"export.arxiv.org", "arxiv.org"})
+_MAX_REDIRECTS = 3
 
 
 class ArxivFulltextError(ValueError):
@@ -494,26 +502,36 @@ class ArxivEprintFetcher:
         if max_bytes < 1:
             raise ValueError("max_bytes must be positive")
         self._limits = limits or ParseLimits(max_input_bytes=max_bytes)
-        self._client = client or httpx.AsyncClient(timeout=timeout)
+        # provider_http_client pins every connection to a public address, so a
+        # DNS answer for arxiv.org cannot rebind the download onto a private host.
+        self._client = client or provider_http_client(timeout=timeout)
         self._owns_client = client is None
 
     async def fetch(self, work_id: str, version: str = "") -> bytes:
         url = arxiv_eprint_url(work_id, version)
         try:
-            async with self._client.stream("GET", url) as response:
-                response.raise_for_status()
-                content_length = response.headers.get("content-length", "").strip()
-                if content_length.isdigit() and int(content_length) > self._limits.max_input_bytes:
-                    raise ArxivFulltextFetchError("arXiv e-print exceeds input size limit")
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in response.aiter_bytes():
-                    total += len(chunk)
-                    if total > self._limits.max_input_bytes:
-                        raise ArxivFulltextFetchError("arXiv e-print exceeds input size limit")
-                    chunks.append(chunk)
+            for _ in range(_MAX_REDIRECTS + 1):
+                async with self._client.stream("GET", url) as response:
+                    if response.is_redirect:
+                        url = _arxiv_redirect_target(url, response.headers.get("location", ""))
+                        continue
+                    response.raise_for_status()
+                    return await self._read_bounded(response)
         except (httpx.HTTPError, OSError) as exc:
             raise ArxivFulltextFetchError(f"arXiv e-print request failed: {exc}") from exc
+        raise ArxivFulltextFetchError("arXiv e-print redirected too many times")
+
+    async def _read_bounded(self, response: httpx.Response) -> bytes:
+        content_length = response.headers.get("content-length", "").strip()
+        if content_length.isdigit() and int(content_length) > self._limits.max_input_bytes:
+            raise ArxivFulltextFetchError("arXiv e-print exceeds input size limit")
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > self._limits.max_input_bytes:
+                raise ArxivFulltextFetchError("arXiv e-print exceeds input size limit")
+            chunks.append(chunk)
         return b"".join(chunks)
 
     async def sections(
@@ -528,7 +546,9 @@ class ArxivEprintFetcher:
         if scholarly is None or not scholarly.work_id.lower().startswith("arxiv:"):
             return [source]
         raw = await self.fetch(scholarly.work_id, scholarly.version)
-        document = parse_arxiv_eprint(raw, self._limits)
+        # Untarring and scanning up to max_input_bytes of LaTeX is CPU-bound;
+        # keep it off the event loop like the OA PDF parser does.
+        document = await run_blocking(parse_arxiv_eprint, raw, self._limits)
         required_names: set[str]
         if required is True:
             required_names = {
@@ -560,6 +580,17 @@ class ArxivEprintFetcher:
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+
+def _arxiv_redirect_target(current: str, location: str) -> str:
+    """Resolve a redirect, refusing any hop that leaves arXiv over HTTPS."""
+    if not location:
+        raise ArxivFulltextFetchError("arXiv e-print redirect has no location")
+    target = urljoin(current, location)
+    parts = urlsplit(target)
+    if parts.scheme != "https" or (parts.hostname or "").lower() not in _ARXIV_HOSTS:
+        raise ArxivFulltextFetchError("arXiv e-print redirected off arXiv")
+    return target
 
 
 def _section_source(source: Source, section: LatexSection) -> Source:

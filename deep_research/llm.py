@@ -194,14 +194,26 @@ class LLM:
     async def stream(
         self, system: str, user: str, *, temperature: float = 0.4
     ) -> AsyncIterator[str]:
-        async with (
-            provider_request(
-                self.settings.llm_base_url or "https://api.openai.com", self.settings.llm_api_key
-            ),
-            aclosing(self._stream_once(system, user, temperature=temperature)) as stream,
-        ):
-            async for delta in stream:
-                yield delta
+        # 建连阶段的瞬时故障（限流、网关超时）重试最多 3 次；一旦已经产出过增量就
+        # 不再重试——重发会把半截正文重复拼进交付物，这时把异常交给调用方处理。
+        for attempt in range(3):
+            emitted = False
+            try:
+                async with (
+                    provider_request(
+                        self.settings.llm_base_url or "https://api.openai.com",
+                        self.settings.llm_api_key,
+                    ),
+                    aclosing(self._stream_once(system, user, temperature=temperature)) as stream,
+                ):
+                    async for delta in stream:
+                        emitted = True
+                        yield delta
+                return
+            except Exception as exc:
+                if emitted or not _retryable(exc) or attempt == 2:
+                    raise
+                await asyncio.sleep(min(2**attempt, 8))
 
     async def _stream_once(
         self, system: str, user: str, *, temperature: float = 0.4

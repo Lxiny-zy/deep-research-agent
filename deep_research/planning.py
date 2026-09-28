@@ -420,6 +420,10 @@ class ExecutionStep(BaseModel):
     resource: ResourceSpec = Field(default_factory=ResourceSpec)
     artifacts: list[ArtifactSpec] = Field(default_factory=list, max_length=100)
     reset: bool = True
+    # 步骤级质量检查：开启后执行器在交付前复核本步产物（声明产物齐全、非空、
+    # 交付门无 fail），不合格则带着问题清单重做，最多 ``max_check_attempts`` 次。
+    enable_check: bool = False
+    max_check_attempts: int | None = Field(None, ge=1, le=5)
     status: StepStatus = StepStatus.PENDING
     metadata: dict[str, Any] = Field(default_factory=dict)
 

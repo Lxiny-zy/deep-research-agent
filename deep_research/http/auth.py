@@ -33,7 +33,16 @@ async def require_api_key(
     path = request.url.path
     mutation = request.method not in {"GET", "HEAD", "OPTIONS"}
     research_action = path in {"/api/research", "/api/intent/assess"} or (
-        mutation and (path == "/api/runs" or path.startswith("/api/runs/"))
+        mutation
+        and (
+            path == "/api/runs"
+            or path.startswith("/api/runs/")
+            or path == "/api/projects"
+            or path.startswith("/api/projects/")
+            or path.startswith("/api/qa/")
+            # 契约预览只读地解析输入，但它是研究发起流程的一部分，研究员身份即可调用
+            or path == "/api/templates/contract"
+        )
     )
     if research_action and not principal.can_research:
         raise HTTPException(403, "当前身份为只读，无法创建或修改研究")

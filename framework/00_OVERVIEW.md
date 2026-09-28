@@ -1,6 +1,13 @@
 # LLM 长任务编排框架 — 总览
 
-从 Vela/Apevon 平台日志中逆向提取的完整长任务编排设计，可直接接入第三方 LLM API 复现。
+本目录包含 Vela/Apevon 日志中的历史提取资料，以及已接入本项目的研究编排规范。
+原始资料存在截断和缺失附件，不能视作完整可运行平台。
+
+当前生产入口为 `deep_research.orchestrator.DeepResearchAgent` 和 `/api/runs`，
+CLI 支持 `python -m deep_research.cli "研究问题" --plan framework/10_research_plan.json`。
+完整接入说明见 [09_long_research.md](09_long_research.md)，可运行示例见
+[10_research_plan.json](10_research_plan.json)。`run.py` 和旧示例仅供历史参考，
+不会被生产执行器调用。以下架构图及对照表描述原始设计；实际能力以 09 文档为准。
 
 ## 架构图
 

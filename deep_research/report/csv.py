@@ -134,5 +134,5 @@ def _cell_value(cell: TableCell) -> str:
     if cell.note_ref is not None:
         value += f" [注 {cell.note_ref}]"
     if cell.disputed:
-        value += " ⚠"
+        value += " （存疑）"
     return value

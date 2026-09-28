@@ -238,7 +238,17 @@ class PlanCompiler:
                 "total_steps": len(plan.steps),
                 "is_terminal": plan_step.id in terminal_ids,
                 "workflow_agent": agent,
+                "skills": list(getattr(plan_step, "skills", [])),
             }
+            if getattr(plan_step, "enable_check", False):
+                metadata["enable_check"] = True
+                metadata["max_check_attempts"] = int(
+                    getattr(plan_step, "max_check_attempts", None) or 2
+                )
+            resource = getattr(plan_step, "resource", None)
+            if resource is not None and hasattr(resource, "model_dump"):
+                # 执行侧（operation_runner）据此为 GPU 步骤分配设备并设定时限
+                metadata["resource"] = resource.model_dump(mode="json")
             if operations:
                 metadata["operations"] = operations
             declared_outputs = getattr(plan_step, "produced_paths", None)
@@ -282,11 +292,52 @@ class PlanCompiler:
             compiled.append(compiled_step)
             mapping[plan_step.id] = f"node-{plan_step.id}"
 
+        # Handoffs follow the same graph as scheduling. Carry ancestor outputs
+        # explicitly, so isolated executors never scan unrelated branch files.
+        dependencies = {
+            step.id: _step_dependencies(step)
+            if has_explicit_dependencies
+            else ([plan.steps[index - 1].id] if index else [])
+            for index, step in enumerate(plan.steps)
+        }
+        compiled_by_id = {step.id: compiled[index] for index, step in enumerate(plan.steps)}
+        for plan_step in plan.steps:
+            ancestors: list[str] = []
+            pending = list(dependencies[plan_step.id])
+            while pending:
+                dependency = pending.pop(0)
+                if dependency in ancestors:
+                    continue
+                ancestors.append(dependency)
+                pending.extend(dependencies[dependency])
+            handoffs = []
+            for dependency in ancestors:
+                source = compiled_by_id[dependency]
+                outputs = source.metadata.get("expected_output_specs") or [
+                    {"path": path, "required": True}
+                    for path in source.metadata.get("expected_outputs", [])
+                ]
+                if not outputs and source.agent == "plan_executor":
+                    outputs = [
+                        {
+                            "path": f"work/{plan.slug}/plan-{dependency}/response.md",
+                            "required": True,
+                        }
+                    ]
+                handoffs.append({"id": dependency, "outputs": outputs})
+            compiled_by_id[plan_step.id].metadata["handoff_steps"] = handoffs
+
         nodes = [
             WorkflowNode(
                 id=mapping[plan_step.id],
                 step=compiled[index].model_dump(mode="json"),
-                join_mode="success_all" if len(_step_dependencies(plan_step)) > 1 else "any",
+                join_mode=(
+                    "all"
+                    if compiled[index].metadata.get("allow_partial_dependencies") is True
+                    else "success_all"
+                    if len(_step_dependencies(plan_step)) > 1
+                    else "any"
+                ),
             )
             for index, plan_step in enumerate(plan.steps)
         ]

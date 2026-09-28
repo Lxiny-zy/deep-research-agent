@@ -339,7 +339,8 @@ async def test_generic_step_gap_is_partial_when_later_report_exists(tmp_path: Pa
     finally:
         await agent.aclose()
 
-    assert report.markdown == "# final result"
+    assert report.markdown.startswith("# final result")
+    assert "model refused this step" in report.markdown
     persisted = json.loads(
         (tmp_path / ".framework/plans/generic-partial.json").read_text(encoding="utf-8")
     )

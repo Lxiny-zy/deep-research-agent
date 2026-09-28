@@ -5,19 +5,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 
 from .config import Settings
 from .observability import Event
 from .orchestrator import DeepResearchAgent
+from .planner_runtime import coerce_execution_plan
 
 _ICON = {
-    "start": "▶",
-    "info": "·",
-    "finding": "✓",
-    "round": "↻",
-    "report": "■",
-    "done": "✔",
-    "error": "✗",
+    "start": ">",
+    "info": "-",
+    "finding": "+",
+    "round": "~",
+    "report": "#",
+    "done": "OK",
+    "error": "!!",
 }
 
 
@@ -35,13 +37,23 @@ async def _amain() -> None:
         help="研究问题",
     )
     parser.add_argument("-o", "--output", default="research_report.md", help="报告输出路径")
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
         "-w", "--workflow", default=None, help="任务流程（如 deep / quick）；默认 deep"
     )
+    source.add_argument("--plan", type=Path, help="执行项目标准或 Vela 兼容的计划 JSON 文件")
     args = parser.parse_args()
+    execution_plan = None
+    if args.plan is not None:
+        try:
+            execution_plan = coerce_execution_plan(
+                args.plan.read_text(encoding="utf-8-sig"), query=args.query, initial=True
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(f"无法加载执行计划：{exc}")
 
-    print(f"\n🔍 {args.query}\n")
-    agent = DeepResearchAgent(Settings(), workflow=args.workflow)
+    print(f"\n研究问题：{args.query}\n")
+    agent = DeepResearchAgent(Settings(), workflow=args.workflow, execution_plan=execution_plan)
     try:
         agent.tracer.subscribe(_print)  # 把事件实时打印到控制台
         report = await agent.run(args.query)
@@ -50,7 +62,7 @@ async def _amain() -> None:
         print(report.markdown)
         # 写文件是阻塞 IO，放到线程里执行，避免阻塞事件循环
         await asyncio.to_thread(_write_report, args.output, args.query, report.markdown)
-        print(f"📄 已保存：{args.output}")
+        print(f"已保存：{args.output}")
     finally:
         await agent.aclose()
 

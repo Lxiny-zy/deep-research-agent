@@ -278,3 +278,49 @@ async def test_claim_failure_does_not_kill_the_loop() -> None:
 
     assert failures["count"] == 2
     assert executor.calls[0]["run_id"] == run_id
+
+
+# ---- 进程入口：--check 健康探针与启动/退出路径 ----
+
+
+def _sqlite_url(tmp_path) -> str:  # type: ignore[no-untyped-def]
+    return f"sqlite+aiosqlite:///{(tmp_path / 'worker.db').as_posix()}"
+
+
+@pytest.mark.asyncio
+async def test_worker_check_reports_fresh_and_missing_heartbeat(tmp_path, monkeypatch):
+    from deep_research import worker as worker_module
+    from deep_research.persistence.db import make_engine, make_sessionmaker, prepare_sqlite_schema
+    from deep_research.persistence.sql_repository import SqlRepository
+
+    url = _sqlite_url(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("APP_ENV", "development")
+    engine = make_engine(url)
+    await prepare_sqlite_schema(engine, url)
+    try:
+        # 没有心跳记录：探针失败，容器编排据此重启 worker
+        assert await worker_module.main_async(["--check", "--name", "w-probe"]) == 1
+        await SqlRepository(make_sessionmaker(engine)).heartbeat_worker("w-probe", 0)
+        assert await worker_module.main_async(["--check", "--name", "w-probe"]) == 0
+        # 其他 worker 的心跳不能让本 worker 的探针通过
+        assert await worker_module.main_async(["--check", "--name", "w-other"]) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_main_builds_and_stops_cleanly(tmp_path, monkeypatch):
+    from deep_research import worker as worker_module
+
+    monkeypatch.setenv("DATABASE_URL", _sqlite_url(tmp_path))
+    monkeypatch.setenv("APP_ENV", "development")
+    seen: dict[str, str] = {}
+
+    async def fake_run_forever(self) -> None:  # type: ignore[no-untyped-def]
+        seen["name"] = self.name
+        self.request_stop()
+
+    monkeypatch.setattr(worker_module.Worker, "run_forever", fake_run_forever)
+    assert await worker_module.main_async(["--name", "w-main"]) == 0
+    assert seen["name"] == "w-main"

@@ -113,7 +113,11 @@ async def test_catalog_runtime_resolves_card_and_falls_back():
     # 绑定档案的卡片 → 解析出专属 LLM；未知角色 → None（回退默认）
     assert rt.resolve_llm("my-critic") is not None
     assert rt.resolve_llm("unknown") is None
-    assert rt.terminal_roles == {"aggregator", "my-writer"}
+    from deep_research.workbench.roles import WORKBENCH_WRITER_ROLES
+
+    # 内置终端角色 = synthesizer / aggregator / 工作台写作者；
+    # 被同名卡片覆盖的 synthesizer 让位给卡片
+    assert rt.terminal_roles == {"aggregator", "my-writer", *WORKBENCH_WRITER_ROLES}
     await rt.aclose()
 
 

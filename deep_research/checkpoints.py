@@ -20,6 +20,7 @@ SETTING_FIELDS = (
     "llm_max_input_chars",
     "llm_max_output_tokens",
     "max_run_seconds",
+    "quality",
     "orchestration_mode",
     "runtime_config_version",
 )

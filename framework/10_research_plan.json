@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "slug": "long-research",
+  "title": "可恢复的证据研究",
+  "steps": [
+    {
+      "id": "scope",
+      "name": "研究规划",
+      "prompt": "根据用户 query 确定可检索的研究子问题，由内置 planner 写入黑板。",
+      "operation": {"kind": "agent", "agent": "planner"},
+      "artifacts": [{"path": "work/long-research/planner/plan.json", "format": "json"}],
+      "resource": {"timeout_seconds": 180, "max_attempts": 2}
+    },
+    {
+      "id": "evidence",
+      "name": "证据检索",
+      "prompt": "使用配置的检索工具研究子问题，获取来源并核验引文。",
+      "operation": {"kind": "agent", "agent": "researcher"},
+      "depends_on": ["scope"],
+      "artifacts": [{"path": "work/long-research/researcher/results.json", "format": "json"}],
+      "resource": {"timeout_seconds": 600, "max_attempts": 2}
+    },
+    {
+      "id": "reflect",
+      "name": "证据反思",
+      "prompt": "使用内置 reflector 评估已有证据是否充分，记录缺口与补充问题。",
+      "operation": {"kind": "agent", "agent": "reflector"},
+      "depends_on": ["evidence"],
+      "artifacts": [{"path": "work/long-research/reflector/reflection.json", "format": "json", "required": false}],
+      "resource": {"timeout_seconds": 180, "max_attempts": 2}
+    },
+    {
+      "id": "assessment",
+      "name": "对照与缺口审计",
+      "prompt": "只分析依赖交接中实际提供的研究计划、来源证据和反思。比较方法的适用条件、评估设置、相互矛盾的结果和其他解释；不补造未检索到的论文或实验。输出 assessment.md，包含已确认事实及来源、推断、失败路线、尚未解决的限制；输出 gaps.json，按缺口、影响、后续动作、验收标准记录。无法完整核实时返回 partial，明确缺口。",
+      "depends_on": ["reflect"],
+      "artifacts": [
+        {"path": "work/long-research/assessment/assessment.md", "format": "md"},
+        {"path": "work/long-research/assessment/gaps.json", "format": "json"}
+      ],
+      "metadata": {"result_contract": "research-step-v1", "allow_partial_dependencies": true},
+      "resource": {"timeout_seconds": 300, "max_attempts": 2}
+    },
+    {
+      "id": "deliver",
+      "name": "研究交付",
+      "prompt": "根据全部依赖交接输出独立可读的中文报告：摘要、研究范围与方法、主要发现、对照与反证、证据局限、后续建议。区分事实与推断，用 researcher/results.json 中的原始来源及验证状态支持结论，保持有依据的引用。明确上游的 partial/failed 和被截断资料带来的限制；不要声称运行了未执行的实验。将 Markdown 放入声明的 report.md；研究范围未完成时使用 partial，并列出具体缺口及后续动作。",
+      "depends_on": ["assessment"],
+      "artifacts": [{"path": "output/long-research/final/report.md", "format": "md"}],
+      "metadata": {"result_contract": "research-step-v1", "allow_partial_dependencies": true},
+      "resource": {"timeout_seconds": 300, "max_attempts": 2}
+    }
+  ]
+}
