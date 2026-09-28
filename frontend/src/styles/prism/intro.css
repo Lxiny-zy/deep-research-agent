@@ -1,0 +1,109 @@
+/* 欢迎界面 · 布局与文字（光环与动效见 intro-motion.css） */
+
+.intro {
+  --px: 0;
+  --py: 0;
+  --ring: min(58vmin, 480px);
+  background:
+    radial-gradient(ellipse 70% 60% at 50% 50%, transparent 40%, var(--bg-subtle) 100%), var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  inset: 0;
+  isolation: isolate;
+  overflow: hidden;
+  position: fixed;
+  z-index: 90;
+}
+
+.intro-top,
+.intro-foot {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  padding: 28px 40px;
+  position: relative;
+  z-index: 2;
+}
+
+.intro-kicker,
+.intro-foot > span {
+  color: var(--text-3);
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+}
+
+.intro-foot > span {
+  font-size: 14px;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.intro-icon-button,
+.intro-link {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  padding: 8px 14px;
+  transition:
+    border-color var(--duration) var(--ease),
+    color var(--duration) var(--ease);
+}
+
+.intro-icon-button {
+  display: grid;
+  height: 38px;
+  padding: 0;
+  place-items: center;
+  width: 38px;
+}
+
+.intro-icon-button:hover,
+.intro-link:hover {
+  border-color: var(--text-3);
+  color: var(--text);
+}
+
+.intro-stage {
+  display: grid;
+  flex: 1;
+  perspective: 1000px;
+  place-items: center;
+  position: relative;
+}
+
+.intro-stage > * {
+  grid-area: 1 / 1;
+}
+
+.intro-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: var(--font-display);
+  font-size: clamp(22px, 2.4vw, 30px);
+  font-weight: 500;
+  gap: 6px;
+  letter-spacing: 0.02em;
+  transform: translateY(calc(var(--ring) / 2 + 64px));
+}
+
+.intro-brand em {
+  background: var(--spectrum);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.intro-brand span {
+  color: var(--text-3);
+  font-family: var(--font-serif);
+  font-size: var(--text-sm);
+  letter-spacing: 0.6em;
+}

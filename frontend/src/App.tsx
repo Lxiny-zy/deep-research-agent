@@ -4,7 +4,11 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import LoginGate from './components/LoginGate'
 import WelcomePage from './components/WelcomePage'
 import OnboardingTour from './components/OnboardingTour'
-import { hasSeenTour, markTourSeen } from './lib/onboarding'
+import SpectrumBackdrop from './components/SpectrumBackdrop'
+import { signatureKey } from './lib/spectrum'
+import { usePointerSpotlight } from './hooks/usePointerSpotlight'
+import { useButtonHues } from './hooks/useButtonHues'
+import { hasSeenIntro, hasSeenTour, markIntroSeen, markTourSeen } from './lib/onboarding'
 import { AppIcon, type AppIconName } from './components/AppIcon'
 import {
   ApiError,
@@ -23,6 +27,8 @@ type Role = 'admin' | 'researcher' | 'reader'
 interface NavItem {
   to: string
   label: string
+  /** 英文副标题（衬线小字） */
+  en: string
   icon: AppIconName
   end?: boolean
   roles: Role[]
@@ -31,28 +37,59 @@ interface NavItem {
 // 一级入口按科研人员的工作场景组织；工作流构建与角色广场属于高级定制，
 // 归在「高级」分组里，普通研究者不会被它们打扰。
 const WORKSPACE_NAV: NavItem[] = [
-  { to: '/', label: '工作台', icon: 'sparkles', end: true, roles: ['admin', 'researcher'] },
-  { to: '/qa', label: '学术问答', icon: 'chat', roles: ['admin', 'researcher'] },
-  { to: '/history', label: '任务记录', icon: 'history', roles: ['admin', 'researcher', 'reader'] },
-  { to: '/library', label: '资料库', icon: 'library', roles: ['admin', 'researcher', 'reader'] },
+  {
+    to: '/',
+    label: '工作台',
+    en: 'Home',
+    icon: 'sparkles',
+    end: true,
+    roles: ['admin', 'researcher'],
+  },
+  {
+    to: '/qa',
+    label: '学术问答',
+    en: 'Research Q&A',
+    icon: 'chat',
+    roles: ['admin', 'researcher'],
+  },
+  {
+    to: '/history',
+    label: '任务记录',
+    en: 'Task History',
+    icon: 'history',
+    roles: ['admin', 'researcher', 'reader'],
+  },
+  {
+    to: '/library',
+    label: '资料库',
+    en: 'Library',
+    icon: 'library',
+    roles: ['admin', 'researcher', 'reader'],
+  },
 ]
 
 const ADVANCED_NAV: NavItem[] = [
-  { to: '/workflows', label: '工作流构建', icon: 'workflow', roles: ['admin'] },
-  { to: '/agents', label: '角色广场', icon: 'users', roles: ['admin'] },
-  { to: '/settings', label: '设置', icon: 'settings', roles: ['admin'] },
+  { to: '/workflows', label: '工作流构建', en: 'Workflow', icon: 'workflow', roles: ['admin'] },
+  { to: '/agents', label: '角色广场', en: 'Agents', icon: 'users', roles: ['admin'] },
+  { to: '/settings', label: '设置', en: 'Settings', icon: 'settings', roles: ['admin'] },
 ]
 
-const PAGE_TITLE: [RegExp, string][] = [
-  [/^\/$/, '科研工作台'],
-  [/^\/runs\//, '任务详情'],
-  [/^\/history/, '任务记录'],
-  [/^\/qa/, '学术问答'],
-  [/^\/library/, '资料库'],
-  [/^\/workflows/, '工作流构建'],
-  [/^\/agents/, '角色广场'],
-  [/^\/settings/, '设置'],
+const PAGE_TITLE: [RegExp, string, string][] = [
+  [/^\/$/, '科研工作台', 'Workbench'],
+  [/^\/runs\//, '任务详情', 'Research Run'],
+  [/^\/history/, '任务记录', 'Task History'],
+  [/^\/qa/, '学术问答', 'Research Q&A'],
+  [/^\/library/, '资料库', 'Library'],
+  [/^\/workflows/, '工作流构建', 'Workflow'],
+  [/^\/agents/, '角色广场', 'Agents'],
+  [/^\/settings/, '设置', 'Settings'],
 ]
+
+const ROLE_LABEL: Record<Role, [string, string]> = {
+  admin: ['管理员', 'Administrator'],
+  researcher: ['研究者', 'Researcher'],
+  reader: ['访客', 'Reader'],
+}
 
 const COLLAPSE_KEY = 'sr_sidebar_collapsed'
 
@@ -108,8 +145,12 @@ export default function App() {
   const [authAttempt, setAuthAttempt] = useState(0)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(readCollapsed)
-  const [showTour, setShowTour] = useState(() => !hasSeenTour())
+  // 欢迎光环每个会话一次；新手引导等欢迎光环结束后再出现
+  const [introDone, setIntroDone] = useState(hasSeenIntro)
+  const [showTour, setShowTour] = useState(() => hasSeenIntro() && !hasSeenTour())
   const theme = useTheme()
+  usePointerSpotlight()
+  useButtonHues()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -118,6 +159,12 @@ export default function App() {
     setShowTour(false)
   }
   const enterWorkspace = () => (authStatus === 'verified' ? navigate('/') : setShowLogin(true))
+  const finishIntro = () => {
+    markIntroSeen()
+    setIntroDone(true)
+    if (location.pathname === '/welcome') navigate('/')
+    if (!hasSeenTour()) setShowTour(true)
+  }
   const tour =
     showTour && !showLogin ? (
       <OnboardingTour
@@ -256,10 +303,20 @@ export default function App() {
     )
   }
 
-  if (authStatus === 'guest' || location.pathname === '/welcome') {
+  if (authStatus === 'guest') {
     return (
       <>
-        <WelcomePage onEnter={enterWorkspace} onTour={() => setShowTour(true)} />
+        <WelcomePage
+          onEnter={() => {
+            // 游客已经在这里「进入」过：登录成功后不再重播欢迎光环
+            markIntroSeen()
+            setIntroDone(true)
+            enterWorkspace()
+          }}
+          onTour={() => setShowTour(true)}
+          onToggleTheme={theme.toggle}
+          dark={theme.dark}
+        />
         {tour}
         {showLogin && (
           <LoginGate onClose={() => setShowLogin(false)} onAuthenticated={onAuthenticated} />
@@ -268,13 +325,20 @@ export default function App() {
     )
   }
 
-  const pageTitle =
-    PAGE_TITLE.find(([pattern]) => pattern.test(location.pathname))?.[1] ?? 'Science Research'
+  const titleEntry = PAGE_TITLE.find(([pattern]) => pattern.test(location.pathname))
+  const pageTitle = titleEntry?.[1] ?? 'Science Research'
+  const pageTitleEn = titleEntry?.[2] ?? 'Science Research'
+  const showIntro = !introDone || location.pathname === '/welcome'
+  const [roleCn, roleEn] = ROLE_LABEL[role]
+  const identity = getApiKeyStorage() === 'none' ? '本地研究者' : roleCn
   const visible = (items: NavItem[]) => items.filter((item) => item.roles.includes(role))
   const forbidden =
     (role !== 'admin' && ['/settings', '/agents', '/workflows'].includes(location.pathname)) ||
     (role === 'reader' && (location.pathname === '/' || location.pathname.startsWith('/qa')))
-  const wide = location.pathname === '/workflows' || location.pathname.startsWith('/runs/')
+  const wide =
+    location.pathname === '/workflows' ||
+    location.pathname.startsWith('/runs/') ||
+    location.pathname.startsWith('/qa')
   const shellClass = [
     'app-shell',
     collapsed ? 'is-collapsed' : '',
@@ -291,8 +355,11 @@ export default function App() {
       className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
       title={collapsed ? item.label : undefined}
     >
-      <AppIcon name={item.icon} size={18} aria-hidden="true" />
-      <span className="sidebar-link-label">{item.label}</span>
+      <AppIcon name={item.icon} size={19} strokeWidth={1.6} aria-hidden="true" />
+      <span className="sidebar-link-label">
+        {item.label}
+        <small>{item.en}</small>
+      </span>
     </NavLink>
   )
 
@@ -303,36 +370,30 @@ export default function App() {
       </a>
       <aside className="sidebar" aria-label="侧边导航">
         <NavLink to="/" className="sidebar-brand" aria-label="Science Research 首页">
-          <span className="sidebar-logo" aria-hidden="true">
-            <AppIcon name="network" size={18} strokeWidth={2} />
-          </span>
+          <span className="sidebar-logo" aria-hidden="true" />
           <span className="sidebar-brand-text">
             <strong>Science Research</strong>
             <small>科研工作台</small>
           </span>
         </NavLink>
-        {role !== 'reader' && (
-          <div className="sidebar-action">
-            <NavLink to="/" end className="sidebar-new" title="新建任务">
-              <AppIcon name="plus" size={16} aria-hidden="true" />
-              <span>新建任务</span>
-            </NavLink>
-          </div>
-        )}
         <nav className="sidebar-nav" aria-label="主导航">
           <div className="sidebar-section">
-            <span className="sidebar-section-title">工作区</span>
+            <span className="visually-hidden">工作区</span>
             {visible(WORKSPACE_NAV).map(link)}
           </div>
           {visible(ADVANCED_NAV).length > 0 && (
             <div className="sidebar-section">
-              <span className="sidebar-section-title">高级</span>
+              <span className="sidebar-section-title">研究工具</span>
               {visible(ADVANCED_NAV).map(link)}
             </div>
           )}
           <RecentRuns enabled={authStatus === 'verified'} />
         </nav>
         <div className="sidebar-footer">
+          <p className="sidebar-motto" aria-hidden="true">
+            Science illumines
+            <br />a more open tomorrow.
+          </p>
           <button
             type="button"
             className="sidebar-link"
@@ -355,6 +416,13 @@ export default function App() {
         </div>
       </aside>
       <div className="sidebar-scrim" onClick={() => setMobileOpen(false)} aria-hidden="true" />
+      {/* 环境背景：棱镜漏光 + 随页面变形的光谱，固定在内容区后方 */}
+      <div className="backdrop" data-signature={signatureKey(location.pathname)} aria-hidden="true">
+        <span className="backdrop-leak l1" />
+        <span className="backdrop-leak l2" />
+        <span className="backdrop-leak l3" />
+        <SpectrumBackdrop route={location.pathname} dark={theme.dark} />
+      </div>
 
       <div className="main-column">
         <header className="topbar">
@@ -367,12 +435,27 @@ export default function App() {
           >
             <AppIcon name={mobileOpen ? 'x' : 'menu'} size={18} aria-hidden="true" />
           </button>
-          <span className="topbar-title">{pageTitle}</span>
+          <span className="topbar-title">
+            {pageTitle}
+            <small>{pageTitleEn}</small>
+          </span>
           <div className="topbar-actions">
             <button
               type="button"
               className="btn btn-ghost icon-button"
-              onClick={theme.toggle}
+              onClick={() => navigate('/history', { state: { focusSearch: true } })}
+              aria-label="搜索任务记录"
+              title="搜索任务记录"
+            >
+              <AppIcon name="search" size={17} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost icon-button theme-toggle"
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect()
+                theme.toggle({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+              }}
               aria-label={theme.dark ? '切换到浅色主题' : '切换到深色主题'}
               title={theme.dark ? '浅色主题' : '深色主题'}
             >
@@ -380,12 +463,20 @@ export default function App() {
             </button>
             <button
               type="button"
-              className="access-chip"
+              className="identity-chip"
               onClick={() => setShowLogin(true)}
-              title="API 密钥管理"
+              title={`API 密钥：${keyStatus}`}
+              aria-label={`当前身份：${identity}，管理 API 密钥`}
             >
-              <AppIcon name="key" size={14} aria-hidden="true" />
-              <span className="access-chip-text">{keyStatus}</span>
+              <span className="identity-avatar" aria-hidden="true">
+                <AppIcon name="user" size={16} />
+              </span>
+              <span className="identity-text">
+                <strong>{identity}</strong>
+                <small>
+                  {roleEn} · {keyStatus}
+                </small>
+              </span>
             </button>
           </div>
         </header>
@@ -409,7 +500,11 @@ export default function App() {
         </main>
       </div>
 
-      {tour}
+      {showIntro ? (
+        <WelcomePage onEnter={finishIntro} onToggleTheme={theme.toggle} dark={theme.dark} />
+      ) : (
+        tour
+      )}
       {showLogin && (
         <LoginGate onClose={() => setShowLogin(false)} onAuthenticated={onAuthenticated} />
       )}

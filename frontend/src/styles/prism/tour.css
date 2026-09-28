@@ -1,0 +1,99 @@
+/* 使用引导：毛玻璃卡片 + 虹彩光环图标 + 光谱进度 */
+
+.welcome-tour-backdrop {
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  backdrop-filter: blur(12px) saturate(1.2);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  z-index: 95;
+}
+
+.welcome-tour {
+  animation: tour-in 520ms var(--ease-out) both;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 480px;
+  outline: none;
+  overflow: hidden;
+  padding: 28px 30px;
+  position: relative;
+  width: 100%;
+}
+
+.welcome-tour::after {
+  background: var(--spectrum);
+  content: '';
+  height: 2px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+@keyframes tour-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.97);
+  }
+}
+
+.welcome-tour-topline,
+.welcome-tour-actions {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.welcome-tour-step {
+  color: var(--text-3);
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.3em;
+}
+
+/* 图标置于一枚旋转的虹彩细环中 */
+.welcome-tour-visual {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  height: 72px;
+  justify-content: center;
+  position: relative;
+  width: 72px;
+}
+
+.welcome-tour-visual::before {
+  animation: iris-spin 10s linear infinite;
+  background: var(--iris);
+  border-radius: 50%;
+  content: '';
+  inset: 0;
+  -webkit-mask: radial-gradient(farthest-side, transparent 88%, #000 92%, #000 97%, transparent);
+  mask: radial-gradient(farthest-side, transparent 88%, #000 92%, #000 97%, transparent);
+  position: absolute;
+}
+
+.welcome-tour-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 92px;
+}
+
+.welcome-tour-copy h2 {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.welcome-tour-copy p {
+  color: var(--text-2);
+  line-height: 1.8;
+  margin: 0;
+}

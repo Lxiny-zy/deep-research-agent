@@ -49,6 +49,21 @@ export function stepLabel(label: string, agent: string): string {
   return ROLE_LABEL[label] ?? ROLE_LABEL[agent] ?? label
 }
 
+/** 任务类型的英文副标题（衬线小字）；未知模板不显示。 */
+const TEMPLATE_EN: Record<string, string> = {
+  autoResearch: 'Research',
+  litReview: 'Literature',
+  peerReview: 'Peer Review',
+  paperRead: 'Close Reading',
+  dataAnalysis: 'Data',
+  slides: 'Slides',
+  mindmap: 'Mind Map',
+}
+
+export function templateEn(key: string): string {
+  return TEMPLATE_EN[key] ?? ''
+}
+
 /** 模板图标名来自后端数据；未知名回退为通用图标，而不是渲染出一个空洞。 */
 export function templateIcon(icon: string): AppIconName {
   return TEMPLATE_ICONS.has(icon as AppIconName) ? (icon as AppIconName) : 'sparkles'

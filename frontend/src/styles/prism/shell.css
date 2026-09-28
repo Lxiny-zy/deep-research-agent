@@ -1,0 +1,106 @@
+/* 外壳：浅色毛玻璃侧栏（中英双语导航）+ 通透顶栏（搜索 / 主题 / 身份） */
+
+.sidebar {
+  -webkit-backdrop-filter: blur(22px) saturate(1.3);
+  backdrop-filter: blur(22px) saturate(1.3);
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+}
+
+.sidebar-brand {
+  gap: 12px;
+  height: 84px;
+  padding: 0 20px;
+}
+
+/* 品牌标：一枚旋转的虹彩细环 */
+.sidebar-logo {
+  animation: iris-spin 14s linear infinite;
+  background: var(--iris);
+  border-radius: 50%;
+  box-shadow: none;
+  height: 38px;
+  -webkit-mask: radial-gradient(farthest-side, transparent 80%, #000 86%, #000 94%, transparent);
+  mask: radial-gradient(farthest-side, transparent 80%, #000 86%, #000 94%, transparent);
+  width: 38px;
+}
+
+.sidebar-brand-text strong {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.sidebar-brand-text small {
+  font-family: var(--font-serif);
+  font-size: var(--text-sm);
+  letter-spacing: 0.08em;
+}
+
+.sidebar-nav {
+  gap: 22px;
+  padding: 8px 0 12px;
+}
+
+.sidebar-section-title {
+  border-top: 1px solid var(--sidebar-border);
+  color: var(--sidebar-muted);
+  font-family: var(--font-serif);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  margin: 0 20px;
+  padding: 16px 0 8px;
+  text-transform: none;
+}
+
+.sidebar-link {
+  border-radius: 0;
+  gap: 16px;
+  height: 58px;
+  padding: 0 24px;
+}
+
+.sidebar-link-label {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-serif);
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.sidebar-link-label small {
+  color: var(--sidebar-muted);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.sidebar-link.active {
+  background: linear-gradient(90deg, var(--sidebar-active), transparent);
+}
+
+.sidebar-link.active::before {
+  height: 100%;
+  left: 0;
+  width: 4px;
+}
+
+.sidebar-footer {
+  border-top: 0;
+  padding: 12px 0 18px;
+}
+
+.sidebar-footer .sidebar-link {
+  height: 40px;
+}
+
+.sidebar-motto {
+  color: var(--sidebar-text);
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-style: italic;
+  line-height: 1.35;
+  margin: 0 24px 16px;
+}

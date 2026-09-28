@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useOutletContext } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useOutletContext } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import StatusBadge from '../components/StatusBadge'
 import EmptyState from '../components/EmptyState'
@@ -42,6 +42,12 @@ function formatElapsed(seconds: number): string {
 }
 
 export default function HistoryPage() {
+  const location = useLocation()
+  // 顶栏搜索按钮带着 focusSearch 跳转过来：直接把光标放进搜索框
+  const focusSearch = Boolean((location.state as { focusSearch?: boolean } | null)?.focusSearch)
+  useEffect(() => {
+    if (focusSearch) document.getElementById('search-input')?.focus()
+  }, [focusSearch, location.key])
   const access = useOutletContext<{ role: string } | undefined>()
   const navigate = useNavigate()
   const [offset, setOffset] = useState(0)

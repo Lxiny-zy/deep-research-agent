@@ -364,7 +364,8 @@ export default function WorkflowFlowCanvas(props: Props) {
               width: 17,
               height: 17,
               markerUnits: 'userSpaceOnUse',
-              color: edge.condition ? 'rgba(28, 28, 28, 0.6)' : '#1C1C1C',
+              // 取主题令牌（prism/workflow.css），暗色下箭头才不会隐形
+              color: edge.condition ? 'var(--flow-edge-cond)' : 'var(--flow-edge)',
             },
             data: { onDelete: props.onDisconnect },
             ariaLabel: `依赖线：${edge.source} 到 ${edge.target}`,
@@ -417,7 +418,7 @@ export default function WorkflowFlowCanvas(props: Props) {
         width: 13,
         height: 13,
         markerUnits: 'userSpaceOnUse',
-        color: 'rgba(28, 28, 28, 0.6)',
+        color: 'var(--flow-edge-soft)',
       },
       data: { semantic: true },
       zIndex: 0,
@@ -437,7 +438,7 @@ export default function WorkflowFlowCanvas(props: Props) {
         width: 13,
         height: 13,
         markerUnits: 'userSpaceOnUse',
-        color: 'rgba(28, 28, 28, 0.6)',
+        color: 'var(--flow-edge-soft)',
       },
       data: { semantic: true },
       zIndex: 0,
@@ -507,7 +508,7 @@ export default function WorkflowFlowCanvas(props: Props) {
     })
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        void flowInstance?.fitView({ padding: 0.28, duration: 420 })
+        void flowInstance?.fitView({ padding: 0.12, duration: 420 })
       })
     })
   }, [dependencies, flowInstance, nodeKeys, onPositionsChange, positions, props.semanticNodeIds])
@@ -568,7 +569,7 @@ export default function WorkflowFlowCanvas(props: Props) {
       }}
       onDrop={handleDrop}
       fitView={props.fitViewOnInit}
-      fitViewOptions={{ padding: 0.28 }}
+      fitViewOptions={{ padding: 0.12 }}
       minZoom={0.25}
       maxZoom={1.8}
       deleteKeyCode={['Backspace', 'Delete']}

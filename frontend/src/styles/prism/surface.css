@@ -1,0 +1,109 @@
+/* 通用表面：衬线标题、带左竖线的区块标题、毛玻璃面板、墨色主按钮、金色选中态 */
+
+.page-header h1,
+.page-intro h1 {
+  font-family: var(--font-display), var(--font-serif);
+  font-size: clamp(30px, 2.8vw, 42px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.page-header p,
+.page-intro p {
+  color: var(--text-2);
+  font-family: var(--font-serif);
+  letter-spacing: 0.04em;
+}
+
+/* 区块标题：左侧一道墨靛竖线（参考稿的「| 科研任务」） */
+.panel-title,
+.section-title,
+.home-config-head,
+.task-picker-legend,
+.home-input-label,
+.home-attach-title,
+.home-examples-title {
+  font-family: var(--font-serif);
+  font-weight: 700;
+}
+
+.panel-title::before,
+.home-config-head::before,
+.task-picker-legend::before,
+.home-input-label::before {
+  background: var(--primary);
+  border-radius: 1px;
+  content: '';
+  display: inline-block;
+  height: 1.05em;
+  margin-right: 10px;
+  vertical-align: -0.15em;
+  width: 3px;
+}
+
+.panel,
+.card {
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(18px) saturate(1.15);
+  background: var(--glass);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* 主按钮：墨色实底，底边一道虹彩细线；深色主题自动反转为暖白 */
+.btn-primary {
+  background: var(--ink);
+  border-color: transparent;
+  box-shadow: var(--shadow-md);
+  color: var(--ink-text);
+  font-family: var(--font-serif);
+  letter-spacing: 0.08em;
+  overflow: hidden;
+  position: relative;
+}
+
+.btn-primary::after {
+  background: var(--spectrum);
+  bottom: 0;
+  content: '';
+  height: 2px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  transform: scaleX(0.35);
+  transition: transform 500ms var(--ease-out);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--ink-2);
+  color: var(--ink-text);
+  transform: translateY(-1px);
+}
+
+.btn-primary:hover:not(:disabled)::after {
+  transform: scaleX(1);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+.input,
+.textarea {
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border-color: var(--border);
+}
+
+.input:focus,
+.textarea:focus {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+}
+
+/* 分段选择：选中项金色描边（参考稿的「深度检索」「深度」） */
+.segmented label.is-selected {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--gold);
+  color: var(--gold-text);
+}

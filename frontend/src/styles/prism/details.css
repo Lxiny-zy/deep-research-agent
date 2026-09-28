@@ -1,0 +1,82 @@
+/* 细节：引导进度条、折叠侧栏、减少动态效果 */
+
+.welcome-tour-progress {
+  display: flex;
+  gap: 6px;
+}
+
+.welcome-tour-progress i {
+  background: var(--surface-3);
+  border-radius: 999px;
+  flex: 1;
+  height: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.welcome-tour-progress i.active::after {
+  animation: tour-fill 460ms var(--ease-out) both;
+  background: var(--spectrum);
+  content: '';
+  inset: 0;
+  position: absolute;
+}
+
+@keyframes tour-fill {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+/* 折叠态：只保留图标与光环标 */
+.app-shell.is-collapsed .sidebar-motto,
+.app-shell.is-collapsed .sidebar-link-label small {
+  display: none;
+}
+
+.app-shell.is-collapsed .sidebar-section-title {
+  margin: 0 12px;
+}
+
+::selection {
+  background: color-mix(in srgb, #b28cff 28%, transparent);
+}
+
+/* 减少动态效果：关闭旋转、漂移、流光与抬升，只保留配色与层次 */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-logo,
+  .identity-avatar,
+  .backdrop-leak,
+  .home-hero-word.is-spectral,
+  .welcome-tour-visual::before,
+  .intro-ring,
+  .intro-prism span {
+    animation: none !important;
+  }
+
+  .catalog-card:hover,
+  .builtin-card:hover,
+  .qa-starter:hover,
+  .library-project:hover,
+  .home-example:hover {
+    transform: none;
+  }
+}
+
+/* 侧栏「最近任务」与导航项同一缩进 */
+.sidebar-recent a,
+.sidebar-recent-empty {
+  padding-left: 24px;
+  padding-right: 20px;
+}
+
+/* 学术问答：整块对话面板改为毛玻璃，让底部升起的光谱透出来 */
+.qa-layout {
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  background: var(--glass);
+}
+
+.qa-sidebar {
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}

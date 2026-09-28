@@ -1,0 +1,108 @@
+/* 交互动效：指针聚光（--mx/--my 由 usePointerSpotlight 写入）、悬停抬升、入场与换页 */
+
+.panel,
+.home-card,
+.home-config,
+.catalog-card,
+.builtin-card,
+.qa-starter,
+.live-metric,
+.library-project,
+.history-run-row,
+.spot {
+  isolation: isolate;
+  position: relative;
+}
+
+/* 聚光：跟随指针的柔光斑，颜色取光谱中段 */
+.panel::before,
+.home-card::before,
+.home-config::before,
+.catalog-card::before,
+.builtin-card::before,
+.qa-starter::before,
+.live-metric::before,
+.library-project::before,
+.spot::before {
+  background: radial-gradient(
+    380px circle at var(--mx, -999px) var(--my, -999px),
+    color-mix(in srgb, #b28cff 16%, transparent),
+    color-mix(in srgb, #ffc56b 8%, transparent) 30%,
+    transparent 60%
+  );
+  border-radius: inherit;
+  content: '';
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  transition: opacity 400ms var(--ease);
+  z-index: -1;
+}
+
+.panel:hover::before,
+.home-card:hover::before,
+.home-config:hover::before,
+.catalog-card:hover::before,
+.builtin-card:hover::before,
+.qa-starter:hover::before,
+.live-metric:hover::before,
+.library-project:hover::before,
+.spot:hover::before {
+  opacity: 1;
+}
+
+.catalog-card,
+.builtin-card,
+.qa-starter,
+.library-project,
+.history-run-row {
+  transition:
+    transform 360ms var(--ease-out),
+    box-shadow 360ms var(--ease),
+    border-color 360ms var(--ease);
+}
+
+.catalog-card:hover,
+.builtin-card:hover,
+.qa-starter:hover,
+.library-project:hover {
+  border-color: color-mix(in srgb, var(--gold) 55%, var(--border));
+  box-shadow: var(--shadow-md);
+  transform: translateY(-3px);
+}
+
+.panel,
+.card,
+.page-header,
+.page-intro {
+  animation: rise-in 620ms var(--ease-out) both;
+}
+
+.content-area > * > .panel:nth-child(2),
+.content-area > * > *:nth-child(2) .panel {
+  animation-delay: 70ms;
+}
+
+.content-area > * > .panel:nth-child(n + 3) {
+  animation-delay: 140ms;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+/* 换页：内容由模糊中浮现，与背景光谱的变形同步 */
+.content-area {
+  animation: route-in 520ms var(--ease-out);
+}
+
+@keyframes route-in {
+  from {
+    filter: blur(6px);
+    opacity: 0;
+  }
+}

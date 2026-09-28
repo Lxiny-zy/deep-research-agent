@@ -1,0 +1,103 @@
+/* 工作台首页 · 杂志式标题区与任务标签页（光谱本体由背景画布绘制在标题区右侧） */
+
+.home-page .home-hero {
+  align-items: start;
+  animation: rise-in 700ms var(--ease-out) both;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  display: grid;
+  gap: var(--space-6);
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: clamp(320px, 40vh, 440px);
+  padding: 4px 0 0;
+}
+
+.home-hero-kicker,
+.home-hero-aside span {
+  color: var(--text-3);
+  display: block;
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.42em;
+  line-height: 1.9;
+  text-transform: uppercase;
+}
+
+.home-hero-title {
+  display: flex;
+  flex-direction: column;
+  margin: 26px 0 0;
+}
+
+.home-hero-word {
+  font-family: var(--font-display);
+  font-size: clamp(58px, 7.4vw, 116px);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 0.86;
+  text-transform: uppercase;
+}
+
+/* RESEARCH：由墨色渐入虹彩，缓慢流动 */
+.home-hero-word.is-spectral {
+  animation: spectral-flow 14s ease-in-out infinite alternate;
+  background: linear-gradient(
+    100deg,
+    var(--text) 0%,
+    var(--text) 28%,
+    #8f86e6 50%,
+    #e59ab8 66%,
+    #d8ae63 82%,
+    #8fd3bd 100%
+  );
+  background-size: 160% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* 字色透明、靠背景裁出字形：继承来的 text-shadow 会画在字形上把渐变盖住（见 pages.css 的页头光晕） */
+  text-shadow: none;
+}
+
+@keyframes spectral-flow {
+  to {
+    background-position: 60% 0;
+  }
+}
+
+.home-hero-question {
+  font-family: var(--font-serif);
+  font-size: clamp(26px, 2.6vw, 38px);
+  font-weight: 700;
+  letter-spacing: 0.34em;
+  margin-top: 26px;
+}
+
+.home-page .home-hero-sub {
+  color: var(--text-2);
+  font-family: var(--font-serif);
+  letter-spacing: 0.3em;
+  margin: 14px 0 0;
+}
+
+.home-hero-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 64px;
+  max-width: 11em;
+  padding-top: 64px;
+}
+
+.home-hero-aside span:last-child {
+  color: var(--primary-text);
+}
+
+.home-hero .home-draft {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .home-hero-aside {
+    display: none;
+  }
+}

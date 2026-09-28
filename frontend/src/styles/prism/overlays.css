@@ -1,0 +1,49 @@
+/* 浮层：遮罩、侧边抽屉、证据抽屉 */
+
+/* 遮罩统一加一点模糊，浮层与底下的光谱背景分得开 */
+.modal-backdrop,
+.evidence-overlay > .evidence-backdrop {
+  -webkit-backdrop-filter: blur(6px) saturate(0.9);
+  backdrop-filter: blur(6px) saturate(0.9);
+}
+
+:root[data-theme='dark'] .modal-backdrop,
+:root[data-theme='dark'] .evidence-overlay > .evidence-backdrop {
+  background: rgba(3, 3, 8, 0.66);
+}
+
+/* 侧边抽屉（角色 / 模型档案编辑）同时带着 .editor-modal，
+   继承了居中弹窗的 24px 内边距、圆角和 max-height：
+   抽屉不贴底，吸顶的标题栏与吸底的操作栏两侧留缝，底下的字段从缝里露出来。
+   这里把抽屉还原成贴右、满高、无内边距。 */
+.drawer.editor-modal {
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  height: 100%;
+  max-height: none;
+  max-width: 100%;
+  padding: 0;
+  width: min(640px, 100vw);
+}
+
+/* 抽屉顶部一道虹彩细线，与引导弹窗、按钮保持同一视觉语言 */
+.drawer.editor-modal::before {
+  background: var(--spectrum);
+  content: '';
+  flex: 0 0 2px;
+  height: 2px;
+}
+
+.drawer > .drawer-header {
+  top: 0;
+}
+
+.drawer .editor-actions,
+.drawer > .stack > .row.between:last-child {
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 -10px 24px -18px rgba(0, 0, 0, 0.35);
+  margin-top: var(--space-4);
+}

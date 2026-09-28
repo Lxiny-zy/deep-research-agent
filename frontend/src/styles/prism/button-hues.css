@@ -1,0 +1,104 @@
+/* 按钮光谱色：useButtonHues 按按钮文字给每个 .btn 一个 data-hue（0–6）。
+   --hue 用于线条、描边与光晕；--hue-ink 用于文字，明暗两套都满足 4.5:1 对比度。
+   危险操作固定为玫红，首页「开始研究」保留整圈虹彩（见 buttons-home.css）。 */
+
+.btn { --hue: #7aa7ff; --hue-ink: #2a55c9; }
+.btn[data-hue='0'] { --hue: #9b7bff; --hue-ink: #5b3fc4; }
+.btn[data-hue='1'] { --hue: #6f9bff; --hue-ink: #2a55c9; }
+.btn[data-hue='2'] { --hue: #4cc3e8; --hue-ink: #0a6582; }
+.btn[data-hue='3'] { --hue: #4fd1a8; --hue-ink: #0c6b4f; }
+.btn[data-hue='4'] { --hue: #f0b54a; --hue-ink: #7f5512; }
+.btn[data-hue='5'] { --hue: #ff9a6a; --hue-ink: #a33f17; }
+.btn[data-hue='6'] { --hue: #ff7fae; --hue-ink: #b3265e; }
+
+:root[data-theme='dark'] .btn { --hue-ink: #9ec0ff; }
+:root[data-theme='dark'] .btn[data-hue='0'] { --hue: #b28cff; --hue-ink: #c7a4ff; }
+:root[data-theme='dark'] .btn[data-hue='1'] { --hue-ink: #9ec0ff; }
+:root[data-theme='dark'] .btn[data-hue='2'] { --hue-ink: #7fe0ff; }
+:root[data-theme='dark'] .btn[data-hue='3'] { --hue-ink: #8fe3c8; }
+:root[data-theme='dark'] .btn[data-hue='4'] { --hue-ink: #ffd27a; }
+:root[data-theme='dark'] .btn[data-hue='5'] { --hue-ink: #ffb38a; }
+:root[data-theme='dark'] .btn[data-hue='6'] { --hue-ink: #ff9fc2; }
+
+.btn.danger,
+.btn-danger,
+:root[data-theme='dark'] .btn.danger,
+:root[data-theme='dark'] .btn-danger {
+  --hue: #ff6f86;
+  --hue-ink: var(--danger-text);
+}
+
+/* 主按钮：墨色不变，底边细线与悬停光晕取本按钮的色 */
+.btn-primary::after {
+  background: linear-gradient(90deg, transparent, var(--hue) 30%, var(--hue) 70%, transparent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  box-shadow:
+    0 10px 26px -14px var(--hue),
+    var(--shadow-md);
+}
+
+.home-actionbar-go .btn-primary::after {
+  background: var(--spectrum);
+}
+
+/* 描线按钮：细框带一点本色，悬停时本色从底部涨满 */
+.btn-secondary {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--hue) 20%, var(--surface)),
+    color-mix(in srgb, var(--hue) 20%, var(--surface))
+  );
+  border-color: color-mix(in srgb, var(--hue) 55%, var(--border));
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--hue);
+  color: var(--hue-ink);
+}
+
+/* 文字按钮：悬停时文字与划线都换成本色 */
+.btn-ghost:not(.icon-button):hover:not(:disabled) {
+  color: var(--hue-ink);
+}
+
+/* 圆形图标按钮：外圈是一颗本色彗星绕圈，图标也染上本色 */
+.icon-button::before {
+  background: conic-gradient(
+    from var(--iris-angle),
+    var(--hue),
+    color-mix(in srgb, var(--hue) 40%, transparent) 45%,
+    transparent 70%,
+    var(--hue)
+  );
+}
+
+.btn.icon-button:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--hue) 12%, transparent);
+  color: var(--hue-ink);
+}
+
+.btn.danger.icon-button::before {
+  background: conic-gradient(from var(--iris-angle), var(--hue), transparent 70%, var(--hue));
+}
+
+.btn:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--hue) 45%, transparent);
+}
+
+/* 默认按钮（没有 primary / secondary / ghost 修饰）：左侧一道本色竖线，悬停时整块染上本色 */
+.btn:not(.btn-primary, .btn-secondary, .btn-ghost, .ghost, .icon-button) {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--hue) 70%, transparent);
+  transition:
+    background-color var(--duration) var(--ease),
+    border-color var(--duration) var(--ease),
+    box-shadow 320ms var(--ease-out),
+    color var(--duration) var(--ease);
+}
+
+.btn:not(.btn-primary, .btn-secondary, .btn-ghost, .ghost, .icon-button):hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--hue) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--hue) 70%, var(--border));
+  box-shadow: inset 4px 0 0 var(--hue);
+  color: var(--hue-ink);
+}

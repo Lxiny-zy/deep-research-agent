@@ -1,0 +1,101 @@
+/* 工作流画布：依赖连线在明暗两套下都清晰可辨。
+   画布常被 fitView 缩到 0.6 倍左右，所以线宽用 non-scaling-stroke 固定在屏幕像素上。 */
+
+.flow-canvas-shell .react-flow {
+  --flow-edge: #3a45a8;
+  --flow-edge-cond: #b8740a;
+  --flow-edge-hot: #c2417a;
+  --flow-edge-soft: color-mix(in srgb, var(--flow-edge) 60%, transparent);
+  --xy-edge-stroke: var(--flow-edge);
+  --xy-edge-stroke-selected: var(--flow-edge-hot);
+  --xy-connectionline-stroke: var(--flow-edge-hot);
+  --xy-connectionline-stroke-width: 2.5;
+}
+
+:root[data-theme='dark'] .flow-canvas-shell .react-flow {
+  --flow-edge: #9ea8ff;
+  --flow-edge-cond: #e2b86a;
+  --flow-edge-hot: #ff9fc2;
+}
+
+/* 根因：base.css 的 `svg { max-width: 100% }` 让连线 svg 在 0 宽的
+   .react-flow__edges 里被压成 0 宽，Chrome 直接不绘制——连线「看不清」其实是没画出来 */
+.react-flow svg {
+  max-width: none;
+}
+
+.flow-canvas-shell .react-flow__edge-path,
+.flow-canvas-shell .react-flow__connection-path,
+.flow-canvas-shell .flow-edge-halo {
+  vector-effect: non-scaling-stroke;
+}
+
+.flow-canvas-shell .react-flow__edge .react-flow__edge-path {
+  stroke: var(--flow-edge);
+  stroke-linecap: round;
+  stroke-width: 2.25;
+  transition:
+    stroke 200ms var(--ease),
+    stroke-width 200ms var(--ease);
+}
+
+/* 自动入口 / 出口：虚线，略淡 */
+.flow-canvas-shell .react-flow__edge.semantic-edge .react-flow__edge-path {
+  stroke: var(--flow-edge-soft);
+  stroke-dasharray: 5 5;
+}
+
+.flow-canvas-shell .react-flow__edge.conditional-edge .react-flow__edge-path {
+  stroke: var(--flow-edge-cond);
+}
+
+/* 悬停 / 选中：变成暖粉、加粗，并沿方向流动 */
+.flow-canvas-shell .react-flow__edge.selectable:hover .react-flow__edge-path,
+.flow-canvas-shell .react-flow__edge.selected .react-flow__edge-path {
+  animation: flow-edge-run 900ms linear infinite;
+  stroke: var(--flow-edge-hot);
+  stroke-dasharray: 10 6;
+  stroke-width: 3;
+}
+
+.flow-canvas-shell .react-flow__edge.selectable:hover .flow-edge-halo,
+.flow-canvas-shell .react-flow__edge.selected .flow-edge-halo {
+  stroke: color-mix(in srgb, var(--flow-edge-hot) 22%, transparent);
+  stroke-width: 12;
+}
+
+@keyframes flow-edge-run {
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+
+/* 选中某节点时，无关连线只是退后一步，不再几乎消失 */
+.flow-canvas-shell .react-flow__edge.workflow-edge-muted {
+  opacity: 0.45;
+}
+
+/* 端口：更大、描边更粗，悬停时放大 */
+.flow-canvas-shell .flow-agent-node .react-flow__handle {
+  background: var(--surface);
+  border: 2px solid var(--flow-edge);
+  height: 12px;
+  transition: scale 200ms var(--ease-out), background 200ms var(--ease);
+  width: 12px;
+}
+
+.flow-canvas-shell .flow-agent-node .react-flow__handle.port-interactive:hover {
+  background: var(--flow-edge-hot);
+  border-color: var(--flow-edge-hot);
+  scale: 1.35;
+}
+
+.flow-canvas-shell .flow-agent-node .react-flow__handle.port-disabled {
+  border-color: var(--border-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-canvas-shell .react-flow__edge .react-flow__edge-path {
+    animation: none;
+  }
+}

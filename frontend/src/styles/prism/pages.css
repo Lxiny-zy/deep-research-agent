@@ -1,0 +1,107 @@
+/* 子页面细节：标题压在光谱上的可读性、吸底条漏底、骨架屏、以及此前没有样式的容器 */
+
+/* 页头标题和说明常压在背景光谱的峰上：给文字描一圈底色光晕，谱线从字后穿过而不打架 */
+/* 首页大字里有 background-clip: text 的渐变字，文字阴影会盖住它，所以排除 .home-hero */
+.page-header:not(.home-hero) h1,
+.page-header:not(.home-hero) p,
+.run-q {
+  text-shadow:
+    0 0 2px var(--bg),
+    0 0 10px var(--bg),
+    0 0 18px var(--bg);
+}
+
+/* 设置页吸底保存条离底边留了 16px，下面的内容会从缝里露出来；用底色把这道缝盖住 */
+.settings-savebar::after {
+  background: var(--bg);
+  content: '';
+  height: calc(var(--space-4) + 2px);
+  left: -12px;
+  pointer-events: none;
+  position: absolute;
+  right: -12px;
+  top: calc(100% + 1px);
+}
+
+/* 骨架屏：.sk-row 原本只有外边距没有高度，加载占位其实是空白 */
+.skeleton-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: var(--space-2) 0;
+}
+
+.skeleton-block .sk-row {
+  height: 14px;
+  margin-top: 0;
+  width: 100%;
+}
+
+.skeleton-block .sk-row:nth-child(3n + 2) {
+  width: 82%;
+}
+
+.skeleton-block .sk-row:nth-child(3n) {
+  width: 64%;
+}
+
+/* 实时活动：跟随状态 + 开关 */
+.timeline-follow-state {
+  align-items: center;
+  color: var(--text-3);
+  display: inline-flex;
+  font-size: var(--text-xs);
+  gap: 6px;
+}
+
+.timeline-follow-state::before {
+  animation: follow-pulse 1.6s ease-in-out infinite;
+  background: var(--success);
+  border-radius: 50%;
+  content: '';
+  height: 6px;
+  width: 6px;
+}
+
+@keyframes follow-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* 意图判定面板里的分组容器 */
+.intent-clarify,
+.intent-resolved,
+.intent-scores {
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+}
+
+.intent-clarify {
+  background: color-mix(in srgb, var(--gold-soft) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gold) 35%, transparent);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.intent-cost-note,
+.intent-reason {
+  color: var(--text-3);
+  font-style: italic;
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-follow-state::before {
+    animation: none;
+  }
+}
+
+/* 运行页「进展」卡：标题是一句会换行的长话，上方已有小标题，
+   左竖线在 flex 标题里会竖在两行中间、与文字脱开，这里去掉 */
+.run-narrative .panel-title::before {
+  display: none;
+}

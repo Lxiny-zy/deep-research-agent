@@ -14,9 +14,19 @@ import {
 import type { QaMessage } from '../types'
 
 const STARTERS = [
-  '查找 DOE 光谱成像系统误差补偿的最新文献',
-  'CASSI 重建中常用的评价指标有哪些？',
-  'Zernike 系数盲估计有哪些代表性方法？',
+  { tag: '文献检索', text: '查找 DOE 光谱成像系统误差补偿的最新文献' },
+  { tag: '评价指标', text: 'CASSI 重建中常用的评价指标有哪些？' },
+  { tag: '方法梳理', text: 'Zernike 系数盲估计有哪些代表性方法？' },
+  { tag: '前沿进展', text: '深度展开网络在快照光谱成像中的最新进展' },
+  { tag: '对比分析', text: '比较 SD-CASSI 与 DD-CASSI 的系统结构差异' },
+  { tag: '方法梳理', text: '高光谱图像去噪有哪些基于深度先验的方法？' },
+]
+
+/** 右侧「工作方式」：与回答下方「检索与核验过程」的三个步骤一一对应 */
+const STEPS = [
+  { title: '改写检索式', text: '把问题拆成可检索的关键词与同义表述' },
+  { title: '检索与逐字核验', text: '只保留能在原文中逐字找到的证据片段' },
+  { title: '引用复核', text: '回答里的每个论断都回指到具体来源' },
 ]
 
 function MessageView({ message }: { message: QaMessage }) {
@@ -138,6 +148,13 @@ export default function QaPage() {
   }
 
   const empty = !id && messages.length === 0 && !pending
+  // 本会话所有回答引用过的来源，按首次出现去重
+  const sources = [...new Set(messages.flatMap((message) => message.citations))].map((url) => {
+    const evidence = messages
+      .flatMap((message) => message.evidence)
+      .find((item) => item.source_url === url)
+    return { url, label: evidence?.source_reference || evidence?.source_title || url }
+  })
 
   return (
     <div className="qa-layout">
@@ -176,7 +193,7 @@ export default function QaPage() {
         </ul>
       </aside>
 
-      <section className="qa-main" aria-label="学术问答">
+      <section className={'qa-main' + (empty ? ' is-empty' : '')} aria-label="学术问答">
         <header className="qa-header">
           <h1>{conversation.data?.title || '向文献提问'}</h1>
           <p className="hint">每个回答都来自逐字核验过的检索证据，附带可追溯引用。</p>
@@ -185,24 +202,11 @@ export default function QaPage() {
         <div className={'qa-thread' + (empty ? ' is-empty' : '')} aria-live="polite">
           {empty && (
             <div className="qa-welcome">
-              <span className="qa-welcome-icon" aria-hidden="true">
-                <AppIcon name="chat" size={22} />
+              <span className="qa-welcome-kicker" aria-hidden="true">
+                Ask the literature
               </span>
               <h2>问一个学术问题</h2>
               <p className="hint">系统会检索文献、逐字核对原文，再给出带引用的回答。</p>
-              <div className="qa-starters">
-                {STARTERS.map((starter) => (
-                  <button
-                    type="button"
-                    key={starter}
-                    className="qa-starter"
-                    onClick={() => submit(starter)}
-                  >
-                    <span>{starter}</span>
-                    <AppIcon name="arrow-up-right" size={14} aria-hidden="true" />
-                  </button>
-                ))}
-              </div>
             </div>
           )}
           {messages.map((message) => (
@@ -277,7 +281,62 @@ export default function QaPage() {
             </button>
           </div>
         </form>
+
+        {empty && (
+          <div className="qa-starters" aria-label="示例问题">
+            {STARTERS.map((starter) => (
+              <button
+                type="button"
+                key={starter.text}
+                className="qa-starter"
+                onClick={() => submit(starter.text)}
+              >
+                <span className="qa-starter-tag">{starter.tag}</span>
+                <span className="qa-starter-text">{starter.text}</span>
+                <AppIcon name="arrow-up-right" size={14} aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        )}
       </section>
+
+      <aside className="qa-context" aria-label="问答说明与引用">
+        <section className="qa-context-block">
+          <h2 className="qa-context-title">
+            本会话引用
+            {sources.length > 0 && <span className="qa-context-count">{sources.length}</span>}
+          </h2>
+          {sources.length ? (
+            <ol className="qa-context-sources">
+              {sources.map((source) => (
+                <li key={source.url}>
+                  <a href={source.url} target="_blank" rel="noopener noreferrer">
+                    {source.label}
+                  </a>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="hint">回答引用过的文献会汇总在这里，方便整体回看。</p>
+          )}
+        </section>
+        <section className="qa-context-block">
+          <h2 className="qa-context-title">工作方式</h2>
+          <ol className="qa-context-steps">
+            {STEPS.map((step) => (
+              <li key={step.title}>
+                <strong>{step.title}</strong>
+                <span>{step.text}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+        <p className="qa-context-motto" aria-hidden="true">
+          Every claim,
+          <br />
+          traced to its source.
+        </p>
+      </aside>
     </div>
   )
 }

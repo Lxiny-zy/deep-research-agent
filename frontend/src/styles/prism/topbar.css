@@ -1,0 +1,97 @@
+/* 顶栏：通透无边框；左侧中英页名，右侧搜索 / 主题 / 身份头像 */
+
+.topbar {
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+  border-bottom: 1px solid transparent;
+  height: var(--topbar-height);
+  padding: 0 32px;
+}
+
+.topbar-title {
+  align-items: baseline;
+  display: flex;
+  font-family: var(--font-serif);
+  font-size: var(--text-md);
+  gap: 12px;
+}
+
+.topbar-title small {
+  color: var(--text-3);
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+}
+
+.topbar-actions {
+  gap: 6px;
+}
+
+.identity-chip {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  margin-left: 10px;
+  padding: 4px 4px 4px 18px;
+  text-align: left;
+}
+
+.identity-avatar {
+  background: var(--iris);
+  border-radius: 50%;
+  display: grid;
+  height: 36px;
+  padding: 2px;
+  place-items: center;
+  width: 36px;
+}
+
+.identity-avatar .app-icon {
+  background: var(--ink);
+  border-radius: 50%;
+  box-sizing: content-box;
+  color: var(--ink-text);
+  padding: 7px;
+}
+
+.identity-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.identity-text strong {
+  font-family: var(--font-serif);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.identity-text small {
+  color: var(--text-3);
+  font-family: var(--font-display);
+  font-size: 11px;
+}
+
+.identity-chip:hover .identity-avatar {
+  animation: iris-spin 3s linear infinite;
+}
+
+.identity-chip:focus-visible {
+  border-radius: var(--radius-md);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+@media (max-width: 760px) {
+  .identity-text,
+  .topbar-title small {
+    display: none;
+  }
+}

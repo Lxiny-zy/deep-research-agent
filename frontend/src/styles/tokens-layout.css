@@ -1,0 +1,72 @@
+/* 与主题无关的令牌：字体、字号、间距、圆角、尺寸、动效 */
+
+:root {
+  --font-sans:
+    'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', system-ui,
+    -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  /* 中文衬线：标题、导航、任务名；拉丁展示字：品牌大字与英文副标题 */
+  --font-serif:
+    'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
+  --font-display:
+    'Playfair Display', 'Didot', 'Bodoni 72', 'Bodoni MT', 'Times New Roman', var(--font-serif);
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  --sidebar-width: 224px;
+  --sidebar-collapsed: 64px;
+  --topbar-height: 60px;
+  --content-max: 1280px;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --duration: 180ms;
+
+  /* 兼容：旧组件里仍引用的变量名，映射到新令牌 */
+  --text-primary: var(--text);
+  --text-secondary: var(--text-2);
+  --text-tertiary: var(--text-3);
+  --surface-1: var(--surface);
+  --border-primary: var(--border);
+  --border-secondary: var(--border);
+  --border-accent: var(--primary);
+  --accent-primary: var(--primary);
+  --error: var(--danger);
+}
+
+/* 光环角度可插值：让 conic 渐变真正旋转（不支持 @property 的浏览器退化为静止光环） */
+@property --iris-angle {
+  syntax: '<angle>';
+  inherits: true;
+  initial-value: 0deg;
+}
+
+/* 自定义属性里的 var() 在声明它的元素上就被代换掉了：若只在 :root 声明 --iris，
+   后代再怎么动画 --iris-angle 也转不起来。所以逐元素（含伪元素）重新声明。 */
+*,
+::before,
+::after {
+  --iris: conic-gradient(from var(--iris-angle), var(--iris-stops));
+}

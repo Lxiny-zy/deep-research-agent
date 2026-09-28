@@ -1,171 +1,85 @@
 /* ============================================================================
-   Science Research 设计令牌
-   浅色为默认（科研文档以阅读为主），深色跟随系统或手动切换。
-   所有组件只引用这里的变量，不写死颜色。
+   Science Research 颜色令牌 · 亮色「棱镜纸」
+   米白纸面 + 虹彩光谱 + 墨色与金色点睛；深色「墨夜」见 tokens-dark.css，
+   字体 / 间距 / 动效见 tokens-layout.css。正文色在所有底色上 ≥ 4.5:1。
    ========================================================================== */
 
 :root {
   color-scheme: light;
 
-  /* 中性色：偏冷的石墨灰，长时间阅读不刺眼 */
-  --bg: #f6f7f9;
-  --bg-subtle: #eef0f3;
-  --surface: #ffffff;
-  --surface-2: #f8f9fb;
-  --surface-3: #f1f3f6;
-  --surface-hover: #f3f5f8;
-  --border: #e3e6eb;
-  --border-strong: #cfd4dc;
+  --bg: #f5f4f1;
+  --bg-subtle: #eeece8;
+  --surface: #fcfbf9;
+  --surface-2: #f8f7f4;
+  /* 不透明原值：玻璃卡片内部会把 --surface 改成半透明，弹层用这两个值恢复实底（见 prism/glass.css） */
+  --surface-solid: #fcfbf9;
+  --surface-2-solid: #f8f7f4;
+  --surface-3: #efede9;
+  --surface-hover: #f2f0ec;
+  --border: #e3e0da;
+  --border-strong: #cdc8bf;
+  --glass: rgba(252, 251, 249, 0.62);
 
-  --text: #16191f;
-  --text-2: #4a5160;
-  /* text-3 在 bg / surface-3 上需 ≥ 4.5:1（WCAG AA 正文）；#6f7685 仅 4.1 */
-  --text-3: #646b79;
-  --text-muted: #686f7d; /* 最弱一级文字，仍需 ≥ 4.5:1 */
+  --text: #16151a;
+  --text-2: #44424c;
+  --text-3: #55525e;
+  --text-muted: #5d5a66;
   --text-inverse: #ffffff;
 
-  /* 品牌主色：沉稳的靛蓝，科研 / 学术气质 */
-  --primary: #3b5bdb;
-  --primary-hover: #334fc4;
-  --primary-active: #2b43a8;
-  --primary-soft: #eef2ff;
-  --primary-soft-2: #dfe6ff;
-  --primary-text: #2f49b8;
-  --focus-ring: 0 0 0 3px rgba(59, 91, 219, 0.24);
+  /* 主色：墨靛（导航指示、链接）；金色：选中态描线 */
+  --primary: #3a45a8;
+  --primary-hover: #313b93;
+  --primary-active: #29317c;
+  --primary-soft: #eceefa;
+  --primary-soft-2: #dde1f6;
+  --primary-text: #2f3890;
+  --focus-ring: 0 0 0 3px rgba(58, 69, 168, 0.22);
+  --gold: #b07d2e;
+  --gold-text: #8a5d17;
+  --gold-soft: #f8efe0;
 
-  /* 语义色 */
-  --success: #1f9d61;
-  --success-soft: #e7f6ee;
-  --success-text: #157a4b;
-  --warning: #c77c02;
-  --warning-soft: #fdf3e1;
-  --warning-text: #9a5d00;
-  --danger: #d64545;
-  --danger-soft: #fdecec;
-  --danger-text: #b3261e;
-  --info: #2f80ed;
-  --info-soft: #e8f1fd;
-  --info-text: #1f63c2;
+  /* 墨色：主操作按钮与强调块 */
+  --ink: #1b1a24;
+  --ink-2: #2a2936;
+  --ink-text: #f7f5f0;
+  --ink-muted: #bdb9c8;
 
-  /* 侧边栏：深色，把导航与内容区明确分开 */
-  --sidebar-bg: #161a23;
-  --sidebar-border: #232836;
-  --sidebar-text: #aab1c0;
-  --sidebar-text-strong: #f2f4f8;
-  --sidebar-hover: #1f2431;
-  --sidebar-active: #262d3d;
-  --sidebar-accent: #8ea2ff;
-  --sidebar-muted: #6f7788;
-  --brand-gradient: linear-gradient(135deg, #5b78ff, #3b5bdb);
+  /* 虹彩光谱：品牌色带与光环 */
+  --spectrum: linear-gradient(100deg, #7aa7ff, #b28cff 28%, #ff9fc2 52%, #ffc56b 76%, #8fe3c8);
+  /* 只存色标；--iris 本身在 tokens-layout.css 里逐元素声明，才能跟着各自的 --iris-angle 转 */
+  --iris-stops: #ff9fc2, #ffc56b, #c8f0a0, #8fe3c8, #7aa7ff, #b28cff, #ff9fc2;
+
+  --success: #1f8a58;
+  --success-soft: #e6f4ec;
+  --success-text: #146c43;
+  --warning: #b8740a;
+  --warning-soft: #fbf1df;
+  --warning-text: #8d5700;
+  --danger: #c93c3c;
+  --danger-soft: #fbeaea;
+  --danger-text: #a52620;
+  --info: #2f6fd6;
+  --info-soft: #e7effb;
+  --info-text: #1f58b3;
+
+  /* 侧栏：浅色毛玻璃，与内容区同一纸面，靠留白与细线分隔 */
+  --sidebar-bg: rgba(248, 247, 244, 0.72);
+  --sidebar-border: #e3e0da;
+  --sidebar-text: #44424c;
+  --sidebar-text-strong: #16151a;
+  --sidebar-hover: rgba(27, 26, 36, 0.045);
+  --sidebar-active: rgba(27, 26, 36, 0.075);
+  --sidebar-accent: #3a45a8;
+  --sidebar-muted: #5d5a66;
+  --brand-gradient: linear-gradient(120deg, #1b1a24, #2d2b3d);
   --on-primary: #ffffff;
   --knob: #ffffff;
 
-  /* 浮层 */
-  --tooltip-bg: #1f2430;
-  --tooltip-text: #eef1f6;
+  --tooltip-bg: #1b1a24;
+  --tooltip-text: #f7f5f0;
 
-  /* 排版 */
-  --font-sans:
-    'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', system-ui,
-    -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  --font-serif: 'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', 'STSong', Georgia, serif;
-
-  --text-xs: 12px;
-  --text-sm: 13px;
-  --text-base: 14px;
-  --text-md: 15px;
-  --text-lg: 17px;
-  --text-xl: 20px;
-  --text-2xl: 24px;
-  --text-3xl: 30px;
-
-  /* 尺寸 */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-full: 999px;
-
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-10: 40px;
-
-  --sidebar-width: 240px;
-  --sidebar-collapsed: 64px;
-  --topbar-height: 56px;
-  --content-max: 1240px;
-
-  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
-  --shadow-md: 0 6px 16px -4px rgba(16, 24, 40, 0.1), 0 2px 6px -2px rgba(16, 24, 40, 0.05);
-  --shadow-lg: 0 18px 40px -12px rgba(16, 24, 40, 0.22);
-
-  --ease: cubic-bezier(0.2, 0, 0, 1);
-  --duration: 160ms;
-
-  /* 兼容：旧组件里仍引用的变量名，映射到新令牌 */
-  --text-primary: var(--text);
-  --text-secondary: var(--text-2);
-  --text-tertiary: var(--text-3);
-  --surface-1: var(--surface);
-  --border-primary: var(--border);
-  --border-secondary: var(--border);
-  --border-accent: var(--primary);
-  --accent-primary: var(--primary);
-  --error: var(--danger);
-}
-
-:root[data-theme='dark'] {
-  color-scheme: dark;
-  --bg: #0f1218;
-  --bg-subtle: #141821;
-  --surface: #171b24;
-  --surface-2: #1b202a;
-  --surface-3: #212734;
-  --surface-hover: #222836;
-  --border: #2a303d;
-  --border-strong: #3a4252;
-
-  --text: #e8ebf1;
-  --text-2: #b4bac7;
-  --text-3: #9aa1b0;
-  --text-muted: #888f9e;
-
-  --primary: #6f8bff;
-  --primary-hover: #8198ff;
-  --primary-active: #5a78f5;
-  --primary-soft: #1d2440;
-  --primary-soft-2: #26305a;
-  --primary-text: #a9b8ff;
-  --focus-ring: 0 0 0 3px rgba(111, 139, 255, 0.35);
-
-  --success: #3cc47f;
-  --success-soft: #16291f;
-  --success-text: #6fdca3;
-  --warning: #e6a23c;
-  --warning-soft: #2c2413;
-  --warning-text: #f0c070;
-  --danger: #f06a6a;
-  --danger-soft: #2f1818;
-  --danger-text: #ff9b9b;
-  --info: #5ea0ff;
-  --info-soft: #15233a;
-  --info-text: #9cc4ff;
-
-  --sidebar-bg: #0b0e13;
-  --sidebar-border: #1c212c;
-  --sidebar-hover: #161a23;
-  --sidebar-active: #1d2330;
-  --tooltip-bg: #2b3140;
-
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 8px 20px -6px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 20px 44px -12px rgba(0, 0, 0, 0.6);
+  --shadow-xs: 0 1px 2px rgba(30, 24, 16, 0.04);
+  --shadow-sm: 0 1px 3px rgba(30, 24, 16, 0.06), 0 1px 2px rgba(30, 24, 16, 0.03);
+  --shadow-md: 0 10px 24px -10px rgba(30, 24, 16, 0.14);
+  --shadow-lg: 0 24px 48px -18px rgba(30, 24, 16, 0.22);
 }

@@ -1,0 +1,106 @@
+/* 按钮家族：墨色实底（主操作，见 surface.css）· 描线 · 文字 · 圆形图标 · 危险。
+   每一类有自己的悬停语言，一眼能分出主次。首页专属按钮见 buttons-home.css。 */
+
+/* 描线按钮：一道墨色细线框，悬停时墨色从底部涨满、文字反白 */
+.btn-secondary {
+  background: linear-gradient(var(--ink), var(--ink)) no-repeat bottom / 100% 0%;
+  background-color: transparent;
+  border: 1px solid color-mix(in srgb, var(--ink) 55%, transparent);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--font-serif);
+  letter-spacing: 0.04em;
+  transition:
+    background-size 360ms var(--ease-out),
+    border-color var(--duration) var(--ease),
+    color 240ms var(--ease);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: transparent;
+  background-size: 100% 100%;
+  border-color: var(--ink);
+  color: var(--ink-text);
+}
+
+/* 文字按钮：没有底色，悬停时一道细线从左向右划出 */
+.btn-ghost:not(.icon-button) {
+  background: linear-gradient(currentColor, currentColor) no-repeat 0 calc(100% - 6px) / 0% 1px;
+  background-color: transparent;
+  background-origin: content-box;
+  transition:
+    background-size 320ms var(--ease-out),
+    color var(--duration) var(--ease);
+}
+
+.btn-ghost:not(.icon-button):hover:not(:disabled) {
+  background-color: transparent;
+  background-size: 100% 1px;
+  color: var(--primary-text);
+}
+
+.btn-ghost:not(.icon-button) .app-icon {
+  transition: transform 320ms var(--ease-out);
+}
+
+.btn-ghost:not(.icon-button):hover .app-icon {
+  transform: translateX(-2px) rotate(-8deg);
+}
+
+/* 圆形图标按钮：悬停时外圈亮起一道虹彩细环，图标轻转 */
+/* :where 让各组件自己的定位 / 圆角规则仍能覆盖这里 */
+:where(.icon-button) {
+  position: relative;
+}
+
+.btn.icon-button {
+  border-radius: 50%;
+}
+
+.icon-button::before {
+  background: var(--iris);
+  border-radius: 50%;
+  content: '';
+  inset: -1px;
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1px));
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  transition: opacity 280ms var(--ease);
+}
+
+.icon-button:hover:not(:disabled)::before,
+.icon-button:focus-visible::before {
+  animation: iris-spin 3s linear infinite;
+  opacity: 1;
+}
+
+.icon-button .app-icon {
+  transition: transform 360ms var(--ease-out);
+}
+
+.icon-button:hover:not(:disabled) .app-icon {
+  transform: rotate(-12deg) scale(1.08);
+}
+
+/* 危险操作：平时低调，悬停时底色泛红、图标轻摇一下 */
+.btn.danger:hover:not(:disabled),
+.btn-danger:hover:not(:disabled) {
+  background-color: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.btn.danger.icon-button::before {
+  background: var(--danger);
+}
+
+.btn.danger:hover:not(:disabled) .app-icon {
+  animation: nudge 420ms var(--ease-out);
+  transform: none;
+}
+
+@keyframes nudge {
+  25% { rotate: -10deg; }
+  60% { rotate: 8deg; }
+}

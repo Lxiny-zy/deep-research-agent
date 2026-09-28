@@ -1,0 +1,77 @@
+/* ============================================================================
+   颜色令牌 · 深色「墨夜」
+   近黑墨底上，光谱自发光更亮；保留金色点睛。正文色在所有底色上 ≥ 4.5:1。
+   ========================================================================== */
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #07070b;
+  --bg-subtle: #0c0c12;
+  --surface: #0f0f16;
+  --surface-2: #13131c;
+  --surface-solid: #0f0f16;
+  --surface-2-solid: #13131c;
+  --surface-3: #1a1a25;
+  --surface-hover: #1d1d29;
+  --border: #262634;
+  --border-strong: #37374a;
+  --glass: rgba(15, 15, 22, 0.58);
+
+  --text: #f3f1eb;
+  --text-2: #cac7d4;
+  --text-3: #aeabbb;
+  --text-muted: #9a97a8;
+
+  --primary: #9ea8ff;
+  --primary-hover: #b1b9ff;
+  --primary-active: #8a95f5;
+  --primary-soft: #1a1c38;
+  --primary-soft-2: #24274d;
+  --primary-text: #bcc3ff;
+  --focus-ring: 0 0 0 3px rgba(158, 168, 255, 0.35);
+  --gold: #e2b86a;
+  --gold-text: #f0cd8c;
+  --gold-soft: #2a2213;
+
+  /* 深色下的「墨色」按钮反转为暖白，保持最强色差 */
+  --ink: #f3f1eb;
+  --ink-2: #dedad0;
+  --ink-text: #111018;
+  --ink-muted: #4d4a57;
+
+  --spectrum: linear-gradient(100deg, #6f9bff, #a77dff 28%, #ff8fb8 52%, #ffbd5c 76%, #6fdcbc);
+
+  --success: #3cc47f;
+  --success-soft: #11251a;
+  --success-text: #74dca6;
+  --warning: #e6a23c;
+  --warning-soft: #2a2011;
+  --warning-text: #f0c273;
+  --danger: #f06a6a;
+  --danger-soft: #2c1515;
+  --danger-text: #ff9d9d;
+  --info: #5ea0ff;
+  --info-soft: #121f35;
+  --info-text: #9dc4ff;
+
+  --sidebar-bg: rgba(10, 10, 15, 0.7);
+  --sidebar-border: #1f1f2b;
+  --sidebar-text: #bdbac9;
+  --sidebar-text-strong: #ffffff;
+  --sidebar-hover: rgba(255, 255, 255, 0.05);
+  --sidebar-active: rgba(255, 255, 255, 0.08);
+  --sidebar-accent: #bcc3ff;
+  --sidebar-muted: #9a97a8;
+  --brand-gradient: linear-gradient(120deg, #f3f1eb, #d9d4c8);
+  --on-primary: #111018;
+  --knob: #f3f1eb;
+
+  --tooltip-bg: #24232f;
+  --tooltip-text: #f3f1eb;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 12px 28px -10px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 26px 52px -18px rgba(0, 0, 0, 0.7);
+}

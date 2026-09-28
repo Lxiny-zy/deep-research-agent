@@ -307,27 +307,29 @@ function ResearchComposer() {
   return (
     <div className="home-page">
       <header className="page-header home-hero">
-        <div>
-          <span className="home-hero-eyebrow">
-            <AppIcon name="sparkles" size={13} aria-hidden="true" />
-            Science Research 科研工作台
+        <div className="home-hero-copy">
+          <span className="home-hero-kicker" aria-hidden="true">
+            From questions
+            <br />
+            to a brighter
+            <br />
+            tomorrow.
           </span>
-          <h1>今天想研究什么？</h1>
-          <p>描述问题或上传文件。模型先读文件再检索文献，每条结论逐字核验后交付。</p>
-          <ul className="home-hero-points" aria-label="工作方式">
-            <li>
-              <AppIcon name="file-search" size={14} aria-hidden="true" />
-              读懂上传的文件
-            </li>
-            <li>
-              <AppIcon name="shield" size={14} aria-hidden="true" />
-              证据逐字核验
-            </li>
-            <li>
-              <AppIcon name="check-circle" size={14} aria-hidden="true" />
-              不合格自动返工
-            </li>
-          </ul>
+          <h1 className="home-hero-title">
+            <span className="visually-hidden">Science Research 科研工作台：</span>
+            <span className="home-hero-word" aria-hidden="true">
+              Science
+            </span>
+            <span className="home-hero-word is-spectral" aria-hidden="true">
+              Research
+            </span>
+            <span className="home-hero-question">今天想研究什么？</span>
+          </h1>
+          <p className="home-hero-sub">探索未知，让思想穿越时空，与伟大的智慧相遇。</p>
+        </div>
+        <div className="home-hero-aside" aria-hidden="true">
+          <span>Knowledge drives human progress</span>
+          <span>Spectrum of knowledge</span>
         </div>
         {draft.status !== 'idle' && (
           <div className={'home-draft is-' + draft.status}>
@@ -411,9 +413,14 @@ function ResearchComposer() {
           )}
 
           <section className="home-card home-input">
-            <label className="home-input-label" htmlFor="query">
-              {activeTemplate?.input_label ?? '研究问题'}
-            </label>
+            <div className="home-section-head">
+              <label className="home-input-label" htmlFor="query">
+                {activeTemplate?.input_label ?? '研究问题'}
+              </label>
+              <span className="home-section-motto" aria-hidden="true">
+                Good research begins with a better question.
+              </span>
+            </div>
             <textarea
               id="query"
               className="input textarea home-query"
@@ -466,7 +473,7 @@ function ResearchComposer() {
             )}
             <div className="home-attach">
               <span className="home-attach-title">
-                附件
+                添加附件
                 <span className="hint">模型会先阅读这些文件，引用时标注文件与页码 / 章节</span>
               </span>
               <AttachmentDropzone
@@ -483,7 +490,7 @@ function ResearchComposer() {
               if (!examples.length || thread.length > 0) return null
               return (
                 <div className="home-examples" aria-label="示例输入">
-                  <span className="home-examples-title">示例</span>
+                  <span className="home-examples-title">示例问题</span>
                   {examples.map((example) => (
                     <button
                       type="button"
@@ -492,6 +499,7 @@ function ResearchComposer() {
                       onClick={() => draft.update({ query: example })}
                     >
                       {example.length > 56 ? example.slice(0, 56) + '…' : example}
+                      <AppIcon name="chevron-right" size={13} aria-hidden="true" />
                     </button>
                   ))}
                 </div>
@@ -537,10 +545,7 @@ function ResearchComposer() {
         </div>
 
         <aside className="home-config" aria-label="研究配置">
-          <div className="home-config-head">
-            <AppIcon name="sliders" size={15} aria-hidden="true" />
-            任务配置
-          </div>
+          <div className="home-config-head">任务配置</div>
           {strategies.length > 0 && !customWorkflow && (
             <StrategySelector
               strategies={strategies}
@@ -622,10 +627,20 @@ function ResearchComposer() {
             key={customWorkflow ?? strategyWorkflow ?? workflow}
             workflow={customWorkflow ?? strategyWorkflow ?? workflow}
           />
+          <p className="home-config-motto" aria-hidden="true">
+            Not just answers,
+            <br />
+            but new perspectives.
+          </p>
         </aside>
       </fieldset>
 
       <div className="home-actionbar">
+        <p className="home-actionbar-motto" aria-hidden="true">
+          Exploration
+          <br />
+          has no final frontier.
+        </p>
         <div className="home-actionbar-status" role="status">
           <AppIcon
             name={submitting ? 'loader' : clarify ? 'help' : 'circle-dot-dashed'}
@@ -641,15 +656,18 @@ function ResearchComposer() {
             {error}。输入已保留，可重新提交。
           </div>
         )}
-        <button
-          className="btn btn-primary btn-lg"
-          onClick={start}
-          disabled={busy || !query.trim()}
-          type="button"
-        >
-          {submitLabel}
-          {!submitting && <AppIcon name="arrow-right" size={16} aria-hidden="true" />}
-        </button>
+        <div className="home-actionbar-go">
+          <button
+            className="btn btn-primary btn-lg"
+            onClick={start}
+            disabled={busy || !query.trim()}
+            type="button"
+          >
+            {submitLabel}
+            {!submitting && <AppIcon name="arrow-right" size={16} aria-hidden="true" />}
+          </button>
+          <span aria-hidden="true">Begin research</span>
+        </div>
       </div>
     </div>
   )

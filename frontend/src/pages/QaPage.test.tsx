@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import QaPage from './QaPage'
@@ -65,10 +65,14 @@ describe('QaPage', () => {
   it('renders answers with citations and the verification trail', async () => {
     renderAt('/qa/c1')
     expect(await screen.findByText('CASSI 是什么？')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Wagadarikar 2008' })).toHaveAttribute(
+    const answer = screen.getByRole('list', { name: '引用来源' })
+    expect(within(answer).getByRole('link', { name: 'Wagadarikar 2008' })).toHaveAttribute(
       'href',
       'https://a.com',
     )
+    // 右侧面板把本会话引用汇总一次（去重）
+    const panel = screen.getByRole('complementary', { name: '问答说明与引用' })
+    expect(within(panel).getAllByRole('link', { name: 'Wagadarikar 2008' })).toHaveLength(1)
     expect(screen.getByText('保留 1 条已核验证据')).toBeInTheDocument()
   })
 

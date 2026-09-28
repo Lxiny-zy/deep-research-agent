@@ -1,5 +1,5 @@
 import { AppIcon } from './AppIcon'
-import { formatLabel, templateIcon } from '../lib/workbench'
+import { formatLabel, templateEn, templateIcon } from '../lib/workbench'
 import type { TaskTemplate } from '../types'
 
 interface Props {
@@ -10,7 +10,7 @@ interface Props {
 }
 
 /**
- * 任务类型选择器：一行紧凑的单选标签（radiogroup），下方只展开当前任务的说明与交付格式。
+ * 任务类型选择器：一行带英文副标题的标签页（radiogroup），下方只展开当前任务的说明与交付格式。
  * 紧凑排列让输入框留在首屏；用原生 radio，键盘方向键切换与读屏语义都由浏览器提供。
  */
 export default function TaskTemplatePicker({ templates, value, disabled, onChange }: Props) {
@@ -37,9 +37,16 @@ export default function TaskTemplatePicker({ templates, value, disabled, onChang
                 className="visually-hidden"
               />
               <span className="task-card-icon" aria-hidden="true">
-                <AppIcon name={templateIcon(template.icon)} size={15} />
+                <AppIcon name={templateIcon(template.icon)} size={20} strokeWidth={1.5} />
               </span>
-              <strong className="task-card-title">{template.title}</strong>
+              <span className="task-card-text">
+                <strong className="task-card-title">{template.title}</strong>
+                {templateEn(template.key) && (
+                  <small className="task-card-en" aria-hidden="true">
+                    {templateEn(template.key)}
+                  </small>
+                )}
+              </span>
             </label>
           )
         })}

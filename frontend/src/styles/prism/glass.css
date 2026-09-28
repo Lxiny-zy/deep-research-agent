@@ -1,0 +1,54 @@
+/* 透光玻璃卡片：背景光谱从卡片后面以柔和色晕透出来，而不是被一刀切断。
+   - 外层卡片：轻模糊（3px）+ 约 60% 底色，谱线柔化成色晕、正文不受干扰；
+   - 卡片内部：把 --surface / --surface-2 改成半透明，嵌套卡片、选项块自动跟着透光，
+     不必逐个组件改；嵌套卡片不再叠第二层模糊；
+   - 弹窗、菜单、抽屉恢复实底，输入框保留较高的底色保证可读。 */
+
+:root {
+  --glass-fill: 60%;
+  --glass-inner: 55%;
+  /* 模糊保持很轻：再大细谱线会被糊没，只剩一片灰 */
+  --glass-blur: 3px;
+}
+
+:root[data-theme='dark'] {
+  --glass-fill: 56%;
+  --glass-inner: 45%;
+}
+
+.panel,
+.card,
+.home-card,
+.home-page .home-config {
+  --surface: color-mix(in srgb, var(--surface-solid) var(--glass-inner), transparent);
+  --surface-2: color-mix(in srgb, var(--surface-2-solid) var(--glass-inner), transparent);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.1);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.1);
+  background: color-mix(in srgb, var(--surface-solid) var(--glass-fill), transparent);
+}
+
+/* 嵌套在玻璃里的卡片：只要一层薄底色，不再叠模糊 */
+:is(.panel, .card, .home-card, .home-config) :is(.panel, .card, .home-card) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--surface);
+}
+
+/* 输入框：底色更实一些，打字时不被后面的谱线干扰 */
+:is(.panel, .card, .home-card, .home-config) :is(.input, .textarea) {
+  background: color-mix(in srgb, var(--surface-solid) 82%, transparent);
+}
+
+/* 弹层恢复实底：它们常渲染在卡片内部，但需要完整遮住下面的内容 */
+:is(
+    .modal,
+    .editor-modal,
+    .auth-modal,
+    [role='dialog'],
+    [role='menu'],
+    [role='listbox'],
+    [role='tooltip']
+  ) {
+  --surface: var(--surface-solid);
+  --surface-2: var(--surface-2-solid);
+}

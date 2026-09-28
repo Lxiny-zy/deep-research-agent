@@ -1,0 +1,93 @@
+/* 欢迎界面 · 环外光谱画布、节拍律动与涟漪（节拍周期与 haloRender.ts 的 BEAT_MS 一致） */
+
+.intro-ring > .intro-halo {
+  height: 190%;
+  left: -45%;
+  pointer-events: none;
+  position: absolute;
+  top: -45%;
+  width: 190%;
+}
+
+/* 细环与光晕跟着节拍轻轻一跳：一次主拍 + 一次回响 */
+.intro-ring > .intro-ring-line {
+  animation: ring-beat 2.4s ease-out infinite;
+}
+
+.intro-ring > .intro-ring-glow {
+  animation: glow-beat 2.4s ease-out infinite;
+}
+
+/* 涟漪：两圈细环轮流向外荡开，每拍一圈 */
+.intro-ring > .intro-ring-wave {
+  animation: ring-wave 4.8s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+  -webkit-mask: radial-gradient(farthest-side, transparent 97%, #000 98.6%, transparent);
+  mask: radial-gradient(farthest-side, transparent 97%, #000 98.6%, transparent);
+  opacity: 0;
+}
+
+.intro-ring > .intro-ring-wave + .intro-ring-wave {
+  animation-delay: -2.4s;
+}
+
+@keyframes ring-beat {
+  0% {
+    scale: 1.014;
+  }
+  9% {
+    scale: 1;
+  }
+  20% {
+    scale: 1.006;
+  }
+  32%,
+  100% {
+    scale: 1;
+  }
+}
+
+@keyframes glow-beat {
+  0% {
+    opacity: 1;
+    scale: 1.02;
+  }
+  30%,
+  100% {
+    opacity: var(--glow-rest, 0.62);
+    scale: 1;
+  }
+}
+
+:root[data-theme='dark'] .intro {
+  --glow-rest: 0.85;
+}
+
+@keyframes ring-wave {
+  0% {
+    opacity: 0.85;
+    scale: 1;
+  }
+  100% {
+    opacity: 0;
+    scale: 1.55;
+  }
+}
+
+/* 悬停「进入」：节拍加快 */
+.intro-stage:has(.intro-enter:hover) .intro-ring > .intro-ring-line,
+.intro-stage:has(.intro-enter:hover) .intro-ring > .intro-ring-glow {
+  animation-duration: 1.2s;
+}
+
+.intro.is-leaving .intro-ring > .intro-ring-wave {
+  animation: none;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intro-ring > .intro-ring-line,
+  .intro-ring > .intro-ring-glow,
+  .intro-ring > .intro-ring-wave {
+    animation: none;
+  }
+}

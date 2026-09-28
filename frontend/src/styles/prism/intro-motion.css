@@ -1,0 +1,121 @@
+/* 欢迎界面 · 虹彩光环、进入按钮与离场过渡 */
+
+.intro-ring {
+  animation:
+    iris-spin 16s linear infinite,
+    ring-breathe 7s ease-in-out infinite;
+  height: var(--ring);
+  pointer-events: none;
+  position: relative;
+  transform: translate(calc(var(--px) * 18px), calc(var(--py) * 18px))
+    rotateX(calc(var(--py) * -12deg)) rotateY(calc(var(--px) * 12deg));
+  transition: transform 600ms var(--ease-out);
+  width: var(--ring);
+}
+
+.intro-ring > i {
+  background: var(--iris);
+  border-radius: 50%;
+  inset: 0;
+  position: absolute;
+}
+
+/* 细环：径向遮罩只留下一圈柔边光带 */
+.intro-ring-line {
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent 93.5%,
+    #000 96%,
+    #000 98.4%,
+    transparent
+  );
+  mask: radial-gradient(farthest-side, transparent 93.5%, #000 96%, #000 98.4%, transparent);
+}
+
+.intro-ring-glow {
+  filter: blur(22px);
+  -webkit-mask: radial-gradient(farthest-side, transparent 84%, #000 94%, transparent);
+  mask: radial-gradient(farthest-side, transparent 84%, #000 94%, transparent);
+  opacity: 0.75;
+}
+
+/* 高光：一段白色弧光，朝向指针所在的一侧 */
+.intro-ring > .intro-ring-shine {
+  background: conic-gradient(
+    from calc(var(--px) * 80deg + var(--py) * 40deg + 200deg),
+    transparent 0 62%,
+    rgba(255, 255, 255, 0.95) 72%,
+    transparent 84%
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent 94%, #000 96.5%, transparent 99%);
+  mask: radial-gradient(farthest-side, transparent 94%, #000 96.5%, transparent 99%);
+}
+
+:root[data-theme='dark'] .intro-ring > i {
+  mix-blend-mode: screen;
+}
+
+:root[data-theme='dark'] .intro-ring-glow {
+  filter: blur(30px);
+  opacity: 1;
+}
+
+@keyframes iris-spin {
+  to {
+    --iris-angle: 360deg;
+  }
+}
+
+@keyframes ring-breathe {
+  50% {
+    scale: 1.025;
+  }
+}
+
+.intro-enter {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: calc(var(--ring) * 0.6);
+  justify-content: center;
+  width: calc(var(--ring) * 0.6);
+}
+
+.intro-enter-cn {
+  font-family: var(--font-serif);
+  font-size: clamp(26px, 2.6vw, 34px);
+  font-weight: 600;
+  letter-spacing: 0.5em;
+  /* letter-spacing 会在末字后面也留一段空白；左侧补同样宽的内边距，
+     两者一起过渡，字距拉开时「进」「入」才会以中心对称地向两边展开 */
+  padding-left: 0.5em;
+  transition:
+    letter-spacing 500ms var(--ease-out),
+    padding-left 500ms var(--ease-out);
+}
+
+.intro-enter-en {
+  color: var(--text-3);
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.5em;
+  padding-left: 0.5em;
+  text-transform: uppercase;
+}
+
+.intro-enter:hover .intro-enter-cn,
+.intro-enter:focus-visible .intro-enter-cn {
+  letter-spacing: 0.7em;
+  padding-left: 0.7em;
+}
+
+.intro-enter:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}

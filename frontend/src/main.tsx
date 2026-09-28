@@ -4,6 +4,10 @@ import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import App from './App'
 import RouteFallback from './components/RouteFallback'
+// 品牌展示字（自托管，符合 CSP 的 font-src 'self'）
+import '@fontsource/playfair-display/400.css'
+import '@fontsource/playfair-display/400-italic.css'
+import '@fontsource/playfair-display/600.css'
 import './styles/index.css'
 import ErrorPage, { NotFoundPage } from './pages/ErrorPage'
 

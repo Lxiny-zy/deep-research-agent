@@ -1,0 +1,127 @@
+/* 背景层：棱镜漏光 + 光谱画布。漏光的角度与位置随页面特征（data-signature）变化 */
+
+/* 外壳成为层叠上下文：背景层 z-index:-1 画在外壳底色之上、内容之下 */
+.app-shell {
+  background: var(--bg);
+  isolation: isolate;
+}
+
+.main-column {
+  background: transparent;
+  position: relative;
+}
+
+.backdrop {
+  --leak-rotate: -24deg;
+  --leak-top: 8%;
+  --leak-left: 30%;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: fixed;
+  z-index: -1;
+}
+
+.backdrop[data-signature='qa'] {
+  --leak-rotate: -10deg;
+  --leak-top: 18%;
+  --leak-left: 45%;
+}
+
+.backdrop[data-signature='history'] {
+  --leak-rotate: 8deg;
+  --leak-top: 4%;
+  --leak-left: 20%;
+}
+
+.backdrop[data-signature='library'] {
+  --leak-rotate: -48deg;
+  --leak-top: 0%;
+  --leak-left: 55%;
+}
+
+.backdrop[data-signature='run'] {
+  --leak-rotate: -34deg;
+  --leak-top: -6%;
+  --leak-left: 50%;
+}
+
+.backdrop[data-signature='workflows'] {
+  --leak-rotate: 22deg;
+  --leak-top: 10%;
+  --leak-left: 30%;
+}
+
+.backdrop[data-signature='agents'] {
+  --leak-rotate: -62deg;
+  --leak-top: -10%;
+  --leak-left: 62%;
+}
+
+.backdrop[data-signature='tools'] {
+  --leak-rotate: -18deg;
+  --leak-top: 26%;
+  --leak-left: 58%;
+}
+
+/* 漏光：几道虹彩斜光，缓慢漂移；换页时角度与位置平滑过渡 */
+.backdrop-leak {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 159, 194, 0.5),
+    rgba(255, 210, 120, 0.45),
+    rgba(160, 230, 200, 0.45),
+    rgba(122, 167, 255, 0.5),
+    transparent
+  );
+  filter: blur(40px);
+  height: 16vmax;
+  left: var(--leak-left);
+  opacity: 0.28;
+  position: absolute;
+  rotate: var(--leak-rotate);
+  top: var(--leak-top);
+  transition:
+    rotate 1.6s var(--ease-out),
+    top 1.6s var(--ease-out),
+    left 1.6s var(--ease-out);
+  width: 110vmax;
+}
+
+.backdrop-leak.l1 {
+  animation: leak-drift 26s ease-in-out infinite alternate;
+}
+
+.backdrop-leak.l2 {
+  animation: leak-drift 32s ease-in-out infinite alternate-reverse;
+  height: 7vmax;
+  opacity: 0.2;
+  translate: -30vmax 34vmax;
+}
+
+.backdrop-leak.l3 {
+  animation: leak-drift 40s ease-in-out infinite alternate;
+  height: 4vmax;
+  left: -10%;
+  opacity: 0.18;
+  top: 70%;
+}
+
+:root[data-theme='dark'] .backdrop-leak {
+  mix-blend-mode: screen;
+  opacity: 0.14;
+}
+
+@keyframes leak-drift {
+  to {
+    translate: 8vmax 3vmax;
+  }
+}
+
+.spectrum-canvas {
+  height: 100%;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+}
