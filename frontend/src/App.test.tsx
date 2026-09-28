@@ -14,14 +14,16 @@ vi.mock('./components/LoginGate', () => ({
 
 function renderApp() {
   return render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <MemoryRouter initialEntries={['/']}>
-      <Routes>
-        <Route path="/" element={<App />}>
-          <Route index element={<div data-testid="console">console</div>} />
-        </Route>
-      </Routes>
-    </MemoryRouter>
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<App />}>
+            <Route index element={<div data-testid="console">console</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
     </QueryClientProvider>,
   )
 }
@@ -95,7 +97,11 @@ describe('App authentication bootstrap', () => {
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
 
     expect(await screen.findByTestId('console')).toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // 配置检查恰好发生两次（失败一次 + 重试一次）；侧边栏的最近任务列表是另一个请求
+    const configCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes('/api/config'),
+    )
+    expect(configCalls).toHaveLength(2)
     expect(getApiKey()).toBe('still-valid')
   })
 })

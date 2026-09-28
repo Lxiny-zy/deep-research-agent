@@ -183,7 +183,7 @@ export default function ReportView({
               {body}
             </Markdown>
           )}
-          {streaming && <span className="cursor">▍</span>}
+          {streaming && <span className="report-caret" aria-hidden="true" />}
           {/* 流式阶段不渲染来源节：正文还在写，此时的 citations 是残缺快照，
               先给出一份会随后变化的清单，比暂时不给更容易误导。 */}
           {!streaming && cited.length > 0 && (

@@ -3,6 +3,7 @@ import type {
   ResourcePreflight,
   SearchResourceImpact,
   AgentCard,
+  AttachmentUploadResult,
   AgentCardInput,
   AssessRequest,
   AssessResponse,
@@ -16,6 +17,12 @@ import type {
   ModelProfileInput,
   ModelProbeInput,
   ModelDiscoveryResult,
+  ResearchProject,
+  Corpus,
+  LibrarySource,
+  LibrarySourceStatus,
+  SourceChunk,
+  ImportSourceInput,
   RoleInfo,
   ReportDocument,
   RunDetail,
@@ -30,6 +37,17 @@ import type {
   WorkflowDef,
   WorkflowDefInput,
   WorkflowInfo,
+  TaskTemplate,
+  TaskContract,
+  DeliverableRegistry,
+  RunTemplateInfo,
+  QaConversation,
+  QaMessage,
+  RunNarrative,
+  RunWorkspace,
+  TierSpec,
+  UsageQuota,
+  QualityField,
 } from '../types'
 
 export const checkResourcePreflight = (workflow: string, signal?: AbortSignal) =>
@@ -136,7 +154,11 @@ export function setApiKey(key: string, remember = false): 'local' | 'session' | 
 export function clearApiKey(): void {
   memoryApiKey = null
   for (const storage of ['localStorage', 'sessionStorage'] as const) {
-    try { window[storage].removeItem(API_KEY_STORAGE) } catch { /* Storage is optional. */ }
+    try {
+      window[storage].removeItem(API_KEY_STORAGE)
+    } catch {
+      /* Storage is optional. */
+    }
   }
   clearWorkspaceState()
 }
@@ -218,7 +240,8 @@ function submissionFor(body: CreateRunRequest, identity?: string): PendingSubmis
     ) as PendingSubmission | null
     if (
       (saved?.identity ?? saved?.body) === logicalIdentity &&
-      typeof saved?.key === 'string' && typeof saved?.body === 'string'
+      typeof saved?.key === 'string' &&
+      typeof saved?.body === 'string'
     )
       return saved
   } catch {
@@ -284,6 +307,85 @@ export function assessIntent(body: AssessRequest, signal?: AbortSignal): Promise
 
 export function listWorkflows(): Promise<WorkflowInfo[]> {
   return request<WorkflowInfo[]>('/api/workflows')
+}
+
+export function listProjects(signal?: AbortSignal): Promise<ResearchProject[]> {
+  return request<ResearchProject[]>('/api/projects', { signal })
+}
+
+export function createProject(body: {
+  name: string
+  description?: string
+}): Promise<ResearchProject> {
+  return request<ResearchProject>('/api/projects', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function listCorpora(projectId: string, signal?: AbortSignal): Promise<Corpus[]> {
+  return request<Corpus[]>(`/api/projects/${encodeURIComponent(projectId)}/corpora`, { signal })
+}
+
+export function createCorpus(
+  projectId: string,
+  body: { name: string; description?: string },
+): Promise<Corpus> {
+  return request<Corpus>(`/api/projects/${encodeURIComponent(projectId)}/corpora`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function listLibrarySources(
+  projectId: string,
+  corpusId?: string,
+  signal?: AbortSignal,
+): Promise<LibrarySource[]> {
+  const query = corpusId ? `?corpus_id=${encodeURIComponent(corpusId)}` : ''
+  return request<LibrarySource[]>(
+    `/api/projects/${encodeURIComponent(projectId)}/sources${query}`,
+    { signal },
+  )
+}
+
+export function importLibrarySource(
+  projectId: string,
+  body: ImportSourceInput,
+): Promise<LibrarySource> {
+  return request<LibrarySource>(`/api/projects/${encodeURIComponent(projectId)}/sources/import`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function listSourceChunks(
+  projectId: string,
+  sourceId: string,
+  signal?: AbortSignal,
+): Promise<SourceChunk[]> {
+  return request<SourceChunk[]>(
+    `/api/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}/chunks`,
+    { signal },
+  )
+}
+
+export function setLibrarySourceStatus(
+  projectId: string,
+  sourceId: string,
+  status: LibrarySourceStatus,
+): Promise<LibrarySource> {
+  return request<LibrarySource>(
+    `/api/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}`,
+    { method: 'PATCH', body: JSON.stringify({ status }) },
+  )
+}
+
+export function deleteLibrarySource(projectId: string, sourceId: string): Promise<void> {
+  return requestVoid(
+    `/api/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}`,
+    { method: 'DELETE' },
+  )
 }
 
 // ── 自定义工作流（构建器）──────────────────────────────────────────────
@@ -359,11 +461,23 @@ export function getRunDocument(
   })
 }
 
-export type RunDocumentFormat = 'md' | 'csv' | 'xlsx' | 'pdf'
+export type RunDocumentFormat =
+  | 'md'
+  | 'csv'
+  | 'xlsx'
+  | 'pdf'
+  | 'tex'
+  | 'bib'
+  | 'bundle'
+  | 'paper_pdf'
+export type ReportExportProfile = 'academic' | 'technical' | 'executive' | 'appendix'
+export type LatexTemplateName = 'ctexart' | 'ctexrep' | 'ieeetran' | 'acmart'
 
 export interface RunDocumentExportOptions {
   includeHsiTables?: boolean
   tableId?: string
+  profile?: ReportExportProfile
+  template?: LatexTemplateName
   signal?: AbortSignal
 }
 
@@ -401,6 +515,13 @@ export async function downloadRunDocument(
 ): Promise<RunDocumentDownload> {
   const query = new URLSearchParams()
   if (options.includeHsiTables) query.set('include_hsi_tables', 'true')
+  if (options.profile && (format === 'tex' || format === 'paper_pdf')) {
+    query.set('profile', options.profile)
+  }
+  if (options.profile && format === 'bundle') query.set('profile', options.profile)
+  if (options.template && (format === 'tex' || format === 'paper_pdf' || format === 'bundle')) {
+    query.set('template', options.template)
+  }
   // 只有单表导出（CSV/XLSX）需要选表。md/pdf 渲染的是整份文档，给它们带
   // table_id 会让 URL 声明一个该端点并不遵守的约束。用白名单而不是排除法，
   // 这样将来新增格式默认不带，而不是默认带上。
@@ -409,10 +530,22 @@ export async function downloadRunDocument(
   }
   const suffix = query.toString() ? `?${query.toString()}` : ''
   const encodedId = encodeURIComponent(id)
-  const fallback = `research-${id.replace(/[^A-Za-z0-9._-]/g, '_') || 'run'}.${format}`
+  const endpointByFormat: Record<RunDocumentFormat, string> = {
+    md: 'md',
+    csv: 'csv',
+    xlsx: 'xlsx',
+    pdf: 'pdf',
+    tex: 'tex',
+    bib: 'bib',
+    bundle: 'bundle.zip',
+    paper_pdf: 'paper.pdf',
+  }
+  const endpoint = endpointByFormat[format]
+  const extension = format === 'paper_pdf' ? 'pdf' : format
+  const fallback = `research-${id.replace(/[^A-Za-z0-9._-]/g, '_') || 'run'}.${extension}`
   const key = getApiKey()
   return withResponse(
-    `/api/runs/${encodedId}/document.${format}${suffix}`,
+    `/api/runs/${encodedId}/document.${endpoint}${suffix}`,
     {
       headers: {
         Accept: 'application/octet-stream',
@@ -505,14 +638,17 @@ export async function streamRun(
   heartbeat()
   try {
     controller.signal.throwIfAborted()
-    const res = await Promise.race([fetch(`/api/runs/${encodeURIComponent(id)}/stream`, {
-      headers: {
-        Accept: 'text/event-stream',
-        ...(key ? { Authorization: `Bearer ${key}` } : {}),
-        ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}),
-      },
-      signal: controller.signal,
-    }), aborted])
+    const res = await Promise.race([
+      fetch(`/api/runs/${encodeURIComponent(id)}/stream`, {
+        headers: {
+          Accept: 'text/event-stream',
+          ...(key ? { Authorization: `Bearer ${key}` } : {}),
+          ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}),
+        },
+        signal: controller.signal,
+      }),
+      aborted,
+    ])
     if (!res.ok) {
       if (res.status === 401) signalUnauthorized(key)
       throw new ApiError(res.status, res.statusText)
@@ -574,7 +710,7 @@ export function getConfig(signal?: AbortSignal): Promise<ConfigView> {
 
 export function getCapabilities(
   signal?: AbortSignal,
-): Promise<{ exports: Record<RunDocumentFormat, boolean> }> {
+): Promise<{ exports: Partial<Record<RunDocumentFormat, boolean>> }> {
   return request('/api/capabilities', { signal })
 }
 
@@ -702,4 +838,156 @@ export function deleteSearchKey(id: string): Promise<void> {
 
 export function testSearchKey(id: string): Promise<TestResult> {
   return request<TestResult>(`/api/search-keys/${encodeURIComponent(id)}/test`, { method: 'POST' })
+}
+
+// ---- 科研工作台 ------------------------------------------------------------
+
+export function listTemplates(signal?: AbortSignal): Promise<TaskTemplate[]> {
+  return request<TaskTemplate[]>('/api/templates', { signal })
+}
+
+export function previewContract(
+  template: string,
+  query: string,
+  signal?: AbortSignal,
+  strategy?: string | null,
+): Promise<TaskContract> {
+  return request<TaskContract>('/api/templates/contract', {
+    method: 'POST',
+    body: JSON.stringify({ template, query, strategy: strategy ?? null }),
+    signal,
+  })
+}
+
+export function getDeliverables(id: string, signal?: AbortSignal): Promise<DeliverableRegistry> {
+  return request<DeliverableRegistry>(`/api/runs/${encodeURIComponent(id)}/deliverables`, {
+    signal,
+  })
+}
+
+export function getRunTemplate(id: string, signal?: AbortSignal): Promise<RunTemplateInfo> {
+  return request<RunTemplateInfo>(`/api/runs/${encodeURIComponent(id)}/template`, { signal })
+}
+
+/** 取一份交付物的字节（带鉴权头，不把密钥放进 URL）。 */
+export async function fetchDeliverable(
+  id: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<RunDocumentDownload> {
+  const key = getApiKey()
+  const path = name.split('/').map(encodeURIComponent).join('/')
+  return withResponse(
+    `/api/runs/${encodeURIComponent(id)}/deliverables/${path}`,
+    {
+      headers: {
+        Accept: 'application/octet-stream',
+        ...(key ? { Authorization: `Bearer ${key}` } : {}),
+      },
+      signal,
+    },
+    async (res) => {
+      if (!res.ok) {
+        if (res.status === 401) signalUnauthorized(key)
+        let detail = res.statusText
+        try {
+          const body = (await res.json()) as { detail?: unknown }
+          if (body.detail != null) detail = formatDetail(body.detail, res.statusText)
+        } catch {
+          // Error responses are allowed to be non-JSON.
+        }
+        throw new ApiError(res.status, detail)
+      }
+      return {
+        blob: await res.blob(),
+        filename: downloadFilename(
+          res.headers.get('Content-Disposition'),
+          name.split('/').pop() ?? name,
+        ),
+      }
+    },
+    120_000,
+  )
+}
+
+// ---- 学术问答 --------------------------------------------------------------
+
+export function listConversations(signal?: AbortSignal): Promise<QaConversation[]> {
+  return request<QaConversation[]>('/api/qa/conversations', { signal })
+}
+
+export function createConversation(title = ''): Promise<QaConversation> {
+  return request<QaConversation>('/api/qa/conversations', {
+    method: 'POST',
+    body: JSON.stringify({ title }),
+  })
+}
+
+export function getConversation(id: string, signal?: AbortSignal): Promise<QaConversation> {
+  return request<QaConversation>(`/api/qa/conversations/${encodeURIComponent(id)}`, { signal })
+}
+
+export function deleteConversation(id: string): Promise<void> {
+  return requestVoid(`/api/qa/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function askQuestion(id: string, query: string, signal?: AbortSignal): Promise<QaMessage> {
+  return request<QaMessage>(`/api/qa/conversations/${encodeURIComponent(id)}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+    signal,
+  })
+}
+
+export function getNarrative(id: string, signal?: AbortSignal): Promise<RunNarrative> {
+  return request<RunNarrative>(`/api/runs/${encodeURIComponent(id)}/narrative`, { signal })
+}
+
+export function getWorkspace(id: string, signal?: AbortSignal): Promise<RunWorkspace> {
+  return request<RunWorkspace>(`/api/runs/${encodeURIComponent(id)}/workspace`, { signal })
+}
+
+/** 读取工作区中一个已登记的产物（文本），返回内容与是否被截断。 */
+export async function readWorkspaceFile(
+  id: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ text: string; truncated: boolean }> {
+  const key = getApiKey()
+  const query = new URLSearchParams({ path })
+  return withResponse(
+    `/api/runs/${encodeURIComponent(id)}/workspace/file?${query.toString()}`,
+    { headers: key ? { Authorization: `Bearer ${key}` } : {}, signal },
+    async (res) => {
+      if (!res.ok) {
+        if (res.status === 401) signalUnauthorized(key)
+        throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`)
+      }
+      return { text: await res.text(), truncated: res.headers.get('X-Truncated') === '1' }
+    },
+  )
+}
+
+export function listTiers(signal?: AbortSignal): Promise<TierSpec[]> {
+  return request<TierSpec[]>('/api/tiers', { signal })
+}
+
+export function getUsage(signal?: AbortSignal): Promise<UsageQuota> {
+  return request<UsageQuota>('/api/usage', { signal })
+}
+
+export function getQualitySchema(signal?: AbortSignal): Promise<QualityField[]> {
+  return request<QualityField[]>('/api/config/quality-schema', { signal })
+}
+
+/** 上传并解析一个任务附件（文件内容以 Base64 传输，服务端只解析不落盘）。 */
+export function uploadAttachment(
+  body: { filename: string; mime_type: string; data_base64: string },
+  signal?: AbortSignal,
+): Promise<AttachmentUploadResult> {
+  return request<AttachmentUploadResult>('/api/attachments', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    signal,
+  })
 }

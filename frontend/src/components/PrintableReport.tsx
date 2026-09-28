@@ -227,7 +227,7 @@ export default function PrintableReport({
       aria-label="可打印报告"
     >
       <header className="print-head">
-        <p className="print-kicker">Deep Research · Evidence Report</p>
+        <p className="print-kicker">Science Research · Evidence Report</p>
         <h1>{displayReportTitle(query)}</h1>
         <p className="print-meta">
           {createdAt && <span>生成时间：{createdAt}</span>}
@@ -319,7 +319,8 @@ export default function PrintableReport({
                 </h3>
                 {forUrl.map((finding, i) => (
                   <EvidenceCard
-                    key={finding.verification.claim_id || `${finding.source_url}-${i}`}
+                    // claim_id 是内容哈希：不同子问题抽出同一句原文时会重复，须带序号去重
+                    key={`${finding.verification.claim_id || finding.source_url}-${i}`}
                     finding={finding}
                   />
                 ))}

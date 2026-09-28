@@ -1,0 +1,109 @@
+/* ============================================================================
+   访问密钥登录弹窗
+   ========================================================================== */
+
+.auth-modal {
+  max-width: 440px;
+  padding: var(--space-6);
+}
+
+.auth-modal-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.auth-topline {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.auth-symbol {
+  align-items: center;
+  background: var(--primary-soft);
+  border-radius: var(--radius-lg);
+  color: var(--primary-text);
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  width: 44px;
+}
+
+.auth-modal h2 {
+  font-size: var(--text-xl);
+}
+
+.auth-copy {
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.auth-key-input {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.auth-key-input .input {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+
+.auth-remember {
+  align-items: flex-start;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--text-sm);
+  gap: var(--space-2);
+}
+
+.auth-remember input {
+  margin-top: 3px;
+}
+
+.auth-remember span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.auth-remember small {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.auth-submit {
+  height: 40px;
+  width: 100%;
+}
+
+.auth-footnote {
+  align-items: flex-start;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  display: flex;
+  font-size: var(--text-xs);
+  gap: var(--space-2);
+  line-height: 1.6;
+  padding-top: var(--space-3);
+}
+
+.auth-footnote .app-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.auth-logout {
+  align-self: center;
+  color: var(--danger-text);
+}

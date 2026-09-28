@@ -36,8 +36,9 @@ export default function TagEditor({ runId, tags }: { runId: string; tags: string
       ))}
       <input
         className="tag-input"
+        aria-label="添加标签"
         value={input}
-        placeholder="+ 标签"
+        placeholder="添加标签"
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {

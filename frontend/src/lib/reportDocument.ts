@@ -1,5 +1,7 @@
 import type {
   ChartBlock,
+  PaperSection,
+  PaperSectionKind,
   ReportBlock,
   ReportDocument,
   ReportEvidence,
@@ -145,6 +147,36 @@ function normalizeBlock(raw: unknown, index: number): ReportBlock | null {
   return null
 }
 
+const PAPER_SECTION_KINDS = new Set<PaperSectionKind>([
+  'abstract',
+  'introduction',
+  'related_work',
+  'methods',
+  'experiments',
+  'results',
+  'limitations',
+  'conclusion',
+  'data_availability',
+  'ethics',
+  'other',
+])
+
+function normalizeSection(raw: unknown, index: number): PaperSection | null {
+  if (!isRecord(raw)) return null
+  const rawKind = stringValue(raw.kind, 'other') as PaperSectionKind
+  const levelValue = Math.min(3, Math.max(1, positiveInteger(raw.level, 1) ?? 1)) as 1 | 2 | 3
+  const rawBlocks = Array.isArray(raw.blocks) ? raw.blocks : []
+  return {
+    id: stringValue(raw.id, `section-${index + 1}`),
+    title: stringValue(raw.title, `Section ${index + 1}`),
+    kind: PAPER_SECTION_KINDS.has(rawKind) ? rawKind : 'other',
+    level: levelValue,
+    blocks: rawBlocks
+      .map((block, blockIndex) => normalizeBlock(block, blockIndex))
+      .filter((block): block is ReportBlock => block != null),
+  }
+}
+
 function normalizeReferences(value: unknown): ReportReference[] {
   if (!Array.isArray(value)) return []
   return value
@@ -269,10 +301,20 @@ export function normalizeReportDocument(payload: unknown): ReportDocument | null
   const references = normalizeReferences(rawReferences)
   const query = stringValue(payload.query, stringValue(nestedReport?.query))
   const schemaVersion = positiveInteger(payload.schema_version, 1) ?? 1
+  const rawSections = Array.isArray(payload.sections) ? payload.sections : []
+  const sections = rawSections
+    .map((section, index) => normalizeSection(section, index))
+    .filter((section): section is PaperSection => section != null)
   return {
     schema_version: schemaVersion,
     query,
+    ...(typeof payload.title === 'string' ? { title: payload.title } : {}),
+    ...(typeof payload.abstract === 'string' ? { abstract: payload.abstract } : {}),
+    ...(Array.isArray(payload.keywords) ? { keywords: stringList(payload.keywords) } : {}),
+    ...(Array.isArray(payload.authors) ? { authors: stringList(payload.authors) } : {}),
+    ...(typeof payload.institution === 'string' ? { institution: payload.institution } : {}),
     blocks,
+    ...(Array.isArray(payload.sections) ? { sections } : {}),
     references,
     evidence,
     overview: normalizeOverview(payload.overview, evidence),

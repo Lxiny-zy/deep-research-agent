@@ -47,12 +47,13 @@ export default function ClarifyDialog({
   }
 
   return (
-    <section className="panel clarify-dialog" aria-label="澄清提问">
+    <section className="clarify" aria-label="澄清提问">
       <div className="clarify-head">
-        <span className="panel-kicker">
-          <AppIcon name="help" size={14} aria-hidden="true" /> 需要补充信息
+        <span className="clarify-badge">
+          <AppIcon name="help" size={14} aria-hidden="true" />
+          需要补充信息
         </span>
-        <span className="muted small">
+        <span className="hint">
           第 {round + 1} / {MAX_CLARIFY_ROUNDS} 轮
         </span>
       </div>
@@ -76,7 +77,7 @@ export default function ClarifyDialog({
         </div>
       )}
 
-      <label className="field-label clarify-custom" htmlFor="clarify-custom">
+      <label className="field-label" htmlFor="clarify-custom">
         {choices.length > 0 ? '或者自己描述' : '请补充'}
         <span className="clarify-custom-row">
           <input
@@ -106,7 +107,7 @@ export default function ClarifyDialog({
       </label>
 
       <div className="clarify-foot">
-        <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onSkip}>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={onSkip}>
           {SKIP_OPTION}
         </button>
         <span className="hint">研究还没有开始，因此没有消耗检索与生成成本。</span>

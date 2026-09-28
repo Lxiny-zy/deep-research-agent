@@ -1,0 +1,12 @@
+/* 页面与业务组件样式，每个页面一个文件（见 styles/pages/*.css）。 */
+@import './pages/workbench-home.css';
+@import './pages/qa.css';
+@import './pages/run.css';
+@import './pages/history.css';
+@import './pages/library.css';
+@import './pages/settings.css';
+@import './pages/catalog.css';
+@import './pages/workflow.css';
+@import './pages/welcome.css';
+@import './pages/auth.css';
+@import './pages/attachments.css';

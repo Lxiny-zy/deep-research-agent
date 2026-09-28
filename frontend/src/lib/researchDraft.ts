@@ -4,6 +4,7 @@ export interface DraftContent {
   query: string
   params: ResearchParams
   workflow: string
+  project_id: string
 }
 
 export interface ResearchDraft extends DraftContent {
@@ -58,6 +59,7 @@ export function loadResearchDraft(context = ''): ResearchDraft | null {
       query: value.query,
       params,
       workflow: typeof value.workflow === 'string' ? value.workflow : '',
+      project_id: typeof value.project_id === 'string' ? value.project_id : '',
       savedAt: value.savedAt,
       context,
     }

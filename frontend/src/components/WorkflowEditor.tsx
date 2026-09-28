@@ -403,7 +403,7 @@ export default function WorkflowEditor({
             <span className={`pipeline-health ${validation ? 'warning' : 'ready'}`}>
               {validation ?? '管线可运行'}
             </span>
-            <button className="btn ghost" onClick={closeEditor} type="button">
+            <button className="btn btn-ghost" onClick={closeEditor} type="button">
               <AppIcon name="x" size={14} aria-hidden="true" />
               关闭
             </button>
@@ -425,13 +425,14 @@ export default function WorkflowEditor({
 
         <div className="workflow-notices">
           {savedDraft && (
-            <div className="row gap" role="status">
+            <div className="row gap workflow-notice" role="status">
               <span>发现尚未提交的本地草稿（版本 {savedDraft.version}）。</span>
-              <button type="button" onClick={restoreDraft}>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={restoreDraft}>
                 恢复本地草稿
               </button>
               <button
                 type="button"
+                className="btn btn-ghost btn-sm"
                 onClick={() => {
                   sessionStorage.removeItem(draftKey)
                   setSavedDraft(null)
@@ -449,7 +450,7 @@ export default function WorkflowEditor({
             </p>
           )}
           {conflict && (
-            <section role="alert" className="panel panel-body">
+            <section role="alert" className="workflow-conflict">
               <p>服务器已有版本 {conflict.version}。请比较后选择，不会自动覆盖。</p>
               <p>
                 本地：{displayName || name}，{steps.length} 个节点；
@@ -464,16 +465,24 @@ export default function WorkflowEditor({
               <p>
                 服务器说明：{conflict.description || '无'}；本地说明：{description || '无'}
               </p>
-              <button type="button" disabled={pending} onClick={onReload}>
-                载入服务器版本
-              </button>
-              <button
-                type="button"
-                disabled={pending || !!validation}
-                onClick={() => submit(conflict.version)}
-              >
-                用当前草稿覆盖服务器版本
-              </button>
+              <div className="row gap-sm">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={pending}
+                  onClick={onReload}
+                >
+                  载入服务器版本
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm danger"
+                  disabled={pending || !!validation}
+                  onClick={() => submit(conflict.version)}
+                >
+                  用当前草稿覆盖服务器版本
+                </button>
+              </div>
             </section>
           )}
         </div>
@@ -595,12 +604,17 @@ export default function WorkflowEditor({
                 onAddReflection={appendReflection}
               />
             </div>
-            {!steps.length && <div className="canvas-empty">从左侧角色库拖入第一个 Agent</div>}
+            {!steps.length && <div className="canvas-empty">从左侧角色库拖入第一个角色</div>}
             {graphError && (
               <div className="canvas-graph-error" role="alert">
                 <span>{graphError}</span>
-                <button type="button" onClick={() => setGraphError('')} aria-label="关闭提示">
-                  ×
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm icon-button"
+                  onClick={() => setGraphError('')}
+                  aria-label="关闭提示"
+                >
+                  <AppIcon name="x" size={14} aria-hidden="true" />
                 </button>
               </div>
             )}
@@ -647,7 +661,7 @@ export default function WorkflowEditor({
             {current ? (
               <div className="stack compact">
                 <div className="selected-node-label">
-                  <span>NODE {selected + 1}</span>
+                  <span>节点 {selected + 1}</span>
                   <strong>{nodeTitle(current, roles)}</strong>
                 </div>
                 {current.kind === 'agent' ? (

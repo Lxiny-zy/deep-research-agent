@@ -55,7 +55,7 @@ export default function ModelProfileCard({ profile: p, onEdit, onDelete }: Props
 
       <div className="row between role-card-foot">
         <button
-          className="btn ghost small"
+          className="btn btn-ghost btn-sm"
           onClick={() => test.mutate(p.id)}
           disabled={test.isPending}
         >
@@ -68,11 +68,11 @@ export default function ModelProfileCard({ profile: p, onEdit, onDelete }: Props
           测试连接
         </button>
         <div className="row gap-sm">
-          <button className="btn ghost small" onClick={onEdit}>
+          <button className="btn btn-ghost btn-sm" onClick={onEdit}>
             <AppIcon name="edit" size={13} aria-hidden="true" />
             编辑
           </button>
-          <button className="btn ghost small danger" onClick={onDelete}>
+          <button className="btn btn-ghost btn-sm danger" onClick={onDelete}>
             <AppIcon name="trash" size={13} aria-hidden="true" />
             删除
           </button>

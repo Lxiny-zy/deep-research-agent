@@ -141,7 +141,7 @@ export default function SearchProfilesManager({
               )}
               <div className="row gap-sm role-card-foot">
                 <button
-                  className="btn ghost small"
+                  className="btn btn-ghost btn-sm"
                   type="button"
                   onClick={() => test(profile)}
                   disabled={testing !== null || !profile.enabled}
@@ -149,7 +149,7 @@ export default function SearchProfilesManager({
                   {testing === profile.id ? '测试中…' : '测试档案'}
                 </button>
                 <button
-                  className="btn ghost small"
+                  className="btn btn-ghost btn-sm"
                   type="button"
                   onClick={() => edit(profile)}
                   disabled={mutations.save.isPending}
@@ -158,7 +158,7 @@ export default function SearchProfilesManager({
                 </button>
                 {!profile.builtin && (
                   <button
-                    className="btn ghost small danger"
+                    className="btn btn-ghost btn-sm danger"
                     type="button"
                     onClick={() => mutations.remove.mutate(profile.id)}
                     disabled={mutations.remove.isPending}
@@ -295,7 +295,7 @@ export default function SearchProfilesManager({
               保存检索档案
             </button>
             <button
-              className="btn ghost"
+              className="btn btn-ghost"
               type="button"
               onClick={() => setSession(null)}
               disabled={mutations.save.isPending}

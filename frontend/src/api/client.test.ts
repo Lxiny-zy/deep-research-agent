@@ -306,6 +306,18 @@ describe('run document downloads', () => {
 
     expect(fetchMock.mock.calls[0][0]).toBe('/api/runs/run-1/document.pdf')
   })
+
+  it('maps the paper PDF format to its dedicated endpoint', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new Uint8Array([37, 80, 68, 70]), { status: 200 }))
+
+    await downloadRunDocument('run-1', 'paper_pdf', { includeHsiTables: true })
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/runs/run-1/document.paper.pdf?include_hsi_tables=true',
+    )
+  })
 })
 
 describe('resumeRun', () => {

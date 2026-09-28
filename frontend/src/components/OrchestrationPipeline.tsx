@@ -47,7 +47,7 @@ export default function OrchestrationPipeline({ execution, events = [], runStatu
     <div className="orchestration-runtime">
       <div className="orchestration-runtime-head">
         <div>
-          <span className="workflow-kicker">工作流运行时</span>
+          <span className="panel-kicker">工作流运行时</span>
           <strong>{execution?.workflow_name ?? '实时编排'}</strong>
           <small className="runtime-current-step">{progress.currentLabel}</small>
         </div>

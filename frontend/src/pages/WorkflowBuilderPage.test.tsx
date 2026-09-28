@@ -96,7 +96,10 @@ vi.mock('../components/WorkflowEditor', () => ({
       <span data-testid="editor-pending">{String(!!pending)}</span>
       <span data-testid="editor-version">{String(initial?.version ?? '')}</span>
       {conflict && (
-        <button data-testid="overwrite-editor" onClick={() => onSubmit({ version: conflict.version })}>
+        <button
+          data-testid="overwrite-editor"
+          onClick={() => onSubmit({ version: conflict.version })}
+        >
           用当前草稿覆盖
         </button>
       )}

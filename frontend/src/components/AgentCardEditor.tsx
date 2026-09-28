@@ -84,18 +84,18 @@ export default function AgentCardEditor({
   }
 
   return createPortal(
-    <div className="modal-backdrop" onClick={onCancel}>
+    <div className="modal-backdrop drawer-backdrop" onClick={onCancel}>
       <section
         ref={dialogRef}
-        className="modal editor-modal agent-editor-modal"
+        className="drawer editor-modal agent-editor-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="agent-editor-title"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="modal-header-row">
+        <div className="modal-header-row drawer-header">
           <div>
-            <span className="eyebrow">角色 / 配置</span>
+            <span className="eyebrow">角色配置</span>
             <h3 className="panel-title" id="agent-editor-title">
               {editing ? '编辑角色' : '新建角色'}
             </h3>
@@ -129,7 +129,7 @@ export default function AgentCardEditor({
                 ))}
               </div>
             </div>
-            <label className="settings-item">
+            <label className="field-label agent-display-name">
               <span className="muted small">展示名</span>
               <input
                 className="input"
@@ -275,7 +275,7 @@ export default function AgentCardEditor({
           </p>
           <button
             type="button"
-            className="btn ghost"
+            className="btn btn-ghost"
             onClick={showPreview}
             disabled={previewPending}
           >
@@ -316,7 +316,7 @@ export default function AgentCardEditor({
           )}
 
           <div className="row between editor-actions">
-            <button className="btn ghost" onClick={onCancel} type="button">
+            <button className="btn btn-ghost" onClick={onCancel} type="button">
               取消
             </button>
             <button

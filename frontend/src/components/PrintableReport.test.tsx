@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import PrintableReport from './PrintableReport'
 import { displayReportTitle } from '../lib/reportTitle'
 import type { Finding } from '../types'
@@ -75,6 +75,27 @@ describe('PrintableReport：屏幕侧栏在纸上的等价物', () => {
     expect(screen.getByText('证据附录')).toBeInTheDocument()
     expect(screen.getByText(/该方法达到 38.36 dB/)).toBeInTheDocument()
     expect(screen.getByText(/编码孔径为单色散结构/)).toBeInTheDocument()
+  })
+
+  it('同一 claim_id 的两条证据都要打印，且不触发重复 key 警告', () => {
+    // claim_id 是内容哈希：两个子问题从同一来源抽出同一句原文时会撞 ID
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(
+      <PrintableReport
+        markdown={MARKDOWN}
+        query="CASSI"
+        findings={[
+          finding({ statement: '子问题一的论断' }, { claim_id: 'dup' }),
+          finding({ statement: '子问题二的论断' }, { claim_id: 'dup' }),
+        ]}
+        citations={[URL_B]}
+      />,
+    )
+    expect(screen.getByText(/子问题一的论断/)).toBeInTheDocument()
+    expect(screen.getByText(/子问题二的论断/)).toBeInTheDocument()
+    const keyWarnings = spy.mock.calls.filter((call) => String(call[0]).includes('same key'))
+    spy.mockRestore()
+    expect(keyWarnings).toHaveLength(0)
   })
 
   it('把原先只活在 tooltip 里的字段渲染为正式内容', () => {

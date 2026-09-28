@@ -99,7 +99,13 @@ export interface ReportDocument {
   final_validation?: Wire<'FinalReportValidation'> | null
   schema_version: number
   query: string
+  title?: string
+  abstract?: string
+  keywords?: string[]
+  authors?: string[]
+  institution?: string
   blocks: ReportBlock[]
+  sections?: PaperSection[]
   references: ReportReference[]
   evidence: ReportEvidence[]
   overview: ReportOverview
@@ -107,6 +113,27 @@ export interface ReportDocument {
 }
 
 export type ReportBlock = ProseBlock | TableBlock | ChartBlock
+
+export type PaperSectionKind =
+  | 'abstract'
+  | 'introduction'
+  | 'related_work'
+  | 'methods'
+  | 'experiments'
+  | 'results'
+  | 'limitations'
+  | 'conclusion'
+  | 'data_availability'
+  | 'ethics'
+  | 'other'
+
+export interface PaperSection {
+  id: string
+  title: string
+  kind: PaperSectionKind
+  level: 1 | 2 | 3
+  blocks: ReportBlock[]
+}
 
 export interface ProseBlock {
   kind: 'prose'
@@ -208,6 +235,73 @@ export interface SourceSnapshot {
   url: string
   content: string
   content_hash: string
+  locator?: string
+}
+
+export interface ResearchProject {
+  id: string
+  name: string
+  description: string
+  owner_id: string
+  corpus_count: number
+  source_count: number
+  included_source_count: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface Corpus {
+  id: string
+  project_id: string
+  name: string
+  description: string
+  source_count: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type LibrarySourceKind = 'text' | 'markdown' | 'url' | 'doi' | 'pdf'
+export type LibrarySourceStatus = 'included' | 'excluded'
+
+export interface LibrarySource {
+  id: string
+  project_id: string
+  corpus_id: string
+  title: string
+  kind: LibrarySourceKind
+  status: LibrarySourceStatus
+  origin_url: string
+  mime_type: string
+  content_hash: string
+  char_count: number
+  chunk_count: number
+  metadata: Record<string, unknown>
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface SourceChunk {
+  id: string
+  source_id: string
+  ordinal: number
+  content: string
+  content_hash: string
+  locator: string
+  start_char: number
+  end_char: number
+  page_start: number | null
+  page_end: number | null
+  section: string
+}
+
+export interface ImportSourceInput {
+  corpus_id: string
+  title?: string
+  kind: LibrarySourceKind
+  text?: string
+  data_base64?: string
+  origin_url?: string
+  mime_type?: string
 }
 
 export type RunManifest = Required<Wire<'RunManifest'>>
@@ -464,6 +558,22 @@ export type ConfigView = Omit<Wire<'ConfigView'>, 'access'> & {
 // 全局配置更新（PUT /api/config 请求，全部可选）
 export type ConfigUpdate = Wire<'ConfigUpdate'>
 
+/** 交付质量策略（值为数字或开关；字段集合与说明由 /api/config/quality-schema 给出） */
+export type QualityPolicy = Record<string, number | boolean>
+
+/** 交付质量设置的一个字段：标签、分组、取值范围、默认值与悬浮说明 */
+export interface QualityField {
+  key: string
+  label: string
+  group: string
+  kind: 'int' | 'bool'
+  help: string
+  min: number | null
+  max: number | null
+  unit: string
+  default: number | boolean
+}
+
 // ── 角色广场 catalog ──────────────────────────────────────────────────
 // 角色行为模板（决定该角色在引擎里的执行逻辑）
 export type Behavior = 'plan' | 'research' | 'reflect' | 'synthesize' | 'critique'
@@ -609,4 +719,279 @@ export interface ResourcePreflight {
 export interface SearchResourceImpact {
   profiles: Record<string, string[]>
   keys: Record<string, string[]>
+}
+
+// ---- 科研工作台 ------------------------------------------------------------
+
+export type TemplateKey =
+  | 'autoResearch'
+  | 'litReview'
+  | 'peerReview'
+  | 'paperRead'
+  | 'dataAnalysis'
+  | 'slides'
+  | 'mindmap'
+
+export type DeliverableFormat = 'md' | 'docx' | 'pdf' | 'html' | 'pptx' | 'mindmap' | 'xlsx' | 'zip'
+
+export interface TemplateSection {
+  key: string
+  title: string
+  guidance: string
+  required: boolean
+}
+
+/** 检索策略：任务怎么找证据。深度检索是一种策略，不是独立的任务类型。 */
+export type StrategyKey = 'none' | 'quick' | 'deep'
+
+export interface TemplateStrategy {
+  key: StrategyKey
+  label: string
+  description: string
+  workflow: string
+}
+
+export interface TaskTemplate {
+  key: TemplateKey
+  title: string
+  tagline: string
+  description: string
+  icon: string
+  workflow: string
+  strategies?: TemplateStrategy[]
+  default_strategy?: StrategyKey
+  input_kind: 'topic' | 'paper' | 'dataset'
+  input_label: string
+  input_placeholder: string
+  sections: TemplateSection[]
+  deliverables: DeliverableFormat[]
+  examples: string[]
+  accepts_attachments: boolean
+  tier_default: 'light' | 'standard' | 'deep'
+  min_citations: number
+  tags: string[]
+}
+
+export interface PaperReference {
+  kind: 'arxiv' | 'doi' | 'url'
+  value: string
+  url: string
+}
+
+export interface TaskContract {
+  template: TemplateKey
+  title: string
+  original_request: string
+  focus: string
+  papers: PaperReference[]
+  dataset_csv: string
+  dataset_rows?: number
+  required_sections: string[]
+  deliverables: string[]
+  constraints: string[]
+  evidence_rules: string[]
+  tier: string
+  strategy?: string
+  rendered?: string
+}
+
+export type GateStatus = 'pass' | 'warn' | 'fail'
+
+export interface GateResult {
+  name: string
+  status: GateStatus
+  issues: string[]
+  metrics: Record<string, unknown>
+}
+
+export interface DeliverableItem {
+  name: string
+  format: string
+  title: string
+  role: 'report' | 'reading' | 'source' | 'slides' | 'figure' | 'data'
+  size: number
+  sha256: string
+  mime_type: string
+  status: GateStatus
+  issues: string[]
+}
+
+export interface DeliverableRegistry {
+  version: number
+  run_id: string
+  template: TemplateKey
+  title: string
+  status: GateStatus
+  generated_at: string
+  primary: string | null
+  items: DeliverableItem[]
+  gates: GateResult[]
+}
+
+export interface RunTemplateInfo {
+  template: TaskTemplate
+  contract: TaskContract | null
+  extras: { score?: number | null; stats?: Record<string, number>; figures?: number }
+  analysis: {
+    rows: number
+    columns: string[]
+    describe: Record<string, unknown>[]
+    tests: Record<string, unknown>[]
+    synthetic: boolean
+  } | null
+  intake: {
+    papers: PaperReference[]
+    sections: { url: string; title: string; section: string; chars: number }[]
+    failures: { url: string; error: string }[]
+  } | null
+}
+
+// ---- 学术问答 --------------------------------------------------------------
+
+export interface QaThought {
+  tool: string
+  input: string
+  observation: string
+}
+
+export interface QaEvidence {
+  statement: string
+  source_url: string
+  evidence_quote: string
+  source_title?: string
+  source_reference?: string
+}
+
+export interface QaMessage {
+  id: string
+  position: number
+  query: string
+  answer: string
+  citations: string[]
+  evidence: QaEvidence[]
+  thoughts: QaThought[]
+  status: 'done' | 'fallback'
+  created_at: string | null
+  tokens?: number
+}
+
+export interface QaConversation {
+  id: string
+  title: string
+  created_at: string | null
+  updated_at: string | null
+  message_count: number
+  messages: QaMessage[]
+}
+
+export interface NarrativeSection {
+  key: string
+  title: string
+  status: 'pending' | 'active' | 'done' | 'error'
+  lines: string[]
+  first_seq: number | null
+  last_seq: number | null
+  elapsed: number
+}
+
+export interface RunNarrative {
+  headline: string
+  sections: NarrativeSection[]
+  counters: Record<string, number>
+  last_seq: number
+}
+
+// ---- 运行工作区（三栏详情页） ------------------------------------------------
+
+export interface WorkspaceStep {
+  index: number
+  node_id: string
+  label: string
+  kind: string
+  agent: string
+  status: StepRunStatus
+  attempt: number
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+  elapsed: number | null
+}
+
+export interface WorkspaceReplan {
+  id: string
+  target: string
+  trigger: 'partial' | 'failed'
+  action: 'rescue' | 'accept'
+  name: string
+  reason: string
+  result: string
+}
+
+export interface WorkspaceFile {
+  path: string
+  area: 'work' | 'output'
+  stage: string
+  name: string
+  size: number
+  sha256: string
+  mime_type: string
+  step: string | null
+  attempt: number | null
+  created_at: string
+}
+
+export interface RunWorkspace {
+  run_id: string
+  status: string
+  workflow: string | null
+  attempt: number | null
+  steps: WorkspaceStep[]
+  replans: WorkspaceReplan[]
+  files: WorkspaceFile[]
+  slug: string | null
+}
+
+// ---- 档位与额度 --------------------------------------------------------------
+
+export type TierKey = 'light' | 'standard' | 'deep'
+
+export interface TierSpec {
+  key: TierKey
+  title: string
+  description: string
+  max_sub_questions: number
+  max_rounds: number
+  results_per_search: number
+  max_tokens: number
+}
+
+export interface UsageQuota {
+  period: 'day'
+  resets_at: string
+  runs: { used: number; limit: number | null }
+  tokens: { used: number; limit: number | null }
+  exhausted: boolean
+}
+
+// ── 任务附件（POST /api/attachments）─────────────────────────────────
+/** 已解析附件的完整数据：创建任务时原样放进 CreateRunRequest.attachments */
+export type AttachmentPayload = Record<string, unknown> & { id: string; filename: string }
+
+/** 附件展示摘要 */
+export interface AttachmentSummary {
+  id: string
+  filename: string
+  kind: string
+  mime_type: string
+  size: number
+  char_count: number
+  chunk_count: number
+  truncated: boolean
+  preview: string
+  sections: string[]
+}
+
+export interface AttachmentUploadResult {
+  attachment: AttachmentPayload
+  summary: AttachmentSummary
 }

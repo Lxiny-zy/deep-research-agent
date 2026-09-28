@@ -9,7 +9,7 @@ import {
 export function useResearchDraft(defaultQuery: string, context: string) {
   const [initial] = useState(() => loadResearchDraft(context))
   const [draft, setDraft] = useState<DraftContent>(
-    () => initial ?? { query: defaultQuery, workflow: '', params: {} },
+    () => initial ?? { query: defaultQuery, workflow: '', project_id: '', params: {} },
   )
   const [status, setStatus] = useState<
     'idle' | 'restored' | 'saving' | 'saved' | 'unavailable' | 'cleared'

@@ -50,15 +50,16 @@ export default function EventTimeline({
   }
 
   if (events.length === 0) {
-    return <p className="muted small">等待事件…开始研究后这里会实时显示各 Agent 的动作。</p>
+    return <p className="hint">等待事件…开始研究后这里会实时显示各 Agent 的动作。</p>
   }
 
   return (
     <div className="timeline-shell">
       {lastPage > 0 && (
-        <nav className="row gap" aria-label="事件分页">
+        <nav className="timeline-pager" aria-label="事件分页">
           <button
             type="button"
+            className="btn btn-ghost btn-sm"
             disabled={currentPage === 0}
             onClick={() => {
               setPage(currentPage - 1)
@@ -73,6 +74,7 @@ export default function EventTimeline({
           </span>
           <button
             type="button"
+            className="btn btn-ghost btn-sm"
             disabled={currentPage === lastPage}
             onClick={() => setPage(currentPage + 1)}
           >
@@ -80,6 +82,7 @@ export default function EventTimeline({
           </button>
           <button
             type="button"
+            className="btn btn-ghost btn-sm"
             onClick={() => {
               setPage(null)
               setFollowLatest(true)
@@ -96,7 +99,7 @@ export default function EventTimeline({
           </span>
           <button
             type="button"
-            className="timeline-follow-toggle"
+            className="btn btn-ghost btn-sm timeline-follow-toggle"
             onClick={() => {
               if (followLatest) {
                 setFollowLatest(false)
@@ -121,13 +124,13 @@ export default function EventTimeline({
           const live = streaming && currentPage === lastPage && i === visibleEvents.length - 1
           return (
             <div
-              className={`event-row${live ? ' live' : ''}`}
+              className={`event-row stage-${String(ev.stage).toLowerCase()}${live ? ' live' : ''}`}
               key={`${ev.elapsed}-${ev.stage}-${ev.type}-${i}`}
             >
-              <span className="event-dot" style={{ background: meta.color }} />
+              <span className="event-dot" aria-hidden="true" />
               <span className="event-time">{ev.elapsed.toFixed(1)}s</span>
               <div className="event-main">
-                <span className="event-stage" style={{ color: meta.color }}>
+                <span className="event-stage">
                   <AppIcon name={meta.icon} size={14} aria-hidden="true" />
                   {meta.label} · {ev.stage}
                 </span>

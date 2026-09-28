@@ -7,7 +7,9 @@ export function useDialogFocus(onClose: () => void) {
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null
     const overflow = document.body.style.overflow
+    const rootOverflow = document.documentElement.style.overflow
     document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
     const focusable = () =>
       Array.from(
         ref.current?.querySelectorAll<HTMLElement>(
@@ -49,6 +51,7 @@ export function useDialogFocus(onClose: () => void) {
     document.addEventListener('keydown', onKey)
     return () => {
       document.body.style.overflow = overflow
+      document.documentElement.style.overflow = rootOverflow
       document.removeEventListener('keydown', onKey)
       if (previous?.isConnected) previous.focus()
     }

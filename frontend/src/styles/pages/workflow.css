@@ -1,0 +1,732 @@
+/* ============================================================================
+   工作流构建：模板区、自定义卡片、全屏编排工作台与画布
+   ========================================================================== */
+
+.workflow-page {
+  gap: var(--space-5);
+}
+
+/* 内置模板（可折叠卡片） */
+.workflow-templates {
+  padding: 0;
+}
+
+.workflow-templates > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: var(--space-3);
+  list-style: none;
+  padding: var(--space-4) var(--space-5);
+}
+
+.workflow-templates > summary::-webkit-details-marker {
+  display: none;
+}
+
+.workflow-template-icon {
+  align-items: center;
+  background: var(--primary-soft);
+  border-radius: var(--radius-md);
+  color: var(--primary-text);
+  display: flex;
+  flex-shrink: 0;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+
+.workflow-template-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.workflow-template-copy strong {
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.workflow-template-copy span {
+  color: var(--text-3);
+  font-size: var(--text-sm);
+}
+
+.workflow-template-chevron {
+  color: var(--text-3);
+  transition: transform var(--duration) var(--ease);
+}
+
+.workflow-templates[open] .workflow-template-chevron {
+  transform: rotate(180deg);
+}
+
+.workflow-template-content {
+  border-top: 1px solid var(--border);
+  padding: var(--space-5);
+}
+
+.workspace-load-error {
+  align-items: center;
+  background: var(--danger-soft);
+  border-radius: var(--radius-md);
+  color: var(--danger-text);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+}
+
+.workflow-custom-rail > .panel-header {
+  margin-bottom: var(--space-4);
+}
+
+/* ---- 编排工作台（全屏弹层） ---- */
+.workflow-studio-backdrop {
+  padding: var(--space-4);
+}
+
+.workflow-studio {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  height: min(920px, calc(100vh - 32px));
+  overflow: hidden;
+  width: min(1480px, calc(100vw - 32px));
+}
+
+.workflow-studio-head {
+  align-items: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-5);
+}
+
+.workflow-studio-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.workflow-kicker {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.workflow-studio-head strong {
+  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.workflow-studio-head .row.gap {
+  gap: var(--space-2);
+}
+
+.pipeline-health {
+  align-items: center;
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  height: 26px;
+  max-width: 360px;
+  overflow: hidden;
+  padding: 0 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-health.ready {
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.pipeline-health.warning {
+  background: var(--warning-soft);
+  color: var(--warning-text);
+}
+
+.workflow-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.workflow-notices:not(:empty) {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-3) var(--space-5);
+}
+
+.workflow-notice {
+  color: var(--text-2);
+  font-size: var(--text-sm);
+}
+
+.workflow-conflict {
+  background: var(--warning-soft);
+  border-radius: var(--radius-md);
+  color: var(--warning-text);
+  display: flex;
+  flex-direction: column;
+  font-size: var(--text-sm);
+  gap: 6px;
+  padding: var(--space-3) var(--space-4);
+}
+
+.workflow-mobile-tabs {
+  display: none;
+}
+
+.workflow-studio-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 260px minmax(0, 1fr) 320px;
+  min-height: 0;
+}
+
+.workflow-library,
+.workflow-inspector {
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.workflow-library {
+  border-right: 1px solid var(--border);
+}
+
+.workflow-inspector {
+  border-left: 1px solid var(--border);
+}
+
+.workflow-pane-title {
+  align-items: baseline;
+  display: flex;
+  gap: var(--space-2);
+  justify-content: space-between;
+}
+
+.workflow-pane-title strong {
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.workflow-pane-title span {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.workflow-role-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workflow-role-item {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  cursor: grab;
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 8px 10px;
+  text-align: left;
+  transition:
+    border-color var(--duration) var(--ease),
+    background var(--duration) var(--ease);
+  width: 100%;
+}
+
+.workflow-role-item:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.workflow-role-item > span:nth-child(2) {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.workflow-role-item strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.workflow-role-item small {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-role-item .role-item-desc {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  white-space: normal;
+}
+
+.workflow-role-item.control .role-monogram {
+  background: var(--warning-soft);
+  color: var(--warning-text);
+}
+
+.role-monogram {
+  align-items: center;
+  background: var(--primary-soft);
+  border-radius: var(--radius-sm);
+  color: var(--primary-text);
+  display: flex;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+
+.role-add {
+  color: var(--text-muted);
+}
+
+.workflow-role-item:hover .role-add {
+  color: var(--primary);
+}
+
+.workflow-library-divider,
+.inspector-divider {
+  border-top: 1px solid var(--border);
+  margin: var(--space-1) 0;
+}
+
+/* 画布区 */
+.workflow-canvas {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+
+.canvas-toolbar {
+  align-items: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  gap: var(--space-2) var(--space-4);
+  padding: 8px var(--space-4);
+}
+
+.canvas-toolbar strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.canvas-mode {
+  background: var(--primary-soft);
+  border-radius: var(--radius-full);
+  color: var(--primary-text);
+  font-weight: 500;
+  margin-left: auto;
+  padding: 2px 10px;
+}
+
+.flow-canvas-shell {
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 18px 18px;
+  flex: 1;
+  min-height: 360px;
+  position: relative;
+}
+
+.canvas-empty {
+  color: var(--text-3);
+  font-size: var(--text-sm);
+  left: 50%;
+  pointer-events: none;
+  position: absolute;
+  top: 55%;
+  transform: translate(-50%, -50%);
+}
+
+.canvas-graph-error {
+  align-items: center;
+  background: var(--danger-soft);
+  border-radius: var(--radius-md);
+  bottom: var(--space-4);
+  box-shadow: var(--shadow-md);
+  color: var(--danger-text);
+  display: flex;
+  font-size: var(--text-sm);
+  gap: var(--space-2);
+  left: 50%;
+  padding: 6px 6px 6px 14px;
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 6;
+}
+
+/* React Flow 主题化 */
+.flow-canvas-shell .react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke: var(--text-muted);
+  --xy-edge-stroke-selected: var(--primary);
+  --xy-connectionline-stroke: var(--primary);
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-background-color-hover: var(--surface-hover);
+  --xy-controls-button-color: var(--text-2);
+  --xy-controls-button-border-color: var(--border);
+  --xy-minimap-background-color: var(--surface);
+  --xy-handle-background-color: var(--surface);
+  --xy-handle-border-color: var(--primary);
+  background: transparent;
+}
+
+.flow-canvas-shell .react-flow__controls {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.flow-canvas-shell .react-flow__minimap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.flow-agent-node {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 168px;
+  padding: 10px 12px;
+  position: relative;
+  transition:
+    border-color var(--duration) var(--ease),
+    box-shadow var(--duration) var(--ease);
+}
+
+.flow-agent-node:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.flow-agent-node.selected {
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
+}
+
+.flow-agent-node.reflect_loop {
+  border-style: dashed;
+  border-color: var(--warning);
+}
+
+.flow-agent-node.input,
+.flow-agent-node.output {
+  background: var(--surface-2);
+  min-width: 120px;
+}
+
+.flow-agent-node.orphan {
+  border-color: var(--warning);
+}
+
+.flow-agent-node.muted {
+  opacity: 0.45;
+}
+
+.flow-agent-node strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.flow-agent-node small {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.flow-node-kind {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.flow-node-index {
+  align-items: center;
+  background: var(--primary);
+  border-radius: 999px;
+  color: var(--text-inverse);
+  display: flex;
+  font-size: 11px;
+  font-weight: 600;
+  height: 20px;
+  justify-content: center;
+  position: absolute;
+  right: -8px;
+  top: -8px;
+  width: 20px;
+}
+
+.flow-node-warning {
+  color: var(--warning-text);
+  font-size: 11px;
+}
+
+.flow-agent-node .react-flow__handle {
+  background: var(--surface);
+  border: 2px solid var(--primary);
+  height: 10px;
+  width: 10px;
+}
+
+.flow-agent-node .react-flow__handle.port-disabled {
+  border-color: var(--border-strong);
+}
+
+.flow-edge-halo {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+}
+
+.react-flow__edge.selected .flow-edge-halo {
+  stroke: color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.react-flow__edge.semantic-edge path {
+  stroke-dasharray: 4 4;
+}
+
+.react-flow__edge.workflow-edge-muted {
+  opacity: 0.3;
+}
+
+.react-flow__edge.conditional-edge .react-flow__edge-path {
+  stroke: var(--warning);
+}
+
+.flow-edge-delete {
+  background: var(--danger);
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-inverse);
+  font-size: 11px;
+  padding: 3px 8px;
+  pointer-events: all;
+  position: absolute;
+}
+
+.flow-canvas-legend,
+.flow-canvas-actions {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  color: var(--text-3);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  gap: var(--space-3);
+  padding: 6px 10px;
+}
+
+.flow-canvas-legend span {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.legend-line {
+  border-top: 2px solid var(--text-muted);
+  display: inline-block;
+  width: 18px;
+}
+
+.legend-line.semantic {
+  border-top-style: dashed;
+}
+
+.legend-node {
+  border: 1px solid var(--warning);
+  border-radius: 3px;
+  display: inline-block;
+  height: 10px;
+  width: 14px;
+}
+
+.flow-canvas-actions button {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  height: 26px;
+  padding: 0 10px;
+}
+
+.flow-canvas-actions button:hover {
+  background: var(--surface-hover);
+}
+
+.flow-canvas-actions .delete-action {
+  border-color: var(--danger);
+  color: var(--danger-text);
+}
+
+/* 检查器 */
+.workflow-inspector .stack.compact {
+  gap: var(--space-3);
+}
+
+.selected-node-label {
+  background: var(--primary-soft);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 12px;
+}
+
+.selected-node-label span {
+  color: var(--primary-text);
+  font-size: var(--text-xs);
+}
+
+.selected-node-label strong {
+  color: var(--text);
+  font-size: var(--text-md);
+}
+
+.dependency-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dependency-option {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+}
+
+.dependency-option label {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  font-weight: 400;
+  gap: 8px;
+}
+
+.dependency-condition {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 4px 8px;
+  width: 100%;
+}
+
+.reliability-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .workflow-studio-body {
+    grid-template-columns: 220px minmax(0, 1fr) 280px;
+  }
+}
+
+@media (max-width: 900px) {
+  .workflow-studio-backdrop {
+    padding: 0;
+  }
+
+  .workflow-studio {
+    border-radius: 0;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  .workflow-mobile-tabs {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 2px;
+    padding: 6px var(--space-4);
+  }
+
+  .workflow-mobile-tabs button {
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    color: var(--text-2);
+    flex: 1;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    height: 32px;
+  }
+
+  .workflow-mobile-tabs button.active {
+    background: var(--primary-soft);
+    color: var(--primary-text);
+  }
+
+  .workflow-studio-body {
+    display: block;
+    overflow: hidden;
+  }
+
+  .workflow-studio-body > .mobile-pane {
+    display: none;
+    height: 100%;
+  }
+
+  .workflow-studio-body > .mobile-pane.mobile-active {
+    display: flex;
+  }
+
+  .workflow-library,
+  .workflow-inspector {
+    border: 0;
+  }
+}

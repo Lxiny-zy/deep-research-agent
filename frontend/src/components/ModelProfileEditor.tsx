@@ -72,18 +72,18 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
   }
 
   return createPortal(
-    <div className="modal-backdrop" onClick={onCancel}>
+    <div className="modal-backdrop drawer-backdrop" onClick={onCancel}>
       <div
         ref={dialogRef}
-        className="modal editor-modal"
+        className="drawer editor-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="model-editor-title"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="modal-header-row">
+        <div className="modal-header-row drawer-header">
           <div>
-            <span className="eyebrow">MODEL / PROFILE</span>
+            <span className="eyebrow">模型档案</span>
             <h3 className="panel-title" id="model-editor-title">
               {editing ? '编辑模型档案' : '新建模型档案'}
             </h3>
@@ -125,7 +125,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
               <div className="row gap-sm">
                 <button
                   type="button"
-                  className="btn ghost small"
+                  className="btn btn-ghost btn-sm"
                   onClick={() => setManualModelEntry((value) => !value)}
                 >
                   <AppIcon
@@ -136,7 +136,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
                   {manualModelEntry ? '使用模型列表' : '手动填写 ID'}
                 </button>
                 <button
-                  className="btn ghost small"
+                  className="btn btn-ghost btn-sm"
                   onClick={discover}
                   disabled={probe.discover.isPending}
                 >
@@ -218,7 +218,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
                 </div>
                 <button
                   type="button"
-                  className="btn ghost small"
+                  className="btn btn-ghost btn-sm"
                   onClick={() => setReplacingApiKey(true)}
                 >
                   {initial?.api_key_set ? '更换密钥' : '输入密钥'}
@@ -245,7 +245,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
                 />
                 <button
                   type="button"
-                  className="btn ghost small"
+                  className="btn btn-ghost btn-sm"
                   onClick={() => {
                     setApiKey('')
                     setReplacingApiKey(false)
@@ -328,11 +328,11 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
 
           <div className="row between" style={{ marginTop: 8 }}>
             <div className="row gap-sm">
-              <button className="btn ghost" onClick={onCancel} type="button">
+              <button className="btn btn-ghost" onClick={onCancel} type="button">
                 取消
               </button>
               <button
-                className="btn ghost"
+                className="btn btn-ghost"
                 onClick={() => probe.test.mutate(probeBody)}
                 disabled={probe.test.isPending || !model}
                 type="button"

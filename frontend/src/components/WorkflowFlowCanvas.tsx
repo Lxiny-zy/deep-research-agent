@@ -69,12 +69,12 @@ function AgentFlowNode({ data, selected }: NodeProps<Node<CanvasNodeData>>) {
       )}
       <span className="flow-node-kind">
         {data.kind === 'reflect_loop'
-          ? 'CONTROL'
+          ? '控制'
           : data.kind === 'input'
-            ? 'ENTRY'
+            ? '入口'
             : data.kind === 'output'
-              ? 'RESULT'
-              : 'AGENT'}
+              ? '结果'
+              : '角色'}
       </span>
       <strong>{data.label}</strong>
       <small>{data.subtitle}</small>
@@ -626,14 +626,14 @@ export default function WorkflowFlowCanvas(props: Props) {
         position="bottom-right"
         nodeColor={(node) =>
           node.data.orphan
-            ? 'rgba(28, 28, 28, 0.4)'
+            ? 'var(--text-muted)'
             : node.data.kind === 'reflect_loop'
-              ? 'rgba(28, 28, 28, 0.6)'
-              : 'rgba(28, 28, 28, 0.8)'
+              ? 'var(--warning)'
+              : 'var(--primary)'
         }
-        nodeStrokeColor="#1C1C1C"
+        nodeStrokeColor="var(--border-strong)"
         nodeStrokeWidth={1}
-        maskColor="rgba(28, 28, 28, 0.10)"
+        maskColor="color-mix(in srgb, var(--text) 8%, transparent)"
         ariaLabel="工作流缩略导航图"
       />
     </ReactFlow>

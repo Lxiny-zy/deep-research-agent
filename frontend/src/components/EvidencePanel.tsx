@@ -298,7 +298,8 @@ function EvidenceCard({ finding, allFindings }: { finding: Finding; allFindings:
           </dd>
           <dt>语义判断</dt>
           <dd>
-            模型结果：{verification.semantic_reason || SEMANTIC_BADGE[verification.semantic_status].label}
+            模型结果：
+            {verification.semantic_reason || SEMANTIC_BADGE[verification.semantic_status].label}
           </dd>
           {verification.semantic_status !== 'not_checked' && (
             <>
@@ -464,7 +465,8 @@ export default function EvidencePanel({
             ) : (
               findings.map((f, i) => (
                 <EvidenceCard
-                  key={f.verification.claim_id || `${f.source_url}-${i}`}
+                  // claim_id 是内容哈希，同一句原文可能被多个子问题抽出，须带序号去重
+                  key={`${f.verification.claim_id || f.source_url}-${i}`}
                   finding={f}
                   allFindings={allFindings}
                 />

@@ -6,18 +6,10 @@ export default function LiveTelemetryPreviewPage() {
   const demo = useLiveTelemetryDemo()
 
   return (
-    <main className="live-preview-page signal-theme">
-      <div className="ambient-stage" aria-hidden="true">
-        <span className="ambient-block block-coral" />
-        <span className="ambient-block block-blue" />
-        <span className="ambient-block block-lime" />
-        <span className="ambient-grid" />
-      </div>
-
-      <div className="live-preview-content">
-        <header className="live-preview-header">
+    <main className="live-preview-page">
+      <div className="live-preview-content stack">
+        <header className="page-header">
           <div>
-            <span>LIVE TELEMETRY PREVIEW</span>
             <h1>研究进度动态效果</h1>
             <p>这是无真实模型消耗的模拟运行，展示生产组件的实际动画与状态切换。</p>
           </div>
@@ -45,7 +37,7 @@ export default function LiveTelemetryPreviewPage() {
           runStatus={demo.runStatus}
         />
 
-        <section className="live-preview-notes">
+        <section className="panel live-preview-notes">
           <strong>当前状态</strong>
           <span>{telemetryStageMessage(demo.elapsed)}</span>
           <small>

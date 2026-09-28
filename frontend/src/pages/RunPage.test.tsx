@@ -21,6 +21,13 @@ vi.mock('../hooks/useRuns', () => ({
   useResumeRun: () => ({ mutate: resumeMutateMock, isPending: false, isError: false, error: null }),
 }))
 vi.mock('../components/DagView', () => ({ default: () => null }))
+vi.mock('../components/FileTree', () => ({ default: () => null }))
+vi.mock('../hooks/useWorkbench', () => ({
+  useDeliverables: () => ({ data: undefined, isLoading: false, error: null }),
+  useRunTemplate: () => ({ data: undefined }),
+  useNarrative: () => ({ data: undefined }),
+  useWorkspace: () => ({ data: undefined }),
+}))
 vi.mock('../components/EventTimeline', () => ({ default: () => null }))
 vi.mock('../components/OrchestrationPipeline', () => ({ default: () => null }))
 vi.mock('../components/ReportActions', () => ({ default: () => null }))

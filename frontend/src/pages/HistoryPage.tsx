@@ -1,10 +1,9 @@
-import ResearchMotif from '../components/ResearchMotif'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useOutletContext } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import StatusBadge from '../components/StatusBadge'
 import EmptyState from '../components/EmptyState'
-import { useRevealOnScroll } from '../hooks/useRevealOnScroll'
+import Skeleton from '../components/Skeleton'
 import { useBatchDeleteRuns, useDeleteRun, useRunsList, useTags } from '../hooks/useRuns'
 import type { RunStatus } from '../types'
 
@@ -20,6 +19,8 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'error', label: '出错' },
 ]
 
+const ACTIVE_STATUSES = ['pending', 'running', 'cancelling']
+
 function formatCreatedAt(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
@@ -33,10 +34,16 @@ function formatCreatedAt(value: string): string {
   }).format(date)
 }
 
+function formatElapsed(seconds: number): string {
+  if (!Number.isFinite(seconds)) return '—'
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const minutes = Math.floor(seconds / 60)
+  return `${minutes}m ${Math.round(seconds % 60)}s`
+}
+
 export default function HistoryPage() {
   const access = useOutletContext<{ role: string } | undefined>()
-  const pageRef = useRef<HTMLDivElement>(null)
-  useRevealOnScroll(pageRef)
+  const navigate = useNavigate()
   const [offset, setOffset] = useState(0)
   const [status, setStatus] = useState('')
   const [qInput, setQInput] = useState('')
@@ -44,6 +51,7 @@ export default function HistoryPage() {
   const [tag, setTag] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [deleteError, setDeleteError] = useState('')
+  const canCreate = access?.role !== 'reader'
 
   useEffect(() => {
     const id = setTimeout(() => setQ(qInput.trim()), 350)
@@ -68,11 +76,18 @@ export default function HistoryPage() {
   const rows = useMemo(() => data?.slice(0, PAGE) ?? [], [data])
   const hasNext = (data?.length ?? 0) > PAGE
   const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.id))
+  const someSelected = !allSelected && rows.some((row) => selected.has(row.id))
   const filtersActive = Boolean(status || q || tag)
 
   useEffect(() => {
     if (data?.length === 0 && offset > 0) setOffset((value) => Math.max(0, value - PAGE))
   }, [data, offset])
+
+  function clearFilters() {
+    setStatus('')
+    setQInput('')
+    setTag('')
+  }
 
   function toggle(id: string) {
     setSelected((previous) => {
@@ -122,264 +137,268 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="stack page-stack" ref={pageRef}>
-      <header className="page-intro history-intro page-intro-compact intro-unveil">
+    <div className="stack page-stack history-page">
+      <header className="page-header">
         <div>
-          <span className="eyebrow">
-            <AppIcon name="history" size={14} aria-hidden="true" /> ARCHIVE / RUN LOG
-          </span>
-          <h1>
-            研究记录，<em>保持可回放。</em>
-          </h1>
-          <p>按问题、状态或标签检索每一次运行。完整链路、引用与产出都在这里留下痕迹。</p>
+          <h1>任务记录</h1>
+          <p>按问题、状态或标签检索每一次运行，完整链路、引用与交付物都可以回看。</p>
         </div>
-        <ResearchMotif kind="archive" className="page-motif" />
+        {canCreate && (
+          <div className="page-header-actions">
+            <Link className="btn btn-primary" to="/">
+              <AppIcon name="plus" size={15} aria-hidden="true" />
+              新建任务
+            </Link>
+          </div>
+        )}
       </header>
 
-      <div className="history-workbench">
-        <section className="panel filter-panel history-filter-module" data-reveal="1">
-          <div className="panel-header">
-            <div>
-              <span className="panel-kicker">FILTER / 01</span>
-              <h2 className="panel-title">筛选条件</h2>
-            </div>
-            {filtersActive && (
+      <section className="panel history-panel" aria-label="任务列表">
+        <div className="history-toolbar">
+          <label className="input-with-icon history-search" htmlFor="search-input">
+            <AppIcon name="search" size={15} aria-hidden="true" />
+            <span className="visually-hidden">搜索关键词</span>
+            <input
+              id="search-input"
+              className="input"
+              type="search"
+              placeholder="搜索任务问题…"
+              value={qInput}
+              onChange={(event) => setQInput(event.target.value)}
+            />
+          </label>
+          <label className="select-with-icon history-status" htmlFor="status-select">
+            <AppIcon name="filter" size={15} aria-hidden="true" />
+            <span className="visually-hidden">状态筛选</span>
+            <select
+              id="status-select"
+              className="input"
+              value={status}
+              onChange={(event) => setStatus(event.target.value)}
+            >
+              {STATUS_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {filtersActive && (
+            <button className="btn btn-ghost btn-sm" onClick={clearFilters} type="button">
+              <AppIcon name="x" size={14} aria-hidden="true" /> 清除筛选
+            </button>
+          )}
+          <div className="history-toolbar-spacer" />
+          {selected.size > 0 && <span className="hint">已选 {selected.size} 条</span>}
+          <button
+            className="btn btn-sm history-bulk-delete"
+            disabled={selected.size === 0 || batchDel.isPending}
+            onClick={removeSelected}
+            type="button"
+          >
+            <AppIcon
+              name={batchDel.isPending ? 'loader' : 'trash'}
+              size={14}
+              aria-hidden="true"
+              className={batchDel.isPending ? 'spin' : ''}
+            />
+            {batchDel.isPending ? '删除中…' : `删除所选 (${selected.size})`}
+          </button>
+        </div>
+
+        {tags.data && tags.data.length > 0 && (
+          <div className="history-tags" role="group" aria-label="标签筛选">
+            <span className="hint">标签</span>
+            {tags.data.map((item) => (
               <button
-                className="btn btn-ghost btn-sm"
-                onClick={() => {
-                  setStatus('')
-                  setQInput('')
-                  setTag('')
-                }}
                 type="button"
+                key={item.tag}
+                className={`history-tag${tag === item.tag ? ' is-active' : ''}`}
+                aria-pressed={tag === item.tag}
+                onClick={() => setTag(tag === item.tag ? '' : item.tag)}
               >
-                <AppIcon name="x" size={14} aria-hidden="true" /> 清除筛选
+                {item.tag}
+                <span className="history-tag-count">{item.count}</span>
               </button>
-            )}
+            ))}
           </div>
-          <div className="panel-body history-filter-body">
-            <div className="history-filters-grid">
-              <label className="field-label" htmlFor="search-input">
-                搜索关键词
-                <span className="input-with-icon">
-                  <AppIcon name="search" size={16} aria-hidden="true" />
-                  <input
-                    id="search-input"
-                    className="input"
-                    placeholder="搜索问题关键词…"
-                    value={qInput}
-                    onChange={(event) => setQInput(event.target.value)}
-                  />
-                </span>
-              </label>
-              <label className="field-label" htmlFor="status-select">
-                状态筛选
-                <span className="select-with-icon">
-                  <AppIcon name="sliders" size={15} aria-hidden="true" />
-                  <select
-                    id="status-select"
-                    className="input"
-                    value={status}
-                    onChange={(event) => setStatus(event.target.value)}
-                  >
-                    {STATUS_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </span>
-              </label>
-            </div>
+        )}
 
-            {tags.data && tags.data.length > 0 && (
-              <div className="history-tags-filter">
-                <div className="field-label">标签筛选</div>
-                <div className="chips">
-                  {tags.data.map((item) => (
-                    <button
-                      type="button"
-                      key={item.tag}
-                      className={`chip${tag === item.tag ? ' active' : ''}`}
-                      onClick={() => setTag(tag === item.tag ? '' : item.tag)}
-                    >
-                      {item.tag}
-                      <span>{item.count}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+        {deleteError && (
+          <p className="alert error history-alert" role="alert">
+            <AppIcon name="alert" size={15} aria-hidden="true" />
+            {deleteError}
+          </p>
+        )}
+
+        {isLoading && (
+          <div className="history-loading" role="status" aria-label="正在加载">
+            <Skeleton rows={6} />
           </div>
-        </section>
+        )}
 
-        <section className="panel history-list-panel history-results-module" data-reveal="2">
-          <div className="panel-header history-list-header">
-            <div>
-              <span className="panel-kicker">RUNS / {String(rows.length).padStart(2, '0')}</span>
-              <h2 className="panel-title">
-                研究历史 {!isLoading && rows.length > 0 && <small>({rows.length} 条)</small>}
-              </h2>
-            </div>
-            <div className="history-toolbar-actions">
-              <label className="history-select-all">
+        {isError && (
+          <div className="history-error" role="alert">
+            <p>{error instanceof Error ? error.message : '加载失败'}</p>
+            <button className="btn btn-secondary btn-sm" onClick={() => void refetch()}>
+              <AppIcon name="refresh" size={14} aria-hidden="true" />
+              重新加载记录
+            </button>
+          </div>
+        )}
+
+        {!isLoading && !isError && rows.length === 0 && (
+          <EmptyState
+            icon={filtersActive ? 'search' : 'history'}
+            title={filtersActive ? '没有符合条件的记录' : '还没有任务记录'}
+            description={
+              filtersActive
+                ? '换一个关键词，或清除筛选查看全部任务。'
+                : '每一次任务的过程、证据与交付物都会保存在这里。'
+            }
+          >
+            {filtersActive ? (
+              <button className="btn btn-secondary" onClick={clearFilters}>
+                清除全部筛选
+              </button>
+            ) : (
+              canCreate && (
+                <Link className="btn btn-primary" to="/">
+                  <AppIcon name="plus" size={15} aria-hidden="true" /> 开始第一个任务
+                </Link>
+              )
+            )}
+          </EmptyState>
+        )}
+
+        {rows.length > 0 && (
+          <div className="history-table" role="table" aria-label="任务记录">
+            <div className="history-table-head" role="row">
+              <span role="columnheader" className="history-col-check">
                 <input
                   type="checkbox"
                   checked={allSelected}
+                  ref={(element) => {
+                    if (element) element.indeterminate = someSelected
+                  }}
                   onChange={toggleAll}
-                  disabled={rows.length === 0}
+                  aria-label="全选"
                 />
-                <span>全选</span>
-              </label>
-              <button
-                className="btn btn-secondary btn-sm"
-                disabled={selected.size === 0 || batchDel.isPending}
-                onClick={removeSelected}
-                type="button"
-              >
-                <AppIcon
-                  name={batchDel.isPending ? 'loader' : 'trash'}
-                  size={14}
-                  aria-hidden="true"
-                  className={batchDel.isPending ? 'spin' : ''}
-                />
-                {batchDel.isPending ? '删除中…' : `删除所选 (${selected.size})`}
-              </button>
+              </span>
+              <span role="columnheader">任务</span>
+              <span role="columnheader">状态</span>
+              <span role="columnheader" className="history-col-time">
+                创建时间
+              </span>
+              <span role="columnheader" className="history-col-num">
+                Token
+              </span>
+              <span role="columnheader" className="history-col-num">
+                耗时
+              </span>
+              <span role="columnheader" className="history-col-action">
+                <span className="visually-hidden">操作</span>
+              </span>
             </div>
-          </div>
-
-          <div className="panel-body">
-            {deleteError && (
-              <p className="error-text" role="alert">
-                {deleteError}
-              </p>
-            )}
-            {isLoading && (
-              <div className="spinner-container">
-                <AppIcon name="loader" size={24} className="spin" aria-label="正在加载" />
-              </div>
-            )}
-            {isError && (
-              <div className="workspace-load-error" role="alert">
-                <p>{error instanceof Error ? error.message : '加载失败'}</p>
-                <button className="btn btn-secondary small" onClick={() => void refetch()}>
-                  重新加载记录
-                </button>
-              </div>
-            )}
-
-            {!isLoading && !isError && rows.length === 0 && (
-              <EmptyState
-                icon={filtersActive ? 'search' : 'history'}
-                title={filtersActive ? '没有符合条件的记录' : '还没有研究记录'}
-                description={
-                  filtersActive
-                    ? '换一个关键词，或清除筛选查看全部研究。'
-                    : '每一次探索的过程、证据与报告，都会保存在这里。'
-                }
-              >
-                {filtersActive ? (
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      setStatus('')
-                      setQInput('')
-                      setTag('')
+            <div className="history-run-list" role="rowgroup">
+              {rows.map((run) => {
+                const active = ACTIVE_STATUSES.includes(run.status)
+                const isSelected = selected.has(run.id)
+                return (
+                  <div
+                    className={`history-run-row${isSelected ? ' is-selected' : ''}`}
+                    key={run.id}
+                    role="row"
+                    onClick={(event) => {
+                      // 整行可点击进入详情；勾选框、链接与按钮保留各自的行为
+                      const target = event.target as HTMLElement
+                      if (target.closest('a, button, input, label')) return
+                      navigate(`/runs/${run.id}`)
                     }}
                   >
-                    清除全部筛选
-                  </button>
-                ) : (
-                  access?.role !== 'reader' && (
-                    <Link className="btn btn-primary" to="/">
-                      <AppIcon name="plus" size={15} aria-hidden="true" /> 开始第一次研究
-                    </Link>
-                  )
-                )}
-              </EmptyState>
-            )}
-
-            {rows.length > 0 && (
-              <div className="history-run-list">
-                {rows.map((run, index) => (
-                  <article
-                    className="history-run-row stagger-item"
-                    key={run.id}
-                    style={{ '--i': index } as React.CSSProperties}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selected.has(run.id)}
-                      onChange={() => toggle(run.id)}
-                      aria-label={`选择研究：${run.query}`}
-                    />
-                    <Link to={`/runs/${run.id}`} className="history-run-link">
-                      <div className="history-run-query" title={run.query}>
+                    <span role="cell" className="history-col-check">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggle(run.id)}
+                        aria-label={`选择研究：${run.query}`}
+                      />
+                    </span>
+                    <span role="cell" className="history-col-main">
+                      <Link to={`/runs/${run.id}`} className="history-run-query" title={run.query}>
                         {run.query}
-                      </div>
-                      <div className="history-run-meta">
-                        <StatusBadge status={run.status as RunStatus} />
-                        {run.created_at && (
-                          <time dateTime={run.created_at}>{formatCreatedAt(run.created_at)}</time>
-                        )}
-                        <span>{run.total_tokens} tokens</span>
-                        <span>{run.elapsed.toFixed(1)}s</span>
-                        {run.tags.length > 0 && (
-                          <div className="history-run-tags">
-                            {run.tags.map((item) => (
-                              <span key={item}>{item}</span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </Link>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm icon-button"
-                      title={
-                        ['pending', 'running', 'cancelling'].includes(run.status)
-                          ? '研究进行中，请先取消后再删除'
-                          : '删除'
-                      }
-                      disabled={
-                        del.isPending || ['pending', 'running', 'cancelling'].includes(run.status)
-                      }
-                      aria-label={`删除研究：${run.query}`}
-                      onClick={() => void removeOne(run.id, run.query)}
-                    >
-                      <AppIcon name="trash" size={15} aria-hidden="true" />
-                    </button>
-                  </article>
-                ))}
-              </div>
-            )}
+                      </Link>
+                      {run.tags.length > 0 && (
+                        <span className="history-run-tags">
+                          {run.tags.map((item) => (
+                            <span key={item} className="chip">
+                              {item}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                    </span>
+                    <span role="cell" className="history-col-status">
+                      <StatusBadge status={run.status as RunStatus} />
+                    </span>
+                    <span role="cell" className="history-col-time hint">
+                      {run.created_at ? (
+                        <time dateTime={run.created_at}>{formatCreatedAt(run.created_at)}</time>
+                      ) : (
+                        '—'
+                      )}
+                    </span>
+                    <span role="cell" className="history-col-num numeric">
+                      {run.total_tokens} tokens
+                    </span>
+                    <span role="cell" className="history-col-num numeric">
+                      {formatElapsed(run.elapsed)}
+                    </span>
+                    <span role="cell" className="history-col-action">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm icon-button danger"
+                        title={active ? '研究进行中，请先取消后再删除' : '删除'}
+                        disabled={del.isPending || active}
+                        aria-label={`删除研究：${run.query}`}
+                        onClick={() => void removeOne(run.id, run.query)}
+                      >
+                        <AppIcon name="trash" size={15} aria-hidden="true" />
+                      </button>
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
-        </section>
-      </div>
+        )}
 
-      {(offset > 0 || hasNext) && (
-        <nav className="pagination" aria-label="研究记录分页">
-          <button
-            className="btn btn-secondary"
-            disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PAGE))}
-            type="button"
-          >
-            <AppIcon name="arrow-left" size={15} aria-hidden="true" />
-            上一页
-          </button>
-          <span>第 {Math.floor(offset / PAGE) + 1} 页</span>
-          <button
-            className="btn btn-secondary"
-            disabled={!hasNext}
-            onClick={() => setOffset(offset + PAGE)}
-            type="button"
-          >
-            下一页
-            <AppIcon name="arrow-right" size={15} aria-hidden="true" />
-          </button>
-        </nav>
-      )}
+        {(offset > 0 || hasNext) && (
+          <nav className="history-pagination" aria-label="研究记录分页">
+            <span className="hint">第 {Math.floor(offset / PAGE) + 1} 页</span>
+            <div className="row">
+              <button
+                className="btn btn-sm"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - PAGE))}
+                type="button"
+              >
+                <AppIcon name="arrow-left" size={14} aria-hidden="true" />
+                上一页
+              </button>
+              <button
+                className="btn btn-sm"
+                disabled={!hasNext}
+                onClick={() => setOffset(offset + PAGE)}
+                type="button"
+              >
+                下一页
+                <AppIcon name="arrow-right" size={14} aria-hidden="true" />
+              </button>
+            </div>
+          </nav>
+        )}
+      </section>
     </div>
   )
 }

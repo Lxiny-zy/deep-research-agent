@@ -113,7 +113,7 @@ export default function SearchKeyCard({ k, onToggle, onDelete, onUpdate, referen
           <div className="row gap-sm">
             <button
               type="button"
-              className="btn btn-primary small"
+              className="btn btn-primary btn-sm"
               disabled={saving}
               onClick={save}
             >
@@ -121,7 +121,7 @@ export default function SearchKeyCard({ k, onToggle, onDelete, onUpdate, referen
             </button>
             <button
               type="button"
-              className="btn ghost small"
+              className="btn btn-ghost btn-sm"
               disabled={saving}
               onClick={() => {
                 setSecret('')
@@ -135,7 +135,7 @@ export default function SearchKeyCard({ k, onToggle, onDelete, onUpdate, referen
       )}
       <div className="row between role-card-foot">
         <button
-          className="btn ghost small"
+          className="btn btn-ghost btn-sm"
           onClick={() => test.mutate(k.id)}
           disabled={test.isPending || ['responses', 'chat_search'].includes(k.provider)}
           title={
@@ -155,7 +155,7 @@ export default function SearchKeyCard({ k, onToggle, onDelete, onUpdate, referen
         <div className="row gap-sm">
           {onUpdate && (
             <button
-              className="btn ghost small"
+              className="btn btn-ghost btn-sm"
               type="button"
               onClick={() => {
                 setLabel(k.label)
@@ -166,11 +166,11 @@ export default function SearchKeyCard({ k, onToggle, onDelete, onUpdate, referen
               编辑
             </button>
           )}
-          <button className="btn ghost small" onClick={onToggle}>
+          <button className="btn btn-ghost btn-sm" onClick={onToggle}>
             <AppIcon name={k.enabled ? 'eye-off' : 'eye'} size={13} aria-hidden="true" />
             {k.enabled ? '停用' : '启用'}
           </button>
-          <button className="btn ghost small danger" onClick={onDelete}>
+          <button className="btn btn-ghost btn-sm danger" onClick={onDelete}>
             <AppIcon name="trash" size={13} aria-hidden="true" /> 删除
           </button>
         </div>

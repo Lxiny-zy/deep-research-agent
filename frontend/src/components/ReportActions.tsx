@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
-import { downloadRunDocument, getCapabilities, type RunDocumentFormat } from '../api/client'
+import {
+  downloadRunDocument,
+  getCapabilities,
+  type LatexTemplateName,
+  type RunDocumentFormat,
+} from '../api/client'
 import { downloadBlob, downloadText, slugify } from '../lib/download'
 import { AppIcon } from './AppIcon'
 
@@ -35,12 +40,13 @@ export default function ReportActions({
   documentReady?: boolean
   previewing?: boolean
   onTogglePreview?: () => void
-  capabilities?: { pdf: boolean; xlsx: boolean }
+  capabilities?: Partial<Record<RunDocumentFormat, boolean>>
 }) {
   const [copied, setCopied] = useState(false)
   const [selectedTableId, setSelectedTableId] = useState('')
   const [exporting, setExporting] = useState<RunDocumentFormat | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [latexTemplate, setLatexTemplate] = useState<LatexTemplateName>('ctexart')
   const [available, setAvailable] = useState(capabilities)
   useEffect(() => {
     if (capabilities) {
@@ -51,7 +57,15 @@ export default function ReportActions({
     getCapabilities(controller.signal)
       .then((result) => setAvailable(result.exports))
       .catch(() => {
-        if (!controller.signal.aborted) setAvailable({ pdf: false, xlsx: false })
+        if (!controller.signal.aborted)
+          setAvailable({
+            pdf: false,
+            xlsx: false,
+            tex: false,
+            bib: false,
+            bundle: false,
+            paper_pdf: false,
+          })
       })
     return () => controller.abort()
   }, [capabilities])
@@ -124,6 +138,9 @@ export default function ReportActions({
           format === 'csv' || format === 'xlsx'
             ? selectedTableId || tableOptions[0]?.id
             : undefined,
+        ...(format === 'tex' || format === 'paper_pdf' || format === 'bundle'
+          ? { profile: 'academic' as const, template: latexTemplate }
+          : {}),
       })
       downloadBlob(result.filename, result.blob)
     } catch (error: unknown) {
@@ -133,26 +150,42 @@ export default function ReportActions({
     }
   }
 
-  return (
-    <div className="report-actions">
-      <button type="button" className="btn ghost sm" onClick={copy} disabled={disabled}>
-        <AppIcon name={copied ? 'check' : 'copy'} size={14} aria-hidden="true" />
-        {copied ? '已复制' : '复制'}
-      </button>
+  function exportItem(
+    format: RunDocumentFormat,
+    label: string,
+    options: { disabled: boolean; title?: string; busyLabel?: string; icon?: 'download' | 'file' },
+  ) {
+    const busy = exporting === format
+    return (
       <button
         type="button"
-        className="btn ghost sm"
-        onClick={() => void downloadMarkdown()}
-        disabled={disabled || exporting !== null}
-        aria-busy={exporting === 'md'}
+        className="run-export-item"
+        onClick={() => void exportDocument(format)}
+        disabled={options.disabled}
+        aria-busy={busy}
+        title={options.title}
       >
-        <AppIcon name={exporting === 'md' ? 'loader' : 'download'} size={14} aria-hidden="true" />
-        {exporting === 'md' ? '导出中…' : '下载 .md'}
+        <AppIcon
+          name={busy ? 'loader' : (options.icon ?? 'download')}
+          size={14}
+          className={busy ? 'spin' : ''}
+          aria-hidden="true"
+        />
+        {busy ? (options.busyLabel ?? '导出中…') : label}
+      </button>
+    )
+  }
+
+  return (
+    <div className="report-actions">
+      <button type="button" className="btn btn-ghost btn-sm" onClick={copy} disabled={disabled}>
+        <AppIcon name={copied ? 'check' : 'copy'} size={14} aria-hidden="true" />
+        {copied ? '已复制' : '复制'}
       </button>
       {onTogglePreview && (
         <button
           type="button"
-          className="btn ghost sm"
+          className="btn btn-ghost btn-sm"
           onClick={onTogglePreview}
           disabled={disabled}
           aria-pressed={previewing}
@@ -163,62 +196,99 @@ export default function ReportActions({
       )}
       <button
         type="button"
-        className="btn ghost sm"
+        className="btn btn-ghost btn-sm"
         onClick={() => window.print()}
         disabled={disabled}
       >
         <AppIcon name="printer" size={14} aria-hidden="true" />
         打印 · 存为 PDF
       </button>
-      {tableOptions.length > 1 && (
-        <label className="report-export-table">
-          <select
-            aria-label="导出表格"
-            value={selectedTableId}
-            onChange={(event) => setSelectedTableId(event.target.value)}
-            disabled={exporting !== null}
+      <details className="run-export-menu">
+        <summary className="btn btn-secondary btn-sm">
+          <AppIcon name="download" size={14} aria-hidden="true" />
+          导出
+          <AppIcon name="chevron-down" size={14} aria-hidden="true" />
+        </summary>
+        <div className="run-export-panel" role="group" aria-label="导出格式">
+          <span className="run-export-group">报告</span>
+          <button
+            type="button"
+            className="run-export-item"
+            onClick={() => void downloadMarkdown()}
+            disabled={disabled || exporting !== null}
+            aria-busy={exporting === 'md'}
           >
-            {tableOptions.map((table) => (
-              <option value={table.id} key={table.id}>
-                {table.label || table.id}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <button
-        type="button"
-        className="btn ghost sm"
-        onClick={() => void exportDocument('csv')}
-        disabled={tableExportDisabled}
-        aria-busy={exporting === 'csv'}
-        title={tableExportHint}
-      >
-        <AppIcon name={exporting === 'csv' ? 'loader' : 'download'} size={14} aria-hidden="true" />
-        {exporting === 'csv' ? '导出中…' : '下载 CSV'}
-      </button>
-      <button
-        type="button"
-        className="btn ghost sm"
-        onClick={() => void exportDocument('xlsx')}
-        disabled={tableExportDisabled || !available?.xlsx}
-        aria-busy={exporting === 'xlsx'}
-        title={!available?.xlsx ? '此服务暂不支持 XLSX 导出' : tableExportHint}
-      >
-        <AppIcon name={exporting === 'xlsx' ? 'loader' : 'download'} size={14} aria-hidden="true" />
-        {exporting === 'xlsx' ? '导出中…' : '下载 XLSX'}
-      </button>
-      <button
-        type="button"
-        className="btn ghost sm"
-        onClick={() => void exportDocument('pdf')}
-        disabled={exportDisabled || !available?.pdf}
-        aria-busy={exporting === 'pdf'}
-        title={!available?.pdf ? '此服务暂不支持 PDF 导出，可使用打印功能' : exportHint}
-      >
-        <AppIcon name={exporting === 'pdf' ? 'loader' : 'download'} size={14} aria-hidden="true" />
-        {exporting === 'pdf' ? '导出中…' : '下载 PDF'}
-      </button>
+            <AppIcon
+              name={exporting === 'md' ? 'loader' : 'download'}
+              size={14}
+              className={exporting === 'md' ? 'spin' : ''}
+              aria-hidden="true"
+            />
+            {exporting === 'md' ? '导出中…' : '下载 .md'}
+          </button>
+          {exportItem('pdf', '下载 PDF', {
+            disabled: exportDisabled || !available?.pdf,
+            title: !available?.pdf ? '此服务暂不支持 PDF 导出，可使用打印功能' : exportHint,
+          })}
+          <span className="run-export-group">表格</span>
+          {tableOptions.length > 1 && (
+            <select
+              className="input run-export-select"
+              aria-label="导出表格"
+              value={selectedTableId}
+              onChange={(event) => setSelectedTableId(event.target.value)}
+              disabled={exporting !== null}
+            >
+              {tableOptions.map((table) => (
+                <option value={table.id} key={table.id}>
+                  {table.label || table.id}
+                </option>
+              ))}
+            </select>
+          )}
+          {exportItem('csv', '下载 CSV', { disabled: tableExportDisabled, title: tableExportHint })}
+          {exportItem('xlsx', '下载 XLSX', {
+            disabled: tableExportDisabled || !available?.xlsx,
+            title: !available?.xlsx ? '此服务暂不支持 XLSX 导出' : tableExportHint,
+          })}
+          <span className="run-export-group">科研交付</span>
+          <label className="run-export-template">
+            <span>论文模板</span>
+            <select
+              className="input run-export-select"
+              value={latexTemplate}
+              onChange={(event) => setLatexTemplate(event.target.value as LatexTemplateName)}
+              disabled={exporting !== null}
+            >
+              <option value="ctexart">中文论文 · ctexart</option>
+              <option value="ctexrep">中文长文 · ctexrep</option>
+              <option value="ieeetran">IEEE · 单栏审稿稿</option>
+              <option value="acmart">ACM · manuscript</option>
+            </select>
+          </label>
+          {exportItem('paper_pdf', '论文版 PDF', {
+            disabled: exportDisabled || available?.paper_pdf !== true,
+            title:
+              available?.paper_pdf !== true
+                ? '论文版 PDF 需要服务端安装 TeX Live 与 latexmk，可先下载 .tex 源文件'
+                : exportHint,
+            busyLabel: '编译中…',
+            icon: 'file',
+          })}
+          {exportItem('tex', '下载 .tex', {
+            disabled: exportDisabled || available?.tex !== true,
+            title: available?.tex !== true ? '此服务暂不支持 LaTeX 源文件导出' : exportHint,
+          })}
+          {exportItem('bib', '下载 .bib', {
+            disabled: exportDisabled || available?.bib !== true,
+            title: available?.bib !== true ? '此服务暂不支持 BibTeX 导出' : exportHint,
+          })}
+          {exportItem('bundle', '下载复现包', {
+            disabled: exportDisabled || available?.bundle !== true,
+            title: available?.bundle !== true ? '此服务暂不支持科研复现包导出' : exportHint,
+          })}
+        </div>
+      </details>
       {exportError && (
         <span className="report-export-error" role="alert">
           {exportError}

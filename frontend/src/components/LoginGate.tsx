@@ -63,7 +63,7 @@ export default function LoginGate({ onClose, onAuthenticated }: Props) {
     <div className="modal-backdrop" onClick={onClose}>
       <div
         ref={dialogRef}
-        className="modal scale-in auth-modal"
+        className="modal auth-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="api-key-title"
@@ -91,9 +91,8 @@ export default function LoginGate({ onClose, onAuthenticated }: Props) {
         <div className="auth-modal-inner">
           <div className="auth-topline">
             <span className="auth-symbol">
-              <AppIcon name="key" size={24} aria-hidden="true" />
+              <AppIcon name="key" size={20} aria-hidden="true" />
             </span>
-            <span className="panel-kicker">WORKSPACE ACCESS</span>
             <button
               type="button"
               className="btn btn-ghost icon-button"
@@ -152,13 +151,13 @@ export default function LoginGate({ onClose, onAuthenticated }: Props) {
               </span>
             </label>
             {error && (
-              <p className="test-result test-fail" role="alert">
+              <p className="alert error auth-error" role="alert">
                 <AppIcon name="circle-x" size={16} aria-hidden="true" />
                 {error}
               </p>
             )}
             {storageNotice && (
-              <p className="auth-storage-notice" role="status">
+              <p className="alert warning auth-storage-notice" role="status">
                 {storageNotice}
               </p>
             )}

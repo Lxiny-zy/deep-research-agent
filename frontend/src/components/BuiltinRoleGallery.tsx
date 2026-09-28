@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react'
 import { agentIconName } from '../lib/agentIcons'
 import type { RoleInfo } from '../types'
 import { AppIcon, type AppIconName } from './AppIcon'
@@ -16,36 +15,22 @@ const ROLE_ICONS: Record<string, AppIconName> = {
   critic: 'shield',
 }
 
-function staggerStyle(index: number): CSSProperties {
-  return { '--stagger-i': index } as CSSProperties
-}
-
 export default function BuiltinRoleGallery({ roles }: { roles: RoleInfo[] }) {
   const builtins = roles.filter((role) => role.builtin)
   if (!builtins.length) return null
   return (
     <section className="builtin-rail" aria-label="内置角色">
-      <div className="builtin-rail-head">
-        <div>
-          <span className="panel-kicker">
-            <AppIcon name="bot" size={12} aria-hidden="true" /> 内置 / 管线角色
-          </span>
-          <h3 className="builtin-rail-title">内置角色</h3>
-        </div>
-        <span className="builtin-rail-hint">
-          按管线执行序排列的 {builtins.length} 个基座角色：始终可用，可直接被工作流引用。
+      <div className="catalog-section-head">
+        <h3 className="builtin-rail-title">内置角色</h3>
+        <span className="hint">
+          按执行顺序排列的 {builtins.length} 个基座角色，始终可用，可直接被工作流引用。
         </span>
       </div>
       <div className="builtin-card-grid builtin-role-grid">
         {builtins.map((role, index) => {
           const pos = String(index + 1).padStart(2, '0')
           return (
-            <article
-              key={role.name}
-              className="builtin-card builtin-role-card"
-              data-pos={pos}
-              style={staggerStyle(index)}
-            >
+            <article key={role.name} className="builtin-card builtin-role-card" data-pos={pos}>
               <div className="builtin-card-top">
                 <span className="builtin-card-index">{pos}</span>
                 <span className="builtin-card-badges">

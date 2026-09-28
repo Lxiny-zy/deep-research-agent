@@ -1,0 +1,171 @@
+/* ============================================================================
+   Science Research 设计令牌
+   浅色为默认（科研文档以阅读为主），深色跟随系统或手动切换。
+   所有组件只引用这里的变量，不写死颜色。
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* 中性色：偏冷的石墨灰，长时间阅读不刺眼 */
+  --bg: #f6f7f9;
+  --bg-subtle: #eef0f3;
+  --surface: #ffffff;
+  --surface-2: #f8f9fb;
+  --surface-3: #f1f3f6;
+  --surface-hover: #f3f5f8;
+  --border: #e3e6eb;
+  --border-strong: #cfd4dc;
+
+  --text: #16191f;
+  --text-2: #4a5160;
+  /* text-3 在 bg / surface-3 上需 ≥ 4.5:1（WCAG AA 正文）；#6f7685 仅 4.1 */
+  --text-3: #646b79;
+  --text-muted: #686f7d; /* 最弱一级文字，仍需 ≥ 4.5:1 */
+  --text-inverse: #ffffff;
+
+  /* 品牌主色：沉稳的靛蓝，科研 / 学术气质 */
+  --primary: #3b5bdb;
+  --primary-hover: #334fc4;
+  --primary-active: #2b43a8;
+  --primary-soft: #eef2ff;
+  --primary-soft-2: #dfe6ff;
+  --primary-text: #2f49b8;
+  --focus-ring: 0 0 0 3px rgba(59, 91, 219, 0.24);
+
+  /* 语义色 */
+  --success: #1f9d61;
+  --success-soft: #e7f6ee;
+  --success-text: #157a4b;
+  --warning: #c77c02;
+  --warning-soft: #fdf3e1;
+  --warning-text: #9a5d00;
+  --danger: #d64545;
+  --danger-soft: #fdecec;
+  --danger-text: #b3261e;
+  --info: #2f80ed;
+  --info-soft: #e8f1fd;
+  --info-text: #1f63c2;
+
+  /* 侧边栏：深色，把导航与内容区明确分开 */
+  --sidebar-bg: #161a23;
+  --sidebar-border: #232836;
+  --sidebar-text: #aab1c0;
+  --sidebar-text-strong: #f2f4f8;
+  --sidebar-hover: #1f2431;
+  --sidebar-active: #262d3d;
+  --sidebar-accent: #8ea2ff;
+  --sidebar-muted: #6f7788;
+  --brand-gradient: linear-gradient(135deg, #5b78ff, #3b5bdb);
+  --on-primary: #ffffff;
+  --knob: #ffffff;
+
+  /* 浮层 */
+  --tooltip-bg: #1f2430;
+  --tooltip-text: #eef1f6;
+
+  /* 排版 */
+  --font-sans:
+    'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', system-ui,
+    -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --font-serif: 'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', 'STSong', Georgia, serif;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+
+  /* 尺寸 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  --sidebar-width: 240px;
+  --sidebar-collapsed: 64px;
+  --topbar-height: 56px;
+  --content-max: 1240px;
+
+  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 6px 16px -4px rgba(16, 24, 40, 0.1), 0 2px 6px -2px rgba(16, 24, 40, 0.05);
+  --shadow-lg: 0 18px 40px -12px rgba(16, 24, 40, 0.22);
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --duration: 160ms;
+
+  /* 兼容：旧组件里仍引用的变量名，映射到新令牌 */
+  --text-primary: var(--text);
+  --text-secondary: var(--text-2);
+  --text-tertiary: var(--text-3);
+  --surface-1: var(--surface);
+  --border-primary: var(--border);
+  --border-secondary: var(--border);
+  --border-accent: var(--primary);
+  --accent-primary: var(--primary);
+  --error: var(--danger);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0f1218;
+  --bg-subtle: #141821;
+  --surface: #171b24;
+  --surface-2: #1b202a;
+  --surface-3: #212734;
+  --surface-hover: #222836;
+  --border: #2a303d;
+  --border-strong: #3a4252;
+
+  --text: #e8ebf1;
+  --text-2: #b4bac7;
+  --text-3: #9aa1b0;
+  --text-muted: #888f9e;
+
+  --primary: #6f8bff;
+  --primary-hover: #8198ff;
+  --primary-active: #5a78f5;
+  --primary-soft: #1d2440;
+  --primary-soft-2: #26305a;
+  --primary-text: #a9b8ff;
+  --focus-ring: 0 0 0 3px rgba(111, 139, 255, 0.35);
+
+  --success: #3cc47f;
+  --success-soft: #16291f;
+  --success-text: #6fdca3;
+  --warning: #e6a23c;
+  --warning-soft: #2c2413;
+  --warning-text: #f0c070;
+  --danger: #f06a6a;
+  --danger-soft: #2f1818;
+  --danger-text: #ff9b9b;
+  --info: #5ea0ff;
+  --info-soft: #15233a;
+  --info-text: #9cc4ff;
+
+  --sidebar-bg: #0b0e13;
+  --sidebar-border: #1c212c;
+  --sidebar-hover: #161a23;
+  --sidebar-active: #1d2330;
+  --tooltip-bg: #2b3140;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 20px -6px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 20px 44px -12px rgba(0, 0, 0, 0.6);
+}

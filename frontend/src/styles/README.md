@@ -1,16 +1,26 @@
-# 样式维护
+# 前端设计系统
 
-应用只从 `index.css` 加载样式，顺序是 foundation → components → layout → motion → pages → print。
+整体为「左侧深色侧边栏 + 浅色内容区」的应用布局，浅色默认，深色跟随系统或手动切换。
+风格参照主流 SaaS / 科研工具：留白充足、层级靠字号与字重而不是颜色、卡片轻阴影、
+单一主色（靛蓝）。**界面与文案中不使用 emoji**，图标一律用 `AppIcon`（lucide）。
 
-| 文件 | 修改范围 |
-| --- | --- |
-| foundation.css | 设计变量、页面基础、原生控件 |
-| components.css | 可复用控件、报告与执行状态组件 |
-| layout.css | 工作台布局、导航、通用响应式规则 |
-| motion.css | 动画与减少动画偏好 |
-| pages.css | 研究、历史、设置、角色和工作流页面 |
-| print.css | 打印排版，保持最后加载 |
+## 文件
 
-历史的 15 份覆盖文件已合并为这 6 类，并删除了 715 条同条件、同选择器、同值的重复声明。迁移保持原声明顺序；不要通过继续追加全局覆盖文件来修正组件样式。在所属文件里修改已有规则，新组件尽量使用组件自己的类名。现有 `!important` 保留兼容作用，移除时需要检查该组件的焦点、窄屏和打印状态。
+| 文件          | 内容                                                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `tokens.css`  | 颜色、字号、间距、圆角、阴影等设计令牌；深色主题在 `[data-theme='dark']`                                                       |
+| `base.css`    | 重置、基础排版、焦点环、滚动条、`visually-hidden`                                                                              |
+| `ui.css`      | 通用组件：`.btn`、`.input`、`.panel`、`.badge`、`.tabs`、`.segmented`、开关、弹窗、空状态、骨架屏、`InfoTip`、`.markdown-body` |
+| `shell.css`   | 应用外壳：侧边栏、顶栏、内容区、响应式抽屉                                                                                     |
+| `pages/*.css` | 每个页面 / 业务组件一个文件，经 `features.css` 汇总引入                                                                        |
+| `print.css`   | 打印版报告（独立令牌，不随主题变化）                                                                                           |
 
-验证：`npm run build` 后，在仓库根目录执行 `python scripts/verify_workspace_ui.py`。样式迁移可以先生成 `--label before`，修改后运行 `--label after --compare before`，比较 6 个页面、两种宽度下的实际计算样式；截图存于 `artifacts/ui-workspace/`。
+## 约定
+
+- 只用 `tokens.css` 里的变量，不写死颜色；需要新颜色先加令牌。
+- 页面标题区用 `.page-header`（h1 + p + `.page-header-actions`）。
+- 卡片用 `.panel`，卡片标题用 `.panel-header` + `.panel-title`。
+- 字号梯度：12 / 13 / 14 / 15 / 17 / 20 / 24 / 30，正文 14。
+- 间距用 4 的倍数（`--space-*`）。
+- 不使用 `!important`（`visually-hidden` 等工具类除外）。
+- 移动端断点：1100（侧栏收成图标）、760（侧栏变抽屉、单列）。

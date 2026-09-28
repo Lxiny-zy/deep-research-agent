@@ -1,4 +1,3 @@
-import ResearchMotif from '../components/ResearchMotif'
 import { useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import AgentCardEditor from '../components/AgentCardEditor'
@@ -153,21 +152,12 @@ export default function AgentSquarePage() {
   }
 
   return (
-    <div className="stack page-stack">
-      <header className="page-intro agents-intro page-intro-compact">
+    <div className="stack page-stack catalog-page">
+      <header className="page-header">
         <div>
-          <span className="eyebrow">
-            <AppIcon name="users" size={14} aria-hidden="true" /> 角色 / 能力层
-          </span>
-          <h1>
-            把专业角色，<em>装配成研究团队。</em>
-          </h1>
-          <p>
-            管理 Agent 行为模板、模型档案与检索 Key
-            池，让每条工作流都能调用清晰、稳定、可复用的能力单元。
-          </p>
+          <h1>角色广场</h1>
+          <p>管理研究角色、模型档案与检索资源。工作流按标识引用这里的角色。</p>
         </div>
-        <ResearchMotif kind="constellation" className="page-motif" />
       </header>
 
       <div className="tabs agent-tabs" role="tablist" aria-label="角色广场分类">
@@ -217,15 +207,15 @@ export default function AgentSquarePage() {
         >
           <div className="panel-header">
             <div>
-              <span className="panel-kicker">角色 / 01</span>
-              <h2 className="panel-title">角色</h2>
+              <h2 className="panel-title">研究角色</h2>
+              <p className="hint">内置角色始终可用；自定义角色可以绑定专属提示词与模型。</p>
             </div>
             <button className="btn btn-primary" onClick={() => openAgentEditor(null)}>
               <AppIcon name="plus" size={15} aria-hidden="true" />
               新建角色
             </button>
           </div>
-          <div className="panel-body">
+          <div className="catalog-panel-body">
             {roles.isLoading && <Skeleton rows={2} />}
             {roles.isError && (
               <p className="error-text" role="alert">
@@ -234,17 +224,12 @@ export default function AgentSquarePage() {
             )}
             <BuiltinRoleGallery roles={roles.data ?? []} />
 
-            <div className="builtin-rail-head custom-follow">
-              <div>
-                <span className="panel-kicker">
-                  <AppIcon name="user-cog" size={12} aria-hidden="true" /> 自定义 / 角色
-                </span>
-                <h3 className="builtin-rail-title">自定义角色</h3>
-              </div>
+            <div className="catalog-section-head custom-follow">
+              <h3 className="builtin-rail-title">自定义角色</h3>
+              <span className="hint">
+                选一种行为模板，自定义提示词与绑定模型；启用后可被工作流引用。
+              </span>
             </div>
-            <p className="hint catalog-description">
-              数据驱动的角色：选一种行为模板，自定义提示词与绑定模型。启用的角色可被工作流按标识引用。
-            </p>
 
             {agents.isLoading && <Skeleton rows={4} />}
             {agents.isError && (
@@ -316,7 +301,7 @@ export default function AgentSquarePage() {
                   )}
                   <div className="role-card-foot catalog-card-foot">
                     <button
-                      className="btn ghost small"
+                      className="btn btn-ghost btn-sm"
                       onClick={() =>
                         agentM.update.mutate({ id: a.id, body: { enabled: !a.enabled } })
                       }
@@ -324,11 +309,11 @@ export default function AgentSquarePage() {
                       <AppIcon name={a.enabled ? 'eye-off' : 'eye'} size={13} aria-hidden="true" />
                       {a.enabled ? '停用' : '启用'}
                     </button>
-                    <button className="btn ghost small" onClick={() => openAgentEditor(a)}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => openAgentEditor(a)}>
                       <AppIcon name="edit" size={13} aria-hidden="true" /> 编辑
                     </button>
                     <button
-                      className="btn ghost small danger"
+                      className="btn btn-ghost btn-sm danger"
                       aria-label={`删除 ${a.display_name || a.name}`}
                       onClick={() => {
                         if (confirm(`删除角色「${a.display_name || a.name}」？`)) {
@@ -357,19 +342,17 @@ export default function AgentSquarePage() {
         >
           <div className="panel-header">
             <div>
-              <span className="panel-kicker">模型 / 02</span>
               <h2 className="panel-title">模型档案</h2>
+              <p className="hint">
+                每个档案是一套独立的端点、密钥与模型；标为「全局默认」的档案在角色未绑定时生效。
+              </p>
             </div>
             <button className="btn btn-primary" onClick={() => openModelEditor(null)}>
               <AppIcon name="plus" size={15} aria-hidden="true" />
               新建档案
             </button>
           </div>
-          <div className="panel-body">
-            <p className="hint catalog-description">
-              每个档案是一套独立的 base_url / key /
-              模型，可被不同角色绑定。标为「全局默认」的档案在角色未绑定时生效。
-            </p>
+          <div className="catalog-panel-body">
             {models.isLoading && <Skeleton rows={3} />}
             {models.isError && (
               <p className="error-text" role="alert">
@@ -421,22 +404,21 @@ export default function AgentSquarePage() {
         >
           <div className="panel-header">
             <div>
-              <span className="panel-kicker">SEARCH ACCESS / 03</span>
               <h2 className="panel-title">检索服务与 Key 池</h2>
+              <p className="hint">
+                按来源分别管理 API Key；同一来源按优先级主备切换，多来源并发检索后合并去重。
+              </p>
             </div>
             <span className="badge info">主备故障转移</span>
           </div>
-          <div className="panel-body">
-            <p className="hint catalog-description">
-              按来源分别管理 API Key；同一来源按优先级主备切换，多来源会并发检索后合并去重。
-            </p>
+          <div className="catalog-panel-body">
             <SearchProfilesManager
               keys={keys.data ?? []}
               references={resourceImpact.data?.profiles}
             />
-            <h3 className="panel-title" style={{ marginTop: 28 }}>
-              API Key 池
-            </h3>
+            <div className="catalog-section-head">
+              <h3 className="builtin-rail-title">API Key 池</h3>
+            </div>
             <p className="hint">
               内置档案使用同渠道的全部启用 Key；自定义档案仅使用明确绑定的
               Key。池中全部凭据不可用时会报告错误。
@@ -453,7 +435,7 @@ export default function AgentSquarePage() {
               </p>
             )}
             {keys.data && keys.data.length === 0 && (
-              <p className="muted">
+              <p className="hint catalog-empty-line">
                 还没有检索 Key。下方可选择 Tavily、Brave、Serper 或 Grok；OpenAlex 与 arXiv 无需
                 Key。
               </p>
@@ -471,7 +453,7 @@ export default function AgentSquarePage() {
               ))}
             </div>
 
-            <div className="key-create-grid">
+            <div className="key-create-grid" aria-label="添加检索 Key">
               <label className="field-label">
                 来源
                 <select

@@ -3,6 +3,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import App from './App'
+import RouteFallback from './components/RouteFallback'
 import './styles/index.css'
 import ErrorPage, { NotFoundPage } from './pages/ErrorPage'
 
@@ -25,6 +26,7 @@ const router = createBrowserRouter([
     path: '/',
     element: <App />,
     errorElement: <ErrorPage />,
+    hydrateFallbackElement: <RouteFallback />,
     children: [
       {
         index: true,
@@ -38,6 +40,14 @@ const router = createBrowserRouter([
       {
         path: 'history',
         lazy: async () => ({ Component: (await import('./pages/HistoryPage')).default }),
+      },
+      {
+        path: 'qa/:id?',
+        lazy: async () => ({ Component: (await import('./pages/QaPage')).default }),
+      },
+      {
+        path: 'library',
+        lazy: async () => ({ Component: (await import('./pages/LibraryPage')).default }),
       },
       {
         path: 'workflows',

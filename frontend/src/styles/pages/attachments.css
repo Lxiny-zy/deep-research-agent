@@ -1,0 +1,253 @@
+/* 任务附件：拖放区 + 文件列表 */
+
+.home-attach {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.home-attach-title {
+  align-items: baseline;
+  color: var(--text);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  gap: var(--space-2);
+}
+
+.home-attach-title .hint {
+  font-weight: 400;
+}
+
+.attach {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.attach-zone {
+  align-items: center;
+  background:
+    linear-gradient(var(--surface-2), var(--surface-2)) padding-box,
+    repeating-linear-gradient(-45deg, var(--border-strong) 0 6px, transparent 6px 12px) border-box;
+  border: 1.5px dashed transparent;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  position: relative;
+  transition:
+    background var(--duration) var(--ease),
+    transform var(--duration) var(--ease),
+    box-shadow var(--duration) var(--ease);
+}
+
+.attach-zone:hover {
+  background:
+    linear-gradient(var(--primary-soft), var(--primary-soft)) padding-box,
+    repeating-linear-gradient(-45deg, var(--primary) 0 6px, transparent 6px 12px) border-box;
+}
+
+.attach-zone.is-dragging {
+  background:
+    linear-gradient(var(--primary-soft), var(--primary-soft)) padding-box,
+    repeating-linear-gradient(-45deg, var(--primary) 0 6px, transparent 6px 12px) border-box;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 16%, transparent);
+  transform: scale(1.01);
+}
+
+.attach-zone.is-dragging .attach-zone-arrow {
+  animation: attach-bounce 0.8s var(--ease) infinite;
+}
+
+.attach-zone.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.attach-zone-icon {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-xs);
+  color: var(--primary);
+  display: flex;
+  flex-shrink: 0;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+
+.attach-zone-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.attach-zone-copy strong {
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: 500;
+}
+
+.attach-zone-copy small {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.attach-zone-pick {
+  color: var(--primary-text);
+  cursor: pointer;
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+.attach-zone-pick::after {
+  content: '';
+  inset: 0;
+  position: absolute;
+}
+
+.attach-zone-pick:hover {
+  text-decoration: underline;
+}
+
+.attach-list {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.attach-item {
+  align-items: center;
+  animation: attach-in 220ms var(--ease) both;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  overflow: hidden;
+  padding: 10px 8px 10px 12px;
+  position: relative;
+  transition:
+    border-color var(--duration) var(--ease),
+    box-shadow var(--duration) var(--ease);
+}
+
+.attach-item:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.attach-item-icon {
+  align-items: center;
+  background: var(--primary-soft);
+  border-radius: 8px;
+  color: var(--primary);
+  display: flex;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.attach-item.is-error .attach-item-icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.attach-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.attach-item-name {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-item-meta {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.attach-item-kind {
+  background: var(--surface-3);
+  border-radius: 4px;
+  color: var(--text-2);
+  font-weight: 600;
+  margin-right: 6px;
+  padding: 1px 5px;
+}
+
+.attach-item-error {
+  color: var(--danger-text);
+}
+
+.attach-item-state {
+  color: var(--text-3);
+  display: flex;
+}
+
+.attach-item.is-ready .attach-item-state {
+  color: var(--success);
+}
+
+.attach-item.is-error .attach-item-state {
+  color: var(--danger);
+}
+
+.attach-progress {
+  background: linear-gradient(90deg, transparent, var(--primary), transparent);
+  background-size: 50% 100%;
+  animation: attach-progress 1.1s linear infinite;
+  bottom: 0;
+  height: 2px;
+  left: 0;
+  position: absolute;
+  right: 0;
+}
+
+@keyframes attach-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes attach-progress {
+  from {
+    background-position: -50% 0;
+  }
+  to {
+    background-position: 150% 0;
+  }
+}
+
+@keyframes attach-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(3px);
+  }
+}

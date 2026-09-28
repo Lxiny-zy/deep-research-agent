@@ -13,9 +13,9 @@ export default function EmptyState({
   children?: ReactNode
 }) {
   return (
-    <div className="empty-state workspace-empty">
-      <div className="empty-state-icon">
-        <AppIcon name={icon} size={26} strokeWidth={1.5} aria-hidden="true" />
+    <div className="empty-state">
+      <div className="empty-state-icon" aria-hidden="true">
+        <AppIcon name={icon} size={22} strokeWidth={1.7} />
       </div>
       <h3 className="empty-state-title">{title}</h3>
       <p>{description}</p>

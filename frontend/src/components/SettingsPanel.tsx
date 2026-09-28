@@ -63,30 +63,38 @@ export default function SettingsPanel({
   }
 
   return (
-    <div className="settings">
-      <button type="button" className="settings-toggle" onClick={() => setOpen((o) => !o)}>
-        <AppIcon name={open ? 'chevron-down' : 'chevron-right'} size={15} aria-hidden="true" />
-        高级设置（留空＝用服务端默认）
+    <div className={'run-params' + (open ? ' is-open' : '')}>
+      <button
+        type="button"
+        className="run-params-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <AppIcon name={open ? 'chevron-down' : 'chevron-right'} size={14} aria-hidden="true" />
+        高级设置
+        <span className="hint">留空＝用服务端默认</span>
       </button>
       {open && (
-        <div className="settings-grid">
-          {FIELDS.map((f) => (
-            <label key={f.key} className="settings-item">
-              <span className="muted small">{f.label}</span>
-              <input
-                className="input"
-                type="number"
-                min={f.min}
-                max={f.max}
-                placeholder={`默认 ${f.fallback}`}
-                value={value[f.key] ?? ''}
-                onChange={(e) => set(f.key, e.target.value)}
-              />
-            </label>
-          ))}
-          <div className="safety-gate-setting per-run-gate">
-            <label className="safety-gate-control">
-              <span className="safety-gate-copy">
+        <div className="run-params-body">
+          <div className="run-params-grid">
+            {FIELDS.map((f) => (
+              <label key={f.key} className="field-label">
+                {f.label}
+                <input
+                  className="input"
+                  type="number"
+                  min={f.min}
+                  max={f.max}
+                  placeholder={`默认 ${f.fallback}`}
+                  value={value[f.key] ?? ''}
+                  onChange={(e) => set(f.key, e.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+          <div className="run-params-gate">
+            <label className="run-params-switch">
+              <span className="run-params-switch-copy">
                 <strong>严格双源门禁</strong>
                 <small>
                   {corroborationOverride == null
@@ -110,7 +118,7 @@ export default function SettingsPanel({
             {corroborationOverride != null && (
               <button
                 type="button"
-                className="btn ghost sm"
+                className="btn btn-ghost btn-sm"
                 onClick={clearCorroborationOverride}
                 title="恢复为全局默认"
               >

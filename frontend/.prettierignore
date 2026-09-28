@@ -1,0 +1,2 @@
+# 由 npm run api:generate 从后端 OpenAPI 生成，格式以生成器输出为准
+src/api/schema.d.ts

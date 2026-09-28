@@ -12,6 +12,12 @@ import StatsBar from '../components/StatsBar'
 import StatusBadge from '../components/StatusBadge'
 import StructuredDocumentPreview from '../components/StructuredDocumentPreview'
 import TagEditor from '../components/TagEditor'
+import DeliverablesPanel from '../components/DeliverablesPanel'
+import FileTree from '../components/FileTree'
+import RunNarrative from '../components/RunNarrative'
+import StepRail from '../components/StepRail'
+import RunTaskSummary from '../components/RunTaskSummary'
+import { useDeliverables, useNarrative, useRunTemplate, useWorkspace } from '../hooks/useWorkbench'
 import { AppIcon } from '../components/AppIcon'
 import { useResearchStream } from '../hooks/useResearchStream'
 import { useCancelRun, useResumeRun, useRunDetail, useRunDocument } from '../hooks/useRuns'
@@ -19,7 +25,7 @@ import { appendTurn, turnFromRun } from '../lib/conversation'
 import { countBlockedSources, flattenFindings, reportEvidenceToFindings } from '../lib/evidence'
 import { displayReportTitle } from '../lib/reportTitle'
 import { deriveResearchProgress } from '../lib/runProgress'
-import type { ReportDocument, RunStatus } from '../types'
+import type { ReportDocument, RunDetail, RunStatus } from '../types'
 
 /**
  * 触发 HSI 领域表的意图名单。
@@ -38,6 +44,17 @@ const HSI_INTENTS = new Set([
   'reproducibility_check',
   'dataset_discovery',
 ])
+
+function runIncludesHsiTables(
+  intent: RunDetail['intent'] | undefined,
+  workflowName?: string | null,
+) {
+  return Boolean(
+    workflowName === 'hsi_review' ||
+    intent?.execution_policy?.workflow === 'hsi_review' ||
+    (intent && (HSI_INTENTS.has(intent.intent) || intent.intent.startsWith('hsi_'))),
+  )
+}
 
 /**
  * 恢复是否仍未生效（即"这份快照还是恢复前那一份"）。
@@ -106,11 +123,9 @@ export default function RunPage() {
   const executionPolicy = persistedIntent?.execution_policy
   // 后端信号优先：execution_policy / workflow_name 是本次运行真正走的编排。
   // intent 名单只兜住那两者都缺失的历史 run（见 HSI_INTENTS 的注释）。
-  const includeHsiTables = Boolean(
-    executionPolicy?.workflow === 'hsi_review' ||
-    detail.data?.orchestration?.workflow_name === 'hsi_review' ||
-    (persistedIntent &&
-      (HSI_INTENTS.has(persistedIntent.intent) || persistedIntent.intent.startsWith('hsi_'))),
+  const includeHsiTables = runIncludesHsiTables(
+    persistedIntent,
+    executionPolicy?.workflow ?? detail.data?.orchestration?.workflow_name,
   )
   // The structured document is fetched only after persistence reaches a
   // terminal state. Streaming and the legacy detail payload remain the
@@ -120,6 +135,10 @@ export default function RunPage() {
     enabled: dbFinished,
     includeHsiTables,
   })
+  const deliverables = useDeliverables(id, dbFinished && Boolean(detail.data?.report))
+  const runTemplate = useRunTemplate(id)
+  const narrative = useNarrative(id, !dbFinished)
+  const workspace = useWorkspace(id, !dbFinished)
 
   useEffect(() => {
     if (stream.status !== 'done' && stream.status !== 'error' && stream.status !== 'cancelled')
@@ -246,47 +265,75 @@ export default function RunPage() {
     })
   }
 
+  const quality = deliverables.data
+    ? {
+        status: deliverables.data.status,
+        passed: deliverables.data.gates.filter((gate) => gate.status === 'pass').length,
+        total: deliverables.data.gates.length,
+      }
+    : null
+  const createdAt = detail.data?.created_at
+    ? new Date(detail.data.created_at).toLocaleString('zh-CN', { hour12: false })
+    : ''
+
   if (detail.isError) {
     const notFound = detail.error instanceof ApiError && detail.error.status === 404
     return (
-      <div className="stack">
-        <div className="panel">
-          <div className="empty">
-            <div className="ico">
-              <AppIcon name="circle-x" size={24} aria-hidden="true" />
-            </div>
-            {notFound
-              ? '运行不存在或已被删除，请回历史页确认。'
-              : `加载运行详情失败：${detail.error instanceof Error ? detail.error.message : '未知错误'}`}
-          </div>
-        </div>
-      </div>
+      <section className="panel run-missing" role="alert">
+        <span className="empty-state-icon" aria-hidden="true">
+          <AppIcon name="circle-x" size={24} />
+        </span>
+        <h1 className="empty-state-title">{notFound ? '任务不存在' : '加载任务详情失败'}</h1>
+        <p className="hint">
+          {notFound
+            ? '运行不存在或已被删除，请回历史页确认。'
+            : `加载运行详情失败：${detail.error instanceof Error ? detail.error.message : '未知错误'}`}
+        </p>
+        <button type="button" className="btn btn-secondary" onClick={() => navigate('/history')}>
+          返回任务记录
+        </button>
+      </section>
     )
   }
 
   return (
-    <div className={`stack run-workbench${liveActive ? ' is-live' : ''}`}>
-      <div className="run-overview">
-        <div className={`panel run-head${canFollowUp ? ' has-followup' : ''}`}>
+    <div className={`run-workbench${liveActive ? ' is-live' : ''}`}>
+      <header className={`run-head${canFollowUp ? ' has-followup' : ''}`}>
+        <div className="run-head-main">
+          <div className="run-head-meta">
+            <StatusBadge status={status} />
+            {runTemplate.data?.template && (
+              <span className="run-head-type">
+                <AppIcon name="file" size={13} aria-hidden="true" />
+                {runTemplate.data.template.title}
+              </span>
+            )}
+            {createdAt && (
+              <span className="run-head-time">
+                <AppIcon name="clock" size={13} aria-hidden="true" />
+                {createdAt}
+              </span>
+            )}
+          </div>
           <h1 className="run-q">{query || '加载中…'}</h1>
-          <StatusBadge status={status} />
+          {id && <TagEditor runId={id} tags={detail.data?.tags ?? []} />}
           {stream.status === 'disconnected' && !dbFinished && (
-            <span className="muted small">实时连接已断开，正在轮询获取进度…</span>
+            <span className="run-head-note" role="status">
+              <AppIcon name="refresh" size={13} aria-hidden="true" />
+              实时连接已断开，正在轮询获取进度…
+            </span>
           )}
-          {canFollowUp && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm run-followup"
-              onClick={askFollowUp}
-            >
-              <AppIcon name="sparkles" size={14} aria-hidden="true" />
-              继续追问
-            </button>
+          {resume.isError && !resuming && (
+            <span className="error-text small" role="alert">
+              恢复失败：{resume.error instanceof Error ? resume.error.message : '未知错误'}
+            </span>
           )}
+        </div>
+        <div className="run-head-actions">
           {canResume && (
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-sm"
               onClick={resumeRun}
               disabled={resume.isPending}
             >
@@ -294,15 +341,10 @@ export default function RunPage() {
               {resume.isPending ? '恢复中' : '恢复运行'}
             </button>
           )}
-          {resume.isError && !resuming && (
-            <span className="error-text small" role="alert">
-              恢复失败：{resume.error instanceof Error ? resume.error.message : '未知错误'}
-            </span>
-          )}
           {(canCancel || status === 'cancelling') && (
             <button
               type="button"
-              className="btn btn-ghost btn-sm danger"
+              className="btn btn-sm danger"
               disabled={cancel.isPending || status === 'cancelling'}
               onClick={() => cancel.mutate()}
             >
@@ -310,90 +352,108 @@ export default function RunPage() {
               {status === 'cancelling' || cancel.isPending ? '取消中' : '取消运行'}
             </button>
           )}
-          {id && <TagEditor runId={id} tags={detail.data?.tags ?? []} />}
-        </div>
-
-        <StatsBar
-          stats={stream.stats}
-          detail={detail.data ?? null}
-          progress={progress}
-          live={{ elapsed: stream.elapsed, tokens: stream.tokens, findings: stream.findings }}
-          liveActive={liveActive}
-          connectionStatus={connectionStatus}
-          tokensEstimated={stream.tokensEstimated}
-        />
-
-        <IntentPanel intent={detail.data?.intent ?? null} />
-
-        <OrchestrationPipeline
-          execution={detail.data?.orchestration}
-          events={stream.events}
-          runStatus={status}
-        />
-      </div>
-
-      {/* 打印预览独占阅读区域，屏幕中的运行活动由打印样式隐藏。 */}
-      <div className={`run-columns${printPreview ? ' is-print-preview' : ''}`}>
-        <div className="stack run-activity-column">
-          <div className="panel">
-            <h3 className="panel-title">Agent 实时活动</h3>
-            <EventTimeline events={stream.events} streaming={streaming} />
-          </div>
-          {stream.dag && (
-            <div className="panel">
-              <h3 className="panel-title">子问题依赖（DAG 分层调度）</h3>
-              <DagView dag={stream.dag} />
-            </div>
+          {canFollowUp && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm run-followup"
+              onClick={askFollowUp}
+            >
+              <AppIcon name="sparkles" size={14} aria-hidden="true" />
+              继续追问
+            </button>
           )}
         </div>
+      </header>
+
+      <StatsBar
+        stats={stream.stats}
+        detail={detail.data ?? null}
+        progress={progress}
+        live={{ elapsed: stream.elapsed, tokens: stream.tokens, findings: stream.findings }}
+        liveActive={liveActive}
+        connectionStatus={connectionStatus}
+        tokensEstimated={stream.tokensEstimated}
+        quality={quality}
+      />
+
+      <RunTaskSummary info={runTemplate.data} />
+
+      {/* 打印预览独占阅读区域，屏幕中的运行活动由打印样式隐藏。 */}
+      <div className={`run-columns run-workbench-grid${printPreview ? ' is-print-preview' : ''}`}>
+        {/* 左栏：步骤轨道 + 人话进度 */}
+        <aside className="run-left-pane" aria-label="运行步骤与进展">
+          <StepRail workspace={workspace.data} />
+          <RunNarrative narrative={narrative.data} />
+        </aside>
         <div
-          className={`panel report-panel run-report-column${liveActive ? ' is-streaming' : ''}${printPreview ? ' is-print-preview' : ''}`}
+          className={`report-panel run-report-column${liveActive ? ' is-streaming' : ''}${printPreview ? ' is-print-preview' : ''}`}
         >
-          <div className="row between panel-head">
-            <h3 className="panel-title">研究报告</h3>
-            <div className="row report-panel-tools">
-              <ReportActions
+          <section className="panel run-report-card" aria-labelledby="run-report-title">
+            <div className="run-report-toolbar">
+              <h2 className="panel-title" id="run-report-title">
+                <AppIcon name="book" size={16} aria-hidden="true" />
+                研究报告
+                {liveActive && <span className="badge info">生成中</span>}
+              </h2>
+              <div className="report-panel-tools">
+                <ReportActions
+                  markdown={markdown}
+                  query={query}
+                  runId={id}
+                  includeHsiTables={includeHsiTables}
+                  tableOptions={tableOptions}
+                  documentReady={Boolean(structuredDocument.data)}
+                  previewing={printPreview}
+                  onTogglePreview={() => setPrintPreview((value) => !value)}
+                />
+              </div>
+            </div>
+            {printPreview ? (
+              <PrintableReport
                 markdown={markdown}
                 query={query}
                 runId={id}
-                includeHsiTables={includeHsiTables}
-                tableOptions={tableOptions}
-                documentReady={Boolean(structuredDocument.data)}
-                previewing={printPreview}
-                onTogglePreview={() => setPrintPreview((value) => !value)}
-              />
-            </div>
-          </div>
-          {printPreview ? (
-            <PrintableReport
-              markdown={markdown}
-              query={query}
-              runId={id}
-              findings={evidenceFindings}
-              citations={citations}
-              blockedSources={blockedSources}
-              createdAt={detail.data?.created_at}
-              preview
-              document={structuredDocument.data}
-            />
-          ) : (
-            <>
-              {!streaming && structuredDocument.data?.final_validation && (
-                <p className="hint" role="status">
-                  正文已完成引用与数值一致性检查。
-                  {structuredDocument.data.final_validation.fallback &&
-                    '生成内容未通过检查，已改为已验证素材摘要。'}
-                  证据标签说明输入素材的验证状态，不代表逐段语义审核。
-                </p>
-              )}
-              <ReportView
-                markdown={markdown}
-                streaming={streaming}
-                isLive={liveActive}
                 findings={evidenceFindings}
                 citations={citations}
                 blockedSources={blockedSources}
+                createdAt={detail.data?.created_at}
+                preview
+                document={structuredDocument.data}
               />
+            ) : (
+              <>
+                {!streaming && structuredDocument.data?.final_validation && (
+                  <p className="run-validation-note" role="status">
+                    <AppIcon name="shield" size={14} aria-hidden="true" />
+                    <span>
+                      正文已完成引用与数值一致性检查。
+                      {structuredDocument.data.final_validation.fallback &&
+                        '生成内容未通过检查，已改为已验证素材摘要。'}
+                      证据标签说明输入素材的验证状态，不代表逐段语义审核。
+                    </span>
+                  </p>
+                )}
+                <ReportView
+                  markdown={markdown}
+                  streaming={streaming}
+                  isLive={liveActive}
+                  findings={evidenceFindings}
+                  citations={citations}
+                  blockedSources={blockedSources}
+                />
+              </>
+            )}
+          </section>
+          {!printPreview && (
+            <>
+              {id && dbFinished && detail.data?.report && (
+                <DeliverablesPanel
+                  runId={id}
+                  registry={deliverables.data}
+                  loading={deliverables.isLoading}
+                  error={deliverables.error}
+                />
+              )}
               {structuredDocument.data && (
                 <StructuredDocumentPreview document={structuredDocument.data} />
               )}
@@ -412,7 +472,47 @@ export default function RunPage() {
             </>
           )}
         </div>
+        {/* 右栏：产物文件树 + 机器事件时间线（排查细节用） */}
+        <aside className="run-right-pane" aria-label="产物与活动">
+          {id && <FileTree runId={id} workspace={workspace.data} />}
+          <details className="panel run-timeline-panel" open={liveActive}>
+            <summary className="run-collapsible-head">
+              <span className="panel-title">
+                <AppIcon name="activity" size={15} aria-hidden="true" />
+                实时活动
+              </span>
+              <AppIcon name="chevron-down" size={15} aria-hidden="true" />
+            </summary>
+            <EventTimeline events={stream.events} streaming={streaming} />
+          </details>
+          {stream.dag && (
+            <section className="panel run-dag-panel">
+              <h3 className="panel-title">子问题依赖（DAG 分层调度）</h3>
+              <DagView dag={stream.dag} />
+            </section>
+          )}
+        </aside>
       </div>
+
+      {/* 意图判定与编排流水线属于诊断信息：默认折叠，放在页面底部 */}
+      <details className="panel run-diagnostics">
+        <summary className="run-collapsible-head">
+          <span className="panel-title">
+            <AppIcon name="gauge" size={15} aria-hidden="true" />
+            意图判定与编排详情
+          </span>
+          <span className="hint">诊断信息，用于排查路由与编排</span>
+          <AppIcon name="chevron-down" size={15} aria-hidden="true" />
+        </summary>
+        <div className="run-diagnostics-body">
+          <IntentPanel intent={detail.data?.intent ?? null} />
+          <OrchestrationPipeline
+            execution={detail.data?.orchestration}
+            events={stream.events}
+            runStatus={status}
+          />
+        </div>
+      </details>
     </div>
   )
 }

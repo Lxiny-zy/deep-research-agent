@@ -1,4 +1,3 @@
-import ResearchMotif from '../components/ResearchMotif'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import BuiltinTemplateGallery from '../components/BuiltinTemplateGallery'
@@ -172,33 +171,33 @@ export default function WorkflowBuilderPage() {
 
   return (
     <div className="stack page-stack workflow-page">
-      <section className="page-intro workflow-intro page-intro-compact">
+      <header className="page-header">
         <div>
-          <span className="eyebrow">
-            <AppIcon name="workflow" size={14} aria-hidden="true" /> 工作流 / 编排
-          </span>
-          <h1>
-            可视化<span className="accent">自由编排</span>研究团队
-          </h1>
-          <p className="sub">
-            从可用角色里挑选、排成一条有序流程（可插入反思循环），保存后即可在「新建研究」中选用并运行。
+          <h1>工作流构建</h1>
+          <p>
+            把角色编排成有序流程，可插入反思循环与分支依赖。保存后可在工作台的「高级：自定义研究流程」中选用。
           </p>
         </div>
-        <ResearchMotif kind="weave" className="page-motif" />
-      </section>
+        <div className="page-header-actions">
+          <button className="btn btn-primary" onClick={() => openEditor(null)} type="button">
+            <AppIcon name="plus" size={15} aria-hidden="true" />
+            新建工作流
+          </button>
+        </div>
+      </header>
 
-      <details className="workflow-templates" ref={templatesRef}>
+      <details className="panel workflow-templates" ref={templatesRef} open>
         <summary>
           <span className="workflow-template-icon">
-            <AppIcon name="stack" size={21} aria-hidden="true" />
+            <AppIcon name="stack" size={18} aria-hidden="true" />
           </span>
           <span className="workflow-template-copy">
-            <strong>参考内置模板</strong>
+            <strong>内置模板</strong>
             <span>从现成的研究流程开始，克隆后按需调整。</span>
           </span>
           <AppIcon
             name="chevron-down"
-            size={19}
+            size={18}
             className="workflow-template-chevron"
             aria-hidden="true"
           />
@@ -209,7 +208,7 @@ export default function WorkflowBuilderPage() {
             <div className="workspace-load-error" role="alert">
               <p>模板加载失败：{templateError}</p>
               <button
-                className="btn btn-secondary small"
+                className="btn btn-secondary btn-sm"
                 onClick={() => setTemplateAttempt((value) => value + 1)}
               >
                 重试加载模板
@@ -225,21 +224,15 @@ export default function WorkflowBuilderPage() {
       <section className="panel workflow-custom-rail" aria-label="自定义工作流">
         <div className="panel-header">
           <div>
-            <span className="panel-kicker">
-              <AppIcon name="waypoints" size={12} aria-hidden="true" /> 自定义 / 工作流
-            </span>
             <h2 className="panel-title">自定义工作流</h2>
+            <p className="hint">你保存的研究流程，可随时编辑、停用或直接发起研究。</p>
           </div>
-          <button className="btn btn-primary" onClick={() => openEditor(null)} type="button">
-            <AppIcon name="plus" size={15} aria-hidden="true" />
-            新建工作流
-          </button>
         </div>
         {workflows.isLoading && <Skeleton rows={3} />}
         {workflows.isError && (
           <div className="workspace-load-error" role="alert">
             <p>{errMsg(workflows.error)}</p>
-            <button className="btn btn-secondary small" onClick={() => void workflows.refetch()}>
+            <button className="btn btn-secondary btn-sm" onClick={() => void workflows.refetch()}>
               重试加载工作流
             </button>
           </div>
@@ -317,16 +310,16 @@ export default function WorkflowBuilderPage() {
               </div>
               <div className="role-card-foot catalog-card-foot">
                 <button
-                  className="btn ghost small"
+                  className="btn btn-ghost btn-sm"
                   onClick={() => navigate(`/?workflow=${encodeURIComponent(wf.name)}`)}
                 >
                   <AppIcon name="play" size={13} aria-hidden="true" /> 去研究
                 </button>
-                <button className="btn ghost small" onClick={() => openEditor(wf)}>
+                <button className="btn btn-ghost btn-sm" onClick={() => openEditor(wf)}>
                   <AppIcon name="edit" size={13} aria-hidden="true" /> 编辑
                 </button>
                 <button
-                  className="btn ghost small danger"
+                  className="btn btn-ghost btn-sm danger"
                   aria-label={`删除 ${wf.display_name || wf.name}`}
                   onClick={() => remove(wf)}
                 >

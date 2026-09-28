@@ -21,6 +21,16 @@ vi.mock('../hooks/useConfig', () => ({
   useConfig: mocks.useConfig,
 }))
 
+vi.mock('../hooks/useWorkbench', () => ({
+  useTemplates: () => ({ data: undefined }),
+  useContractPreview: () => ({ data: undefined, isFetching: false, error: null }),
+  useTiers: () => ({ data: undefined }),
+  useUsage: () => ({ data: undefined }),
+}))
+vi.mock('../hooks/useLibrary', () => ({
+  useProjects: () => ({ data: [] }),
+}))
+
 const WORKFLOWS: WorkflowInfo[] = [
   { name: 'deep', description: '内置默认流程', default: 'True', custom: 'False' },
   { name: 'beta', description: '自定义流程', default: 'False', custom: 'True' },
@@ -266,7 +276,9 @@ describe('NewResearchPage 追问上下文', () => {
 
     await waitFor(() =>
       expect(mocks.createRun).toHaveBeenCalledWith(
-        expect.objectContaining({ history: [] }), expect.any(AbortSignal), expect.any(String),
+        expect.objectContaining({ history: [] }),
+        expect.any(AbortSignal),
+        expect.any(String),
       ),
     )
   })
@@ -427,7 +439,8 @@ describe('NewResearchPage 澄清循环', () => {
       ),
     )
     expect(mocks.assessIntent).toHaveBeenLastCalledWith(
-      expect.objectContaining({ skip: true }), expect.any(AbortSignal),
+      expect.objectContaining({ skip: true }),
+      expect.any(AbortSignal),
     )
   })
 
@@ -459,7 +472,9 @@ describe('NewResearchPage 澄清循环', () => {
 
     await waitFor(() =>
       expect(mocks.createRun).toHaveBeenCalledWith(
-        expect.objectContaining({ query: '帮我看看' }), expect.any(AbortSignal), expect.any(String),
+        expect.objectContaining({ query: '帮我看看' }),
+        expect.any(AbortSignal),
+        expect.any(String),
       ),
     )
     expect(screen.queryByText('需要补充信息')).not.toBeInTheDocument()

@@ -71,15 +71,17 @@ function LiveMetric({
   value,
   note,
   pulsing,
+  tone,
 }: {
   icon: React.ReactNode
   label: string
   value: string
   note: string
   pulsing: boolean
+  tone?: 'success' | 'warning' | 'danger'
 }) {
   return (
-    <div className={`live-metric${pulsing ? ' is-updating' : ''}`}>
+    <div className={`live-metric${pulsing ? ' is-updating' : ''}${tone ? ` is-${tone}` : ''}`}>
       <span className="live-metric-icon">{icon}</span>
       <span className="live-metric-copy">
         <span className="live-metric-label">{label}</span>
@@ -88,6 +90,22 @@ function LiveMetric({
       </span>
     </div>
   )
+}
+
+/** 交付质量结论（交付物登记完成后才有） */
+export interface QualityVerdict {
+  status: 'pass' | 'warn' | 'fail'
+  passed: number
+  total: number
+}
+
+const VERDICT: Record<
+  QualityVerdict['status'],
+  { label: string; tone: 'success' | 'warning' | 'danger' }
+> = {
+  pass: { label: '验收通过', tone: 'success' },
+  warn: { label: '部分完成', tone: 'warning' },
+  fail: { label: '未通过', tone: 'danger' },
 }
 
 export default function StatsBar({
@@ -99,6 +117,7 @@ export default function StatsBar({
   connectionStatus = 'idle',
   tokensEstimated = false,
   paused = false,
+  quality,
 }: {
   stats: RunStats | null
   detail: RunDetail | null
@@ -108,6 +127,7 @@ export default function StatsBar({
   connectionStatus?: 'idle' | 'streaming' | 'disconnected' | 'done' | 'error' | 'cancelled'
   tokensEstimated?: boolean
   paused?: boolean
+  quality?: QualityVerdict | null
 }) {
   const liveElapsed = live?.elapsed ?? 0
   const anchor = useRef({ base: liveElapsed, at: Date.now() })
@@ -156,6 +176,8 @@ export default function StatsBar({
               ? '统计已确认'
               : '等待运行'
 
+  const verdict = quality ? VERDICT[quality.status] : null
+
   return (
     <section
       className={`research-live-overview${liveActive ? ' is-live' : ''}${progress.terminal ? ' is-terminal' : ''}`}
@@ -163,18 +185,6 @@ export default function StatsBar({
     >
       <div className={`research-progress-summary${progressPulse ? ' is-updating' : ''}`}>
         <div className="research-progress-topline">
-          <span className="research-progress-kicker">总体进度</span>
-          <span className={`live-sync-state ${connectionStatus}`}>
-            <i aria-hidden />
-            {connectionLabel}
-          </span>
-        </div>
-
-        <div className="research-progress-main">
-          <strong className="research-progress-value">
-            {Math.round(animatedProgress)}
-            <small>%</small>
-          </strong>
           <div className="research-progress-context">
             <span>{progress.currentLabel}</span>
             <small>
@@ -185,6 +195,16 @@ export default function StatsBar({
                   : '正在确认工作流阶段'}
               {progress.estimated && ' · 阶段估算'}
             </small>
+          </div>
+          <div className="research-progress-side">
+            <span className={`live-sync-state ${connectionStatus}`}>
+              <i aria-hidden />
+              {connectionLabel}
+            </span>
+            <strong className="research-progress-value">
+              {Math.round(animatedProgress)}
+              <small>%</small>
+            </strong>
           </div>
         </div>
 
@@ -198,34 +218,44 @@ export default function StatsBar({
         >
           <span
             style={{ transform: `scaleX(${Math.max(0, Math.min(100, animatedProgress)) / 100})` }}
-          >
-            <i aria-hidden />
-          </span>
+          />
         </div>
       </div>
 
       <div className="live-metrics">
         <LiveMetric
-          icon={<AppIcon name="clock" size={19} aria-hidden="true" />}
+          icon={<AppIcon name="clock" size={17} aria-hidden="true" />}
           label="已耗时"
           value={formatElapsed(elapsed)}
           note={liveActive ? '持续计时中' : '本次运行总耗时'}
           pulsing={liveActive}
         />
         <LiveMetric
-          icon={<AppIcon name="braces" size={19} aria-hidden="true" />}
+          icon={<AppIcon name="braces" size={17} aria-hidden="true" />}
           label="Token 消耗"
-          value={`${isEstimate ? '≈ ' : ''}${numberFormat.format(Math.round(tokens))}`}
+          value={`${isEstimate ? '约 ' : ''}${numberFormat.format(Math.round(tokens))}`}
           note={isEstimate ? '流式阶段含估算值' : liveActive ? '随模型调用累计' : '最终累计用量'}
           pulsing={tokenPulse}
         />
         <LiveMetric
-          icon={<AppIcon name="scan-search" size={19} aria-hidden="true" />}
+          icon={<AppIcon name="scan-search" size={17} aria-hidden="true" />}
           label={sources != null ? '引用来源' : '研究发现'}
           value={numberFormat.format(Math.round(findings))}
           note={sources != null ? '报告引用的有效来源' : '随检索结果动态增加'}
           pulsing={findingPulse}
         />
+        {quality !== undefined && (
+          <LiveMetric
+            icon={<AppIcon name="shield" size={17} aria-hidden="true" />}
+            label="质量验收"
+            value={verdict ? verdict.label : '待验收'}
+            note={
+              quality ? `${quality.passed} / ${quality.total} 项验收门通过` : '交付物生成后给出结论'
+            }
+            pulsing={false}
+            tone={verdict?.tone}
+          />
+        )}
       </div>
     </section>
   )
