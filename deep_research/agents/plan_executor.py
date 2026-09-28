@@ -146,9 +146,18 @@ class PlanExecutor:
                 f"步骤 {step_id} 失败，重规划插入补救：{decision.name}",
                 data={"event_name": "plan.replan", "rescue_id": rescue_id, "target": step_id},
             )
-            bb = await self._execute(bb, ctx, rescue_prompt=decision.prompt)
-            replan.replan_state(bb.scratch)["log"][-1]["result"] = self._status_of(bb, step_id)
-            return bb
+            try:
+                rescued = await self._execute(bb, ctx, rescue_prompt=decision.prompt)
+            except Exception as rescue_exc:
+                # 账本随异常由工作流引擎带回已提交状态；这里如实记下补救的结局
+                replan.replan_state(bb.scratch)["log"][-1]["result"] = (
+                    f"failed: {type(rescue_exc).__name__}"
+                )
+                raise
+            replan.replan_state(rescued.scratch)["log"][-1]["result"] = self._status_of(
+                rescued, step_id
+            )
+            return rescued
         status = self._status_of(bb, step_id)
         if status != "partial":
             return bb
@@ -230,8 +239,10 @@ class PlanExecutor:
             if not problems:
                 return bb
             if check_round == attempts:
+                check_gaps = [f"质量检查：{p}" for p in problems[:10]]
                 result["status"] = "partial"
-                result.setdefault("gaps", []).extend(f"质量检查：{p}" for p in problems[:10])
+                result.setdefault("gaps", []).extend(check_gaps)
+                await self._downgrade_journal(ctx, step_id, check_gaps)
                 return bb
             bb = await self._execute(
                 bb,
@@ -240,6 +251,23 @@ class PlanExecutor:
                 + "\n".join(f"- {p}" for p in problems[:10]),
             )
         return bb
+
+    @staticmethod
+    async def _downgrade_journal(ctx: RunContext, step_id: str, gaps: list[str]) -> None:
+        """质量检查降级也要写回步骤日志。
+
+        下游步骤的依赖上下文与终稿的「未完成事项」都从日志读状态；只改内存里的
+        结果，它们会把这一步当成完全完成，检查失败的事实就此消失。
+        """
+        slug, store = ctx.artifact_slug, ctx.artifact_store
+        if not slug or store is None:
+            return
+        journal = await run_blocking(read_journal, store, slug, step_id)
+        if not journal:
+            return
+        journal["status"] = "partial"
+        journal["gaps"] = [*journal.get("gaps", []), *gaps]
+        await run_blocking(store.write_control_json, journal_path(slug, step_id), journal)
 
     @staticmethod
     def _status_of(bb: Blackboard, step_id: str) -> str:
@@ -377,11 +405,15 @@ class PlanExecutor:
                 citations = citation_urls or sorted(set(_URL_RE.findall(report_text)))
                 report = Report(query=bb.query, markdown=report_text, citations=citations)
                 if bb.results or citations:
+                    from ..workbench.scholarly import uncited_sections_for
+
                     report, check = await run_blocking(
                         finalize_report,
                         report,
                         bb.results,
                         require_corroboration=effective_require_corroboration(bb, ctx.settings),
+                        # 与编排器同一口径：契约规定不带引用的章节（摘要）不按「必须引用」判
+                        uncited_sections=uncited_sections_for(bb.scratch),
                     )
                     if check.issues:
                         result.status = "partial"

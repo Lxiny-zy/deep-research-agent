@@ -134,6 +134,34 @@ function GateRow({ gate }: { gate: GateResult }) {
   )
 }
 
+/**
+ * 把取回的交付物放进预览窗口。
+ *
+ * blob URL 继承本站源，却带不上服务端的 CSP 头；HTML 若直接用 blob 打开，其中的脚本
+ * （思维导图的折叠脚本，或将来某次转义疏漏）就能读到本站存储里的 API Key。
+ * 所以 HTML 放进不带 allow-same-origin 的沙箱 iframe：脚本可以跑，但处在不透明源里。
+ * PDF / PNG 交给浏览器内置查看器，不涉及页面脚本。
+ */
+function showPreview(popup: Window, item: DeliverableItem, blob: Blob) {
+  if (item.mime_type.startsWith('text/html')) {
+    void blob.text().then((html) => {
+      const doc = popup.document
+      doc.title = item.title
+      doc.body.style.margin = '0'
+      const frame = doc.createElement('iframe')
+      frame.setAttribute('sandbox', 'allow-scripts')
+      frame.setAttribute('title', item.title)
+      frame.style.cssText = 'border:0;position:fixed;inset:0;width:100%;height:100%'
+      frame.srcdoc = html
+      doc.body.appendChild(frame)
+    })
+    return
+  }
+  const url = URL.createObjectURL(new Blob([blob], { type: item.mime_type }))
+  popup.location.href = url
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
 interface Props {
   runId: string
   registry: DeliverableRegistry | undefined
@@ -153,23 +181,20 @@ export default function DeliverablesPanel({ runId, registry, loading, error }: P
   async function open(item: DeliverableItem, preview: boolean) {
     setBusy(item.name)
     setActionError(null)
+    // 预览窗口必须在点击的同步阶段打开：等交付物取回（PDF 可能要生成数秒）后再开，
+    // 已超出浏览器的用户激活窗口，弹窗会被静默拦截。
+    const popup = preview ? window.open('', '_blank') : null
+    if (popup) popup.opener = null
     try {
+      if (preview && !popup) throw new Error('浏览器拦截了预览窗口，请允许本站弹出窗口后重试')
       const file = await fetchDeliverable(runId, item.name)
-      if (preview) {
-        // 交付物要带鉴权头才能取，不能直接给 <a href> 服务端 URL；取回后用 blob URL 打开。
-        const url = URL.createObjectURL(new Blob([file.blob], { type: item.mime_type }))
-        const link = document.createElement('a')
-        link.href = url
-        link.target = '_blank'
-        link.rel = 'noopener noreferrer'
-        document.body.appendChild(link)
-        link.click()
-        link.remove()
-        setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      if (popup) {
+        showPreview(popup, item, file.blob)
       } else {
         downloadBlob(file.filename, file.blob)
       }
     } catch (cause) {
+      popup?.close()
       setActionError(cause instanceof Error ? cause.message : '下载失败')
     } finally {
       setBusy(null)

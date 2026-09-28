@@ -115,14 +115,16 @@ def render_pdf_html(document: ReportDocument) -> str:
         "li { margin: 0 0 4pt; }",
         "</style></head><body>",
     ]
-    if document.query:
+    heading = document.title or document.query
+    if heading:
         parts.append("<p class='report-kicker'>Deep Research · Evidence Report</p>")
-        parts.append(f"<h1>{escape(_display_title(document.query))}</h1>")
+        parts.append(f"<h1>{escape(_display_title(heading))}</h1>")
     parts.append(f"<p class='disclaimer'>{escape(document.disclaimer)}</p>")
     _append_overview(parts, document)
     for block in document.blocks:
         if isinstance(block, ProseBlock):
-            _append_prose(parts, block.markdown)
+            # 正文开头的 H1 已作为报告标题渲染过，不再重复一次
+            _append_prose(parts, _without_title(block.markdown, document.title))
         elif isinstance(block, TableBlock):
             _append_table(parts, block)
         elif isinstance(block, ChartBlock):
@@ -517,6 +519,12 @@ def _append_evidence(parts: list[str], document: ReportDocument) -> None:
             parts.append(f"<p>Source: {escape(record.source_url)}</p>")
         parts.append("</section>")
     parts.append("</section>")
+
+
+def _without_title(markdown: str, title: str) -> str:
+    if not title:
+        return markdown
+    return re.sub(rf"\A\s*#\s+{re.escape(title)}\s*(?:\n|\Z)", "", markdown, count=1)
 
 
 def _display_title(value: str) -> str:

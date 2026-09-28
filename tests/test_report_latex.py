@@ -162,3 +162,37 @@ def test_latex_pdf_reports_missing_compiler(monkeypatch: pytest.MonkeyPatch) -> 
 
     with pytest.raises(LatexExportUnavailable, match="latexmk"):
         render_latex_pdf(_document())
+
+
+def test_table_row_labels_are_escaped_like_other_cells() -> None:
+    """行标签来自检索到的实体名；不转义时 & 多出一列、反斜杠命令直接进入源文件。"""
+    document = _document()
+    table = document.blocks[1]
+    assert isinstance(table, TableBlock)
+    table.rows[0].label = r"A&B_v2 \input{x}"
+
+    source = render_latex(document)
+
+    assert r"A\&B\_v2 \textbackslash{}input\{x\}" in source
+    assert r"\input{x}" not in source
+
+
+def test_inline_text_never_carries_a_paragraph_break() -> None:
+    """\\title 等命令参数里出现空行会让 LaTeX 报 Paragraph ended before。"""
+    document = _document()
+    document.query = "第一行\n\n第二行"
+
+    assert r"\title{第一行 第二行}" in render_latex(document)
+
+
+def test_bibtex_fields_contain_no_bare_braces() -> None:
+    """BibTeX 不认反斜杠转义，\\} 仍会提前闭合字段。"""
+    document = _document()
+    document.references = [
+        ReferenceEntry(index=1, url="https://a.test/x}y{z", reference="标题 {含括号}")
+    ]
+
+    bib = render_bibtex(document)
+
+    assert "url = {https://a.test/x%7Dy%7Bz}," in bib
+    assert "title = {标题 (含括号)}," in bib

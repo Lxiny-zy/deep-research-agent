@@ -7,8 +7,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -65,14 +67,16 @@ async def get_quality_schema() -> list[dict[str, Any]]:
 
 
 @router.post("/templates/contract")
-async def preview_contract(req: ContractPreviewRequest) -> dict[str, Any]:
+async def preview_contract(req: ContractPreviewRequest, request: Request) -> dict[str, Any]:
     """预览系统将如何理解这次任务：用户提交前就能看到解析出的论文、章节与约束。"""
     template = get_template(req.template)
     if template is None:
         raise HTTPException(404, "unknown template")
     if not template.supports(req.strategy):
         raise HTTPException(422, "unsupported strategy")
-    contract = build_contract(template, req.query, strategy=req.strategy)
+    contract = build_contract(
+        template, req.query, strategy=req.strategy, quality=request.app.state.settings.quality
+    )
     payload = contract.model_dump(mode="json")
     payload["dataset_csv"] = contract.dataset_csv[:2000]
     payload["dataset_rows"] = (
@@ -100,11 +104,40 @@ async def _bundle(request: Request, run_id: str) -> DeliveryBundle:
     request.app.state.delivery_cache = cache
     key = (run_id, hash((detail.report.markdown, tuple(detail.report.citations))))
     bundle = cache.get(key)
-    if bundle is None:
+    if bundle is not None:
+        return bundle
+    # 交付面板会同时请求登记表和预览文件；冷缓存时让并发请求共用同一次生成，
+    # 而不是各自把 PDF / DOCX / PPTX 全部重排一遍。
+    pending: dict[tuple[str, int], asyncio.Future[DeliveryBundle]] = (
+        getattr(request.app.state, "delivery_pending", None) or {}
+    )
+    request.app.state.delivery_pending = pending
+    inflight = pending.get(key)
+    if inflight is not None:
+        try:
+            return await asyncio.shield(inflight)
+        except asyncio.CancelledError:
+            if not inflight.cancelled():
+                raise  # 是本请求自己被取消
+            # 负责生成的那个请求断开了：由本请求接手重新生成
+    future: asyncio.Future[DeliveryBundle] = asyncio.get_running_loop().create_future()
+    pending[key] = future
+    try:
         bundle = await run_blocking(build_bundle, detail)
-        if len(cache) > 32:
-            cache.pop(next(iter(cache)))
-        cache[key] = bundle
+    except asyncio.CancelledError:
+        future.cancel()
+        raise
+    except Exception as exc:
+        future.set_exception(exc)
+        future.exception()  # 已由本请求抛出；标记为已取回，避免无人等待时的告警
+        raise
+    finally:
+        if pending.get(key) is future:
+            pending.pop(key)
+    future.set_result(bundle)
+    if len(cache) > 32:
+        cache.pop(next(iter(cache)))
+    cache[key] = bundle
     return bundle
 
 
@@ -128,8 +161,15 @@ async def download_deliverable(run_id: str, name: str, request: Request) -> Resp
     record = file.record()
     download = request.query_params.get("download") != "0"
     filename = name.rsplit("/", 1)[-1]
+    disposition = f'{"attachment" if download else "inline"}; filename="{filename}"'
+    # 磁盘文件名只保留 ASCII；filename* 带上中文标题，下载后能认出是哪份报告
+    title = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", file.title).strip(" ._")[:60]
+    extension = filename.rsplit(".", 1)[-1] if "." in filename else ""
+    if title and extension:
+        disposition += f"; filename*=UTF-8''{quote(f'{title}.{extension}', safe='')}"
     headers = {
-        "Content-Disposition": f'{"attachment" if download else "inline"}; filename="{filename}"',
+        "Content-Disposition": disposition,
+        "Cache-Control": "private, no-store",
         "X-Content-SHA256": record["sha256"],
         # 自包含 HTML 在浏览器里内联预览时也不允许执行脚本或加载外部资源
         "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'"

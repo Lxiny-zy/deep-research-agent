@@ -162,10 +162,8 @@ def _file_stem(title: str) -> str:
 
 def build_bundle(detail: RunDetail) -> DeliveryBundle:
     """纯函数：从一次运行的持久化数据生成交付包（不写盘）。"""
-    from .delivery.docx import render_docx
-    from .delivery.html import render_html
-    from .delivery.pdf import PdfRenderError, render_pdf
-
+    # 各格式的第三方依赖（python-docx 等）在各自的 build_* 里延迟导入：
+    # 缺一个可选依赖只让该格式缺席，不拖垮整个交付包
     template = resolve_template(detail)
     scratch = _scratch(detail)
     workbench = (
@@ -305,6 +303,8 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     if not citation_failed:
 
         def build_html() -> None:
+            from .delivery.html import render_html
+
             html = render_html(
                 markdown, title=title, kicker=template.title, meta=meta, images=images
             )
@@ -315,10 +315,14 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             )
 
         def build_docx() -> None:
+            from .delivery.docx import render_docx
+
             data = render_docx(markdown, title=title, meta=meta, images=images)
             files.append(DeliveryFile(f"{stem}.docx", "docx", f"{title}（Word）", "report", data))
 
         def build_pdf() -> None:
+            from .delivery.pdf import PdfRenderError, render_pdf
+
             try:
                 pdf = render_pdf(markdown, title=title, meta=meta, images=images)
             except PdfRenderError as exc:

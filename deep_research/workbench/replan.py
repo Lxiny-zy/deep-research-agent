@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -32,8 +33,12 @@ _INFRASTRUCTURE_MARKERS = (
     "TokenBudgetExceeded",
     "CancelledError",
     "authentication",
-    "401",
-    "403",
+)
+# 401/403 只按 HTTP 状态码的写法匹配：裸子串会误中路径、计数等任意含这几个数字的错误文本
+_AUTH_STATUS = re.compile(
+    r"(?:\b(?:status|status_code|HTTP|code)[\s:=]*|\bError code:\s*)40[13]\b"
+    r"|\b40[13]\s+(?:Unauthorized|Forbidden)\b",
+    re.IGNORECASE,
 )
 
 _SYSTEM = (
@@ -61,7 +66,9 @@ def replan_state(scratch: dict[str, Any]) -> dict[str, Any]:
 
 
 def is_infrastructure_error(error: str) -> bool:
-    return any(marker in error for marker in _INFRASTRUCTURE_MARKERS)
+    return any(marker in error for marker in _INFRASTRUCTURE_MARKERS) or bool(
+        _AUTH_STATUS.search(error)
+    )
 
 
 def can_replan(scratch: dict[str, Any], step_id: str) -> tuple[bool, str]:

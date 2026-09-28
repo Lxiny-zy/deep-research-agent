@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from typing import Any
 
 from .document import ReportDocument, TableBlock, TableCell, TableColumn
@@ -91,6 +92,9 @@ def render_csv(
     return output.getvalue()
 
 
+_PLAIN_NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?%?")
+
+
 def _write_row(writer: Any, values: list[str]) -> None:
     writer.writerow([_spreadsheet_safe(value) for value in values])
 
@@ -98,6 +102,9 @@ def _write_row(writer: Any, values: list[str]) -> None:
 def _spreadsheet_safe(value: str) -> str:
     text = str(value)
     candidate = text.lstrip()
+    # 纯数字（含负数、科学计数、百分比）不会被当成公式，加引号反而把数值变成文本
+    if _PLAIN_NUMBER.fullmatch(candidate):
+        return text
     if candidate.startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")):
         return f"'{text}"
     return text

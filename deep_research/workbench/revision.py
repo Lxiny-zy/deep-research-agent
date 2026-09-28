@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..models import ResearchResult
+from ..persistence.repository import LeaseLostError
 from ..report.validation import describe_problems, validate_body
 from .quality import QualityPolicy
 from .scholarly import abstract_sections, evaluate, revision_brief
@@ -163,6 +164,8 @@ async def write_with_revisions(
     for attempt in range(max_revisions + 1):
         try:
             body = await write(revision)
+        except LeaseLostError:
+            raise  # 租约被接管不是写作失败：交回已有版本会让失去租约的 worker 继续写盘
         except Exception:
             if best is None:
                 raise

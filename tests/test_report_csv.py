@@ -107,6 +107,24 @@ def test_render_csv_neutralizes_formula_like_untrusted_text() -> None:
     assert ["[1] =ref", ""] in rows
 
 
+def test_render_csv_keeps_negative_numbers_numeric() -> None:
+    """-0.5 不是公式；加引号前缀会把数值列变成文本。"""
+    document = ReportDocument(
+        blocks=[
+            TableBlock(
+                id="delta",
+                title="Delta",
+                columns=[TableColumn(key="value", label="变化")],
+                rows=[TableRow(label="A", cells={"value": TableCell(value="-0.5")})],
+            )
+        ],
+    )
+
+    rows = list(csv.reader(io.StringIO(render_csv(document))))
+
+    assert rows[1] == ["A", "-0.5"]
+
+
 def test_render_csv_requires_a_table_id_for_multiple_tables() -> None:
     document = ReportDocument(blocks=[_table("a"), _table("b")])
 

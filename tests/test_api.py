@@ -2199,7 +2199,11 @@ async def test_report_markdown_endpoint_carries_the_evidence_apparatus(repo):
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/markdown")
-    assert resp.headers["content-disposition"].endswith(f'research-{run_id}.md"')
+    disposition = resp.headers["content-disposition"]
+    assert f'filename="research-{run_id}.md"' in disposition
+    # 中文标题走 RFC 5987 filename*，下载后能认出是哪份报告
+    assert "filename*=UTF-8''CASSI%20%E9%87%8D%E5%BB%BA" in disposition
+    assert resp.headers["cache-control"] == "private, no-store"
     body = resp.text
     # 正文在
     assert "正文引用 [1]" in body
@@ -2240,7 +2244,20 @@ async def test_report_csv_endpoint_returns_an_empty_download_before_a_table_exis
     assert resp.status_code == 200
     assert resp.text == ""
     assert resp.headers["content-type"].startswith("text/csv")
-    assert resp.headers["content-disposition"].endswith(f'research-{run_id}.csv"')
+    assert f'filename="research-{run_id}.csv"' in resp.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
+async def test_report_csv_download_starts_with_a_utf8_bom(repo, monkeypatch):
+    """落盘后没有 HTTP 头，中文 Windows 的 Excel 要靠 BOM 才按 UTF-8 打开。"""
+    run_id = await repo.create_run("含表格")
+    monkeypatch.setattr(api, "render_csv", lambda *args, **kwargs: "对象,PSNR\r\nA,38.36\r\n")
+
+    async with _client() as c:
+        resp = await c.get(f"/api/runs/{run_id}/document.csv")
+
+    assert resp.content.startswith(b"\xef\xbb\xbf")
+    assert resp.content[3:].decode("utf-8").startswith("对象,PSNR")
 
 
 @pytest.mark.asyncio
@@ -2264,7 +2281,7 @@ async def test_report_xlsx_endpoint_returns_an_openable_download_before_a_table_
     assert resp.headers["content-type"].startswith(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    assert resp.headers["content-disposition"].endswith(f'research-{run_id}.xlsx"')
+    assert f'filename="research-{run_id}.xlsx"' in resp.headers["content-disposition"]
 
 
 @pytest.mark.asyncio
@@ -2337,7 +2354,7 @@ async def test_report_latex_source_endpoint_returns_academic_source(repo, monkey
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/x-tex")
-    assert response.headers["content-disposition"].endswith('.tex"')
+    assert '.tex"' in response.headers["content-disposition"]
     assert response.text == "% academic source"
 
 
@@ -2364,7 +2381,8 @@ async def test_report_bundle_endpoint_returns_zip(repo, monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/zip")
-    assert response.headers["content-disposition"].endswith('-bundle.zip"')
+    assert '-bundle.zip"' in response.headers["content-disposition"]
+    assert response.headers["content-disposition"].endswith("academic%20bundle-bundle.zip")
     assert response.content == b"PK bundle"
 
 

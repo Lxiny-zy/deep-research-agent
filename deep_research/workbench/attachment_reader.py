@@ -14,6 +14,7 @@ from ..agents.base import Blackboard, RunContext
 from ..agents.researcher import Researcher
 from ..guardrails import verify_claim_consistency
 from ..models import ResearchResult
+from ..persistence.repository import LeaseLostError
 from ..registry import register
 from .attachments import attachments_from_scratch
 from .contract import contract_from_scratch
@@ -62,6 +63,8 @@ class AttachmentReader:
                 researcher.search = _FixedSources(batch)
                 try:
                     result = await researcher.run(question)
+                except LeaseLostError:
+                    raise  # 租约被接管：不能当作单批失败继续读下一批
                 except Exception as exc:  # 单批失败隔离：其余片段照常阅读
                     ctx.tracer.emit(
                         "RESEARCHER",

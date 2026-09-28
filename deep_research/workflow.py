@@ -252,6 +252,19 @@ def _unseen_sub_questions(bb: Blackboard, questions: list[str]) -> list[SubQuest
     return fresh
 
 
+def _carry_replan_ledger(target: Blackboard, failed: Blackboard) -> None:
+    """失败尝试的候选黑板会被丢弃，但其中的重规划账本不能跟着丢。
+
+    账本记录已经花掉的补救额度与审计日志；若随失败的尝试一起消失，下一次重试
+    又从零开始计数，``MAX_REPLANS`` / 每步一次补救的上限就形同虚设。
+    """
+    from .workbench.replan import REPLAN_SCRATCH_KEY
+
+    ledger = failed.scratch.get(REPLAN_SCRATCH_KEY)
+    if ledger is not None:
+        target.scratch[REPLAN_SCRATCH_KEY] = deepcopy(ledger)
+
+
 def _commit_blackboard(target: Blackboard, source: Blackboard) -> Blackboard:
     """Commit a successful isolated attempt while preserving target identity."""
     for field_name in target.__class__.model_fields:
@@ -548,6 +561,7 @@ class WorkflowEngine:
                     candidate = await self._invoke_with_timeout(step, candidate)
                 except Exception as exc:
                     last_error = exc
+                    _carry_replan_ledger(bb, candidate)
                     if attempt + 1 < step.max_attempts:
                         delay = step.retry_backoff * (2**attempt)
                         self.runtime.retry_step(step_run, exc, delay)
@@ -1135,6 +1149,8 @@ class WorkflowEngine:
             candidate = bb.model_copy(deep=True)
             try:
                 candidate = await reflector.step(candidate, self.ctx)
+            except LeaseLostError:
+                raise  # 租约已被接管：本 worker 必须立刻停手，不能当作普通失败继续付费调用
             except Exception as exc:
                 self.ctx.tracer.emit(
                     "REFLECTOR", "error", f"第 {rnd + 1} 轮反思失败，保留已有证据进入综合：{exc}"
@@ -1159,6 +1175,8 @@ class WorkflowEngine:
             candidate.scratch["pending_sub_questions"] = new_subs
             try:
                 candidate = await researcher.step(candidate, self.ctx)
+            except LeaseLostError:
+                raise
             except Exception as exc:
                 self.ctx.tracer.emit(
                     "RESEARCHER", "error", f"第 {rnd + 1} 轮补洞研究失败，保留已有证据：{exc}"

@@ -10,7 +10,7 @@ token 换来的中间结果。用户在创建前就能从 ``/api/usage`` 看到�
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 _PAGE = 200
@@ -45,9 +45,10 @@ def quota_view(used: dict[str, int], settings: Any) -> dict[str, Any]:
     token_quota = settings.daily_token_quota
     return {
         "period": "day",
-        "resets_at": datetime.now(UTC)
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .isoformat(),
+        # 额度在下一个 UTC 零点重置；今天的零点已经过去
+        "resets_at": (
+            datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        ).isoformat(),
         "runs": {"used": used["runs"], "limit": run_quota},
         "tokens": {"used": used["tokens"], "limit": token_quota},
         "exhausted": bool(

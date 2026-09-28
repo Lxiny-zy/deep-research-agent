@@ -87,6 +87,15 @@ def test_render_xlsx_preserves_values_provenance_and_notes() -> None:
     assert "[1] Paper A" in values
 
 
+def test_render_xlsx_strips_xml_illegal_control_characters() -> None:
+    """网页快照里的 \\x0b 等字符会让 openpyxl 抛 IllegalCharacterError，导出变 500。"""
+    table = _table()
+    table.rows[0].label = "MST\x0b-L"
+    workbook = _open_workbook(render_xlsx(ReportDocument(query="q", blocks=[table])))
+
+    assert workbook.active.cell(2, 1).value.startswith("MST-L")
+
+
 def test_render_xlsx_returns_openable_empty_workbook_without_tables() -> None:
     workbook = _open_workbook(render_xlsx(ReportDocument(blocks=[ProseBlock(markdown="text")])))
     assert workbook.active["A1"].value == "暂无表格"

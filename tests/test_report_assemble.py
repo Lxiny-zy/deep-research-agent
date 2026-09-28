@@ -185,6 +185,49 @@ def test_body_keeps_a_mid_document_mention_of_references() -> None:
     assert "本节讨论来源质量。" in prose.markdown
 
 
+def test_leading_h1_becomes_the_document_title() -> None:
+    """分章投影会丢掉无正文的 H1;它必须提升为 title,否则导出里报告标题消失。"""
+    report = Report(query="用户原问题", markdown="# 报告标题\n\n## 摘要\n\n要点。", citations=[])
+
+    doc = assemble_document(report, [])
+
+    assert doc.title == "报告标题"
+    assert render_markdown(doc).startswith("# 报告标题\n")
+
+
+def test_title_stays_empty_without_a_leading_h1() -> None:
+    """正文不以 H1 开头时不猜标题,渲染器回落到 query。"""
+    report = Report(query="q", markdown="引言段落。\n\n# 中途的一级标题\n\n内容。", citations=[])
+
+    assert assemble_document(report, []).title == ""
+
+
+def test_chapter_levels_are_normalized_to_the_shallowest_heading() -> None:
+    """Synthesizer 惯用 H1 标题 + "## 章"；章应是 1 级，否则 LaTeX 全变 \\subsection。"""
+    report = Report(
+        query="q",
+        markdown="# 标题\n\n## 引言\n\n甲。\n\n### 细节\n\n乙。\n\n## 结论\n\n丙。",
+        citations=[],
+    )
+
+    doc = assemble_document(report, [])
+
+    assert [(s.title, s.level) for s in doc.sections] == [("引言", 1), ("细节", 2), ("结论", 1)]
+    markdown = render_markdown(doc)
+    assert "\n## 引言\n" in markdown and "\n### 细节\n" in markdown
+
+
+def test_comment_lines_inside_code_fences_are_not_headings() -> None:
+    """围栏里的 "# 注释" 若被当成标题，会切出假章节并拆散代码块。"""
+    body = "## 方法\n\n```python\n# comment\nx = 1\n```\n\n## 结论\n\n完。"
+    doc = assemble_document(Report(query="q", markdown=body, citations=[]), [])
+
+    assert [s.title for s in doc.sections] == ["方法", "结论"]
+    method = doc.sections[0].blocks[0]
+    assert isinstance(method, ProseBlock)
+    assert "# comment" in method.markdown and method.markdown.count("```") == 2
+
+
 # ── 证据附录 ────────────────────────────────────────────────────────────────
 
 

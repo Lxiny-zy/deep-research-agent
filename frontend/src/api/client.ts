@@ -541,8 +541,13 @@ export async function downloadRunDocument(
     paper_pdf: 'paper.pdf',
   }
   const endpoint = endpointByFormat[format]
-  const extension = format === 'paper_pdf' ? 'pdf' : format
-  const fallback = `research-${id.replace(/[^A-Za-z0-9._-]/g, '_') || 'run'}.${extension}`
+  // 与服务端 Content-Disposition 的 ASCII 文件名保持一致，头缺失时也不会得到 .bundle
+  const suffixByFormat: Partial<Record<RunDocumentFormat, string>> = {
+    bundle: '-bundle.zip',
+    paper_pdf: '-paper.pdf',
+  }
+  const fileSuffix = suffixByFormat[format] ?? `.${format}`
+  const fallback = `research-${id.replace(/[^A-Za-z0-9._-]/g, '_') || 'run'}${fileSuffix}`
   const key = getApiKey()
   return withResponse(
     `/api/runs/${encodedId}/document.${endpoint}${suffix}`,
@@ -570,7 +575,9 @@ export async function downloadRunDocument(
         filename: downloadFilename(res.headers.get('Content-Disposition'), fallback),
       }
     },
-    120_000,
+    // 论文版 PDF 由服务端 XeLaTeX 编译，上限 120s；客户端再留出排队与传输余量，
+    // 否则服务端还在编译时前端先报超时，用户重试又触发一次新的编译。
+    format === 'paper_pdf' || format === 'bundle' ? 180_000 : 120_000,
   )
 }
 

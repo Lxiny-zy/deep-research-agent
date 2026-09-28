@@ -108,6 +108,20 @@ def test_pdf_title_drops_a_markdown_heading_marker_from_the_query() -> None:
     assert "<h1>## 调研一下 2026</h1>" not in html
 
 
+def test_pdf_uses_the_report_title_once() -> None:
+    """正文开头的 H1 是报告标题：用它作 <h1>，且不在正文里再印一遍。"""
+    document = ReportDocument(
+        query="用户原问题",
+        title="报告标题",
+        blocks=[ProseBlock(markdown="# 报告标题\n\n正文。")],
+    )
+
+    html = render_pdf_html(document)
+
+    assert html.count("<h1>") == 1
+    assert "<h1>报告标题</h1>" in html
+
+
 def test_pdf_dependency_is_lazy_and_reports_a_clear_error(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "weasyprint", None)
     with pytest.raises(PdfExportUnavailable, match="optional 'pdf' extra"):

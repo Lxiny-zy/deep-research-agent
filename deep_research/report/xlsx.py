@@ -43,6 +43,8 @@ class XlsxTableSelectionError(XlsxExportError):
 # characters.  Keep the title deterministic so downloads are easy to inspect.
 _INVALID_SHEET_CHARS = re.compile(r"[\\/*?:\[\]]")
 _MAX_CELL_TEXT = 32_767
+# XML 1.0 不允许的控制字符（保留 \t \n \r）
+_XML_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def render_xlsx(
@@ -180,7 +182,8 @@ def _set_text(cell: Any, value: str) -> None:
     # only at this final serialization boundary keeps the in-memory document
     # and CSV export lossless while avoiding a corrupt workbook for pathological
     # model output.
-    text = str(value)
+    # 网页快照常带 \x0b 之类的控制字符，openpyxl 遇到会抛 IllegalCharacterError
+    text = _XML_ILLEGAL.sub("", str(value))
     if len(text) > _MAX_CELL_TEXT:
         text = text[:_MAX_CELL_TEXT]
     cell.value = text

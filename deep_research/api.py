@@ -30,6 +30,7 @@ from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import Any, Literal, cast
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -1702,6 +1703,8 @@ async def create_run(
             req.query,
             attachments_csv=req.dataset or "",
             strategy=req.strategy,
+            # 契约里的质量策略会覆盖 settings.quality，这里必须带上用户的设置
+            quality=settings.quality,
         )
         scratch = execution.checkpoint.setdefault("scratch", {})
         if isinstance(scratch, dict):
@@ -2352,6 +2355,23 @@ async def _load_report_document(
         raise HTTPException(404, "run not found") from exc
 
 
+def _download_headers(run_id: str, document: ReportDocument, suffix: str) -> dict[str, str]:
+    """导出下载头：ASCII 文件名兜底 + RFC 5987 ``filename*`` 带上报告标题。
+
+    只给 ``research-<uuid>.md`` 时，用户下载一批报告后根本分不清哪份是哪份；
+    带 ``filename*`` 的中文标题由浏览器 / 前端 ``downloadFilename`` 优先采用。
+    """
+
+    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
+    disposition = f'attachment; filename="research-{safe_run_id}{suffix}"'
+    title = re.sub(r"^\s*#{1,6}\s+", "", document.title or document.query)
+    title = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", title).strip(" ._")[:60]
+    if title:
+        disposition += f"; filename*=UTF-8''{quote(title + suffix, safe='')}"
+    # 报告内容受鉴权保护，不允许共享缓存或磁盘缓存留存
+    return {"Content-Disposition": disposition, "Cache-Control": "private, no-store"}
+
+
 @app.get("/api/runs/{run_id}", dependencies=[Depends(require_api_key)])
 async def get_run(run_id: str, request: Request) -> RunDetail:
     repo: ResearchRepository = request.app.state.repo
@@ -2399,11 +2419,10 @@ async def get_run_document_markdown(
         # inconsistent document.  Surface it rather than shipping a file with
         # a silently dropped section.
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
     return PlainTextResponse(
         markdown_text,
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}.md"'},
+        headers=_download_headers(run_id, document, ".md"),
     )
 
 
@@ -2428,13 +2447,12 @@ async def get_run_document_csv(
     except CsvTableSelectionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Run ids are normally UUIDs, but sanitising the path value keeps the
-    # download header safe for custom repository implementations as well.
-    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
+    # 下载到本地后没有 HTTP 头可依，中文 Windows 的 Excel 会按 GBK 打开；
+    # UTF-8 BOM 让它识别编码。只加在下载端点，render_csv 本身保持纯文本。
     return PlainTextResponse(
-        csv_text,
+        "﻿" + csv_text if csv_text else csv_text,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}.csv"'},
+        headers=_download_headers(run_id, document, ".csv"),
     )
 
 
@@ -2462,11 +2480,10 @@ async def get_run_document_xlsx(
     except XlsxTableSelectionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
     return Response(
         content=xlsx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}.xlsx"'},
+        headers=_download_headers(run_id, document, ".xlsx"),
     )
 
 
@@ -2484,11 +2501,10 @@ async def get_run_document_pdf(
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     except PdfRenderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}.pdf"'},
+        headers=_download_headers(run_id, document, ".pdf"),
     )
 
 
@@ -2506,11 +2522,10 @@ async def get_run_document_latex(
     if template != "ctexart":
         latex_options["template"] = cast(LatexTemplateName, template)
     source = await run_blocking(render_latex, document, **latex_options)
-    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
     return PlainTextResponse(
         source,
         media_type="application/x-tex; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}.tex"'},
+        headers=_download_headers(run_id, document, ".tex"),
     )
 
 
@@ -2526,11 +2541,10 @@ async def get_run_document_bib(
     if detail is None:
         raise HTTPException(status_code=404, detail="run not found")
     bibtex = await run_blocking(render_bibtex, document, sources=detail.sources)
-    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
     return PlainTextResponse(
         bibtex,
         media_type="application/x-bibtex; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}.bib"'},
+        headers=_download_headers(run_id, document, ".bib"),
     )
 
 
@@ -2556,13 +2570,10 @@ async def get_run_document_bundle(
         profile=cast(ExportProfile, profile),
         template=cast(LatexTemplateName, template),
     )
-    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
     return Response(
         content=bundle,
         media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="research-{safe_run_id}-bundle.zip"'
-        },
+        headers=_download_headers(run_id, document, "-bundle.zip"),
     )
 
 
@@ -2587,11 +2598,10 @@ async def get_run_document_paper_pdf(
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     except LatexRenderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    safe_run_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-")[:80] or "run"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="research-{safe_run_id}-paper.pdf"'},
+        headers=_download_headers(run_id, document, "-paper.pdf"),
     )
 
 

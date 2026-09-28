@@ -528,6 +528,44 @@ async def test_create_run_with_template_freezes_contract_and_workflow(api_repo) 
 
 
 @pytest.mark.asyncio
+async def test_template_contract_carries_the_user_quality_settings(api_repo) -> None:
+    """契约里的质量策略优先于 settings.quality；不带上用户设置，模板任务就永远用默认值。"""
+    from dataclasses import replace
+
+    api, repo = api_repo
+    api.app.state.settings = replace(api.app.state.settings, quality={"survey_min_citations": 5})
+    async with _client(api.app) as client:
+        created = await client.post(
+            "/api/runs",
+            json={"query": "快照光谱成像重建方法", "template": "litReview", "clarified": True},
+        )
+        preview = await client.post(
+            "/api/templates/contract", json={"template": "litReview", "query": "快照光谱成像"}
+        )
+    assert created.status_code == 202, created.text
+    detail = await repo.get_run(created.json()["run_id"])
+    assert detail is not None and detail.orchestration is not None
+    contract = detail.orchestration.checkpoint["scratch"][CONTRACT_SCRATCH_KEY]
+    assert contract["quality"]["survey_min_citations"] == 5
+    assert preview.json()["quality"]["survey_min_citations"] == 5
+
+
+def test_failed_attempt_keeps_the_replan_ledger() -> None:
+    """失败尝试的候选黑板被丢弃时，补救额度账本必须带回已提交状态。"""
+    from deep_research.agents.base import Blackboard
+    from deep_research.workbench import replan
+    from deep_research.workflow import _carry_replan_ledger
+
+    committed = Blackboard(query="q")
+    failed = committed.model_copy(deep=True)
+    replan.replan_state(failed.scratch)["replans"] = 1
+
+    _carry_replan_ledger(committed, failed)
+
+    assert replan.replan_state(committed.scratch)["replans"] == 1
+
+
+@pytest.mark.asyncio
 async def test_strategy_selects_the_evidence_chain_for_a_task(api_repo) -> None:
     """深度检索是任务的一种策略：同一任务换策略只换检索链，交付角色不变。"""
     api, repo = api_repo
@@ -609,6 +647,34 @@ async def test_deliverables_endpoints(api_repo) -> None:
     assert html.headers["content-disposition"].startswith("inline")
     assert traversal.status_code in {400, 404}
     assert meta["template"]["key"] == "autoResearch"
+    assert "filename*=UTF-8''" in pdf.headers["content-disposition"]
+    assert pdf.headers["cache-control"] == "private, no-store"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cold_deliverable_requests_build_once(api_repo, monkeypatch) -> None:
+    """登记表与预览同时到达冷缓存时，只生成一次交付包。"""
+    api, repo = api_repo
+    template, execution = _execution("研究问题", "autoResearch", api.app.state.settings)
+    run_id = await repo.create_run("研究问题", execution=execution)
+    await repo.save_report(run_id, Report(query="q", markdown="## 摘要\n正文", citations=[]))
+    await repo.set_status(run_id, "done")
+    from deep_research.workbench import api as workbench_api
+
+    calls: list[str] = []
+    real_build = workbench_api.build_bundle
+
+    def counting_build(detail):  # type: ignore[no-untyped-def]
+        calls.append(detail.id)
+        return real_build(detail)
+
+    monkeypatch.setattr(workbench_api, "build_bundle", counting_build)
+    async with _client(api.app) as client:
+        responses = await asyncio.gather(
+            *(client.get(f"/api/runs/{run_id}/deliverables") for _ in range(3))
+        )
+    assert all(response.status_code == 200 for response in responses)
+    assert len(calls) == 1
 
 
 def test_parse_blocks_handles_nested_lists_and_tables() -> None:
@@ -836,6 +902,11 @@ def test_replan_limits_are_enforced() -> None:
     assert not allowed and "3 次" in why
     assert replan.is_infrastructure_error("LeaseLostError: lease gone")
     assert not replan.is_infrastructure_error("ValueError: bad json")
+    # 鉴权失败按状态码识别；路径或计数里恰好出现 401/403 不算
+    assert replan.is_infrastructure_error("HTTPStatusError: status 401 for url")
+    assert replan.is_infrastructure_error("Error code: 403 - forbidden")
+    assert not replan.is_infrastructure_error("FileNotFoundError: data/run-4013/table.csv")
+    assert not replan.is_infrastructure_error("ValueError: expected 403 rows, got 12")
 
 
 # --------------------------------------------------------------------------- 工作区

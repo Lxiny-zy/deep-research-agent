@@ -73,7 +73,9 @@ def _display_title(document: ReportDocument) -> str:
 def _inline(value: str) -> str:
     """Escape Markdown-ish inline text while preserving basic emphasis/code."""
 
-    escaped = _escape(value)
+    # 行内参数（\title、表格单元格、标题）里的空行会结束段落，LaTeX 直接报错；
+    # 多行正文走 ``_prose`` 逐行调用，这里折叠换行不影响段落结构。
+    escaped = _escape(re.sub(r"\s*[\r\n]+\s*", " ", value))
     # The replacements operate on escaped text and only emit fixed LaTeX
     # commands.  This intentionally supports a small, predictable subset.
     escaped = re.sub(r"`([^`]+)`", lambda m: rf"\texttt{{{m.group(1)}}}", escaped)
@@ -185,7 +187,8 @@ def _table(table: TableBlock) -> str:
     lines.append(" & ".join(_cell(header) for header in headers) + r" \\")
     lines.append(r"\midrule\endhead")
     for row in table.rows:
-        label = row.label + (f" [{row.citation}]" if row.citation else "")
+        # 行标签来自检索到的实体名，与其他单元格一样必须转义
+        label = _cell(row.label) + (f" [{row.citation}]" if row.citation else "")
         values = [label]
         for column in table.columns:
             cell = row.cell(column.key)
@@ -354,12 +357,17 @@ def render_latex(
     return "\n\n".join(lines) + "\n"
 
 
-def _bib_value(value: str) -> str:
-    """Keep a BibTeX field single-line and protect structural delimiters."""
+def _bib_value(value: str, *, url: bool = False) -> str:
+    """Keep a BibTeX field single-line and protect structural delimiters.
 
-    return (
-        value.replace("\r", " ").replace("\n", " ").replace("{", "\\{").replace("}", "\\}").strip()
-    )
+    BibTeX 按花括号配对界定字段、不认反斜杠转义，``\\}`` 照样会提前闭合字段，
+    所以字段里不留任何裸花括号：URL 用等价的百分号编码，文本字段换成圆括号。
+    """
+
+    single_line = value.replace("\r", " ").replace("\n", " ").strip()
+    if url:
+        return single_line.replace("{", "%7B").replace("}", "%7D")
+    return single_line.replace("{", "(").replace("}", ")")
 
 
 def render_bibtex(document: ReportDocument, *, sources: list[Source] | None = None) -> str:
@@ -390,7 +398,7 @@ def render_bibtex(document: ReportDocument, *, sources: list[Source] | None = No
         if doi_match or scholarly_doi:
             doi = (doi_match.group(0) if doi_match else scholarly_doi).rstrip(".")
             fields.append(f"  doi = {{{_bib_value(doi)}}},")
-        fields.append(f"  url = {{{_bib_value(reference.url)}}},")
+        fields.append(f"  url = {{{_bib_value(reference.url, url=True)}}},")
         entries.append("@misc{ref" + str(reference.index) + ",\n" + "\n".join(fields) + "\n}")
     return "\n\n".join(entries) + ("\n" if entries else "")
 
@@ -464,6 +472,8 @@ def render_latex_pdf(
         pdf_path = workdir / "research.pdf"
         if completed.returncode != 0 or not pdf_path.is_file():
             detail = (completed.stderr or completed.stdout or "unknown compiler error")[-2000:]
+            # 编译日志会回给 HTTP 客户端，隐去服务器上的临时目录路径
+            detail = detail.replace(str(workdir), "<workdir>")
             raise LatexRenderError(f"LaTeX 编译失败：{detail}")
         return pdf_path.read_bytes()
 

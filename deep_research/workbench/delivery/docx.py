@@ -8,6 +8,7 @@ DOCX 都从同一个 ``_base_document`` 开始——这是「报告有规定的�
 from __future__ import annotations
 
 import io
+import re
 from collections.abc import Mapping
 
 from docx import Document
@@ -22,6 +23,7 @@ from .markdown import Block, Inline, parse_blocks, plain
 _BODY_FONT = "Microsoft YaHei"
 _ACCENT = RGBColor(0x1F, 0x5F, 0x8B)
 _MUTED = RGBColor(0x5B, 0x66, 0x75)
+_XML_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def _set_east_asian(run_or_style, name: str) -> None:  # type: ignore[no-untyped-def]
@@ -123,6 +125,8 @@ def render_docx(
     images: Mapping[str, bytes] | None = None,
 ) -> bytes:
     images = images or {}
+    # python-docx 拒收 XML 1.0 不允许的控制字符（网页快照里常见），整份 Word 会丢
+    markdown, title, meta = (_XML_ILLEGAL.sub("", value) for value in (markdown, title, meta))
     blocks = parse_blocks(markdown)
     document = _base_document()
     if blocks and blocks[0].kind == "heading" and blocks[0].level == 1:

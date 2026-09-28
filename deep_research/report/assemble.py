@@ -44,6 +44,7 @@ from .pivot import pivot_tables
 # 结构化文档里参考来源是独立字段，正文若把那一段带进来就会渲染两遍。
 _REFERENCES_HEADING = re.compile(r"\n#{2,3}\s*参考来源\s*\n.*\Z", re.DOTALL)
 _ATX_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_FENCE = re.compile(r"^(`{3,}|~{3,})")
 
 _SECTION_ALIASES: dict[str, SectionKind] = {
     "摘要": "abstract",
@@ -117,6 +118,7 @@ def assemble_document(
 
     return ReportDocument(
         query=query or (report.query if report is not None else ""),
+        title=_leading_title(body),
         abstract=abstract,
         blocks=blocks,
         sections=sections,
@@ -124,6 +126,46 @@ def assemble_document(
         evidence=_evidence(findings, index_by_url),
         overview=_overview(findings, events),
     )
+
+
+def _leading_title(body: str) -> str:
+    """Synthesizer 正文开头的一级标题即报告标题。
+
+    分章投影会丢弃没有正文的标题行，这个 H1 若不提升为 ``title``，
+    Markdown / LaTeX 导出就只剩 query 作标题，报告自己的标题凭空消失。
+    """
+
+    for raw in body.replace("\r\n", "\n").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        match = _ATX_HEADING.match(line)
+        if match and len(match.group(1)) == 1:
+            return match.group(2).strip().strip("#").strip()
+        return ""
+    return ""
+
+
+def _heading_lines(body: str) -> dict[int, int]:
+    """行号 → 标题级别；代码围栏内的 ``# 注释`` 不是标题，不能切断章节。"""
+
+    headings: dict[int, int] = {}
+    fence = ""
+    for number, raw in enumerate(body.replace("\r\n", "\n").splitlines()):
+        line = raw.strip()
+        marker = _FENCE.match(line)
+        if marker:
+            if not fence:
+                fence = marker.group(1)[0] * 3
+            elif line.startswith(fence):
+                fence = ""
+            continue
+        if fence:
+            continue
+        match = _ATX_HEADING.match(line)
+        if match:
+            headings[number] = len(match.group(1))
+    return headings
 
 
 def _take_abstract(sections: list[PaperSection]) -> str:
@@ -170,14 +212,24 @@ def _paper_sections(body: str, blocks: list[Block]) -> list[PaperSection]:
             )
         current_lines = []
 
-    for raw in body.replace("\r\n", "\n").splitlines():
-        match = _ATX_HEADING.match(raw.strip())
+    headings = _heading_lines(body)
+    # 开头的 H1 已提升为报告标题，不参与分章；其余标题按最浅一级归一到 1 级，
+    # 否则 Synthesizer 惯用的 "## 章" 会变成 LaTeX 的 \subsection（编号 0.1）。
+    title_line = min(headings) if headings and _leading_title(body) else None
+    if title_line is not None:
+        headings.pop(title_line)
+    shift = min(headings.values(), default=1) - 1
+
+    for number, raw in enumerate(body.replace("\r\n", "\n").splitlines()):
+        if number == title_line:
+            continue
+        match = _ATX_HEADING.match(raw.strip()) if number in headings else None
         if match:
             flush()
             title = match.group(2).strip().strip("#").strip()
             current_title = title or "引言"
             current_kind = _SECTION_ALIASES.get(title, "other")
-            current_level = min(len(match.group(1)), 3)
+            current_level = max(1, min(headings[number] - shift, 3))
             continue
         current_lines.append(raw)
     flush()
