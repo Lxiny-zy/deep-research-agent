@@ -23,18 +23,18 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: 安装带哈希的审计工具链
-        run: pip install --require-hashes -r requirements-dev.lock
+        run: pip install --require-hashes -r requirements-dev.lock -r requirements-workbench.lock
       - name: 校验直接依赖与锁文件一致性
         run: python scripts/check_dependency_locks.py
       - name: 审计 Python 生产依赖
-        run: python -m pip_audit -r requirements.lock -r requirements-pdf.lock --progress-spinner off
+        run: python -m pip_audit -r requirements.lock -r requirements-pdf.lock -r requirements-workbench.lock --progress-spinner off
       - name: 审计前端依赖
         working-directory: frontend
         run: npm audit --audit-level=moderate --package-lock-only
       - name: 生成 CycloneDX SBOM
         run: |
           mkdir -p sbom
-          python -m pip_audit -r requirements.lock -r requirements-pdf.lock --progress-spinner off --format cyclonedx-json --output sbom/python-runtime.cdx.json
+          python -m pip_audit -r requirements.lock -r requirements-pdf.lock -r requirements-workbench.lock --progress-spinner off --format cyclonedx-json --output sbom/python-runtime.cdx.json
           cd frontend
           npm sbom --package-lock-only --sbom-format cyclonedx > ../sbom/frontend.cdx.json
       - name: 保存 SBOM
@@ -56,7 +56,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.lock
       - name: 安装依赖
-        run: pip install --require-hashes -r requirements-dev.lock
+        run: pip install --require-hashes -r requirements-dev.lock -r requirements-workbench.lock
       - name: Ruff 检查与格式校验
         run: |
           ruff check deep_research tests alembic scripts eval
@@ -66,6 +66,10 @@ jobs:
       - name: Pytest（离线，跳过需要 PostgreSQL 的用例）
         run: |
           pytest -m "not pg" --cov=deep_research --cov-report=term-missing --cov-fail-under=80
+      - name: 科研工作台功能覆盖核对（对照参考资料包逐项）
+        # 资料包是本地参考材料，未纳入版本库时跳过；存在时任何「未映射 / 缺失」都会让 CI 失败
+        run: |
+          if [ -d apevon-full-package ]; then python scripts/check_workbench_coverage.py; else echo "reference package not present; skipped"; fi
       - name: 独立 API / worker 的真实 HTTP 验收
         run: python scripts/verify_worker_http.py
       - name: 保存跨进程验收日志
@@ -104,7 +108,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.lock
       - name: 安装依赖
-        run: pip install --require-hashes -r requirements-dev.lock
+        run: pip install --require-hashes -r requirements-dev.lock -r requirements-workbench.lock
       - name: Alembic 迁移到最新版本
         run: python -m deep_research.migrate
       - name: Alembic 模型漂移检查
@@ -137,7 +141,7 @@ jobs:
           npm ci
           npm run build
       - name: 安装构建依赖
-        run: pip install --require-hashes -r requirements-dev.lock
+        run: pip install --require-hashes -r requirements-dev.lock -r requirements-workbench.lock
       - name: 检查 OpenAPI 生成类型
         working-directory: frontend
         run: npm run api:check
@@ -188,7 +192,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "20"
-      - run: pip install --require-hashes -r requirements-dev.lock
+      - run: pip install --require-hashes -r requirements-dev.lock -r requirements-workbench.lock
       - run: python -m playwright install --with-deps chromium
       - working-directory: frontend
         run: |

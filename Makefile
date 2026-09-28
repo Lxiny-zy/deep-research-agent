@@ -17,22 +17,24 @@ help:  ## 显示可用命令
 
 install:  ## 安装开发依赖（含 lint/类型/测试工具）
 	$(PYTHON) -m pip install --require-hashes -r requirements-dev.lock
+	$(PYTHON) -m pip install --require-hashes -r requirements-workbench.lock
 
 lock:  ## 根据人工维护的 requirements*.txt 更新带哈希锁文件（需要 uv）
 	$(UV) pip compile requirements.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements.lock
 	$(UV) pip compile requirements-pdf.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements-pdf.lock
+	$(UV) pip compile requirements-workbench.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements-workbench.lock
 	$(UV) pip compile requirements-dev.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements-dev.lock
 
 dependency-check:  ## 校验直接依赖均被锁文件以兼容版本覆盖
 	$(PYTHON) scripts/check_dependency_locks.py
 
 audit: dependency-check  ## 审计 Python 与前端依赖漏洞
-	$(PYTHON) -m pip_audit -r requirements.lock -r requirements-pdf.lock
+	$(PYTHON) -m pip_audit -r requirements.lock -r requirements-pdf.lock -r requirements-workbench.lock
 	cd frontend && npm audit --audit-level=moderate
 
 sbom:  ## 导出 Python 与前端依赖 SBOM 到 sbom/
 	$(PYTHON) -c "from pathlib import Path; Path('sbom').mkdir(exist_ok=True)"
-	$(PYTHON) -m pip_audit -r requirements.lock -r requirements-pdf.lock --progress-spinner off --format cyclonedx-json --output sbom/python-runtime.cdx.json
+	$(PYTHON) -m pip_audit -r requirements.lock -r requirements-pdf.lock -r requirements-workbench.lock --progress-spinner off --format cyclonedx-json --output sbom/python-runtime.cdx.json
 	cd frontend && npm sbom --package-lock-only --sbom-format cyclonedx > ../sbom/frontend.cdx.json
 
 lint:  ## ruff 检查 + ruff 格式校验 + mypy 类型检查

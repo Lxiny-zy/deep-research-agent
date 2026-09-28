@@ -11,12 +11,17 @@ RUN npm run build
 # ---- 运行镜像：纯 Python，asyncpg/sqlalchemy 均有 manylinux wheel，无需编译器 ----
 FROM python:3.11-slim
 
+ARG INSTALL_TEX=false
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     APP_ENV=production \
-    RUNTIME_CONFIG_PATH=/app/data/runtime_config.json
+    RUNTIME_CONFIG_PATH=/app/data/runtime_config.json \
+    TEXMFVAR=/tmp/texmf-var \
+    TEXMFCONFIG=/tmp/texmf-config \
+    TEXMFCACHE=/tmp/texmf-cache
 
 WORKDIR /app
 
@@ -27,12 +32,21 @@ RUN apt-get update \
         fonts-noto-cjk \
         libpango-1.0-0 \
         libpangoft2-1.0-0 \
+    && if [ "$INSTALL_TEX" = "true" ]; then \
+        apt-get install -y --no-install-recommends \
+          latexmk \
+          texlive-lang-chinese \
+          texlive-latex-extra \
+          texlive-publishers \
+          texlive-xetex; \
+      fi \
     && rm -rf /var/lib/apt/lists/*
 
 # 先装带哈希的锁定依赖：锁文件不变时这层走缓存，改代码不触发重装。
-COPY requirements.lock requirements-pdf.lock ./
+COPY requirements.lock requirements-pdf.lock requirements-workbench.lock ./
 RUN pip install --require-hashes -r requirements.lock \
-    && pip install --require-hashes -r requirements-pdf.lock
+    && pip install --require-hashes -r requirements-pdf.lock \
+    && pip install --require-hashes -r requirements-workbench.lock
 
 # 再拷应用代码 + 迁移脚本 + 前端静态页
 COPY deep_research ./deep_research

@@ -42,3 +42,9 @@ build/
 
 # Local design-review artifacts
 design-review/
+
+# 本地参考资料与其他工具的状态文件（不入库）
+apevon-full-package/
+apevon-full-package.zip
+.reasonix/
+deepseek_markdown_*.md

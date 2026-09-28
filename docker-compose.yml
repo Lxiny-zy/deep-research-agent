@@ -43,7 +43,10 @@ services:
         max-file: "5"
 
   api:
-    build: .
+    build:
+      context: .
+      args:
+        INSTALL_TEX: ${INSTALL_TEX:-false}
     environment: &app_env
       # 启用生产配置校验：强制 API 鉴权、PostgreSQL 与 Catalog 加密。
       APP_ENV: production
@@ -121,7 +124,7 @@ services:
     security_opt:
       - no-new-privileges:true
     tmpfs:
-      - /tmp:size=64m,noexec,nosuid,nodev
+      - /tmp:size=${APP_TMPFS_SIZE:-256m},noexec,nosuid,nodev
     depends_on:
       db:
         condition: service_healthy
@@ -142,7 +145,10 @@ services:
   # 独立执行进程。仅在 DR_EXECUTION_MODE=worker 时需要（compose profile 控制），
   # 可扩副本；MAX_ACTIVE_RUNS 是数据库协调的整个服务并发上限。
   worker:
-    build: .
+    build:
+      context: .
+      args:
+        INSTALL_TEX: ${INSTALL_TEX:-false}
     profiles: ["worker"]
     command: ["python", "-m", "deep_research.worker"]
     environment:
@@ -163,7 +169,7 @@ services:
     security_opt:
       - no-new-privileges:true
     tmpfs:
-      - /tmp:size=64m,noexec,nosuid,nodev
+      - /tmp:size=${APP_TMPFS_SIZE:-256m},noexec,nosuid,nodev
     healthcheck:
       test: ["CMD", "python", "-m", "deep_research.worker", "--check"]
       interval: 15s

@@ -1,15 +1,19 @@
-# Deep Research Agent · 多 Agent 深度研究系统
+# Science Research · 科研工作台
 
 本轮工程修复及验收结果见 [修复记录](docs/REPAIR_REPORT_20260911.md)，部署与一致备份步骤见 [运行指南](docs/OPERATIONS.md)。
 
-把「一个问题」自动**拆解 → 并行检索 → 反思补洞 → 综合成带引用的研究报告**的多 Agent 系统。
+面向技术调研与科学文献审查的证据研究工作台：把「一个问题」自动**拆解 →
+检索项目资料与外部来源 → 验证原文证据 → 反思补洞 → 综合成可追溯报告**。
 
-面向 AI Agent 工程岗位的简历项目，重点展示 **多 Agent 编排、并行 fan-out、来源安全策略、证据验证、流式可观测、自动化评估** 等工程能力（而非又一个对话机器人）。
+系统保存研究项目、可复用语料、来源审核状态、页码/章节/片段定位、运行 checkpoint
+和检索快照。目标不是生成一段看似完整的回答，而是让结论能够回到当时使用的原文。
 
 ---
 
-## ✨ 亮点（面试可讲的点）
+## 核心能力
 
+- **科研工作台（七类任务 + 学术问答）**：课题调研、文献综述、同行评审（1–10 分）、论文精读（含摘要翻译）、数据分析（确定性统计 + 图表）、幻灯片（PPTX + 演讲备注）、思维导图（交互 HTML / PNG），以及带逐字核验引用的多轮学术问答。每类任务由一张模板驱动任务契约、写作章节、交付格式与验收门；交付物以定稿 Markdown 为唯一真源同源生成 DOCX / PDF / HTML，并经引用、结构、篇幅、跨格式一致性等机械验收门登记。深度检索（多子问题检索 + 逐字核验 + 反思补洞）是可按任务选择的检索策略（不检索 / 快速 / 深度），不是独立板块；模型只通过 API 调用云端 LLM，不调度 GPU，交付物在部署服务器本地生成。运行详情为三栏工作区（步骤轨道 / 正文与交付 / 产物文件树），计划步骤部分完成或失败时由重规划器在限额内插入补救。详见 [docs/RESEARCH_WORKBENCH.md](docs/RESEARCH_WORKBENCH.md)；逐项功能覆盖与对应测试见 [docs/WORKBENCH_COVERAGE.md](docs/WORKBENCH_COVERAGE.md)。
+- **任务附件**：新建任务时可拖入最多 8 个文件（PDF / Word / PPT / Excel / Markdown / 文本 / CSV，单个 16 MB 内），上传即在内存中解析为带定位的片段、原文件不落盘；`attachment_reader` 作为每个工作流的第一步让模型分批阅读，读出的结论与检索来源同权经过来源门禁、逐字核验与语义核验。
 - **多 Agent 协作**：Planner / Researcher / Reflector / Synthesizer 各司其职，职责清晰。
 - **意图识别与请求侧门禁**：用户 query 与检索来源各走一条意图判定通道。输入侧是「多轮指代消解 → 三级意图级联 → 槽位抽取 → 澄清判定」四步：级联内部为「正则规则 → 本地 TF-IDF+逻辑回归（0 token，随包分发的 JSON 权重，纯 Python 推理）→ LLM 兜底」的成本阶梯；12 类可路由任务意图（另有 `unknown` 弃权态）会生成可审计的执行策略，决定工作流、子问题数、反思轮数、并发和证据要求。槽位覆盖时间、领域、语言、实体、输出格式、读者、地域、来源类型、新鲜度等约束并注入 Planner；风险意图（越狱 / 套取系统提示词 / 越权指令）在研究开始前拒识并产出说明性报告。策略与风险都只能收紧用户配置，显式 workflow 始终优先（详见 [docs/INTENT_RECOGNITION.md](docs/INTENT_RECOGNITION.md)）。
 - **Workflow-as-Data 编排引擎**：工作流以带版本的图数据（节点 / 边 / 条件 / Join 模式）落库执行。用户界面提供 deep（完整深度研究）、quick（快速检索）和 hsi_review（HSI/AI4S 文献审查）三种公共模板；其它控制原语由默认 planner-driven 运行时统一编排，历史模板保留为兼容入口，也可在前端画布自组工作流。`guarded` 仅是内部兼容别名，不出现在 UI，也不作为自动路由目标。
@@ -17,6 +21,7 @@
 - **可靠性设计**：节点级超时 / 重试 / 退避 / fallback、token 预算、Blackboard checkpoint、崩溃后启动自动恢复，多实例场景用可续期租约 fencing 防止旧实例写脏数据。
 - **API 与执行分离**：`DR_EXECUTION_MODE=worker` 时 API 入队，由独立 worker 领取执行，租约 fencing 防止旧执行者覆盖新结果。`MAX_ACTIVE_RUNS` 与 `MAX_QUEUED_RUNS` 由数据库协调，是整个服务的上限；增加副本不会放大此上限。worker 通过持久化心跳参与就绪检查，合并后的正文增量支持跨进程 SSE 回放。默认 `inline` 由 API 自己执行。
 - **角色广场与检索资源**：统一维护多渠道 Key 池与检索档案，研究角色可继承默认检索或绑定专属服务；支持外接 Responses / Chat Completions 搜索模型，并可预览含固定契约的角色提示词。详见 [检索与角色配置指南](docs/SEARCH_AND_ROLE_CONFIGURATION.md)。
+- **研究项目与资料库**：Project / Corpus / Source / Chunk 四层数据持久化；支持网页、DOI、纯文本、Markdown 与 PDF 导入。URL/DOI 抓取拒绝私网与 DNS rebinding，输入受字节、页数和字符上限约束；PDF 保留页码/章节定位，文本生成稳定重叠片段。项目检索融合 BM25、标题/章节字段、短语命中和查询词覆盖率，并优先返回不同来源，避免长片段或单一文档垄断结果。用户可逐条纳入或排除来源，选定项目后这些片段会与公网检索共同进入来源策略和证据验证，而不是只做附件展示。
 - **并行 fan-out**：子问题用 `asyncio` 并发检索，墙钟时间 ≈ 最慢的一条链，而非求和。
 - **反思循环**：Reflector 自评证据是否充分，不足则自动补洞（loop-until-sufficient）。
 - **来源策略门禁**：检索内容进入 LLM 前检查 URL scheme、非公网/歧义 IP、嵌入凭据，以及网页标题/正文/URL path/query/fragment 中的中英文 Prompt Injection 信号；隔离/拒绝决策进入结构化事件审计。
@@ -90,6 +95,7 @@ deep-research-agent/
 │   ├── workflow.py          # 工作流执行引擎（checkpoint / 重试 / fallback / 预算 / halt）
 │   ├── workflows.py         # 公共工作流模板（deep / quick / hsi_review）与内部兼容编排
 │   ├── catalog/             # 角色广场：角色卡 / 模型档案 / 检索 key 的仓储与运行时
+│   ├── library/             # 研究项目 / 资料库 / 来源摄取 / 分块定位 / 本地检索
 │   ├── persistence/         # 仓储层：接口 + InMemory / SQL(async SQLAlchemy) 双实现
 │   ├── orchestrator.py      # 编排：DAG 调度 + 反思循环 + run_stream + 落库
 │   ├── cli.py               # 命令行入口
@@ -115,10 +121,20 @@ deep-research-agent/
 ```bash
 python -m pip install --require-hashes -r requirements.lock
 cp .env.example .env   # 填入 LLM_API_KEY 与 TAVILY_API_KEY
+# 非 OpenAI 端点再设 LLM_BASE_URL 与 LLM_MODEL（例：DeepSeek / Qwen 的 OpenAI 兼容地址）
 
-# 命令行
-python -m dotenv run -- python -m deep_research.cli "2026 年主流 AI Agent 框架有哪些？各自取舍是什么？"
+# 启动工作台（后端 :8000 + 前端 :5173），浏览器打开 http://127.0.0.1:5173
+python -m uvicorn --env-file .env --reload deep_research.api:app
+cd frontend && npm ci && npm run dev
+
+# 或只用命令行跑一次研究
+python -m dotenv run -- python -m deep_research.cli "快照式高光谱成像中深度展开网络的优势与局限"
 ```
+
+工作台左侧导航：**工作台**（选任务类型 → 描述问题或上传文件 → 选检索策略与档位 → 开始）、
+**学术问答**、**任务记录**、**资料库**、**设置**（工作流构建与角色广场在「设置 → 高级」）。
+上传的 PDF / Word / PPT / Excel / Markdown / 文本 / CSV 由模型先逐片段阅读，结论与检索来源走同一套逐字核验，
+引用标注到文件名与页码 / 幻灯片 / 章节。
 
 `requirements.txt` / `requirements-dev.txt` 只维护直接依赖与允许升级范围；日常安装、CI
 和镜像构建使用带完整传递依赖及发行包哈希的 `requirements*.lock`。修改依赖范围后运行
@@ -145,7 +161,7 @@ cd frontend && npm ci && npm run build  # 产出 frontend/dist
 python -m uvicorn --env-file .env deep_research.api:app  # 访问 http://127.0.0.1:8000
 ```
 
-页面提供：新建研究（可选工作流模板、可调研究参数）、实时观看（Agent 时间线 / DAG 分层调度 / 流式报告 / **实时统计**：耗时秒级跳动、token 随阶段累加）、**报告导出**（复制 / 下载 `.md`）、历史列表与回放、**历史管理**（删除单条·批量 / 状态·关键词·标签筛选 / 打标签分类）、**工作流构建器**（自由画布拖排角色、连线加条件、存库后可直接运行）、**角色广场**（角色卡 / 模型档案 / 检索 key 在线编辑）、**全局设置**（前端改模型 / 端点 / 密钥 / 检索参数并持久化）。未认证访客会先看到欢迎页并可弹出密钥登录。后端 `GET /` 优先加载 `frontend/dist/index.html`，未构建时回退到占位页。
+页面提供：新建研究（可绑定项目资料库、选择工作流并调整研究参数）、资料库（项目 / 语料库 / 来源导入 / 原文片段预览 / 纳入或排除审核）、实时观看（Agent 时间线 / DAG 分层调度 / 流式报告 / 实时统计）、报告导出、历史列表与回放、工作流构建器、角色广场和全局设置。未认证访客会先看到欢迎页并可弹出密钥登录。后端 `GET /` 优先加载 `frontend/dist/index.html`，未构建时回退到占位页。
 
 ## Docker 一键启动（含 PostgreSQL）
 
@@ -213,6 +229,10 @@ python -m scripts.verify_runner_sandbox
 # .env 只开放已安装且通过验收的 operation
 # DR_RUNNER_ALLOWED_OPERATIONS=archive.unpack
 ```
+
+外部研究计划可使用 `--plan framework/10_research_plan.json`，也可通过 API 的
+`execution_plan` 字段提交。步骤交接、产物验收与恢复行为见
+[长研究流程接入说明](framework/09_long_research.md)。
 
 本地开发与 Linux Docker 使用同一套 operation 注册接口；如果需要新增文件处理能力，
 应在代码中新增一个固定的 `OperationDefinition` 并随镜像发布，而不是把命令字符串写进
@@ -284,8 +304,20 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 | `GET`  | `/api/tags` | 全部标签 + 引用计数 |
 | `GET`  | `/api/runs/{id}/events` | 事件回放（支持 `after_seq` 增量） |
 | `GET`  | `/api/runs/{id}/stream` | SSE：支持 `Last-Event-ID` 断点续传与跨实例增量轮询 |
+| `GET`  | `/api/runs/{id}/document` | 结构化报告中间表示（所有导出共用） |
+| `GET`  | `/api/runs/{id}/document.md` / `.csv` / `.xlsx` | Markdown、单表 CSV、XLSX 导出 |
+| `GET`  | `/api/runs/{id}/document.pdf` | 技术报告版 PDF（WeasyPrint，可选依赖） |
+| `GET`  | `/api/runs/{id}/document.tex?profile=academic` | 学术版 XeLaTeX 源文件（固定模板） |
+| `GET`  | `/api/runs/{id}/document.bib` | 同一运行的 BibTeX 参考文献文件 |
+| `GET`  | `/api/runs/{id}/document.bundle.zip` | Markdown、LaTeX、BibTeX、manifest 和来源快照复现包 |
+| `GET`  | `/api/runs/{id}/document.paper.pdf?profile=academic` | 学术版 PDF（latexmk + XeLaTeX，可选运行时） |
 | `POST` | `/api/runs/{id}/cancel` | 幂等请求取消运行，进入 `cancelling` / `cancelled` |
 | `POST` | `/api/runs/{id}/resume` | 从 checkpoint 恢复可重试故障；`cancelled`/`done` 返回 409 |
+| `GET` / `POST` | `/api/projects` | 列出或创建研究项目；普通身份仅能看到自己的项目 |
+| `GET` / `POST` | `/api/projects/{id}/corpora` | 列出或创建项目资料库 |
+| `GET` / `POST` | `/api/projects/{id}/sources*` | 列出来源，导入 URL / DOI / 文本 / Markdown / PDF |
+| `PATCH` / `DELETE` | `/api/projects/{id}/sources/{source_id}` | 纳入、排除或删除来源 |
+| `GET` | `/api/projects/{id}/sources/{source_id}/chunks` | 查看带页码、章节或片段定位的正文块 |
 | `GET`  | `/api/workflows` | 可用工作流列表（内置模板 + 自定义） |
 | `GET`  | `/api/roles` | 可用 Agent 角色列表 |
 | `GET`  | `/api/config` | 当前全局配置（密钥脱敏） |
@@ -300,6 +332,8 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 
 - **加载顺序**：环境变量 → 旧 JSON 兼容配置 → 数据库版本化配置 → 本次请求允许覆盖的研究参数。API 与 worker 使用同一个配置解析入口；已有 run 保存非秘密设置快照，凭据从当前加密配置解析。全局端点变化时旧 run 拒绝恢复，避免向新端点发送旧配置的凭据。
 - **严格双源门禁**：设置页可全局开启，也可在新建研究的高级设置中按次覆盖；环境变量部署可使用 `REQUIRE_CORROBORATION=true`。默认关闭以兼容既有单来源报告，开启后关系验证失败、单一来源或争议论断均无法进入报告；若没有任何合格素材，Synthesizer 会跳过生成模型并返回确定性的无证据结果。
+- **交付格式分工**：普通研究报告使用 Markdown/HTML/WeasyPrint PDF；论文、文献综述和科研报告使用同一份 `ReportDocument` 投影到固定的 `ctexart` XeLaTeX 模板。服务端只生成受控 `.tex`，编译器固定使用 `-no-shell-escape`，没有 TeX 运行时则明确返回 501，仍可下载源文件自行编译。
+  `profile` 支持 `academic`、`technical`、`executive`、`appendix`；前端默认论文按钮使用 `academic`，不同投稿方模板应在后续增加白名单模板，而不是让模型自由拼接 LaTeX。
 - **密钥安全**：`GET` 只脱敏回显，表单留空＝保持不变。在线保存的全局密钥和 Catalog 凭据使用 `CATALOG_ENCRYPTION_KEY` 加密落库；没有加密 key 时拒绝在线保存新密钥，可改用进程环境变量。所有 API/worker 必须持有相同解密 key，checkpoint 不包含密钥。
 - **版本与冲突**：SQL 部署在数据库中保存不可变配置版本，更新携带期望版本；并发修改返回 409，界面保留草稿并要求重新载入。`RUNTIME_CONFIG_PATH` 保留旧 JSON 导入和非 SQL 嵌入模式的兼容用途。
 - `database_url` 与服务端 `api_key` 不可经前端改（自举 / 鉴权安全），仍只来自环境变量。
@@ -379,7 +413,7 @@ make intent-eval     # 离线评测：准确率 / 混淆矩阵 / 拒识率 / 误
 
 设计取舍与三条安全不变量见 [docs/INTENT_RECOGNITION.md](docs/INTENT_RECOGNITION.md)。
 
-## 设计决策（面试可展开）
+## 设计决策
 
 - **为什么意图识别做成三级级联而不是直接调大模型？** 级联是**成本阶梯**不是准确率堆叠：意图判定是每个请求的前置步骤，做成一次 LLM 调用等于给所有流量加固定开销与秒级延迟；规则与本地模型吃掉大部分常规流量，只把低置信样本让给 LLM。攻击流量在第一级就被拦下，攻击者无法靠刷请求放大 LLM 账单。
 - **为什么意图判定只能收紧不能放宽？** 它读的是攻击者可控的输入。做成单向后，即便判定器被完全操控，最坏结果也只是把正常来源误判为可疑（可用性损失），而不可能让攻击性来源进入模型上下文（安全性损失）——安全属性是结构性质，不依赖组件自身正确。
@@ -395,9 +429,11 @@ make intent-eval     # 离线评测：准确率 / 混淆矩阵 / 拒识率 / 误
 - [x] 研究历史持久化 + 事件回放（SQLite / PostgreSQL，Alembic 迁移，Docker 一键起）
 - [x] 实时统计（耗时秒级跳动 + token 随阶段累加，不止结束时一次）
 - [x] 报告导出（Markdown 下载 / 复制）
+- [x] 报告导出（技术报告 PDF、学术 LaTeX 源文件；XeLaTeX PDF 按部署能力启用）
 - [x] 历史管理（删除单条·批量 / 状态·关键词·标签筛选 / 打标签分类）
 - [x] 前端全局设置中心（模型 / 端点 / 密钥 / 检索参数，持久化生效）
 - [x] 学术检索源与 DOI 级出处（OpenAlex / arXiv，含机构与撤稿标记）
+- [x] 研究项目资料库（来源导入、正文分块、定位信息、人工纳入/排除、运行绑定）
 - [ ] AI4S（高光谱计算成像）：全文分节证据、数值+协议校验、同一 work 聚类判独立性、
       对照表由代码渲染、系统综述工作流（分期见 [docs/AI4S_HSI_PLAN.md](docs/AI4S_HSI_PLAN.md)）
 - [ ] 检索后端增加 Bing / SerpAPI / 自建向量库
