@@ -14,7 +14,7 @@
 | PostgreSQL 测试 `pytest -m pg` | 16 通过；0029/0030 升级 → 降级 → 再升级往返通过（临时容器 postgres:16，用后已删除） |
 | 离线端到端 | 已跑通：`DR_DEMO_FAKE_BACKENDS=1` 的独立实例（端口 8001，数据放在临时目录）完成一次课题调研，并检查了运行页 |
 | 真实模型端到端 | **未跑**：按你的要求暂不调用。当前配置 `gpt-4o-mini`，base_url 为空，走 OpenAI 官方端点 |
-| Git | 最后一次提交在 9-21；之后约 190 个文件的改动都只存在于工作区 |
+| Git | 已在 `feat/research-workbench` 分支分 3 批提交（`dedc891` 后端、`6839a08` 前端、`5afd4a2` 文档与构建），未推送 |
 
 ## 进度日志
 
@@ -30,7 +30,8 @@
     - hero 压缩成两行，研究问题和附件区进入 1440×900 的首屏
     - 手机宽度下自动换行
     - vitest 272 个全部通过
-  - [!] 删除 `.tmp_shots.py` 和 `.tmp_w.py`、修改 `.gitignore`：被权限拦截，需要你手动执行（命令见 P0 第 1 项）
+  - [x] 临时脚本已删除；`.gitignore` 已加入资料包、`.reasonix/` 和 deepseek 调研稿（文件保留在本地，只是不入库）
+  - [x] 从 `fix/evidence-anchors-and-fulltext` 拉出 `feat/research-workbench` 分支，分 3 批提交。提交后全量测试：后端 1544、前端 276 全部通过
   - [x] 补低覆盖模块的测试（P3），新增 35 个
     - `library/api.py` 66→95%，`library/ingestion.py` 70→94%：SSRF、重定向和大小上限
     - `llm.py` 69→93%：退避重试、解析回灌和 token 记账
@@ -50,10 +51,10 @@
 ## P0 先落地，别丢工作
 
 1. **整理工作区**
-   - [!] 删掉临时文件：`.tmp_shots.py`、`.tmp_w.py`，可以在输入框执行 `! rm .tmp_shots.py .tmp_w.py`。
+   - [x] 临时文件已删除，`.gitignore` 已更新。
    - 下面三项需要你确认用途后再处理：`.reasonix/`、`deepseek_markdown_20260926_b4e134.md`、`apevon-full-package.zip`。
    - 把 `apevon-full-package/` 和它的 zip 加进 `.gitignore`。这是第三方产品的提示词和技能包，不应该进仓库。CI 在目录不存在时会自动跳过覆盖检查（`ci.yml:72`），所以忽略它不影响 CI。
-2. **分批提交**，放在当前分支或新开一个 `feat/research-workbench` 分支，建议拆成：
+2. [x] **分批提交**：已完成（见进度日志）。原计划的拆分如下：
    - 后端工作台（`deep_research/workbench/`、`plan_contract`、`plan_handoffs`、`tools/fanout.py`）
    - 资料库和两个迁移（`library/`、`alembic 0029/0030`）
    - 报告交付（`report/bundle.py`、`latex.py`、`templates.py`）
