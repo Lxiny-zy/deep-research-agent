@@ -39,8 +39,9 @@ p,li{margin:.5em 0}
 a{color:var(--accent)}
 table{border-collapse:collapse;width:100%;margin:1em 0;font-size:14px;
   display:block;overflow-x:auto}
-th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
-th{background:var(--soft)}
+th,td{border:0;padding:6px 10px;text-align:left;vertical-align:top}
+th{border-top:1.5px solid var(--ink);border-bottom:1px solid var(--ink)}
+tbody tr:last-child td{border-bottom:1.5px solid var(--ink)}
 code{font-family:"JetBrains Mono",Consolas,monospace;font-size:.9em;
   background:var(--soft);padding:.1em .35em;border-radius:4px}
 pre{background:var(--soft);border:1px solid var(--line);border-radius:8px;
@@ -60,14 +61,17 @@ sup.cite a{text-decoration:none}
 # PyMuPDF Story 支持的 CSS 子集：不用变量、flex、媒体查询。
 _PDF_CSS = """
 body{font-family:sans-serif;font-size:10.5pt;line-height:1.6;color:#1c2430}
-h1{font-size:20pt;margin:0 0 8pt 0;color:#10283d}
-h2{font-size:14pt;margin:16pt 0 6pt 0;color:#1f5f8b;border-bottom:1px solid #cfd6de}
-h3{font-size:12pt;margin:12pt 0 4pt 0}
-p{margin:4pt 0}
+h1{font-size:20pt;margin:0 0 8pt 0;color:#111}
+h2{font-size:14pt;margin:16pt 0 6pt 0;color:#111;page-break-after:avoid}
+h3{font-size:12pt;margin:12pt 0 4pt 0;page-break-after:avoid}
+p{margin:6pt 0;orphans:2;widows:2}
 li{margin:2pt 0}
-table{border-collapse:collapse;margin:6pt 0}
-th,td{border:1px solid #b8c2cc;padding:3pt 5pt;font-size:9.5pt}
-th{background-color:#eef2f6}
+table{border-collapse:collapse;width:100%;margin:8pt 0}
+th,td{border:0;padding:4pt 5pt;font-size:9.5pt;vertical-align:top;text-align:left}
+th{border-top:1.2pt solid #111;border-bottom:0.6pt solid #111}
+tbody tr:last-child td{border-bottom:1.2pt solid #111}
+thead{display:table-header-group}
+tr{page-break-inside:avoid}
 pre{font-family:monospace;font-size:9pt;background-color:#f5f7fa;padding:6pt}
 code{font-family:monospace;font-size:9.5pt}
 blockquote{margin:6pt 0 6pt 12pt;color:#5b6675}
@@ -156,7 +160,13 @@ def blocks_html(
                 "<tr>" + "".join(f"<td>{_inline_html(c)}</td>" for c in row) + "</tr>"
                 for row in body
             ]
-            parts.append("<table>" + "".join(rows) + "</table>")
+            parts.append(
+                "<table><thead>"
+                + rows[0]
+                + "</thead><tbody>"
+                + "".join(rows[1:])
+                + "</tbody></table>"
+            )
         elif block.kind == "image":
             src = _image_src(block.src, images)
             caption = escape(block.text)

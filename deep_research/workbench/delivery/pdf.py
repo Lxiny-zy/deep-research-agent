@@ -38,13 +38,20 @@ def _archive_fonts(pymupdf):  # type: ignore[no-untyped-def]
         from matplotlib import font_manager
 
         wanted = (
+            "Noto Serif CJK SC",
+            "Source Han Serif SC",
+            "SimSun",
             "Noto Sans CJK SC",
             "Source Han Sans SC",
             "Microsoft YaHei",
             "SimHei",
             "WenQuanYi Zen Hei",
         )
-        by_name = {font.name: font.fname for font in font_manager.fontManager.ttflist}
+        by_name = {
+            font.name: font.fname
+            for font in font_manager.fontManager.ttflist
+            if font.style == "normal" and font.weight in (400, "normal", "regular", "book")
+        }
         for name in wanted:
             path = by_name.get(name)
             if path and path.lower().endswith((".ttf", ".otf", ".ttc")):

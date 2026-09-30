@@ -76,9 +76,10 @@ def render_pdf_html(document: ReportDocument) -> str:
         "font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; font-size: 9.5pt; }",
         "thead { display: table-header-group; }",
         "tr { break-inside: avoid; }",
-        "th, td { border-bottom: .6pt solid #c7cdd3; padding: 5pt 6pt; vertical-align: top; }",
-        "th { border-top: 1pt solid #7f8b96; border-bottom: 1pt solid #7f8b96; "
-        "background: #edf0f2; "
+        "th, td { border: 0; padding: 5pt 6pt; vertical-align: top; }",
+        "tbody tr:last-child td { border-bottom: 1.2pt solid #111; }",
+        "th { border-top: 1.2pt solid #111; border-bottom: .6pt solid #111; "
+        "background: transparent; "
         "text-align: left; font-weight: 600; color: #33414d; }",
         ".overview table { width: auto; min-width: 68mm; }",
         ".overview td:last-child, .overview th:last-child { text-align: right; "

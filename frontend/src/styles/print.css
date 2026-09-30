@@ -273,14 +273,19 @@
   }
   th,
   td {
-    border: 1px solid var(--print-rule);
+    border: 0;
     padding: 4pt 6pt;
     text-align: left;
     vertical-align: top;
   }
   th {
-    background: var(--print-wash) !important;
+    background: transparent !important;
+    border-top: 1.2pt solid currentColor;
+    border-bottom: 0.6pt solid currentColor;
     font-weight: 600;
+  }
+  tbody tr:last-child td {
+    border-bottom: 1.2pt solid currentColor;
   }
   /* 数值列右对齐 + 等宽数字：列内数字要能竖着对齐比较。 */
   td.numeric,
@@ -574,14 +579,19 @@
   }
   .print-preview th,
   .print-preview td {
-    border: 1px solid rgba(28, 28, 28, 0.2);
+    border: 0;
     padding: 4pt 6pt;
     text-align: left;
     vertical-align: top;
   }
   .print-preview th {
-    background-color: #efeeeb;
+    background-color: transparent;
+    border-top: 1.2pt solid currentColor;
+    border-bottom: 0.6pt solid currentColor;
     font-weight: 600;
+  }
+  .print-preview tbody tr:last-child td {
+    border-bottom: 1.2pt solid currentColor;
   }
   .print-preview td.numeric,
   .print-preview th.numeric {
