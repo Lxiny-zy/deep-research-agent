@@ -45,6 +45,14 @@ _PAPER_FALLBACK = (
 _SEARCH_FALLBACK = (
     "现有检索结果不足以回答这个问题。可以尝试补充更具体的方法名、数据集或年份后再问。"
 )
+_CASUAL_REPLY = (
+    "你好！我可以帮你查找和核对学术资料。请直接告诉我想了解的主题、方法、数据集或论文。"
+)
+_CASUAL_RE = re.compile(
+    r"^(?:你好|您好|嗨|哈喽|hello|hi|hey|谢谢|感谢|再见|拜拜|早上好|晚上好|晚安|你好吗|在吗)"
+    r"[!！。？?、,，…~\s]*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -84,6 +92,11 @@ def _origin(url: str) -> str:
     return "web"
 
 
+def _is_casual_question(question: str) -> bool:
+    """Return True for greetings and other conversational turns that need no retrieval."""
+    return bool(_CASUAL_RE.fullmatch(question.strip()))
+
+
 async def answer_question(
     question: str,
     *,
@@ -99,6 +112,18 @@ async def answer_question(
     ``include_web`` / ``extra_search``（资料库）按用户勾选叠加；不勾选时绝不调用外部检索。
     """
     thoughts: list[dict[str, Any]] = []
+    if _is_casual_question(question):
+        # A greeting must not spend search, page-fetch, verification, or model
+        # tokens.  This also keeps a paper-reader greeting scoped to the paper
+        # without silently expanding it to external sources.
+        thoughts.append(
+            {
+                "tool": "skip_search",
+                "input": question,
+                "observation": "非研究性寒暄，不发起联网检索",
+            }
+        )
+        return QaAnswer(answer=_CASUAL_REPLY, citations=[], findings=[], thoughts=thoughts)
     query = _contextual_query(question, history)
     thoughts.append({"tool": "rewrite", "input": question, "observation": query})
 

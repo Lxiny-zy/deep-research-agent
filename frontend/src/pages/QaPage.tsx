@@ -10,6 +10,8 @@ import {
   getConversation,
   listConversations,
 } from '../api/client'
+import { RequestTimeoutError } from '../api/transport'
+import type { QaConversation, QaMessage } from '../types'
 
 const STARTERS = [
   { tag: '文献检索', text: '查找 DOE 光谱成像系统误差补偿的最新文献' },
@@ -26,6 +28,38 @@ const STEPS = [
   { title: '继续追问', text: '补充论文、方法或实验条件，让问题更具体。' },
   { title: '留意证据不足', text: '未找到支持材料时，回答会说明局限。' },
 ]
+
+const QA_RECOVERY_INTERVAL_MS = 1500
+const QA_RECOVERY_ATTEMPTS = 40
+
+/**
+ * A browser/proxy timeout does not prove that the synchronous server request
+ * was cancelled.  The server may finish and append the message afterwards.
+ * Re-read the conversation before showing an error so users do not resubmit a
+ * question that is already being processed.
+ */
+async function recoverTimedOutAnswer(
+  conversationId: string,
+  query: string,
+  baselineCount: number,
+): Promise<QaMessage | null> {
+  for (let attempt = 0; attempt < QA_RECOVERY_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, QA_RECOVERY_INTERVAL_MS))
+    }
+    try {
+      const conversation = await getConversation(conversationId)
+      const candidate = conversation.messages
+        .slice(baselineCount)
+        .reverse()
+        .find((message) => message.query === query)
+      if (candidate) return candidate
+    } catch {
+      // A single poll can time out while the API is still finishing. Keep polling.
+    }
+  }
+  return null
+}
 
 export default function QaPage() {
   const { id } = useParams<{ id?: string }>()
@@ -54,7 +88,15 @@ export default function QaPage() {
         target = created.id
         createdId.current = created.id
       }
-      await askQuestion(target, text)
+      const baselineCount =
+        queryClient.getQueryData<QaConversation>(['qa-conversation', target])?.messages.length ?? 0
+      try {
+        await askQuestion(target, text)
+      } catch (error) {
+        if (!(error instanceof RequestTimeoutError)) throw error
+        const recovered = await recoverTimedOutAnswer(target, text, baselineCount)
+        if (!recovered) throw error
+      }
       return target
     },
     onMutate: (text) => setPending(text),

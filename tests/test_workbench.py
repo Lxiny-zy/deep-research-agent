@@ -804,6 +804,22 @@ async def test_answer_question_verifies_and_cites(settings) -> None:
 
 
 @pytest.mark.asyncio
+async def test_answer_question_skips_search_for_greetings(settings) -> None:
+    from deep_research.agents.base import RunContext
+    from deep_research.observability import Tracer
+    from deep_research.workbench.qa import answer_question
+
+    class NoSearch:
+        async def search(self, query, *, max_results=5):  # type: ignore[no-untyped-def]
+            raise AssertionError("greetings must not trigger web search")
+
+    ctx = RunContext(llm=QaLLM(), search_tool=NoSearch(), tracer=Tracer(), settings=settings)
+    result = await answer_question("你好！", history=[], ctx=ctx)
+    assert result.citations == [] and not result.fallback
+    assert result.thoughts[0]["tool"] == "skip_search"
+
+
+@pytest.mark.asyncio
 async def test_answer_question_admits_when_no_evidence(settings) -> None:
     from deep_research.agents.base import RunContext
     from deep_research.observability import Tracer

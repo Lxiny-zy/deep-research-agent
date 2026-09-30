@@ -193,7 +193,11 @@ function signalUnauthorized(rejectedKey: string | null): void {
   }
 }
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = 30_000,
+): Promise<T> {
   const key = getApiKey()
   const headers = new Headers(init?.headers)
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
@@ -219,6 +223,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       if (res.status === 204) return undefined as T
       return (await res.json()) as T
     },
+    timeoutMs,
   )
 }
 
@@ -953,11 +958,15 @@ export function askQuestion(
   const body = scope
     ? { query, sources: scope.sources, ...(scope.projectId ? { project_id: scope.projectId } : {}) }
     : { query }
-  return request<QaMessage>(`/api/qa/conversations/${encodeURIComponent(id)}/messages`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-    signal,
-  })
+  return request<QaMessage>(
+    `/api/qa/conversations/${encodeURIComponent(id)}/messages`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+      signal,
+    },
+    120_000,
+  )
 }
 
 export function getReader(runId: string, signal?: AbortSignal): Promise<RunReader> {
