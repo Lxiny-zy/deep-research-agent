@@ -83,7 +83,15 @@ export default function RunTaskSummary({ info }: { info: RunTemplateInfo | undef
             <dd>
               {analysis.rows} 行 × {analysis.columns.length} 列，{analysis.tests.length}{' '}
               项显著性检验
-              {analysis.synthetic && '（合成示例数据）'}
+              {analysis.synthetic
+                ? '（示例数据，结论不代表真实实验）'
+                : contract?.dataset_source?.filename
+                  ? `，来自 ${contract.dataset_source.filename}${
+                      contract.dataset_source.sheet
+                        ? `（工作表「${contract.dataset_source.sheet}」）`
+                        : ''
+                    }，完整使用未截断`
+                  : '，来自粘贴的数据，完整使用未截断'}
             </dd>
           </>
         )}

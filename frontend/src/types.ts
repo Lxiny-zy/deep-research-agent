@@ -786,6 +786,13 @@ export interface TaskContract {
   papers: PaperReference[]
   dataset_csv: string
   dataset_rows?: number
+  /** 数据来源：文件名、工作表与服务端重算的行数、列类型 */
+  dataset_source?: Partial<DatasetSourceInfo>
+  /** 用户是否主动选择示例数据演示；旧任务为 null */
+  demo_data?: boolean | null
+  /** 预览：粘贴数据按分析规则解析后的概况，或无法分析的原因 */
+  dataset_profile?: DatasetSheetProfile
+  dataset_error?: string
   /** 论文类任务：没有论文链接时被当作论文正文的输入字数（0 表示输入太短） */
   pasted_paper_chars?: number
   required_sections: string[]
@@ -795,6 +802,37 @@ export interface TaskContract {
   tier: string
   strategy?: string
   rendered?: string
+}
+
+export interface DatasetColumn {
+  name: string
+  type: '数值' | '文本' | '日期' | '布尔'
+}
+
+export interface DatasetSheetProfile {
+  /** 工作表名；CSV / TSV 为空串 */
+  name: string
+  rows: number
+  columns: DatasetColumn[]
+  chars: number
+}
+
+export interface DatasetSheet extends DatasetSheetProfile {
+  csv: string
+}
+
+/** POST /api/datasets：表格文件解析结果（不落盘） */
+export interface DatasetParseResult {
+  filename: string
+  sheets: DatasetSheet[]
+  skipped: { name: string; error: string }[]
+}
+
+export interface DatasetSourceInfo {
+  filename: string
+  sheet: string
+  rows: number
+  columns: DatasetColumn[]
 }
 
 export type GateStatus = 'pass' | 'warn' | 'fail'

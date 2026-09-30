@@ -171,6 +171,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Parse Dataset Upload
+         * @description 解析表格文件：返回每张可用工作表的 CSV、行数与列类型，以及被跳过的表和原因。
+         *
+         *     与附件一样不落盘：前端选定工作表后把该表的 CSV 随任务提交，服务端创建任务时
+         *     按同一规则重新校验。多工作表由用户选择，这里不替用户挑。
+         */
+        post: operations["parse_dataset_upload_api_datasets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/intent/assess": {
         parameters: {
             query?: never;
@@ -1924,6 +1947,12 @@ export interface components {
             clarified?: boolean;
             /** Dataset */
             dataset?: string | null;
+            dataset_source?: components["schemas"]["DatasetSource"] | null;
+            /**
+             * Demo Data
+             * @default false
+             */
+            demo_data?: boolean;
             /** Execution Plan */
             execution_plan?: {
                 [key: string]: unknown;
@@ -1948,6 +1977,29 @@ export interface components {
         CreateRunResponse: {
             /** Run Id */
             run_id: string;
+        };
+        /** DatasetSource */
+        DatasetSource: {
+            /**
+             * Filename
+             * @default
+             */
+            filename?: string;
+            /**
+             * Sheet
+             * @default
+             */
+            sheet?: string;
+        };
+        /**
+         * DatasetUpload
+         * @description 上传一个待分析的表格文件（CSV / TSV / XLSX，Base64 编码）。
+         */
+        DatasetUpload: {
+            /** Data Base64 */
+            data_base64: string;
+            /** Filename */
+            filename: string;
         };
         /** Event */
         Event: {
@@ -4398,6 +4450,44 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    parse_dataset_upload_api_datasets_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetUpload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

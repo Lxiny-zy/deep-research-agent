@@ -7,7 +7,17 @@ const mocks = vi.hoisted(() => ({
   listWorkflows: vi.fn(),
   createRun: vi.fn(),
   assessIntent: vi.fn(),
+  parseDatasetFile: vi.fn(),
 }))
+
+const COLUMNS = [
+  { name: 'method', type: '文本' },
+  { name: 'psnr', type: '数值' },
+]
+
+function sheet(name: string, csv: string, rows: number) {
+  return { name, csv, rows, columns: COLUMNS, chars: csv.length }
+}
 
 vi.mock('../api/client', () => mocks)
 vi.mock('../hooks/useConfig', () => ({
@@ -192,14 +202,20 @@ describe('NewResearchPage task templates', () => {
     })
   })
 
-  it('attaches an uploaded CSV as the dataset field', async () => {
+  it('attaches an uploaded CSV as the dataset field with its source', async () => {
+    const csv = 'method,psnr\nA,30\nB,31\n'
+    mocks.parseDatasetFile.mockResolvedValue({
+      filename: 'psnr.csv',
+      sheets: [sheet('', csv, 2)],
+      skipped: [],
+    })
     render(
       <MemoryRouter>
         <NewResearchPage />
       </MemoryRouter>,
     )
     fireEvent.click(screen.getByLabelText(/数据分析/))
-    const file = new File(['method,psnr\nA,30\nB,31\n'], 'psnr.csv', { type: 'text/csv' })
+    const file = new File([csv], 'psnr.csv', { type: 'text/csv' })
     fireEvent.change(screen.getByLabelText(/上传 CSV/), { target: { files: [file] } })
     expect(await screen.findByText(/已选择 psnr.csv/)).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('数据分析输入'), { target: { value: '差异显著吗？' } })
@@ -207,7 +223,52 @@ describe('NewResearchPage task templates', () => {
     await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
     expect(mocks.createRun.mock.calls[0][0]).toMatchObject({
       template: 'dataAnalysis',
-      dataset: 'method,psnr\nA,30\nB,31\n',
+      dataset: csv,
+      dataset_source: { filename: 'psnr.csv', sheet: '' },
+      demo_data: false,
     })
+  })
+
+  it('requires a sheet choice for multi-sheet workbooks', async () => {
+    mocks.parseDatasetFile.mockResolvedValue({
+      filename: 'runs.xlsx',
+      sheets: [sheet('CAVE', 'method,psnr\nA,30\n', 1), sheet('KAIST', 'method,psnr\nB,31\n', 1)],
+      skipped: [],
+    })
+    render(
+      <MemoryRouter>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByLabelText(/数据分析/))
+    const file = new File(['x'], 'runs.xlsx')
+    fireEvent.change(screen.getByLabelText(/上传 CSV/), { target: { files: [file] } })
+    const select = await screen.findByLabelText('分析哪张工作表')
+    fireEvent.change(screen.getByLabelText('数据分析输入'), { target: { value: '差异显著吗？' } })
+    fireEvent.click(screen.getByRole('button', { name: '开始数据分析' }))
+    expect(await screen.findByText(/请先选择要分析的一张/)).toBeInTheDocument()
+    expect(mocks.createRun).not.toHaveBeenCalled()
+
+    fireEvent.change(select, { target: { value: 'KAIST' } })
+    fireEvent.click(screen.getByRole('button', { name: '开始数据分析' }))
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
+    expect(mocks.createRun.mock.calls[0][0]).toMatchObject({
+      dataset: 'method,psnr\nB,31\n',
+      dataset_source: { filename: 'runs.xlsx', sheet: 'KAIST' },
+    })
+  })
+
+  it('only sends demo data when the user opts in', async () => {
+    render(
+      <MemoryRouter>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByLabelText(/数据分析/))
+    fireEvent.click(screen.getByLabelText(/用示例数据演示/))
+    fireEvent.change(screen.getByLabelText('数据分析输入'), { target: { value: '差异显著吗？' } })
+    fireEvent.click(screen.getByRole('button', { name: '开始数据分析' }))
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
+    expect(mocks.createRun.mock.calls[0][0]).toMatchObject({ dataset: null, demo_data: true })
   })
 })

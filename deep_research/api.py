@@ -191,6 +191,11 @@ class ResearchParams(BaseModel):
     max_run_seconds: int | None = Field(default=None, ge=1, le=86_400)
 
 
+class DatasetSource(BaseModel):
+    filename: str = Field(default="", max_length=300)
+    sheet: str = Field(default="", max_length=120)
+
+
 class CreateRunRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)  # 限长：query 全文进 prompt，防成本放大
     project_id: str | None = Field(default=None, max_length=36)
@@ -210,6 +215,10 @@ class CreateRunRequest(BaseModel):
     strategy: Literal["none", "quick", "deep"] | None = None
     # 模板为数据分析时可附带的表格数据（CSV/TSV 文本）；其它模板忽略。
     dataset: str | None = Field(default=None, max_length=2_000_000)
+    # 表格来自哪个文件、哪张工作表（由 POST /api/datasets 解析得到）；行列数由服务端重算
+    dataset_source: DatasetSource | None = None
+    # 没有数据时，用户主动选择用合成示例演示分析流程；不选则缺数据直接拒绝
+    demo_data: bool = False
     # 已解析的上传文件（由 POST /api/attachments 返回，前端原样提交）。模型会先阅读这些
     # 文件再检索；片段随任务冻结进 checkpoint，与检索来源走同一套逐字核验。
     attachments: list[dict[str, Any]] = Field(default_factory=list, max_length=8)
@@ -386,6 +395,46 @@ def _run_request_hash(request: CreateRunRequest) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _checked_dataset(contract: Any, submitted: str) -> Any:
+    """数据分析任务建 run 前校验数据：缺数据、超长或无法解析都直接 422，不截断、不代换。
+
+    通过时把服务端重算的行数与列类型写进契约的数据来源，报告据此注明数据出处。
+    """
+    from .workbench.analysis import DatasetError
+    from .workbench.contract import DATASET_MAX_CHARS
+    from .workbench.datasets import profile_csv
+
+    if len(submitted.strip()) > DATASET_MAX_CHARS:
+        raise HTTPException(
+            422,
+            {
+                "code": "dataset_too_large",
+                "message": f"数据超过 {DATASET_MAX_CHARS:,} 字符上限，请先抽样或聚合后再上传",
+            },
+        )
+    if not contract.dataset_csv:
+        if contract.demo_data:
+            return contract
+        raise HTTPException(
+            422,
+            {
+                "code": "dataset_required",
+                "message": "请上传 CSV / TSV / XLSX 表格或粘贴数据；只想看流程可选择示例数据演示",
+            },
+        )
+    try:
+        profile = profile_csv(contract.dataset_source.get("sheet", ""), contract.dataset_csv)
+    except DatasetError as exc:
+        raise HTTPException(422, {"code": "dataset_invalid", "message": str(exc)}) from exc
+    source = {
+        "filename": str(contract.dataset_source.get("filename", "")),
+        "sheet": str(contract.dataset_source.get("sheet", "")),
+        "rows": profile.rows,
+        "columns": profile.columns,
+    }
+    return contract.model_copy(update={"dataset_source": source})
 
 
 def _close_live_hub(app: FastAPI, run_id: str, hub: EventHub | None = None) -> None:
@@ -1706,6 +1755,8 @@ async def create_run(
             task_template,
             req.query,
             attachments_csv=req.dataset or "",
+            dataset_source=req.dataset_source.model_dump() if req.dataset_source else None,
+            demo_data=req.demo_data,
             strategy=req.strategy,
             # 契约里的质量策略会覆盖 settings.quality，这里必须带上用户的设置
             quality=settings.quality,
@@ -1726,6 +1777,8 @@ async def create_run(
                     "粘贴 arXiv / DOI / 论文链接或论文文本，或上传论文文件",
                 },
             )
+        if task_template.input_kind == "dataset":
+            contract = _checked_dataset(contract, req.dataset or "")
         scratch = execution.checkpoint.setdefault("scratch", {})
         if isinstance(scratch, dict):
             # 契约与模板一起冻结进初始 checkpoint：恢复后的尝试、worker 与交付层

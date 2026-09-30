@@ -24,7 +24,7 @@ from typing import Any
 from ..agents.base import Blackboard, RunContext
 from ..models import Report
 from ..registry import register
-from .contract import contract_from_scratch
+from .contract import TaskContract, contract_from_scratch
 from .templates import get_template
 from .writers import _BASE_SYSTEM, WORKBENCH_SCRATCH_KEY, WriterState, _skeleton
 
@@ -58,10 +58,21 @@ class AnalysisResult:
     correlations: list[dict[str, Any]]
     figures: list[Figure] = field(default_factory=list)
     synthetic: bool = False
+    # 数据来源（文件名 / 工作表），由任务契约提供；粘贴的表格为空
+    source: dict[str, Any] = field(default_factory=dict)
+
+    def source_label(self) -> str:
+        if self.synthetic:
+            return "合成示例数据"
+        where = str(self.source.get("filename") or "粘贴的表格")
+        if self.source.get("sheet"):
+            where += f"，工作表「{self.source['sheet']}」"
+        return where
 
     def facts(self) -> str:
         """给写作段的数字台账（Markdown）。"""
         lines = [
+            f"- 数据来源：{self.source_label()}",
             f"- 样本量：{self.rows} 行，{len(self.columns)} 列",
             f"- 数值变量：{', '.join(self.numeric) or '无'}",
             f"- 分类变量：{', '.join(self.categorical) or '无'}",
@@ -172,13 +183,25 @@ def _png(fig: Any) -> bytes:
     return buffer.getvalue()
 
 
-def analyse(csv_text: str, question: str = "") -> AnalysisResult:
-    """对一张表做确定性分析。无数据时用可复现的合成示例演示并如实标注。"""
+def analyse(
+    csv_text: str,
+    question: str = "",
+    *,
+    allow_synthetic: bool = False,
+    source: dict[str, Any] | None = None,
+) -> AnalysisResult:
+    """对一张表做确定性分析。
+
+    没有数据时只在 ``allow_synthetic``（用户主动选择演示）下改用可复现的合成示例，
+    并如实标注；否则抛 ``DatasetError``，不拿示例数据冒充用户的数据。
+    """
     import numpy as np
     import pandas as pd
     from scipy import stats
 
     synthetic = not csv_text.strip()
+    if synthetic and not allow_synthetic:
+        raise DatasetError("没有可分析的数据：请上传 CSV / TSV / XLSX 表格或粘贴数据")
     frame = parse_dataset(_synthetic_csv() if synthetic else csv_text)
     numeric = [
         c
@@ -323,7 +346,13 @@ def analyse(csv_text: str, question: str = "") -> AnalysisResult:
         correlations=correlations,
         figures=figures,
         synthetic=synthetic,
+        source={} if synthetic else dict(source or {}),
     )
+
+
+def allows_synthetic(contract: TaskContract | None) -> bool:
+    """用户主动选了示例演示才用合成数据；契约早于该字段的旧任务保持原行为。"""
+    return contract is None or contract.demo_data is not False
 
 
 def _looks_like_identifier(series: Any) -> bool:
@@ -409,7 +438,13 @@ class DataAnalyst:
         csv_text = contract.dataset_csv if contract is not None else ""
         ctx.tracer.emit("RESEARCHER", "start", "解析数据并执行统计分析…")
         try:
-            result = await run_blocking(analyse, csv_text, question)
+            result = await run_blocking(
+                analyse,
+                csv_text,
+                question,
+                allow_synthetic=allows_synthetic(contract),
+                source=contract.dataset_source if contract is not None else None,
+            )
         except DatasetError as exc:
             bb.report = Report(query=bb.query, markdown=f"## 分析计划\n\n数据无法分析：{exc}\n")
             bb.scratch[WORKBENCH_SCRATCH_KEY] = WriterState(
@@ -502,6 +537,7 @@ class DataAnalyst:
             "tests": result.tests,
             "correlations": result.correlations,
             "synthetic": result.synthetic,
+            "source": result.source,
             "figures": [
                 {"name": f.name, "title": f.title, "caption": f.caption} for f in result.figures
             ],
@@ -522,6 +558,7 @@ __all__ = [
     "AnalysisResult",
     "DataAnalyst",
     "DatasetError",
+    "allows_synthetic",
     "analyse",
     "check_numbers",
     "parse_dataset",

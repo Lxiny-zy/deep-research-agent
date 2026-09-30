@@ -42,6 +42,7 @@ import type {
   DeliverableRegistry,
   RunTemplateInfo,
   QaConversation,
+  DatasetParseResult,
   QaMessage,
   QaSourceOption,
   RunNarrative,
@@ -1023,6 +1024,18 @@ export function getUsage(signal?: AbortSignal): Promise<UsageQuota> {
 
 export function getQualitySchema(signal?: AbortSignal): Promise<QualityField[]> {
   return request<QualityField[]>('/api/config/quality-schema', { signal })
+}
+
+/** 解析待分析的表格文件（CSV / TSV / XLSX）：返回每张工作表的 CSV 与概况，不落盘。 */
+export function parseDatasetFile(
+  body: { filename: string; data_base64: string },
+  signal?: AbortSignal,
+): Promise<DatasetParseResult> {
+  return request<DatasetParseResult>('/api/datasets', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    signal,
+  })
 }
 
 /** 上传并解析一个任务附件（文件内容以 Base64 传输；PDF 原文件会保存，供精读页显示原版）。 */

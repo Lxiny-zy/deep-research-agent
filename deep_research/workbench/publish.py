@@ -217,11 +217,14 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
 
     # 数据分析：确定性地重算图表（与运行时同一函数、同一数据），把图挂进正文
     if template.key == "dataAnalysis":
-        from .analysis import DatasetError, analyse
+        from .analysis import DatasetError, allows_synthetic, analyse
 
         try:
             result = analyse(
-                contract.dataset_csv if contract else "", contract.focus if contract else ""
+                contract.dataset_csv if contract else "",
+                contract.focus if contract else "",
+                allow_synthetic=allows_synthetic(contract),
+                source=contract.dataset_source if contract else None,
             )
         except DatasetError:
             result = None

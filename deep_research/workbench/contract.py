@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field
 from .templates import STRATEGY_LABELS, TaskTemplate
 
 CONTRACT_SCRATCH_KEY = "task_contract"
+# 冻结进 checkpoint 的表格数据上限（字符）；超出时接口直接拒绝，不截断使用
+DATASET_MAX_CHARS = 1_000_000
 
 _URL_RE = re.compile(r"https?://[^\s<>\"'）)\]]+", re.I)
 _ARXIV_RE = re.compile(r"(?<![\w/.])(?:arxiv:)?(\d{4}\.\d{4,5})(v\d+)?(?![\w.])", re.I)
@@ -40,6 +42,10 @@ class TaskContract(BaseModel):
     focus: str = ""
     papers: list[PaperReference] = Field(default_factory=list)
     dataset_csv: str = ""
+    # 数据来源：文件名、工作表、行列数与列类型（粘贴的表格文件名为空）
+    dataset_source: dict[str, Any] = Field(default_factory=dict)
+    # 用户是否主动选择用合成示例演示；None 表示旧任务（当时无数据会自动用示例）
+    demo_data: bool | None = None
     required_sections: list[str] = Field(default_factory=list)
     deliverables: list[str] = Field(default_factory=list)
     confirmed_choices: dict[str, Any] = Field(default_factory=dict)
@@ -61,6 +67,12 @@ class TaskContract(BaseModel):
         if self.papers:
             lines += ["", "## 指定论文"]
             lines += [f"- {paper.kind}: {paper.url}" for paper in self.papers]
+        if self.dataset_source:
+            source = self.dataset_source
+            where = str(source.get("filename") or "粘贴的表格")
+            if source.get("sheet"):
+                where += f"，工作表「{source['sheet']}」"
+            lines += ["", "## 数据来源", f"{where}：{source.get('rows', 0)} 行"]
         if self.required_sections:
             lines += ["", "## 必须包含的章节（按顺序）"]
             lines += [f"{i}. {name}" for i, name in enumerate(self.required_sections, 1)]
@@ -147,6 +159,8 @@ def build_contract(
     answers: dict[str, Any] | None = None,
     tier: str | None = None,
     attachments_csv: str = "",
+    dataset_source: dict[str, Any] | None = None,
+    demo_data: bool = False,
     strategy: str | None = None,
     quality: dict[str, Any] | None = None,
 ) -> TaskContract:
@@ -200,7 +214,10 @@ def build_contract(
         original_request=query.strip()[:20_000],
         focus=focus[:2000],
         papers=papers[:5],
-        dataset_csv=dataset[:200_000],
+        # 超长数据在接口层就被拒绝，这里的上限只是兜底，不作为截断手段
+        dataset_csv=dataset[:DATASET_MAX_CHARS],
+        dataset_source=dict(dataset_source or {}) if dataset else {},
+        demo_data=(demo_data and not dataset) if template.input_kind == "dataset" else None,
         required_sections=template.section_titles(),
         deliverables=list(template.deliverables),
         confirmed_choices=dict(answers or {}),

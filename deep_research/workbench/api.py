@@ -85,6 +85,17 @@ async def preview_contract(req: ContractPreviewRequest, request: Request) -> dic
     payload["dataset_rows"] = (
         max(0, contract.dataset_csv.count("\n")) if contract.dataset_csv else 0
     )
+    if template.input_kind == "dataset" and contract.dataset_csv:
+        # 用与分析时相同的解析规则预检：行列数、列类型，或者说明为什么不能分析
+        from .analysis import DatasetError
+        from .datasets import profile_csv
+
+        try:
+            profile = profile_csv("", contract.dataset_csv).profile()
+            payload["dataset_profile"] = profile
+            payload["dataset_rows"] = profile["rows"]
+        except DatasetError as exc:
+            payload["dataset_error"] = str(exc)
     payload["pasted_paper_chars"] = (
         len(pasted_paper_text(contract)) if template.input_kind == "paper" else 0
     )
@@ -353,3 +364,33 @@ async def upload_attachment(req: AttachmentUpload, request: Request) -> dict[str
             # 存储失败（配额满、磁盘错误）不影响解析结果的使用，只是精读时看不到原版版面
             logger.warning("failed to store original attachment %s: %s", attachment.id, exc)
     return {"attachment": attachment.model_dump(mode="json"), "summary": attachment.summary()}
+
+
+class DatasetUpload(BaseModel):
+    """上传一个待分析的表格文件（CSV / TSV / XLSX，Base64 编码）。"""
+
+    filename: str = Field(min_length=1, max_length=300)
+    data_base64: str = Field(min_length=1, max_length=22_500_000)
+
+
+@router.post("/datasets")
+async def parse_dataset_upload(req: DatasetUpload) -> dict[str, Any]:
+    """解析表格文件：返回每张可用工作表的 CSV、行数与列类型，以及被跳过的表和原因。
+
+    与附件一样不落盘：前端选定工作表后把该表的 CSV 随任务提交，服务端创建任务时
+    按同一规则重新校验。多工作表由用户选择，这里不替用户挑。
+    """
+    import base64
+    import binascii
+
+    from .analysis import DatasetError
+    from .datasets import parse_table_file
+
+    try:
+        raw = base64.b64decode(req.data_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(422, "文件内容不是有效的 Base64") from exc
+    try:
+        return await run_blocking(parse_table_file, raw, req.filename)
+    except DatasetError as exc:
+        raise HTTPException(422, {"code": "dataset_invalid", "message": str(exc)}) from exc

@@ -6,6 +6,8 @@ import SettingsPanel from '../components/SettingsPanel'
 import ResourcePreflightPanel from '../components/ResourcePreflightPanel'
 import TaskTemplatePicker from '../components/TaskTemplatePicker'
 import ContractPreview from '../components/ContractPreview'
+import DatasetPicker from '../components/DatasetPicker'
+import { chosenSheet, type DatasetChoice } from '../lib/datasetChoice'
 import StrategySelector from '../components/StrategySelector'
 import AttachmentDropzone from '../components/AttachmentDropzone'
 import { useAttachments } from '../hooks/useAttachments'
@@ -32,15 +34,6 @@ const SAMPLES = [
   '衍射光学元件（DOE）端到端联合设计的主流优化方法对比',
 ]
 
-function readText(file: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result ?? ''))
-    reader.onerror = () => reject(reader.error)
-    reader.readAsText(file, 'utf-8')
-  })
-}
-
 export default function NewResearchPage() {
   const [searchParams] = useSearchParams()
   return <ResearchComposer key={searchParams.get('followup') === '1' ? 'followup' : 'new'} />
@@ -61,6 +54,7 @@ function ResearchComposer() {
     () => searchParams.get('template') || 'autoResearch',
   )
   const activeTemplate = templates.data?.find((item) => item.key === templateKey)
+  const isDataTask = activeTemplate?.input_kind === 'dataset'
   // 课题调研允许在「高级」里改用自定义流程；其它任务由「任务 + 检索策略」决定流程。
   const templateOwnsWorkflow = Boolean(activeTemplate && activeTemplate.key !== 'autoResearch')
   const strategies = activeTemplate?.strategies ?? []
@@ -86,24 +80,13 @@ function ResearchComposer() {
   // 档位默认跟随任务模板（精读/评审偏标准，综述偏深度）；用户手动选过后不再被模板覆盖。
   const [tierChoice, setTierChoice] = useState<TierKey | null>(null)
   const tier: TierKey = tierChoice ?? activeTemplate?.tier_default ?? 'standard'
-  // 数据分析可以上传 CSV / TSV 文件：文件内容作为独立的 dataset 字段提交，
-  // 输入框里只写分析问题。只在浏览器内读取，不经过其它服务。
-  const [dataset, setDataset] = useState<{ name: string; text: string } | null>(null)
+  // 数据分析的数据表：文件交给服务端解析，多工作表由用户选择；没有数据时只有
+  // 用户主动勾选才用示例数据演示。
+  const [dataset, setDataset] = useState<DatasetChoice | null>(null)
+  const [demoData, setDemoData] = useState(false)
+  const datasetSheet = chosenSheet(dataset)
   // 任务附件：选择即上传解析，模型会在检索前先阅读这些文件
   const attachments = useAttachments()
-  const [datasetError, setDatasetError] = useState<string | null>(null)
-  async function pickDataset(file: File | undefined) {
-    setDatasetError(null)
-    if (!file) return setDataset(null)
-    if (file.size > 2_000_000) return setDatasetError('文件超过 2 MB，请先抽样或聚合后再上传')
-    try {
-      const text = await readText(file)
-      if (!text.trim()) return setDatasetError('文件为空')
-      setDataset({ name: file.name, text })
-    } catch {
-      setDatasetError('无法读取文件，请确认是 UTF-8 编码的文本表格')
-    }
-  }
   const draftRef = useRef(draft)
   draftRef.current = draft
   const [workflows, setWorkflows] = useState<WorkflowInfo[]>([])
@@ -159,7 +142,12 @@ function ResearchComposer() {
         workflow: customWorkflow,
         template: activeTemplate ? activeTemplate.key : null,
         strategy: customWorkflow ? null : strategy,
-        dataset: activeTemplate?.input_kind === 'dataset' && dataset ? dataset.text : null,
+        dataset: isDataTask && datasetSheet ? datasetSheet.csv : null,
+        dataset_source:
+          isDataTask && dataset && datasetSheet
+            ? { filename: dataset.parsed.filename, sheet: datasetSheet.name }
+            : null,
+        demo_data: isDataTask && !datasetSheet && demoData,
         tier,
         project_id: projectId || null,
         history: thread,
@@ -175,7 +163,8 @@ function ResearchComposer() {
         thread,
         templateKey,
         tier,
-        dataset: dataset?.name ?? null,
+        dataset: dataset ? [dataset.parsed.filename, datasetSheet?.name ?? null] : null,
+        demoData,
         attachments: attachments.payloads.map((item) => item.id),
       }),
     )
@@ -218,6 +207,10 @@ function ResearchComposer() {
   async function start() {
     const value = query.trim()
     if (!value || busy || attachments.uploading) return
+    if (isDataTask && dataset && !datasetSheet) {
+      setError('这个文件有多张工作表，请先选择要分析的一张')
+      return
+    }
     beginRequest()
     setSubmitting(true)
     setError(null)
@@ -434,49 +427,21 @@ function ResearchComposer() {
                   : (activeTemplate?.input_placeholder ?? '写下你正在思考的问题……')
               }
             />
-            {activeTemplate?.input_kind === 'dataset' && (
-              <div className="home-dataset">
-                <label className="btn btn-secondary btn-sm" htmlFor="dataset-file">
-                  <AppIcon name="database" size={14} aria-hidden="true" />
-                  {dataset ? '更换数据文件' : '上传 CSV / TSV'}
-                </label>
-                <input
-                  id="dataset-file"
-                  type="file"
-                  accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
-                  className="visually-hidden"
-                  onChange={(event) => void pickDataset(event.target.files?.[0])}
-                />
-                {dataset ? (
-                  <span className="home-dataset-file">
-                    <AppIcon name="file" size={14} aria-hidden="true" />
-                    已选择 {dataset.name}（约 {Math.max(0, dataset.text.split('\n').length - 1)}{' '}
-                    行）
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm icon-button"
-                      aria-label="移除数据文件"
-                      onClick={() => setDataset(null)}
-                    >
-                      <AppIcon name="x" size={13} aria-hidden="true" />
-                    </button>
-                  </span>
-                ) : (
-                  <span className="hint">也可以直接把表格粘贴到上方输入框，第一行写分析问题。</span>
-                )}
-                {datasetError && (
-                  <span className="error-text" role="alert">
-                    {datasetError}
-                  </span>
-                )}
-              </div>
+            {isDataTask && (
+              <DatasetPicker
+                value={dataset}
+                onChange={setDataset}
+                demo={demoData}
+                onDemoChange={setDemoData}
+                disabled={busy}
+              />
             )}
             <div className="home-attach">
               <span className="home-attach-title">
                 参考附件
                 <span className="hint">
                   {activeTemplate?.input_kind === 'dataset'
-                    ? '用于补充说明；统计数据请通过上方 CSV / TSV 入口上传或粘贴。'
+                    ? '用于补充说明；统计数据请通过上方表格入口上传或粘贴。'
                     : '可补充论文或背景材料。'}
                 </span>
               </span>
@@ -517,7 +482,16 @@ function ResearchComposer() {
               contract={contract.data}
               loading={contract.isFetching}
               error={contract.error}
-              uploadedDataset={dataset?.name}
+              uploadedDataset={
+                dataset
+                  ? {
+                      filename: dataset.parsed.filename,
+                      sheet: datasetSheet,
+                      pending: !datasetSheet,
+                    }
+                  : null
+              }
+              demoData={demoData}
               attachmentCount={attachments.payloads.length}
             />
           )}

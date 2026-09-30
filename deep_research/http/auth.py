@@ -42,8 +42,9 @@ async def require_api_key(
             or path.startswith("/api/qa/")
             # 契约预览只读地解析输入，但它是研究发起流程的一部分，研究员身份即可调用
             or path == "/api/templates/contract"
-            # 上传附件只解析文件并保存原文，同属发起研究的一步
+            # 上传附件、解析数据表只处理用户自己的文件，同属发起研究的一步
             or path == "/api/attachments"
+            or path == "/api/datasets"
         )
     )
     if research_action and not principal.can_research:

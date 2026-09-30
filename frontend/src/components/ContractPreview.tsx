@@ -1,13 +1,20 @@
 import { AppIcon } from './AppIcon'
 import { formatLabel } from '../lib/workbench'
-import type { TaskContract, TaskTemplate } from '../types'
+import type { DatasetSheetProfile, TaskContract, TaskTemplate } from '../types'
 
 interface Props {
   template: TaskTemplate
   contract: TaskContract | undefined
   loading: boolean
   error: unknown
-  uploadedDataset?: string | null
+  /** 上传的数据文件；pending 表示多工作表文件尚未选定 */
+  uploadedDataset?: {
+    filename: string
+    sheet: DatasetSheetProfile | null
+    pending: boolean
+  } | null
+  /** 用户明确选择用示例数据演示 */
+  demoData?: boolean
   /** 已解析完成、会随任务提交的附件数 */
   attachmentCount?: number
 }
@@ -22,6 +29,7 @@ export default function ContractPreview({
   loading,
   error,
   uploadedDataset,
+  demoData = false,
   attachmentCount = 0,
 }: Props) {
   const needsPaper = template.input_kind === 'paper'
@@ -72,13 +80,35 @@ export default function ContractPreview({
               <dt>数据</dt>
               <dd>
                 {uploadedDataset ? (
-                  `使用上传文件 ${uploadedDataset}`
-                ) : contract.dataset_csv ? (
-                  `约 ${contract.dataset_rows ?? 0} 行数据`
+                  uploadedDataset.pending ? (
+                    <span className="contract-warning">
+                      <AppIcon name="alert" size={13} aria-hidden="true" />
+                      {`${uploadedDataset.filename} 有多张工作表，请先选择要分析的一张`}
+                    </span>
+                  ) : (
+                    `使用上传文件 ${uploadedDataset.filename}${
+                      uploadedDataset.sheet?.name
+                        ? `（工作表「${uploadedDataset.sheet.name}」）`
+                        : ''
+                    }${
+                      uploadedDataset.sheet
+                        ? `，${uploadedDataset.sheet.rows} 行 × ${uploadedDataset.sheet.columns.length} 列，完整使用不截断`
+                        : ''
+                    }`
+                  )
+                ) : contract.dataset_error ? (
+                  <span className="contract-warning">
+                    <AppIcon name="alert" size={13} aria-hidden="true" />
+                    {contract.dataset_error}
+                  </span>
+                ) : contract.dataset_profile ? (
+                  `粘贴的数据：${contract.dataset_profile.rows} 行 × ${contract.dataset_profile.columns.length} 列，完整使用不截断`
+                ) : demoData ? (
+                  '暂无数据，将用示例数据演示分析流程（结论不代表真实实验）'
                 ) : (
                   <span className="contract-warning">
                     <AppIcon name="alert" size={13} aria-hidden="true" />
-                    未检测到表格数据，将用合成示例演示分析流程
+                    还没有数据：请上传 CSV / TSV / XLSX 或粘贴表格；也可勾选示例数据演示
                   </span>
                 )}
               </dd>

@@ -205,7 +205,7 @@ def test_analysis_runs_tests_and_ignores_id_columns() -> None:
 
 
 def test_analysis_without_data_uses_labelled_synthetic_example() -> None:
-    result = analyse("", "")
+    result = analyse("", "", allow_synthetic=True)
     assert result.synthetic and "合成数据" in result.facts()
 
 
