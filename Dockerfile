@@ -52,6 +52,8 @@ RUN pip install --require-hashes -r requirements.lock \
 COPY deep_research ./deep_research
 COPY alembic ./alembic
 COPY alembic.ini ./
+# AGPL-3.0：分发镜像时随附协议全文
+COPY LICENSE ./
 # Explicit framework contracts used by every planner-driven run.  Keep the
 # global rules beside the skill contracts so the image uses the same policy as
 # the source checkout.

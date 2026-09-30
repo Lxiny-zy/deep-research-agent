@@ -1,6 +1,8 @@
 # Science Research · 科研工作台
 
 部署与一致备份步骤见 [运行指南](docs/OPERATIONS.md)。
+当前维护状态见 [待办与验证记录](docs/NEXT_STEPS.md)，依赖文件说明见 [供应链指南](docs/SUPPLY_CHAIN.md)。
+早期面试题库、简历说明和阶段日志统一保留在 [历史资料归档](docs/archive/README.md)，不作为当前验收依据。
 
 面向技术调研与科学文献审查的证据研究工作台：把「一个问题」自动**拆解 →
 检索项目资料与外部来源 → 验证原文证据 → 反思补洞 → 综合成可追溯报告**。
@@ -119,7 +121,7 @@ deep-research-agent/
 ## 快速开始
 
 ```bash
-python -m pip install --require-hashes -r requirements.lock
+python -m pip install --require-hashes -r requirements.lock -r requirements-workbench.lock
 cp .env.example .env   # 填入 LLM_API_KEY 与 TAVILY_API_KEY
 # 非 OpenAI 端点再设 LLM_BASE_URL 与 LLM_MODEL（例：DeepSeek / Qwen 的 OpenAI 兼容地址）
 
@@ -136,9 +138,12 @@ python -m dotenv run -- python -m deep_research.cli "快照式高光谱成像中
 上传的 PDF / Word / PPT / Excel / Markdown / 文本 / CSV 由模型先逐片段阅读，结论与检索来源走同一套逐字核验，
 引用标注到文件名与页码 / 幻灯片 / 章节。
 
-`requirements.txt` / `requirements-dev.txt` 只维护直接依赖与允许升级范围；日常安装、CI
-和镜像构建使用带完整传递依赖及发行包哈希的 `requirements*.lock`。修改依赖范围后运行
-`make lock`（需要 `uv`）并提交两个锁文件，避免不同时间部署得到不同依赖组合。
+`requirements*.txt` 维护基础、PDF、工作台、开发四组直接依赖；对应的四份
+`requirements*.lock` 锁定版本与哈希。基础服务与完整工作台所需依赖不同，不要只安装基础锁
+就验收所有导出和附件功能。传统报告 PDF 还需 PDF 锁文件及系统 Pango/字体，见运行指南。
+修改依赖后运行 `make lock`（需要 `uv`）：按依赖组顺序约束共同版本，再检查组合一致性，
+提交全部受影响的锁文件。前端单独维护 `frontend/package-lock.json`。详见
+[供应链与可复现交付](docs/SUPPLY_CHAIN.md)。
 
 ## Web 实时 Demo（React 前端）
 
@@ -440,3 +445,14 @@ make intent-eval     # 离线评测：准确率 / 混淆矩阵 / 拒识率 / 误
 - [ ] 评估接入 LangSmith / Phoenix 做 tracing 看板
 - [x] 身份与角色权限、run 归属隔离；报告 PDF / CSV / XLSX 导出与能力发现
 - [ ] 组织租户、报告授权共享与分享链接；人工复核的通用质量发布基线
+
+## 许可证
+
+Copyright (C) 2026 LI Xinyu
+
+本项目以 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）发布。
+任何人修改、分发本项目，或将修改后的版本以网络服务形式提供给他人使用时，
+都必须以同一协议公开完整对应源码，并保留版权与许可声明。
+如需以闭源方式集成或商用，请联系作者另行授权。
+
+仓库中来自第三方的资料、依赖与示例保留其原始许可，不因本协议而改变。

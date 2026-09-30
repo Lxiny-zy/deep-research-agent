@@ -7,6 +7,8 @@ name = "deep-research-agent"
 version = "0.1.0"
 description = "Science Research：面向科研人员的研究工作台（文献综述、论文精读、审稿、数据分析、汇报材料）"
 readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dynamic = ["dependencies"]
 
