@@ -786,6 +786,8 @@ export interface TaskContract {
   papers: PaperReference[]
   dataset_csv: string
   dataset_rows?: number
+  /** 论文类任务：没有论文链接时被当作论文正文的输入字数（0 表示输入太短） */
+  pasted_paper_chars?: number
   required_sections: string[]
   deliverables: string[]
   constraints: string[]
@@ -840,6 +842,8 @@ export interface RunTemplateInfo {
     synthetic: boolean
   } | null
   intake: {
+    /** 研究对象来源：论文链接 / 上传文件 / 粘贴文本 / 未提供 */
+    mode?: 'papers' | 'attachments' | 'pasted' | 'missing'
     papers: PaperReference[]
     sections: { url: string; title: string; section: string; chars: number }[]
     failures: { url: string; error: string }[]
@@ -860,7 +864,12 @@ export interface QaEvidence {
   evidence_quote: string
   source_title?: string
   source_reference?: string
+  /** 精读对话里区分出处：本论文 / 资料库 / 联网检索；普通问答不带此字段。 */
+  origin?: QaOrigin
 }
+
+export type QaOrigin = 'paper' | 'library' | 'web'
+export type QaSourceOption = 'web' | 'library'
 
 export interface QaMessage {
   id: string
@@ -882,6 +891,27 @@ export interface QaConversation {
   updated_at: string | null
   message_count: number
   messages: QaMessage[]
+  /** 绑定到某次论文精读任务的会话；普通问答为 null。 */
+  run_id?: string | null
+}
+
+// ---- 论文精读工作区 --------------------------------------------------------
+
+export interface ReaderDocument {
+  id: string
+  kind: 'attachment' | 'paper' | 'pasted'
+  title: string
+  url?: string
+  /** 能否在右侧直接显示原版 PDF。 */
+  pdf: boolean
+  note: string
+}
+
+export interface RunReader {
+  run_id: string
+  status: RunStatus
+  documents: ReaderDocument[]
+  has_report: boolean
 }
 
 export interface NarrativeSection {

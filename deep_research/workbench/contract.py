@@ -213,6 +213,19 @@ def build_contract(
     )
 
 
+# 论文类任务没有论文指针时，足够长的输入本身就被当作论文文本（摘要或正文）；
+# 更短的输入只是一句指令，不能充当评审或精读对象。
+PASTED_PAPER_MIN_CHARS = 150
+
+
+def pasted_paper_text(contract: TaskContract) -> str:
+    """返回可充当论文文本的用户输入；有论文指针或输入过短时返回空串。"""
+    if contract.papers:
+        return ""
+    text = contract.original_request.strip()
+    return text if len(text) >= PASTED_PAPER_MIN_CHARS else ""
+
+
 def contract_from_scratch(scratch: dict[str, Any]) -> TaskContract | None:
     raw = scratch.get(CONTRACT_SCRATCH_KEY)
     if not isinstance(raw, dict):
@@ -230,4 +243,5 @@ __all__ = [
     "build_contract",
     "contract_from_scratch",
     "extract_papers",
+    "pasted_paper_text",
 ]

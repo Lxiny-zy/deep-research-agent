@@ -81,6 +81,8 @@ import {
   Workflow,
   X,
   Zap,
+  ZoomIn,
+  ZoomOut,
   Share2,
   type LucideIcon,
   type LucideProps,
@@ -172,6 +174,8 @@ const APP_ICONS = {
   workflow: Workflow,
   x: X,
   zap: Zap,
+  'zoom-in': ZoomIn,
+  'zoom-out': ZoomOut,
 } satisfies Record<string, LucideIcon>
 
 export type AppIconName = keyof typeof APP_ICONS

@@ -453,6 +453,78 @@ async def test_paper_intake_isolates_failures(settings, monkeypatch) -> None:
     assert bb.scratch["intake_sources"]["failures"][0]["error"].startswith("RuntimeError")
 
 
+class _NoSearch(FakeSearch):
+    async def search(self, query, *, max_results=5):  # type: ignore[no-untyped-def]
+        raise AssertionError("paper tasks must never fall back to open search")
+
+
+PASTED_ABSTRACT = (
+    "本文提出一种面向编码孔径快照光谱成像的深度展开重建网络。"
+    "我们将物理前向模型嵌入每一级迭代，并以可学习的先验替代手工正则项。"
+    "在 CAVE 与 KAIST 仿真数据上，所提方法的平均 PSNR 达到 38.4 dB，"
+    "相比同等参数量的端到端网络提升 1.2 dB，同时推理耗时降低约三成。"
+    "我们还在实拍数据上验证了方法对掩膜标定误差的稳健性，并讨论了噪声模型失配带来的局限。"
+    "代码与训练配置将随论文一同公开，便于复现与后续比较。"
+)
+
+
+class _PastedLLM(FakeLLM):
+    async def parse(self, system, user, schema, *, temperature=0.2, retries=2):  # type: ignore[no-untyped-def]
+        from deep_research.models import FindingList
+
+        if schema is FindingList and "https://workspace.invalid/pasted/" in user:
+            start = user.index("https://workspace.invalid/pasted/")
+            url = user[start:].split()[0].rstrip("）)]，,")
+            return FindingList(
+                findings=[
+                    {
+                        "statement": "方法在仿真数据上平均 PSNR 为 38.4 dB",
+                        "source_url": url,
+                        "evidence_quote": "平均 PSNR 达到 38.4 dB",
+                        "confidence": 0.9,
+                    }
+                ]
+            )
+        return await super().parse(system, user, schema, temperature=temperature, retries=retries)
+
+
+@pytest.mark.asyncio
+async def test_paper_intake_reads_pasted_paper_text_instead_of_searching(settings) -> None:
+    from deep_research.agents.base import RunContext
+    from deep_research.observability import Tracer
+
+    template = get_template("peerReview")
+    assert template is not None
+    bb = Blackboard(query=PASTED_ABSTRACT)
+    bb.scratch[CONTRACT_SCRATCH_KEY] = build_contract(template, PASTED_ABSTRACT).model_dump(
+        mode="json"
+    )
+    ctx = RunContext(llm=_PastedLLM(), search_tool=_NoSearch(), tracer=Tracer(), settings=settings)
+    bb = await PaperIntake().step(bb, ctx)
+    intake = bb.scratch["intake_sources"]
+    assert intake["mode"] == "pasted" and intake["sections"]
+    findings = [f for r in bb.results for f in r.findings]
+    assert findings and findings[0].verification.status == "verified"
+
+
+@pytest.mark.asyncio
+async def test_paper_intake_without_any_paper_reports_instead_of_searching(settings) -> None:
+    from deep_research.agents.base import RunContext
+    from deep_research.observability import Tracer
+
+    template = get_template("paperRead")
+    assert template is not None
+    bb = Blackboard(query="帮我精读一下")
+    bb.scratch[CONTRACT_SCRATCH_KEY] = build_contract(template, "帮我精读一下").model_dump(
+        mode="json"
+    )
+    ctx = RunContext(llm=FakeLLM(), search_tool=_NoSearch(), tracer=Tracer(), settings=settings)
+    bb = await PaperIntake().step(bb, ctx)
+    assert bb.results == []
+    intake = bb.scratch["intake_sources"]
+    assert intake["mode"] == "missing" and "未提供论文" in intake["failures"][0]["error"]
+
+
 # --------------------------------------------------------------------------- HTTP
 
 
@@ -525,6 +597,27 @@ async def test_create_run_with_template_freezes_contract_and_workflow(api_repo) 
     contract = detail.orchestration.checkpoint["scratch"][CONTRACT_SCRATCH_KEY]
     assert contract["template"] == "paperRead"
     assert contract["strategy"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_paper_task_without_paper_is_rejected_before_creating_a_run(api_repo) -> None:
+    """论文类任务没有链接、正文或附件：直接提示补充，不建一条注定空转的 run。"""
+    api, repo = api_repo
+    async with _client(api.app) as client:
+        missing = await client.post(
+            "/api/runs", json={"query": "帮我评审", "template": "peerReview"}
+        )
+        pasted = await client.post(
+            "/api/runs", json={"query": PASTED_ABSTRACT, "template": "peerReview"}
+        )
+        preview = await client.post(
+            "/api/templates/contract", json={"template": "peerReview", "query": PASTED_ABSTRACT}
+        )
+    assert missing.status_code == 422
+    assert missing.json()["detail"]["code"] == "paper_required"
+    assert pasted.status_code == 202, pasted.text
+    assert preview.json()["pasted_paper_chars"] == len(PASTED_ABSTRACT)
+    assert len(await repo.list_runs(limit=10)) == 1
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,8 @@ class QaConversation:
     updated_at: datetime | None = None
     messages: list[QaMessage] = field(default_factory=list)
     message_count: int = 0
+    # 论文精读工作区的对话绑定所属任务；学术问答页的独立会话为 None
+    run_id: str | None = None
 
 
 class ConversationFullError(ValueError):
@@ -44,9 +46,13 @@ class ConversationFullError(ValueError):
 
 
 class QaStore(Protocol):
-    async def create(self, owner_id: str, title: str) -> QaConversation: ...
+    async def create(
+        self, owner_id: str, title: str, run_id: str | None = None
+    ) -> QaConversation: ...
 
-    async def list(self, owner_id: str | None) -> list[QaConversation]: ...
+    async def list(
+        self, owner_id: str | None, run_id: str | None = None
+    ) -> list[QaConversation]: ...
 
     async def get(self, conversation_id: str) -> QaConversation | None: ...
 
@@ -73,14 +79,14 @@ class SqlQaStore:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sm = sessionmaker
 
-    async def create(self, owner_id: str, title: str) -> QaConversation:
+    async def create(self, owner_id: str, title: str, run_id: str | None = None) -> QaConversation:
         async with self._sm() as s, s.begin():
-            row = orm.QaConversationRow(owner_id=owner_id, title=title[:200])
+            row = orm.QaConversationRow(owner_id=owner_id, title=title[:200], run_id=run_id)
             s.add(row)
             await s.flush()
-            return QaConversation(id=row.id, owner_id=owner_id, title=row.title)
+            return QaConversation(id=row.id, owner_id=owner_id, title=row.title, run_id=run_id)
 
-    async def list(self, owner_id: str | None) -> list[QaConversation]:
+    async def list(self, owner_id: str | None, run_id: str | None = None) -> list[QaConversation]:
         async with self._sm() as s:
             counts = (
                 select(orm.QaMessageRow.conversation_id, func.count().label("n"))
@@ -95,6 +101,12 @@ class SqlQaStore:
             )
             if owner_id is not None:
                 stmt = stmt.where(orm.QaConversationRow.owner_id == owner_id)
+            # 问答页只列独立会话；精读页只列本任务的会话，两边互不串
+            stmt = stmt.where(
+                orm.QaConversationRow.run_id.is_(None)
+                if run_id is None
+                else orm.QaConversationRow.run_id == run_id
+            )
             rows = (await s.execute(stmt)).all()
             return [
                 QaConversation(
@@ -104,6 +116,7 @@ class SqlQaStore:
                     created_at=row.created_at,
                     updated_at=row.updated_at,
                     message_count=int(count or 0),
+                    run_id=row.run_id,
                 )
                 for row, count in rows
             ]
@@ -128,6 +141,7 @@ class SqlQaStore:
                 updated_at=row.updated_at,
                 messages=[_message(m) for m in messages],
                 message_count=len(messages),
+                run_id=row.run_id,
             )
 
     async def append(self, conversation_id: str, message: QaMessage) -> QaMessage:
@@ -171,16 +185,25 @@ class InMemoryQaStore:
     def __init__(self) -> None:
         self._items: dict[str, QaConversation] = {}
 
-    async def create(self, owner_id: str, title: str) -> QaConversation:
+    async def create(self, owner_id: str, title: str, run_id: str | None = None) -> QaConversation:
         now = datetime.now(UTC)
         conversation = QaConversation(
-            id=str(uuid4()), owner_id=owner_id, title=title[:200], created_at=now, updated_at=now
+            id=str(uuid4()),
+            owner_id=owner_id,
+            title=title[:200],
+            created_at=now,
+            updated_at=now,
+            run_id=run_id,
         )
         self._items[conversation.id] = conversation
         return QaConversation(**{**conversation.__dict__, "messages": []})
 
-    async def list(self, owner_id: str | None) -> list[QaConversation]:
-        items = [c for c in self._items.values() if owner_id is None or c.owner_id == owner_id]
+    async def list(self, owner_id: str | None, run_id: str | None = None) -> list[QaConversation]:
+        items = [
+            c
+            for c in self._items.values()
+            if (owner_id is None or c.owner_id == owner_id) and c.run_id == run_id
+        ]
         items.sort(key=lambda c: c.updated_at or datetime.min.replace(tzinfo=UTC), reverse=True)
         return [
             QaConversation(**{**c.__dict__, "messages": [], "message_count": len(c.messages)})

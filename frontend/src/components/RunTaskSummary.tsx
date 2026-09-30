@@ -45,10 +45,26 @@ export default function RunTaskSummary({ info }: { info: RunTemplateInfo | undef
             </dd>
           </>
         )}
-        {intake && (
+        {intake?.mode === 'missing' && (
           <>
             <dt>论文导入</dt>
             <dd>
+              <span className="run-task-warning">
+                <AppIcon name="alert" size={13} aria-hidden="true" />
+                {failures[0]?.error ?? '未提供论文'}
+              </span>
+            </dd>
+          </>
+        )}
+        {intake && intake.mode !== 'missing' && (
+          <>
+            <dt>论文导入</dt>
+            <dd>
+              {intake.mode === 'attachments'
+                ? '以上传文件为研究对象，'
+                : intake.mode === 'pasted'
+                  ? '以粘贴的论文文本为研究对象，'
+                  : ''}
               取得 {intake.sections.length} 个章节来源
               {intake.sections.some((section) => section.section) &&
                 `（${[...new Set(intake.sections.map((s) => s.section).filter(Boolean))].join('、')}）`}

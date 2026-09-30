@@ -330,6 +330,16 @@ export default function RunPage() {
           )}
         </div>
         <div className="run-head-actions">
+          {id && runTemplate.data?.template.input_kind === 'paper' && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => navigate(`/runs/${encodeURIComponent(id)}/read`)}
+            >
+              <AppIcon name="book" size={14} aria-hidden="true" />
+              对照原文阅读
+            </button>
+          )}
           {canResume && (
             <button
               type="button"

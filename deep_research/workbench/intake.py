@@ -4,7 +4,8 @@
 开放检索按相关性排序，很可能把用户给的那篇换成相近的另一篇——评审错论文
 比没有评审更糟。因此这个角色：
 
-1. 从任务契约里取出 arXiv / DOI / URL 指针；
+1. 从任务契约里取出 arXiv / DOI / URL 指针；没有指针时依次改用上传的论文文件、
+   粘贴的论文文本，三者都没有就如实报告缺少论文——任何情况下都不退回开放检索；
 2. arXiv 走 ``id_list`` 精确取回元数据与 LaTeX 全文章节；PDF 链接走 OA PDF 解析；
    普通网页走资料库导入的同一条安全抓取路径；
 3. 把来源交给 Researcher 的同一套「来源门禁 → 抽取 → 逐字核验 → 语义核验」链。
@@ -15,6 +16,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any
 
@@ -24,12 +26,14 @@ from ..guardrails import verify_claim_consistency
 from ..models import ResearchResult, Source, SubQuestion
 from ..registry import register
 from ..tools.base import SearchTool
-from .contract import PaperReference, contract_from_scratch
+from .attachments import attachments_from_scratch
+from .contract import PaperReference, contract_from_scratch, pasted_paper_text
 from .roles import PAPER_INTAKE_ROLE
 
 logger = logging.getLogger(__name__)
 
 INTAKE_SOURCES_KEY = "intake_sources"
+PAPER_SOURCES_KEY = "paper_sources"
 _MAX_SOURCES = 12
 
 
@@ -83,6 +87,59 @@ async def fetch_paper(paper: PaperReference, ctx: RunContext) -> list[Source]:
     return await _fetch_document(paper.url)
 
 
+PASTED_URL_PREFIX = "https://workspace.invalid/pasted/"
+_PASTED_CHUNK_CHARS = 2500
+_MISSING_PAPER = "未提供论文：请粘贴 arXiv / DOI / 论文链接或论文文本，或上传论文文件"
+
+
+def pasted_sources(text: str) -> list[Source]:
+    """把用户粘贴的论文文本切成带定位的来源；每段一个独立 URL，逐字核验才能锚准位置。"""
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    chunks: list[str] = []
+    current = ""
+    for paragraph in (p.strip() for p in text.splitlines()):
+        if not paragraph:
+            continue
+        if current and len(current) + len(paragraph) > _PASTED_CHUNK_CHARS:
+            chunks.append(current)
+            current = ""
+        current = f"{current}\n{paragraph}" if current else paragraph
+    if current:
+        chunks.append(current)
+    return [
+        Source(
+            title="粘贴的论文文本",
+            url=f"{PASTED_URL_PREFIX}{digest}?chunk={index}",
+            content=chunk,
+            locator=f"第 {index} 段",
+        )
+        for index, chunk in enumerate(chunks[:_MAX_SOURCES], 1)
+    ]
+
+
+def _record(
+    bb: Blackboard,
+    mode: str,
+    papers: list[PaperReference],
+    sources: list[Source],
+    failures: list[dict[str, Any]],
+) -> None:
+    bb.scratch[INTAKE_SOURCES_KEY] = {
+        "mode": mode,
+        "papers": [paper.model_dump() for paper in papers],
+        "sections": [
+            {
+                "url": source.url,
+                "title": source.title,
+                "section": (source.scholarly.section if source.scholarly else "") or source.locator,
+                "chars": len(source.content),
+            }
+            for source in sources
+        ],
+        "failures": failures,
+    }
+
+
 def _question_for(template_key: str, focus: str) -> str:
     base = {
         "peerReview": "这篇论文的研究问题、方法、实验设置、主要结果与作者声称的贡献分别是什么？",
@@ -99,43 +156,61 @@ class PaperIntake:
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         contract = contract_from_scratch(bb.scratch)
-        papers = contract.papers if contract is not None else []
-        if contract is None or not papers:
-            ctx.tracer.emit(
-                "RESEARCHER",
-                "info",
-                "输入中没有可解析的论文链接，改为按主题检索",
-                data={"category": "paper_intake", "papers": 0},
-            )
+        if contract is None:
+            # 没有任务契约的旧运行无从得知评审对象，沿用主题检索
             bb.scratch["pending_sub_questions"] = [SubQuestion(question=bb.query)]
             return await Researcher().step(bb, ctx)
 
-        collected: list[Source] = []
+        papers = contract.papers
         failures: list[dict[str, Any]] = []
-        for paper in papers:
-            try:
-                sources = await fetch_paper(paper, ctx)
-            except Exception as exc:  # 单篇失败隔离：记录原因，继续下一篇
-                logger.info("paper intake failed for %s: %s", paper.url, exc)
-                failures.append({"url": paper.url, "error": f"{type(exc).__name__}: {exc}"[:300]})
-                continue
-            if not sources:
-                failures.append({"url": paper.url, "error": "未取得任何可用正文"})
-            collected.extend(sources)
-        collected = collected[:_MAX_SOURCES]
-        bb.scratch[INTAKE_SOURCES_KEY] = {
-            "papers": [paper.model_dump() for paper in papers],
-            "sections": [
-                {
-                    "url": source.url,
-                    "title": source.title,
-                    "section": source.scholarly.section if source.scholarly else "",
-                    "chars": len(source.content),
-                }
-                for source in collected
-            ],
-            "failures": failures,
-        }
+        focus = contract.focus
+        if papers:
+            mode = "papers"
+            collected: list[Source] = []
+            for paper in papers:
+                try:
+                    sources = await fetch_paper(paper, ctx)
+                except Exception as exc:  # 单篇失败隔离：记录原因，继续下一篇
+                    logger.info("paper intake failed for %s: %s", paper.url, exc)
+                    failures.append(
+                        {"url": paper.url, "error": f"{type(exc).__name__}: {exc}"[:300]}
+                    )
+                    continue
+                if not sources:
+                    failures.append({"url": paper.url, "error": "未取得任何可用正文"})
+                collected.extend(sources)
+            collected = collected[:_MAX_SOURCES]
+        elif attachments := attachments_from_scratch(bb.scratch):
+            # 上传的论文已由 attachment_reader 逐片段读过并核验；这里只登记评审对象，
+            # 绝不退回开放检索——那会把用户给的论文换成相关度排序里的另一篇。
+            _record(bb, "attachments", [], [s for a in attachments for s in a.sources()], [])
+            ctx.tracer.emit(
+                "RESEARCHER",
+                "info",
+                f"未提供论文链接，以上传的 {len(attachments)} 个文件为研究对象，不做开放检索",
+                data={"category": "paper_intake", "mode": "attachments"},
+            )
+            return bb
+        elif pasted := pasted_paper_text(contract):
+            mode = "pasted"
+            collected = pasted_sources(pasted)
+            focus = ""  # 粘贴的是论文本身，不是用户的关注点
+        else:
+            _record(bb, "missing", [], [], [{"url": "", "error": _MISSING_PAPER}])
+            ctx.tracer.emit(
+                "RESEARCHER",
+                "error",
+                _MISSING_PAPER,
+                data={"category": "paper_intake", "mode": "missing"},
+            )
+            return bb
+
+        _record(bb, mode, papers, collected, failures)
+        # 取回的正文随 checkpoint 冻结：精读工作区的后续对话直接复用，不必再次联网取回
+        bb.scratch[PAPER_SOURCES_KEY] = [
+            source.model_dump(mode="json", include={"title", "url", "content", "locator"})
+            for source in collected
+        ]
         ctx.tracer.emit(
             "RESEARCHER",
             "info",
@@ -153,7 +228,7 @@ class PaperIntake:
         researcher.settings = ctx.settings
         researcher.system = ctx.system_prompt(researcher.system)
         # 每个章节单独一次抽取：整篇塞进一次调用会超出上下文，也会让模型只盯住开头。
-        question = _question_for(contract.template, contract.focus)
+        question = _question_for(contract.template, focus)
         for index in range(0, len(collected), 3):
             batch = collected[index : index + 3]
             researcher.search = _FixedSources(batch)
@@ -175,4 +250,11 @@ class PaperIntake:
         return bb
 
 
-__all__ = ["INTAKE_SOURCES_KEY", "PaperIntake", "fetch_paper"]
+__all__ = [
+    "INTAKE_SOURCES_KEY",
+    "PAPER_SOURCES_KEY",
+    "PASTED_URL_PREFIX",
+    "PaperIntake",
+    "fetch_paper",
+    "pasted_sources",
+]

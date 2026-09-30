@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any, Literal
 from urllib.parse import quote
@@ -17,9 +18,11 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..blocking import run_blocking
-from .contract import build_contract
+from .contract import build_contract, pasted_paper_text
 from .publish import DeliveryBundle, build_bundle, resolve_template
 from .templates import get_template, public_templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["workbench"])
 
@@ -81,6 +84,9 @@ async def preview_contract(req: ContractPreviewRequest, request: Request) -> dic
     payload["dataset_csv"] = contract.dataset_csv[:2000]
     payload["dataset_rows"] = (
         max(0, contract.dataset_csv.count("\n")) if contract.dataset_csv else 0
+    )
+    payload["pasted_paper_chars"] = (
+        len(pasted_paper_text(contract)) if template.input_kind == "paper" else 0
     )
     payload["rendered"] = contract.render()
     return payload
@@ -220,6 +226,46 @@ async def get_workspace_file(run_id: str, path: str, request: Request) -> Respon
     return Response(content=data, media_type=media, headers=headers)
 
 
+@router.get("/runs/{run_id}/reader")
+async def get_reader(run_id: str, request: Request) -> dict[str, Any]:
+    """论文精读工作区：这次任务的研究对象，以及每份能否显示原版 PDF。"""
+    from .reader import reader_documents
+
+    detail = await request.app.state.repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(404, "run not found")
+    return {
+        "run_id": run_id,
+        "status": detail.status,
+        "documents": reader_documents(detail),
+        "has_report": detail.report is not None,
+    }
+
+
+@router.get("/runs/{run_id}/reader/{document_id}/pdf")
+async def get_reader_pdf(run_id: str, document_id: str, request: Request) -> Response:
+    """原版 PDF：只接受该任务登记过的文档；归属由鉴权依赖按 run_id 校验。"""
+    from .reader import ReaderError, load_pdf
+
+    detail = await request.app.state.repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(404, "run not found")
+    try:
+        data = await load_pdf(detail, document_id, request.app.state.settings)
+    except ReaderError as exc:
+        raise HTTPException(404, {"code": "pdf_unavailable", "message": str(exc)}) from exc
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "Content-Disposition": f'inline; filename="{document_id}.pdf"',
+            "Content-Security-Policy": "default-src 'none'",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/runs/{run_id}/narrative")
 async def get_narrative(run_id: str, request: Request) -> dict[str, Any]:
     """人话进度叙述：按阶段聚合的一句话进展，事件的纯函数（不调用模型）。"""
@@ -279,15 +325,17 @@ class AttachmentUpload(BaseModel):
 
 
 @router.post("/attachments", status_code=201)
-async def upload_attachment(req: AttachmentUpload) -> dict[str, Any]:
+async def upload_attachment(req: AttachmentUpload, request: Request) -> dict[str, Any]:
     """解析一个上传文件：返回附件（含全部片段，供创建任务时原样提交）与展示摘要。
 
-    解析只在内存中进行，原始文件不落盘；创建任务时片段随任务契约冻结进 checkpoint。
+    解析在内存中进行，创建任务时片段随任务契约冻结进 checkpoint。PDF 另按内容哈希
+    保存原文件，供论文精读工作区显示原版版面；其他格式的原文件不落盘。
     """
     import base64
     import binascii
 
-    from .attachments import AttachmentError, parse_attachment
+    from ..artifacts import ArtifactError
+    from .attachments import AttachmentError, parse_attachment, save_original
 
     try:
         raw = base64.b64decode(req.data_base64, validate=True)
@@ -297,4 +345,11 @@ async def upload_attachment(req: AttachmentUpload) -> dict[str, Any]:
         attachment = await parse_attachment(raw, req.filename, req.mime_type)
     except AttachmentError as exc:
         raise HTTPException(422, str(exc)) from exc
+    if attachment.kind == "pdf":
+        try:
+            await run_blocking(save_original, request.app.state.settings, attachment.id, raw)
+            attachment = attachment.model_copy(update={"stored": True})
+        except (ArtifactError, OSError) as exc:
+            # 存储失败（配额满、磁盘错误）不影响解析结果的使用，只是精读时看不到原版版面
+            logger.warning("failed to store original attachment %s: %s", attachment.id, exc)
     return {"attachment": attachment.model_dump(mode="json"), "summary": attachment.summary()}

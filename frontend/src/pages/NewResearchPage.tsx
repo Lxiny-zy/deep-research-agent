@@ -325,9 +325,7 @@ function ResearchComposer() {
             </span>
             <span className="home-hero-question">半窗晴色，一卷新知。</span>
           </h1>
-          <p className="home-hero-sub">
-            从一个问题开始，查阅文献、比较方法，整理自己的研究思路。
-          </p>
+          <p className="home-hero-sub">从一个问题开始，查阅文献、比较方法，整理自己的研究思路。</p>
         </div>
         <div className="home-hero-aside" aria-hidden="true">
           <span>Knowledge drives human progress</span>
@@ -520,6 +518,7 @@ function ResearchComposer() {
               loading={contract.isFetching}
               error={contract.error}
               uploadedDataset={dataset?.name}
+              attachmentCount={attachments.payloads.length}
             />
           )}
 

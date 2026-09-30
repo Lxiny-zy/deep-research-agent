@@ -70,7 +70,7 @@ describe('ContractPreview', () => {
     render(
       <ContractPreview template={template()} contract={contract} loading={false} error={null} />,
     )
-    expect(screen.getByText(/未识别到 arXiv/)).toBeInTheDocument()
+    expect(screen.getByText(/还没有论文/)).toBeInTheDocument()
     expect(screen.getByText('重点看实验')).toBeInTheDocument()
     expect(screen.getByText('论文摘要')).toBeInTheDocument()
   })

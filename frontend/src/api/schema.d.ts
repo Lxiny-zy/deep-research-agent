@@ -83,7 +83,8 @@ export interface paths {
          * Upload Attachment
          * @description 解析一个上传文件：返回附件（含全部片段，供创建任务时原样提交）与展示摘要。
          *
-         *     解析只在内存中进行，原始文件不落盘；创建任务时片段随任务契约冻结进 checkpoint。
+         *     解析在内存中进行，创建任务时片段随任务契约冻结进 checkpoint。PDF 另按内容哈希
+         *     保存原文件，供论文精读工作区显示原版版面；其他格式的原文件不落盘。
          */
         post: operations["upload_attachment_api_attachments_post"];
         delete?: never;
@@ -868,6 +869,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{run_id}/reader": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Reader
+         * @description 论文精读工作区：这次任务的研究对象，以及每份能否显示原版 PDF。
+         */
+        get: operations["get_reader_api_runs__run_id__reader_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/reader/{document_id}/pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Reader Pdf
+         * @description 原版 PDF：只接受该任务登记过的文档；归属由鉴权依赖按 run_id 校验。
+         */
+        get: operations["get_reader_pdf_api_runs__run_id__reader__document_id__pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{run_id}/resume": {
         parameters: {
             query?: never;
@@ -1450,8 +1491,12 @@ export interface components {
         };
         /** AskRequest */
         AskRequest: {
+            /** Project Id */
+            project_id?: string | null;
             /** Query */
             query: string;
+            /** Sources */
+            sources?: ("web" | "library")[];
         };
         /**
          * AssessRequest
@@ -1838,6 +1883,8 @@ export interface components {
         };
         /** CreateConversation */
         CreateConversation: {
+            /** Run Id */
+            run_id?: string | null;
             /**
              * Title
              * @default
@@ -5001,7 +5048,9 @@ export interface operations {
     };
     list_conversations_api_qa_conversations_get: {
         parameters: {
-            query?: never;
+            query?: {
+                run_id?: string | null;
+            };
             header?: {
                 "x-api-key"?: string | null;
                 authorization?: string | null;
@@ -5957,6 +6006,77 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_reader_api_runs__run_id__reader_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_reader_pdf_api_runs__run_id__reader__document_id__pdf_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

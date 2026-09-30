@@ -1,6 +1,7 @@
 /* 页面与业务组件样式，每个页面一个文件（见 styles/pages/*.css）。 */
 @import './pages/workbench-home.css';
 @import './pages/qa.css';
+@import './pages/reader.css';
 @import './pages/run.css';
 @import './pages/history.css';
 @import './pages/library.css';

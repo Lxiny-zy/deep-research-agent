@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { AppIcon } from '../components/AppIcon'
+import QaMessageView from '../components/QaMessage'
 import {
   askQuestion,
   createConversation,
@@ -11,7 +10,6 @@ import {
   getConversation,
   listConversations,
 } from '../api/client'
-import type { QaMessage } from '../types'
 
 const STARTERS = [
   { tag: '文献检索', text: '查找 DOE 光谱成像系统误差补偿的最新文献' },
@@ -28,67 +26,6 @@ const STEPS = [
   { title: '继续追问', text: '补充论文、方法或实验条件，让问题更具体。' },
   { title: '留意证据不足', text: '未找到支持材料时，回答会说明局限。' },
 ]
-
-function MessageView({ message }: { message: QaMessage }) {
-  return (
-    <article className="qa-turn" aria-label={`第 ${message.position + 1} 轮问答`}>
-      <div className="qa-question">
-        <p>{message.query}</p>
-      </div>
-      <div className="qa-answer-row">
-        <span className="qa-avatar" aria-hidden="true">
-          <AppIcon name="network" size={14} strokeWidth={2} />
-        </span>
-        <div className={`qa-answer${message.status === 'fallback' ? ' is-fallback' : ''}`}>
-          <div className="markdown-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
-              {message.answer}
-            </ReactMarkdown>
-          </div>
-          {message.citations.length > 0 && (
-            <div className="qa-sources">
-              <span className="qa-sources-title">引用来源</span>
-              <ol className="qa-citations" aria-label="引用来源">
-                {message.citations.map((url, index) => {
-                  const evidence = message.evidence.find((item) => item.source_url === url)
-                  return (
-                    <li key={url} value={index + 1}>
-                      <a href={url} target="_blank" rel="noopener noreferrer">
-                        {evidence?.source_reference || evidence?.source_title || url}
-                      </a>
-                    </li>
-                  )
-                })}
-              </ol>
-            </div>
-          )}
-          {message.thoughts.length > 0 && (
-            <details className="qa-thoughts">
-              <summary>
-                <AppIcon name="chevron-right" size={13} aria-hidden="true" />
-                检索与核验过程
-              </summary>
-              <ol>
-                {message.thoughts.map((thought, index) => (
-                  <li key={index}>
-                    <strong>{THOUGHT_LABEL[thought.tool] ?? thought.tool}</strong>
-                    <span>{thought.observation}</span>
-                  </li>
-                ))}
-              </ol>
-            </details>
-          )}
-        </div>
-      </div>
-    </article>
-  )
-}
-
-const THOUGHT_LABEL: Record<string, string> = {
-  rewrite: '检索式',
-  search_and_verify: '检索与逐字核验',
-  citation_check: '引用复核',
-}
 
 export default function QaPage() {
   const { id } = useParams<{ id?: string }>()
@@ -215,7 +152,7 @@ export default function QaPage() {
             </div>
           )}
           {messages.map((message) => (
-            <MessageView key={message.id} message={message} />
+            <QaMessageView key={message.id} message={message} />
           ))}
           {pending && (
             <article className="qa-turn is-pending">

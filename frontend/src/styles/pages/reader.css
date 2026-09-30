@@ -1,0 +1,292 @@
+/* ============================================================================
+   论文精读：左侧对话 + 右侧原版 PDF / 精读报告
+   ========================================================================== */
+
+.reader-layout {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  display: grid;
+  grid-template-columns: minmax(340px, 2fr) minmax(0, 3fr);
+  height: calc(100vh - var(--topbar-height) - var(--space-6) * 2);
+  min-height: 560px;
+  overflow: hidden;
+}
+
+/* ---- 左侧对话 ---- */
+.reader-chat {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.reader-head {
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-5);
+}
+
+.reader-back {
+  align-items: center;
+  color: var(--text-3);
+  display: inline-flex;
+  font-size: var(--text-xs);
+  gap: var(--space-1);
+  text-decoration: none;
+  width: fit-content;
+}
+
+.reader-back:hover {
+  color: var(--text-primary);
+}
+
+.reader-title {
+  font-size: var(--text-lg);
+  line-height: 1.35;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.reader-verse {
+  color: var(--text-2);
+  font-family: var(--font-serif, serif);
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+
+.reader-thread {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+.reader-empty {
+  margin: auto 0;
+  text-align: center;
+}
+
+.reader-composer {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+
+/* ---- 本轮参考来源 ---- */
+.reader-scope {
+  align-items: center;
+  border: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: 0;
+}
+
+.reader-scope legend {
+  color: var(--text-3);
+  float: left;
+  font-size: var(--text-xs);
+  margin-right: var(--space-1);
+  padding: 0;
+}
+
+.reader-scope-item {
+  align-items: center;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: var(--text-sm);
+  gap: var(--space-1);
+}
+
+.reader-scope-item.is-fixed {
+  color: var(--text-2);
+  cursor: default;
+}
+
+.reader-scope-project {
+  font-size: var(--text-sm);
+  max-width: 180px;
+}
+
+/* ---- 右侧：原文 / 精读报告 ---- */
+.reader-pane {
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.reader-tabs {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+}
+
+.reader-tab {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--text-3);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: var(--text-sm);
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+}
+
+.reader-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.reader-tab.is-active {
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  font-weight: 600;
+}
+
+.reader-doc-select {
+  font-size: var(--text-sm);
+  margin-left: auto;
+  max-width: 45%;
+}
+
+.reader-pane-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.reader-note {
+  align-items: flex-start;
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  margin: auto;
+  max-width: 360px;
+  padding: var(--space-6);
+}
+
+.reader-report {
+  background: var(--surface);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-6);
+}
+
+/* ---- PDF 阅读器 ---- */
+.pdf-viewer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pdf-toolbar {
+  align-items: center;
+  display: flex;
+  font-size: var(--text-xs);
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+}
+
+.pdf-toolbar-count {
+  color: var(--text-3);
+}
+
+.pdf-toolbar-note {
+  color: var(--warning, var(--text-2));
+}
+
+.pdf-toolbar-zoom {
+  align-items: center;
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.pdf-scroller {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3) var(--space-4) var(--space-6);
+}
+
+.pdf-page {
+  background: #fff;
+  box-shadow: var(--shadow-sm, 0 1px 3px rgb(0 0 0 / 0.15));
+  flex: none;
+  position: relative;
+}
+
+.pdf-highlight {
+  background: rgb(250 204 21 / 0.38);
+  border-radius: 2px;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  position: absolute;
+}
+
+.pdf-loading {
+  align-items: center;
+  color: var(--text-3);
+  display: flex;
+  gap: var(--space-2);
+  margin: auto;
+}
+
+/* 对话里「本论文」引用：点击在右侧定位 */
+.qa-citation-locate {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: var(--primary-text);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  gap: 4px;
+  padding: 0;
+  text-align: left;
+}
+
+.qa-citation-locate:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 960px) {
+  .reader-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(480px, 1fr);
+    height: auto;
+  }
+
+  .reader-chat {
+    border-bottom: 1px solid var(--border);
+    border-right: 0;
+    max-height: 70vh;
+  }
+
+  .reader-pane {
+    min-height: 70vh;
+  }
+}

@@ -221,3 +221,55 @@ async def test_model_reads_attachment_and_cites_it_after_verification():  # type
     assert verified[0].verification.source_title == "实验记录.docx"
     # 参考来源显示文件名与定位，而不是内部占位 URL
     assert verified[0].verification.source_reference.startswith("实验记录.docx（实验结果")
+
+
+class NoSearch(FakeSearch):
+    async def search(self, query, *, max_results=5):  # type: ignore[no-untyped-def]
+        raise AssertionError("paper tasks with uploaded papers must not open-search")
+
+
+@pytest.mark.asyncio
+async def test_paper_read_with_only_an_uploaded_paper_reads_it_without_searching():  # type: ignore[no-untyped-def]
+    """只上传论文、没给链接时：以附件为精读对象，不退化成按主题检索别的论文。"""
+    from deep_research.config import Settings
+    from deep_research.orchestrator import DeepResearchAgent, create_initial_execution
+    from deep_research.persistence.memory_repository import InMemoryRepository
+    from deep_research.workbench.contract import CONTRACT_SCRATCH_KEY, build_contract
+    from deep_research.workbench.intake import INTAKE_SOURCES_KEY
+    from deep_research.workbench.templates import get_template
+
+    attachment = await parse_attachment(_docx(), "待精读论文.docx")
+    settings = Settings(artifact_root=tempfile.mkdtemp())
+    template = get_template("paperRead")
+    assert template is not None
+    query = "重点看实验部分"
+    execution = create_initial_execution(query, template.workflow, settings)
+    scratch = execution.checkpoint.setdefault("scratch", {})
+    scratch[CONTRACT_SCRATCH_KEY] = build_contract(template, query).model_dump(mode="json")
+    scratch[ATTACHMENTS_SCRATCH_KEY] = [attachment.model_dump(mode="json")]
+    repo = InMemoryRepository()
+    run_id = await repo.create_run(query, execution=execution)
+    agent = DeepResearchAgent(
+        settings,
+        llm=AttachmentLLM(),
+        search_tool=NoSearch(),
+        workflow=template.workflow,
+        repo=repo,
+        run_id=run_id,
+        initial_execution=execution,
+    )
+    await agent.run(query)
+    detail = await repo.get_run(run_id)
+    assert detail is not None and detail.status == "done"
+    verified = [
+        f
+        for r in detail.results
+        for f in r.findings
+        if f.source_url.startswith(ATTACHMENT_URL_PREFIX) and f.verification.status == "verified"
+    ]
+    assert verified, "精读对象就是上传的论文，其原文须能通过逐字核验"
+    urls = [f.source_url for r in detail.results for f in r.findings]
+    assert all(url.startswith(ATTACHMENT_URL_PREFIX) for url in urls)
+    intake = detail.orchestration.checkpoint["scratch"][INTAKE_SOURCES_KEY]
+    assert intake["mode"] == "attachments"
+    assert intake["sections"][0]["title"] == "待精读论文.docx"

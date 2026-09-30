@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import sys
@@ -1032,6 +1033,9 @@ async def security_headers(request: Request, call_next):  # type: ignore[no-unty
 # 生产同源托管：把 Vite 构建产物的静态资源挂在 /assets/*（须在末尾 catch-all SPA 路由
 # 之前注册）。dist 未构建时跳过——开发期前端走 Vite dev server，不经后端静态服务。
 _FRONTEND_ASSETS = _FRONTEND_DIST.parent / "assets"
+# PDF.js 的 worker 是 .mjs；模块 worker 要求 JavaScript MIME，而 Windows 注册表和
+# 旧版 Python 的 mimetypes 未必认得这个扩展名。
+mimetypes.add_type("text/javascript", ".mjs")
 if _FRONTEND_ASSETS.is_dir():
     app.mount("/assets", StaticFiles(directory=str(_FRONTEND_ASSETS)), name="assets")
 
@@ -1561,7 +1565,7 @@ async def create_run(
             settings = replace(settings, orchestration_mode="planner-driven")
     lease_owner = uuid4().hex
 
-    from .workbench.contract import CONTRACT_SCRATCH_KEY, build_contract
+    from .workbench.contract import CONTRACT_SCRATCH_KEY, build_contract, pasted_paper_text
     from .workbench.templates import get_template
 
     task_template = get_template(req.template) if req.template else None
@@ -1706,6 +1710,22 @@ async def create_run(
             # 契约里的质量策略会覆盖 settings.quality，这里必须带上用户的设置
             quality=settings.quality,
         )
+        if (
+            task_template.input_kind == "paper"
+            and not contract.papers
+            and not req.attachments
+            and not pasted_paper_text(contract)
+        ):
+            # 评审 / 精读的对象是一篇具体论文：没有论文就不建 run，
+            # 否则只会得到一份空转的交付，或被换成检索到的另一篇论文。
+            raise HTTPException(
+                422,
+                {
+                    "code": "paper_required",
+                    "message": f"请提供要{task_template.title}的论文："
+                    "粘贴 arXiv / DOI / 论文链接或论文文本，或上传论文文件",
+                },
+            )
         scratch = execution.checkpoint.setdefault("scratch", {})
         if isinstance(scratch, dict):
             # 契约与模板一起冻结进初始 checkpoint：恢复后的尝试、worker 与交付层

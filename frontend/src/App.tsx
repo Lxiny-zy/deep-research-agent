@@ -76,6 +76,7 @@ const ADVANCED_NAV: NavItem[] = [
 
 const PAGE_TITLE: [RegExp, string, string][] = [
   [/^\/$/, '科研工作台', 'Workbench'],
+  [/^\/runs\/[^/]+\/read/, '论文精读', 'Paper Reader'],
   [/^\/runs\//, '任务详情', 'Research Run'],
   [/^\/history/, '任务记录', 'Task History'],
   [/^\/qa/, '学术问答', 'Research Q&A'],

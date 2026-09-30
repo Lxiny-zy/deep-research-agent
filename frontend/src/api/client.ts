@@ -43,7 +43,9 @@ import type {
   RunTemplateInfo,
   QaConversation,
   QaMessage,
+  QaSourceOption,
   RunNarrative,
+  RunReader,
   RunWorkspace,
   TierSpec,
   UsageQuota,
@@ -919,14 +921,16 @@ export async function fetchDeliverable(
 
 // ---- 学术问答 --------------------------------------------------------------
 
-export function listConversations(signal?: AbortSignal): Promise<QaConversation[]> {
-  return request<QaConversation[]>('/api/qa/conversations', { signal })
+/** 不传 runId 时只列普通问答；传入时只列绑定到该精读任务的会话。 */
+export function listConversations(signal?: AbortSignal, runId?: string): Promise<QaConversation[]> {
+  const query = runId ? `?${new URLSearchParams({ run_id: runId }).toString()}` : ''
+  return request<QaConversation[]>(`/api/qa/conversations${query}`, { signal })
 }
 
-export function createConversation(title = ''): Promise<QaConversation> {
+export function createConversation(title = '', runId?: string): Promise<QaConversation> {
   return request<QaConversation>('/api/qa/conversations', {
     method: 'POST',
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(runId ? { title, run_id: runId } : { title }),
   })
 }
 
@@ -938,12 +942,46 @@ export function deleteConversation(id: string): Promise<void> {
   return requestVoid(`/api/qa/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
-export function askQuestion(id: string, query: string, signal?: AbortSignal): Promise<QaMessage> {
+/** 精读会话可逐轮选择额外参考来源；普通问答忽略 scope。 */
+export function askQuestion(
+  id: string,
+  query: string,
+  signal?: AbortSignal,
+  scope?: { sources: QaSourceOption[]; projectId?: string },
+): Promise<QaMessage> {
+  const body = scope
+    ? { query, sources: scope.sources, ...(scope.projectId ? { project_id: scope.projectId } : {}) }
+    : { query }
   return request<QaMessage>(`/api/qa/conversations/${encodeURIComponent(id)}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ query }),
+    body: JSON.stringify(body),
     signal,
   })
+}
+
+export function getReader(runId: string, signal?: AbortSignal): Promise<RunReader> {
+  return request<RunReader>(`/api/runs/${encodeURIComponent(runId)}/reader`, { signal })
+}
+
+/** 取回原版 PDF 的字节；由前端的 PDF.js 渲染，不交给浏览器内置阅读器。 */
+export async function fetchReaderPdf(
+  runId: string,
+  documentId: string,
+  signal?: AbortSignal,
+): Promise<ArrayBuffer> {
+  const key = getApiKey()
+  return withResponse(
+    `/api/runs/${encodeURIComponent(runId)}/reader/${encodeURIComponent(documentId)}/pdf`,
+    { headers: key ? { Authorization: `Bearer ${key}` } : {}, signal },
+    async (res) => {
+      if (!res.ok) {
+        if (res.status === 401) signalUnauthorized(key)
+        throw new ApiError(res.status, res.status === 404 ? '原版 PDF 暂不可用' : res.statusText)
+      }
+      return res.arrayBuffer()
+    },
+    120_000,
+  )
 }
 
 export function getNarrative(id: string, signal?: AbortSignal): Promise<RunNarrative> {
@@ -987,7 +1025,7 @@ export function getQualitySchema(signal?: AbortSignal): Promise<QualityField[]> 
   return request<QualityField[]>('/api/config/quality-schema', { signal })
 }
 
-/** 上传并解析一个任务附件（文件内容以 Base64 传输，服务端只解析不落盘）。 */
+/** 上传并解析一个任务附件（文件内容以 Base64 传输；PDF 原文件会保存，供精读页显示原版）。 */
 export function uploadAttachment(
   body: { filename: string; mime_type: string; data_base64: string },
   signal?: AbortSignal,

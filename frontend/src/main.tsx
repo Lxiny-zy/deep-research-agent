@@ -42,6 +42,10 @@ const router = createBrowserRouter([
         lazy: async () => ({ Component: (await import('./pages/RunPage')).default }),
       },
       {
+        path: 'runs/:id/read',
+        lazy: async () => ({ Component: (await import('./pages/ReaderPage')).default }),
+      },
+      {
         path: 'history',
         lazy: async () => ({ Component: (await import('./pages/HistoryPage')).default }),
       },

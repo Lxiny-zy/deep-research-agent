@@ -51,6 +51,8 @@ class AttachmentChunk(BaseModel):
     ordinal: int
     locator: str = Field(default="", max_length=300)
     content: str = Field(max_length=8000)
+    # PDF 片段的起始页（从 1 开始）；精读工作区据此把引用跳到原文对应页
+    page: int | None = Field(default=None, ge=1)
 
 
 class Attachment(BaseModel):
@@ -63,6 +65,8 @@ class Attachment(BaseModel):
     size: int = Field(ge=0)
     char_count: int = Field(ge=0)
     truncated: bool = False
+    # 原文件是否已保存（目前仅 PDF），精读工作区据此决定能否显示原版版面
+    stored: bool = False
     chunks: list[AttachmentChunk] = Field(default_factory=list, max_length=MAX_CHUNKS_PER_FILE)
 
     def preview(self, limit: int = 240) -> str:
@@ -81,6 +85,7 @@ class Attachment(BaseModel):
             "char_count": self.char_count,
             "chunk_count": len(self.chunks),
             "truncated": self.truncated,
+            "stored": self.stored,
             "preview": self.preview(),
             "sections": list(dict.fromkeys(c.locator.split(" / ")[0] for c in self.chunks))[:12],
         }
@@ -150,6 +155,7 @@ async def parse_attachment(raw: bytes, filename: str, mime_type: str = "") -> At
             ordinal=int(str(chunk.get("ordinal", index))),
             locator=str(chunk.get("locator", ""))[:300],
             content=str(chunk.get("content", ""))[:8000],
+            page=_page_of(chunk.get("page_start")),
         )
         for index, chunk in enumerate(prepared.chunks)
         if str(chunk.get("content", "")).strip()
@@ -164,6 +170,83 @@ async def parse_attachment(raw: bytes, filename: str, mime_type: str = "") -> At
         truncated=len(chunks) > MAX_CHUNKS_PER_FILE,
         chunks=chunks[:MAX_CHUNKS_PER_FILE],
     )
+
+
+def _page_of(page_start: object) -> int | None:
+    return page_start + 1 if isinstance(page_start, int) and page_start >= 0 else None
+
+
+# ---- 原文件保存：精读工作区显示原版 PDF --------------------------------------
+# 按内容哈希一文件一个产物目录（``<artifact_root>/attachments/att-<id>/``），
+# 复用 ArtifactStore 的原子写入、清单哈希与全局配额；同一文件重复上传只保存一次。
+
+ATTACHMENT_STORE_DIR = "attachments"
+_ATTACHMENT_ID_RE = re.compile(r"^[0-9a-f]{24}$")
+_ORIGINAL_STAGE = "source"
+_ORIGINAL_NAME = "original.pdf"
+
+
+def _original_store(settings: Any) -> Any:
+    from pathlib import Path
+
+    from ..artifacts import ArtifactStore
+
+    return ArtifactStore(
+        Path(settings.artifact_root) / ATTACHMENT_STORE_DIR,
+        max_bytes=MAX_FILE_BYTES,
+        max_total_bytes=settings.artifact_total_bytes,
+        quota_root=settings.artifact_root,
+    )
+
+
+def _slug(attachment_id: str) -> str:
+    # id 随创建任务的请求体回传，属于客户端可控数据：只接受内容哈希格式，杜绝路径注入
+    if not _ATTACHMENT_ID_RE.fullmatch(attachment_id):
+        raise AttachmentError("附件标识无效")
+    return f"att-{attachment_id}"
+
+
+def save_original(settings: Any, attachment_id: str, raw: bytes) -> None:
+    """保存上传的 PDF 原文件；已保存过同一内容时不重复写入。"""
+    if load_original(settings, attachment_id) is not None:
+        return
+    _original_store(settings).write(
+        _slug(attachment_id),
+        _ORIGINAL_STAGE,
+        _ORIGINAL_NAME,
+        raw,
+        mime_type="application/pdf",
+        max_size=MAX_FILE_BYTES,
+    )
+
+
+def load_original(settings: Any, attachment_id: str) -> bytes | None:
+    """读取已保存的 PDF 原文件，并按清单哈希复核；不存在或校验失败时返回 None。"""
+    from ..artifacts import ArtifactError
+
+    store = _original_store(settings)
+    slug = _slug(attachment_id)
+    try:
+        manifest = store.load_manifest(slug)
+    except (ArtifactError, OSError, ValueError):
+        return None
+    record = next((item for item in manifest.files if item.name == _ORIGINAL_NAME), None)
+    if record is None:
+        return None
+    try:
+        store.verify(
+            record.path,
+            expected_sha256=record.sha256,
+            expected_size=record.size_bytes,
+            raise_on_error=True,
+        )
+        data: bytes = store.read_bytes(record.path)
+    except (ArtifactError, OSError, ValueError):
+        return None
+    # 内容寻址：原文件的摘要必须与 id 对上，防止被替换成别的文件
+    if hashlib.sha256(data).hexdigest()[:24] != attachment_id:
+        return None
+    return data
 
 
 def limit_attachments(items: list[Attachment]) -> list[Attachment]:
@@ -204,6 +287,8 @@ def attachments_from_scratch(scratch: dict[str, Any]) -> list[Attachment]:
 __all__ = [
     "ATTACHMENTS_SCRATCH_KEY",
     "ATTACHMENT_URL_PREFIX",
+    "load_original",
+    "save_original",
     "attachment_url",
     "Attachment",
     "AttachmentChunk",

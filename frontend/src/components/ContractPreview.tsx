@@ -8,6 +8,8 @@ interface Props {
   loading: boolean
   error: unknown
   uploadedDataset?: string | null
+  /** 已解析完成、会随任务提交的附件数 */
+  attachmentCount?: number
 }
 
 /**
@@ -20,6 +22,7 @@ export default function ContractPreview({
   loading,
   error,
   uploadedDataset,
+  attachmentCount = 0,
 }: Props) {
   const needsPaper = template.input_kind === 'paper'
   const needsData = template.input_kind === 'dataset'
@@ -51,10 +54,14 @@ export default function ContractPreview({
                       </li>
                     ))}
                   </ul>
+                ) : attachmentCount > 0 ? (
+                  `使用上传的 ${attachmentCount} 个文件，不做开放检索`
+                ) : contract.pasted_paper_chars ? (
+                  `使用粘贴的论文文本（约 ${contract.pasted_paper_chars} 字），不做开放检索`
                 ) : (
                   <span className="contract-warning">
                     <AppIcon name="alert" size={13} aria-hidden="true" />
-                    未识别到 arXiv / DOI / 链接，将改为按主题检索
+                    还没有论文：请粘贴 arXiv / DOI / 论文链接或论文文本，或上传论文文件
                   </span>
                 )}
               </dd>
