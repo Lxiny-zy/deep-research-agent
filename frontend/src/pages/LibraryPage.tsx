@@ -53,7 +53,9 @@ export default function LibraryPage() {
   const [sourceTitle, setSourceTitle] = useState('')
   const [origin, setOrigin] = useState('')
   const [sourceText, setSourceText] = useState('')
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
+  const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -123,9 +125,44 @@ export default function LibraryPage() {
   }
 
   async function importCurrentSource() {
-    if (!projectId || !corpusId) return
+    if (!projectId || !corpusId || importing) return
     setError('')
+    setImporting(true)
+    setImportProgress('')
     try {
+      if (importNeedsFile) {
+        const failed: File[] = []
+        const errors: string[] = []
+        let succeeded = 0
+        for (const [index, file] of files.entries()) {
+          setImportProgress(`正在导入 ${index + 1}/${files.length}：${file.name}`)
+          try {
+            if (file.size > 16 * 1024 * 1024) throw new Error('文件超过 16 MB 限制')
+            const created = await importSource.mutateAsync({
+              corpus_id: corpusId,
+              kind: 'pdf',
+              title:
+                files.length === 1 && sourceTitle.trim()
+                  ? sourceTitle.trim()
+                  : file.name.replace(/\.pdf$/i, ''),
+              data_base64: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+              mime_type: file.type || 'application/pdf',
+            })
+            setSelectedSourceId(created.id)
+            succeeded += 1
+          } catch (cause) {
+            failed.push(file)
+            errors.push(`${file.name}：${cause instanceof Error ? cause.message : '导入失败'}`)
+          }
+        }
+        setFiles(failed)
+        setError(errors.join('；'))
+        setImportProgress(
+          `成功导入 ${succeeded} 个文件，失败 ${failed.length} 个${failed.length ? '，可重试失败文件' : ''}。`,
+        )
+        if (!failed.length) setSourceTitle('')
+        return
+      }
       const body: ImportSourceInput = {
         corpus_id: corpusId,
         kind: mode,
@@ -133,19 +170,15 @@ export default function LibraryPage() {
       }
       if (importNeedsUrl) body.origin_url = origin.trim()
       if (importNeedsText) body.text = sourceText
-      if (importNeedsFile && file) {
-        body.data_base64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()))
-        body.mime_type = file.type || 'application/pdf'
-        body.title ||= file.name.replace(/\.pdf$/i, '')
-      }
       const created = await importSource.mutateAsync(body)
       setSelectedSourceId(created.id)
       setSourceTitle('')
       setOrigin('')
       setSourceText('')
-      setFile(null)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '来源导入失败')
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -211,9 +244,8 @@ export default function LibraryPage() {
       <header className="page-header">
         <div>
           <h1>资料库</h1>
-          <p>
-            按项目管理研究来源：导入、审核、查看原文片段，已纳入的来源会参与后续任务的证据核验。
-          </p>
+          <p className="page-verse">收得片纸，留待来日细读。</p>
+          <p>按项目整理文献与资料，在后续研究中查阅、引用。</p>
         </div>
       </header>
 
@@ -295,6 +327,7 @@ export default function LibraryPage() {
                   key={project.id}
                   className={`library-project${project.id === projectId ? ' is-active' : ''}`}
                   aria-current={project.id === projectId ? 'true' : undefined}
+                  disabled={importing}
                   onClick={() => {
                     setProjectId(project.id)
                     setCorpusId('')
@@ -340,6 +373,7 @@ export default function LibraryPage() {
                     <AppIcon name="database" size={15} aria-hidden="true" />
                     <select
                       id="corpus-select"
+                      disabled={importing}
                       className="input"
                       value={corpusId}
                       onChange={(event) => {
@@ -397,9 +431,11 @@ export default function LibraryPage() {
                       key={item.value}
                       className={mode === item.value ? 'active' : ''}
                       aria-pressed={mode === item.value}
+                      disabled={importing}
                       onClick={() => {
                         setMode(item.value)
-                        setFile(null)
+                        setFiles([])
+                        setImportProgress('')
                       }}
                     >
                       <AppIcon name={item.icon} size={14} aria-hidden="true" />
@@ -413,6 +449,7 @@ export default function LibraryPage() {
                     <input
                       className="input"
                       value={sourceTitle}
+                      disabled={importing || files.length > 1}
                       onChange={(event) => setSourceTitle(event.target.value)}
                       placeholder="可留空，系统会尝试识别"
                     />
@@ -444,38 +481,49 @@ export default function LibraryPage() {
                   )}
                   {importNeedsFile && (
                     <label className="field-label library-import-wide library-file-drop">
-                      PDF 文件（最大 16 MB）
+                      PDF 文件（支持多选，每个最大 16 MB；批量按文件名命名）
                       <span className="library-file-box">
                         <AppIcon name="download" size={18} aria-hidden="true" />
-                        <span>{file ? file.name : '选择 PDF 文件'}</span>
+                        <span>
+                          {files.length
+                            ? files.map((file) => file.name).join('、')
+                            : '选择 PDF 文件'}
+                        </span>
                         <input
                           type="file"
+                          multiple
+                          disabled={importing}
                           accept="application/pdf,.pdf"
-                          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                          onChange={(event) => {
+                            setFiles(Array.from(event.target.files ?? []))
+                            setImportProgress('')
+                            event.target.value = ''
+                          }}
                         />
                       </span>
                     </label>
                   )}
                 </div>
                 <div className="library-form-actions">
+                  {importProgress && <span role="status">{importProgress}</span>}
                   <button
                     type="button"
                     className="btn btn-primary"
                     disabled={
-                      importSource.isPending ||
+                      importing ||
                       (importNeedsUrl && !origin.trim()) ||
                       (importNeedsText && !sourceText.trim()) ||
-                      (importNeedsFile && !file)
+                      (importNeedsFile && !files.length)
                     }
                     onClick={() => void importCurrentSource()}
                   >
                     <AppIcon
-                      name={importSource.isPending ? 'loader' : 'plus'}
+                      name={importing ? 'loader' : 'plus'}
                       size={15}
-                      className={importSource.isPending ? 'spin' : ''}
+                      className={importing ? 'spin' : ''}
                       aria-hidden="true"
                     />
-                    {importSource.isPending ? '正在提取与分块…' : '导入资料库'}
+                    {importing ? '正在提取与分块…' : '导入资料库'}
                   </button>
                 </div>
               </section>

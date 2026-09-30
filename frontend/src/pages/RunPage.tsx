@@ -426,10 +426,10 @@ export default function RunPage() {
                   <p className="run-validation-note" role="status">
                     <AppIcon name="shield" size={14} aria-hidden="true" />
                     <span>
-                      正文已完成引用与数值一致性检查。
-                      {structuredDocument.data.final_validation.fallback &&
-                        '生成内容未通过检查，已改为已验证素材摘要。'}
-                      证据标签说明输入素材的验证状态，不代表逐段语义审核。
+                      {structuredDocument.data.final_validation.fallback
+                        ? '正文未通过引用或数值检查，已替换为核验素材摘要。'
+                        : '已检查正文的引用与数值一致性。'}
+                      证据标签仅反映素材状态，不代表逐段语义审核。
                     </span>
                   </p>
                 )}
@@ -487,7 +487,7 @@ export default function RunPage() {
           </details>
           {stream.dag && (
             <section className="panel run-dag-panel">
-              <h3 className="panel-title">子问题依赖（DAG 分层调度）</h3>
+              <h3 className="panel-title">子问题依赖</h3>
               <DagView dag={stream.dag} />
             </section>
           )}
@@ -499,7 +499,7 @@ export default function RunPage() {
         <summary className="run-collapsible-head">
           <span className="panel-title">
             <AppIcon name="gauge" size={15} aria-hidden="true" />
-            意图判定与编排详情
+            诊断详情
           </span>
           <span className="hint">诊断信息，用于排查路由与编排</span>
           <AppIcon name="chevron-down" size={15} aria-hidden="true" />

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import QaPage from './QaPage'
 import type { QaConversation } from '../types'
@@ -42,14 +42,21 @@ const conversation: QaConversation = {
   ],
 }
 
+function PageRoutes() {
+  const location = useLocation()
+  return (
+    <Routes key={location.pathname}>
+      <Route path="/qa/:id?" element={<QaPage />} />
+    </Routes>
+  )
+}
+
 function renderAt(path: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/qa/:id?" element={<QaPage />} />
-        </Routes>
+        <PageRoutes />
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -93,5 +100,31 @@ describe('QaPage', () => {
     fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: '追问' } })
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('服务不可用')
+    expect(screen.getByLabelText('输入问题')).toHaveValue('追问')
+  })
+
+  it('keeps the first question visible while waiting and retries in the same conversation', async () => {
+    mocks.createConversation.mockResolvedValue({ ...conversation, id: 'c2', messages: [] })
+    let rejectAnswer!: (error: Error) => void
+    mocks.askQuestion.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectAnswer = reject
+        }),
+    )
+    renderAt('/qa')
+    fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: '首轮问题' } })
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledWith('c2', '首轮问题'))
+    expect(screen.getByText('正在检索并核验证据…')).toBeInTheDocument()
+    expect(screen.getByText('首轮问题')).toBeInTheDocument()
+    rejectAnswer(new Error('暂时失败'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('暂时失败')
+    expect(screen.getByLabelText('输入问题')).toHaveValue('首轮问题')
+    mocks.askQuestion.mockResolvedValueOnce(conversation.messages[0])
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    await screen.findByText('CASSI 是什么？')
+    expect(mocks.createConversation).toHaveBeenCalledTimes(1)
+    expect(mocks.askQuestion).toHaveBeenCalledTimes(2)
   })
 })

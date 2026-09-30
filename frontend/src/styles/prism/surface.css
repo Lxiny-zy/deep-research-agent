@@ -16,6 +16,21 @@
   letter-spacing: 0.04em;
 }
 
+/* 页头题句：大字寄意，下一行白话说明用途（一页只放一句） */
+.page-header .page-verse,
+.evidence-verse {
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  letter-spacing: 0.16em;
+  margin: 10px 0 2px;
+}
+
+.evidence-verse {
+  font-size: var(--text-md);
+  margin: 0 0 var(--space-2);
+}
+
 /* 区块标题：左侧一道墨靛竖线（参考稿的「| 科研任务」） */
 .panel-title,
 .section-title,

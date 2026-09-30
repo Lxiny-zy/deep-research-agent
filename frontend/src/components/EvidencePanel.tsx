@@ -455,6 +455,7 @@ export default function EvidencePanel({
             </span>
           </div>
           <div className="evidence-drawer-body" ref={bodyRef}>
+            <p className="evidence-verse">不独知其然，亦问其所据。</p>
             <p className="evidence-snapshot-note">
               展示的是检索服务返回的快照上下文，不等同于完整网页正文或事实已获证实。
               {findings.length > 1 &&

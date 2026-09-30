@@ -28,7 +28,7 @@ export default function ContractPreview({
       <div className="home-card-head">
         <span className="home-card-title">
           <AppIcon name="scan-search" size={15} aria-hidden="true" />
-          任务理解预览
+          任务确认
         </span>
         {loading && <AppIcon name="loader" size={14} className="spin" aria-label="正在解析" />}
       </div>

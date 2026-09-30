@@ -246,7 +246,7 @@ export default function WorkflowBuilderPage() {
           <EmptyState
             icon="workflow"
             title="为你的研究，搭一条专属流程"
-            description="从空白画布自由连接角色，或以模板为起点。保存后即可在新建研究中使用。"
+            description="新建工作流，或从内置模板开始。"
           >
             <button
               className="btn btn-secondary"

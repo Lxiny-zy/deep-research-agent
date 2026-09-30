@@ -297,7 +297,7 @@ export default function SettingsPage() {
       <header className="page-header">
         <div>
           <h1>设置</h1>
-          <p>管理默认模型、检索来源、研究参数与交付质量口径。修改后对新建任务生效。</p>
+          <p>设置默认模型、检索档案、研究参数与交付质量。保存后对新建任务生效。</p>
         </div>
       </header>
 

@@ -247,7 +247,7 @@ export default function AgentSquarePage() {
               <EmptyState
                 icon="user-cog"
                 title="把研究经验，交给专属角色"
-                description="内置角色已经可以使用。需要特定的提示词或模型时，创建自己的研究助手。"
+                description="需要专属提示词或模型？创建自定义角色。"
               >
                 <button className="btn btn-secondary" onClick={() => openAgentEditor(null)}>
                   创建自定义角色

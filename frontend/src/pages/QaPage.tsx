@@ -22,11 +22,11 @@ const STARTERS = [
   { tag: '方法梳理', text: '高光谱图像去噪有哪些基于深度先验的方法？' },
 ]
 
-/** 右侧「工作方式」：与回答下方「检索与核验过程」的三个步骤一一对应 */
+/** 阅读提示与回答内的核验记录分工：这里说明如何使用和判断回答。 */
 const STEPS = [
-  { title: '改写检索式', text: '把问题拆成可检索的关键词与同义表述' },
-  { title: '检索与逐字核验', text: '只保留能在原文中逐字找到的证据片段' },
-  { title: '引用复核', text: '回答里的每个论断都回指到具体来源' },
+  { title: '查看出处', text: '点击引用，回到原文核对结论与适用条件。' },
+  { title: '继续追问', text: '补充论文、方法或实验条件，让问题更具体。' },
+  { title: '留意证据不足', text: '未找到支持材料时，回答会说明局限。' },
 ]
 
 function MessageView({ message }: { message: QaMessage }) {
@@ -96,6 +96,7 @@ export default function QaPage() {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<string | null>(null)
+  const createdId = useRef<string | undefined>(undefined)
   const endRef = useRef<HTMLDivElement>(null)
 
   const conversations = useQuery({
@@ -110,20 +111,24 @@ export default function QaPage() {
 
   const ask = useMutation({
     mutationFn: async (text: string) => {
-      let target = id
+      let target = id || createdId.current
       if (!target) {
         const created = await createConversation(text.slice(0, 60))
         target = created.id
-        navigate(`/qa/${created.id}`, { replace: true })
+        createdId.current = created.id
       }
       await askQuestion(target, text)
       return target
     },
     onMutate: (text) => setPending(text),
+    onError: (_error, text) => setDraft(text),
     onSettled: async (target) => {
-      setPending(null)
       await queryClient.invalidateQueries({ queryKey: ['qa-conversations'] })
       if (target) await queryClient.invalidateQueries({ queryKey: ['qa-conversation', target] })
+      setPending(null)
+      // The app remounts page content when the pathname changes. Keep the
+      // first request and its error state visible until the answer is saved.
+      if (target && !id) navigate(`/qa/${target}`, { replace: true })
     },
   })
 
@@ -195,8 +200,8 @@ export default function QaPage() {
 
       <section className={'qa-main' + (empty ? ' is-empty' : '')} aria-label="学术问答">
         <header className="qa-header">
-          <h1>{conversation.data?.title || '向文献提问'}</h1>
-          <p className="hint">每个回答都来自逐字核验过的检索证据，附带可追溯引用。</p>
+          <h1>{conversation.data?.title || '学术问答'}</h1>
+          <p className="hint">问概念、找文献、比较研究方法，也可以接着上一轮追问。</p>
         </header>
 
         <div className={'qa-thread' + (empty ? ' is-empty' : '')} aria-live="polite">
@@ -205,8 +210,8 @@ export default function QaPage() {
               <span className="qa-welcome-kicker" aria-hidden="true">
                 Ask the literature
               </span>
-              <h2>问一个学术问题</h2>
-              <p className="hint">系统会检索文献、逐字核对原文，再给出带引用的回答。</p>
+              <h2>案头有所疑，且向卷中寻。</h2>
+              <p className="hint">选一个示例，或直接写下你的问题。</p>
             </div>
           )}
           {messages.map((message) => (
@@ -321,7 +326,7 @@ export default function QaPage() {
           )}
         </section>
         <section className="qa-context-block">
-          <h2 className="qa-context-title">工作方式</h2>
+          <h2 className="qa-context-title">阅读提示</h2>
           <ol className="qa-context-steps">
             {STEPS.map((step) => (
               <li key={step.title}>

@@ -323,9 +323,11 @@ function ResearchComposer() {
             <span className="home-hero-word is-spectral" aria-hidden="true">
               Research
             </span>
-            <span className="home-hero-question">今天想研究什么？</span>
+            <span className="home-hero-question">半窗晴色，一卷新知。</span>
           </h1>
-          <p className="home-hero-sub">探索未知，让思想穿越时空，与伟大的智慧相遇。</p>
+          <p className="home-hero-sub">
+            从一个问题开始，查阅文献、比较方法，整理自己的研究思路。
+          </p>
         </div>
         <div className="home-hero-aside" aria-hidden="true">
           <span>Knowledge drives human progress</span>
@@ -431,7 +433,7 @@ function ResearchComposer() {
               placeholder={
                 thread.length
                   ? '接着上文追问，例如「那第二个呢」…'
-                  : (activeTemplate?.input_placeholder ?? '输入一个值得深挖的问题…')
+                  : (activeTemplate?.input_placeholder ?? '写下你正在思考的问题……')
               }
             />
             {activeTemplate?.input_kind === 'dataset' && (
@@ -473,8 +475,12 @@ function ResearchComposer() {
             )}
             <div className="home-attach">
               <span className="home-attach-title">
-                添加附件
-                <span className="hint">模型会先阅读这些文件，引用时标注文件与页码 / 章节</span>
+                参考附件
+                <span className="hint">
+                  {activeTemplate?.input_kind === 'dataset'
+                    ? '用于补充说明；统计数据请通过上方 CSV / TSV 入口上传或粘贴。'
+                    : '可补充论文或背景材料。'}
+                </span>
               </span>
               <AttachmentDropzone
                 items={attachments.items}

@@ -109,7 +109,7 @@ export default function HistoryPage() {
   }
 
   async function removeOne(id: string, query: string) {
-    if (!window.confirm(`删除这条研究记录？\n\n「${query}」\n\n此操作不可撤销。`)) return
+    if (!window.confirm(`删除这条任务记录？\n\n「${query}」\n\n此操作不可撤销。`)) return
     setDeleteError('')
     try {
       await del.mutateAsync(id)
@@ -127,7 +127,7 @@ export default function HistoryPage() {
   async function removeSelected() {
     const ids = [...selected]
     if (!ids.length) return
-    if (!window.confirm(`删除选中的 ${ids.length} 条研究记录？此操作不可撤销。`)) return
+    if (!window.confirm(`删除选中的 ${ids.length} 条任务记录？此操作不可撤销。`)) return
     setDeleteError('')
     try {
       const result = await batchDel.mutateAsync(ids)
@@ -147,7 +147,8 @@ export default function HistoryPage() {
       <header className="page-header">
         <div>
           <h1>任务记录</h1>
-          <p>按问题、状态或标签检索每一次运行，完整链路、引用与交付物都可以回看。</p>
+          <p className="page-verse">重翻旧页，或见新意。</p>
+          <p>查看任务进度，回看研究报告与引用来源。</p>
         </div>
         {canCreate && (
           <div className="page-header-actions">
@@ -256,11 +257,19 @@ export default function HistoryPage() {
         {!isLoading && !isError && rows.length === 0 && (
           <EmptyState
             icon={filtersActive ? 'search' : 'history'}
-            title={filtersActive ? '没有符合条件的记录' : '还没有任务记录'}
+            title={
+              filtersActive
+                ? '没有符合条件的记录'
+                : canCreate
+                  ? '此间尚留白，待你落笔。'
+                  : '还没有任务记录'
+            }
             description={
               filtersActive
                 ? '换一个关键词，或清除筛选查看全部任务。'
-                : '每一次任务的过程、证据与交付物都会保存在这里。'
+                : canCreate
+                  ? '创建第一个研究任务，或回到工作台选一个示例问题。'
+                  : '当前账号暂无可见任务。'
             }
           >
             {filtersActive ? (
@@ -380,7 +389,7 @@ export default function HistoryPage() {
         )}
 
         {(offset > 0 || hasNext) && (
-          <nav className="history-pagination" aria-label="研究记录分页">
+          <nav className="history-pagination" aria-label="任务记录分页">
             <span className="hint">第 {Math.floor(offset / PAGE) + 1} 页</span>
             <div className="row">
               <button

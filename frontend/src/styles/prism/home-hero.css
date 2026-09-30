@@ -76,7 +76,8 @@
 .home-page .home-hero-sub {
   color: var(--text-2);
   font-family: var(--font-serif);
-  letter-spacing: 0.3em;
+  /* 白话说明句较长，字距收窄以免断成碎片；题句的疏朗留给上一行 */
+  letter-spacing: 0.08em;
   margin: 14px 0 0;
 }
 
