@@ -793,7 +793,7 @@ async def test_answer_question_verifies_and_cites(settings) -> None:
     from deep_research.workbench.qa import answer_question
 
     ctx = RunContext(llm=QaLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
-    result = await answer_question("CASSI 是什么？", history=[], ctx=ctx)
+    result = await answer_question("CASSI 是什么？", history=[], ctx=ctx, include_web=True)
     assert result.citations == ["https://a.com"]
     assert "[1]" in result.answer and not result.fallback
     assert [t["tool"] for t in result.thoughts] == [
@@ -830,9 +830,25 @@ async def test_answer_question_admits_when_no_evidence(settings) -> None:
             return []
 
     ctx = RunContext(llm=QaLLM(), search_tool=Empty(), tracer=Tracer(), settings=settings)
-    result = await answer_question("不存在的方向", history=[], ctx=ctx)
+    result = await answer_question("不存在的方向", history=[], ctx=ctx, include_web=True)
     assert result.fallback and result.citations == []
     assert "不足以回答" in result.answer
+
+
+@pytest.mark.asyncio
+async def test_answer_question_uses_model_knowledge_without_sources(settings) -> None:
+    from deep_research.agents.base import RunContext
+    from deep_research.observability import Tracer
+    from deep_research.workbench.qa import answer_question
+
+    class NoSearch:
+        async def search(self, query, *, max_results=5):  # type: ignore[no-untyped-def]
+            raise AssertionError("source-free answers must not trigger web search")
+
+    ctx = RunContext(llm=QaLLM(), search_tool=NoSearch(), tracer=Tracer(), settings=settings)
+    result = await answer_question("什么是 CASSI？", history=[], ctx=ctx)
+    assert result.citations == [] and not result.fallback
+    assert result.thoughts[-1]["tool"] == "model_knowledge"
 
 
 def test_followup_query_uses_previous_turn() -> None:
@@ -859,10 +875,12 @@ async def test_qa_endpoints_round_trip_and_isolate_owners(api_repo, monkeypatch)
         created = (await client.post("/api/qa/conversations", json={"title": "误差文献"})).json()
         cid = created["id"]
         answer = await client.post(
-            f"/api/qa/conversations/{cid}/messages", json={"query": "CASSI 是什么？"}
+            f"/api/qa/conversations/{cid}/messages",
+            json={"query": "CASSI 是什么？", "sources": ["web"]},
         )
         follow = await client.post(
-            f"/api/qa/conversations/{cid}/messages", json={"query": "第二篇呢"}
+            f"/api/qa/conversations/{cid}/messages",
+            json={"query": "第二篇呢", "sources": ["web"]},
         )
         detail = (await client.get(f"/api/qa/conversations/{cid}")).json()
         listing = (await client.get("/api/qa/conversations")).json()
@@ -876,6 +894,33 @@ async def test_qa_endpoints_round_trip_and_isolate_owners(api_repo, monkeypatch)
     assert listing[0]["message_count"] == 2 and "owner_id" not in listing[0]
     assert missing.status_code == 404
     assert deleted.status_code == 204 and gone.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_qa_stream_keeps_source_free_turn_on_model_knowledge_path(api_repo, monkeypatch) -> None:
+    api, _ = api_repo
+    from deep_research.workbench.qa_store import InMemoryQaStore
+
+    api.app.state.qa_store = InMemoryQaStore()
+
+    async def fake_build_agent(app, settings, **kwargs):  # type: ignore[no-untyped-def]
+        agent = DeepResearchAgent(settings, llm=QaLLM(), search_tool=FakeSearch())
+        return agent, None
+
+    monkeypatch.setattr(api, "_build_agent", fake_build_agent)
+    async with _client(api.app) as client:
+        created = await client.post("/api/qa/conversations", json={"title": "无检索问答"})
+        cid = created.json()["id"]
+        response = await client.post(
+            f"/api/qa/conversations/{cid}/messages/stream",
+            json={"query": "什么是 CASSI？", "sources": []},
+        )
+        detail = (await client.get(f"/api/qa/conversations/{cid}")).json()
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+    assert "event: complete" in response.text
+    assert detail["messages"][0]["citations"] == []
+    assert detail["messages"][0]["thoughts"][-1]["tool"] == "model_knowledge"
 
 
 @pytest.mark.asyncio

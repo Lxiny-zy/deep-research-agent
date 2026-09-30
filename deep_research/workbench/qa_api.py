@@ -1,23 +1,27 @@
 """学术问答 HTTP 接口：会话的增删查与「提问一轮」。
 
-提问是同步请求（一次检索 + 一次作答，通常十秒量级），不走 run / worker 队列：
-问答没有需要崩溃恢复的长流程，引入租约与 checkpoint 只会增加复杂度。
-每次提问仍受全局的创建限流保护，并把问题长度限制在 2000 字以内。
+提问在服务端仍复用一次性问答执行，但对外优先使用带心跳的 SSE：
+检索、核验和作答期间每 15 秒发送 keep-alive，完成后返回已持久化消息。
+客户端断线不会取消后台任务，刷新会话仍可读到结果；旧的同步 JSON 接口保留给兼容调用方。
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 from dataclasses import asdict
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
 from ..http.auth import principal_for
 from .qa import MAX_HISTORY_TURNS, answer_question
 from .qa_store import ConversationFullError, InMemoryQaStore, QaConversation, QaMessage, QaStore
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
+_SSE_HEARTBEAT_SECONDS = 15.0
 
 
 class CreateConversation(BaseModel):
@@ -28,7 +32,7 @@ class CreateConversation(BaseModel):
 
 class AskRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
-    # 仅对绑定任务的精读对话生效：本论文始终参与，这里勾选额外叠加的来源
+    # 普通问答中来源全部可选；绑定任务的精读对话另有固定的本论文来源
     sources: list[Literal["web", "library"]] = Field(default_factory=list, max_length=2)
     project_id: str | None = Field(None, max_length=64)
 
@@ -168,22 +172,75 @@ async def ask(conversation_id: str, body: AskRequest, request: Request) -> dict[
     return message
 
 
+@router.post("/conversations/{conversation_id}/messages/stream")
+async def ask_stream(conversation_id: str, body: AskRequest, request: Request) -> StreamingResponse:
+    """Run a normal persisted QA turn while keeping idle HTTP connections alive."""
+    tasks: set[asyncio.Task[dict[str, Any]]] = getattr(request.app.state, "qa_tasks", set())
+    request.app.state.qa_tasks = tasks
+    task = asyncio.create_task(ask(conversation_id, body, request))
+    tasks.add(task)
+
+    def discard_task(completed: asyncio.Task[dict[str, Any]]) -> None:
+        tasks.discard(completed)
+        if not completed.cancelled():
+            completed.exception()  # Retrieve exceptions if the client disconnected.
+
+    task.add_done_callback(discard_task)
+
+    async def events():
+        yield ": connected\n\n"
+        while not task.done():
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task), timeout=_SSE_HEARTBEAT_SECONDS
+                )
+            except TimeoutError:
+                yield ": keep-alive\n\n"
+            except Exception:
+                break
+        try:
+            message = task.result()
+        except HTTPException as exc:
+            payload = {"status": exc.status_code, "detail": exc.detail}
+            yield "event: error\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+        except Exception as exc:
+            payload = {"status": 502, "detail": {"code": "qa_failed", "message": str(exc)}}
+            yield "event: error\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+        else:
+            yield "event: complete\ndata: " + json.dumps(message, ensure_ascii=False) + "\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 async def _paper_scope(
     request: Request, conversation: QaConversation, body: AskRequest
 ) -> dict[str, Any]:
-    """精读对话的证据范围：本论文片段 + 用户勾选的资料库 / 联网检索。"""
-    if conversation.run_id is None:
-        return {}
-    from .reader import paper_sources
+    """Resolve the explicit source scope for both general and paper Q&A.
 
-    await _check_run(request, conversation.run_id)
-    detail = await request.app.state.repo.get_run(conversation.run_id)
-    if detail is None:
-        raise HTTPException(404, "run not found")
-    scope: dict[str, Any] = {
-        "paper_sources": paper_sources(detail),
-        "include_web": "web" in body.sources,
-    }
+    General Q&A defaults to model knowledge.  The web search model and the
+    private library are opt-in through ``sources``; paper conversations always
+    include their frozen paper chunks and may add either source.
+    """
+    if conversation.run_id is None:
+        scope: dict[str, Any] = {"include_web": "web" in body.sources}
+    else:
+        from .reader import paper_sources
+
+        await _check_run(request, conversation.run_id)
+        detail = await request.app.state.repo.get_run(conversation.run_id)
+        if detail is None:
+            raise HTTPException(404, "run not found")
+        scope = {
+            "paper_sources": paper_sources(detail),
+            "include_web": "web" in body.sources,
+        }
     if "library" in body.sources:
         if not body.project_id:
             raise HTTPException(422, "勾选资料库时请选择一个资料库项目")

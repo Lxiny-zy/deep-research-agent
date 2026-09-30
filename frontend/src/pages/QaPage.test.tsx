@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   createConversation: vi.fn(),
   askQuestion: vi.fn(),
   deleteConversation: vi.fn(),
+  listProjects: vi.fn(),
 }))
 vi.mock('../api/client', () => mocks)
 
@@ -67,6 +68,7 @@ describe('QaPage', () => {
     vi.clearAllMocks()
     mocks.listConversations.mockResolvedValue([{ ...conversation, messages: [] }])
     mocks.getConversation.mockResolvedValue(conversation)
+    mocks.listProjects.mockResolvedValue([])
   })
 
   it('renders answers with citations and the verification trail', async () => {
@@ -89,7 +91,12 @@ describe('QaPage', () => {
     renderAt('/qa')
     fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: '新问题' } })
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
-    await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledWith('c2', '新问题'))
+    await waitFor(() =>
+      expect(mocks.askQuestion).toHaveBeenCalledWith('c2', '新问题', undefined, {
+        sources: [],
+        projectId: undefined,
+      }),
+    )
     expect(mocks.createConversation).toHaveBeenCalledWith('新问题')
   })
 
@@ -115,8 +122,13 @@ describe('QaPage', () => {
     renderAt('/qa')
     fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: '首轮问题' } })
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
-    await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledWith('c2', '首轮问题'))
-    expect(screen.getByText('正在检索并核验证据…')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(mocks.askQuestion).toHaveBeenCalledWith('c2', '首轮问题', undefined, {
+        sources: [],
+        projectId: undefined,
+      }),
+    )
+    expect(screen.getByText('正在生成回答…')).toBeInTheDocument()
     expect(screen.getByText('首轮问题')).toBeInTheDocument()
     rejectAnswer(new Error('暂时失败'))
     expect(await screen.findByRole('alert')).toHaveTextContent('暂时失败')

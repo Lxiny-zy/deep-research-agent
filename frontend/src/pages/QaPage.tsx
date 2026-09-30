@@ -11,6 +11,7 @@ import {
   listConversations,
 } from '../api/client'
 import { RequestTimeoutError } from '../api/transport'
+import { useProjects } from '../hooks/useLibrary'
 import type { QaConversation, QaMessage } from '../types'
 
 const STARTERS = [
@@ -67,8 +68,12 @@ export default function QaPage() {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<string | null>(null)
+  const [withLibrary, setWithLibrary] = useState(false)
+  const [projectId, setProjectId] = useState('')
+  const [withWeb, setWithWeb] = useState(false)
   const createdId = useRef<string | undefined>(undefined)
   const endRef = useRef<HTMLDivElement>(null)
+  const projects = useProjects()
 
   const conversations = useQuery({
     queryKey: ['qa-conversations'],
@@ -90,8 +95,14 @@ export default function QaPage() {
       }
       const baselineCount =
         queryClient.getQueryData<QaConversation>(['qa-conversation', target])?.messages.length ?? 0
+      const sources: ('library' | 'web')[] = []
+      if (withLibrary) sources.push('library')
+      if (withWeb) sources.push('web')
       try {
-        await askQuestion(target, text)
+        await askQuestion(target, text, undefined, {
+          sources,
+          projectId: withLibrary ? projectId : undefined,
+        })
       } catch (error) {
         if (!(error instanceof RequestTimeoutError)) throw error
         const recovered = await recoverTimedOutAnswer(target, text, baselineCount)
@@ -126,7 +137,7 @@ export default function QaPage() {
 
   function submit(text = draft) {
     const value = text.trim()
-    if (!value || ask.isPending) return
+    if (!value || ask.isPending || (withLibrary && !projectId)) return
     setDraft('')
     ask.mutate(value)
   }
@@ -207,7 +218,7 @@ export default function QaPage() {
                 </span>
                 <div className="qa-answer qa-answer-pending" role="status">
                   <AppIcon name="loader" size={15} className="spin" aria-hidden="true" />
-                  正在检索并核验证据…
+                  {withLibrary || withWeb ? '正在检索并核验证据…' : '正在生成回答…'}
                 </div>
               </div>
             </article>
@@ -228,6 +239,43 @@ export default function QaPage() {
             submit()
           }}
         >
+          <fieldset className="reader-scope">
+            <legend>本轮参考</legend>
+            <label className="reader-scope-item">
+              <input
+                type="checkbox"
+                checked={withLibrary}
+                onChange={(event) => setWithLibrary(event.target.checked)}
+              />
+              私有知识库
+            </label>
+            {withLibrary && (
+              <select
+                className="reader-scope-project"
+                aria-label="选择知识库项目"
+                value={projectId}
+                onChange={(event) => setProjectId(event.target.value)}
+              >
+                <option value="">
+                  {projects.data?.length ? '选择项目' : '还没有知识库项目'}
+                </option>
+                {(projects.data ?? []).map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <label className="reader-scope-item">
+              <input
+                type="checkbox"
+                checked={withWeb}
+                onChange={(event) => setWithWeb(event.target.checked)}
+              />
+              联网检索
+            </label>
+            <span className="hint">默认使用模型自身知识；勾选后才会调用对应来源。</span>
+          </fieldset>
           <label className="visually-hidden" htmlFor="qa-input">
             输入问题
           </label>
@@ -249,11 +297,13 @@ export default function QaPage() {
             maxLength={2000}
           />
           <div className="qa-composer-foot">
-            <span className="hint">Enter 发送，Shift + Enter 换行</span>
+            <span className="hint">
+              {withLibrary && !projectId ? '勾选知识库后请选择项目' : 'Enter 发送，Shift + Enter 换行'}
+            </span>
             <button
               type="submit"
               className="btn btn-primary btn-sm"
-              disabled={ask.isPending || !draft.trim()}
+              disabled={ask.isPending || !draft.trim() || (withLibrary && !projectId)}
             >
               <AppIcon
                 name={ask.isPending ? 'loader' : 'arrow-right'}

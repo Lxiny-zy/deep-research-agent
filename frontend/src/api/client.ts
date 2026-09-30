@@ -958,15 +958,102 @@ export function askQuestion(
   const body = scope
     ? { query, sources: scope.sources, ...(scope.projectId ? { project_id: scope.projectId } : {}) }
     : { query }
-  return request<QaMessage>(
-    `/api/qa/conversations/${encodeURIComponent(id)}/messages`,
-    {
-      method: 'POST',
-      body: JSON.stringify(body),
-      signal,
-    },
-    120_000,
-  )
+  return askQuestionStream(id, body, signal)
+}
+
+async function askQuestionStream(
+  id: string,
+  body: { query: string; sources?: QaSourceOption[]; project_id?: string },
+  signal?: AbortSignal,
+): Promise<QaMessage> {
+  const key = getApiKey()
+  const controller = new AbortController()
+  const cancel = () => controller.abort(signal?.reason)
+  let timedOut = false
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
+  const refreshIdleTimer = () => {
+    if (idleTimer !== undefined) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, 45_000)
+  }
+  if (signal?.aborted) cancel()
+  signal?.addEventListener('abort', cancel, { once: true })
+  try {
+    const response = await fetch(
+      `/api/qa/conversations/${encodeURIComponent(id)}/messages/stream`,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'text/event-stream',
+          'Content-Type': 'application/json',
+          ...(key ? { Authorization: `Bearer ${key}` } : {}),
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      },
+    )
+    if (!response.ok) {
+      if (response.status === 401) signalUnauthorized(key)
+      let detail = response.statusText || `请求失败（HTTP ${response.status}）`
+      try {
+        const payload = (await response.json()) as { detail?: unknown }
+        if (payload.detail != null) detail = formatDetail(payload.detail, detail)
+      } catch {
+        // Keep status text when the error body is not JSON.
+      }
+      throw new ApiError(response.status, detail)
+    }
+    if (!response.body) throw new ApiError(0, '问答流没有响应内容')
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    refreshIdleTimer()
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        refreshIdleTimer()
+        buffer += decoder.decode(value, { stream: true })
+        let boundary = buffer.match(/\r?\n\r?\n/)
+        while (boundary?.index != null) {
+          const block = buffer.slice(0, boundary.index)
+          buffer = buffer.slice(boundary.index + boundary[0].length)
+          const event = block
+            .split(/\r?\n/)
+            .find((line) => line.startsWith('event:'))
+            ?.slice(6)
+            .trim()
+          const data = block
+            .split(/\r?\n/)
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).replace(/^ /, ''))
+            .join('\n')
+          if (event === 'complete' && data) return JSON.parse(data) as QaMessage
+          if (event === 'error' && data) {
+            const payload = JSON.parse(data) as { status?: number; detail?: unknown }
+            throw new ApiError(
+              payload.status ?? 502,
+              formatDetail(payload.detail, '问答失败'),
+            )
+          }
+          boundary = buffer.match(/\r?\n\r?\n/)
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => {})
+      reader.releaseLock()
+    }
+    throw new ApiError(0, '问答流提前结束')
+  } catch (error) {
+    if (timedOut) throw new RequestTimeoutError()
+    throw error
+  } finally {
+    if (idleTimer !== undefined) clearTimeout(idleTimer)
+    signal?.removeEventListener('abort', cancel)
+  }
 }
 
 export function getReader(runId: string, signal?: AbortSignal): Promise<RunReader> {
