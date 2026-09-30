@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -58,9 +59,49 @@ def load_benchmark(path: Path | str) -> dict[str, Any]:
 
 
 def _as_float(value: object, *, field_name: str) -> float:
-    if not isinstance(value, int | float):
+    if isinstance(value, bool) or not isinstance(value, int | float):
         raise ValueError(f"benchmark field {field_name} must be numeric")
-    return float(value)
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"benchmark field {field_name} must be finite")
+    return result
+
+
+def _read_float(
+    report: RegressionReport, scope: str, metrics: dict[str, Any], field_name: str
+) -> float | None:
+    """Read a required numeric metric without turning malformed input into a crash."""
+
+    if field_name not in metrics:
+        report.failures.append(
+            RegressionFailure(
+                scope=scope,
+                metric=f"missing_{field_name}",
+                actual="missing",
+                expected="finite numeric",
+                message=f"required benchmark field {field_name} is missing",
+            )
+        )
+        return None
+    try:
+        return _as_float(metrics[field_name], field_name=field_name)
+    except ValueError as exc:
+        report.failures.append(
+            RegressionFailure(
+                scope=scope,
+                metric=field_name,
+                actual=repr(metrics[field_name]),
+                expected="finite numeric",
+                message=str(exc),
+            )
+        )
+        return None
+
+
+def _read_row_float(
+    report: RegressionReport, scope: str, row: dict[str, Any], field_name: str
+) -> float | None:
+    return _read_float(report, scope, row, field_name)
 
 
 def _row_key(row: dict[str, Any]) -> tuple[str, str]:
@@ -99,8 +140,19 @@ def evaluate_regression(
                 message="judge protocol differs; regenerate the baseline before comparing scores",
             )
         )
+    raw_candidate_rows = candidate.get("rows")
+    if not isinstance(raw_candidate_rows, list) or not raw_candidate_rows:
+        report.failures.append(
+            RegressionFailure(
+                scope="benchmark",
+                metric="empty_rows",
+                actual="empty" if isinstance(raw_candidate_rows, list) else "missing",
+                expected="at least one row",
+                message="candidate benchmark must contain at least one result row",
+            )
+        )
     candidate_rows = {
-        _row_key(row): row for row in candidate.get("rows", []) if isinstance(row, dict)
+        _row_key(row): row for row in (raw_candidate_rows or []) if isinstance(row, dict)
     }
 
     if baseline is not None and policy.require_same_dataset:
@@ -133,12 +185,64 @@ def evaluate_regression(
             )
             continue
 
-        coverage = _as_float(
-            metrics.get("cited_source_snapshot_coverage", 0),
-            field_name="cited_source_snapshot_coverage",
-        )
-        unsupported = _unsupported_rate(metrics)
-        conflict = _conflict_rate(metrics)
+        # Validate every required scalar before applying thresholds.  Missing
+        # fields must not silently become zero, and non-finite values must not
+        # evade a gate through Python's comparison semantics.
+        _read_row_float(report, scope, row, "score_average")
+        _read_row_float(report, scope, row, "tokens")
+        coverage = _read_float(report, scope, metrics, "cited_source_snapshot_coverage")
+        total = _read_float(report, scope, metrics, "total_findings")
+        supported = _read_float(report, scope, metrics, "semantically_supported")
+        conflicted = _read_float(report, scope, metrics, "conflicted")
+        if total is None or supported is None or conflicted is None:
+            unsupported = None
+            conflict = None
+        else:
+            if total <= 0:
+                report.failures.append(
+                    RegressionFailure(
+                        scope=scope,
+                        metric="empty_findings",
+                        actual=total,
+                        expected="> 0",
+                        message="candidate result contains no findings to evaluate",
+                    )
+                )
+                unsupported = 1.0
+                conflict = 0.0
+            else:
+                unsupported = max(0.0, (total - supported) / total)
+                conflict = conflicted / total
+            if supported < 0 or supported > total:
+                report.failures.append(
+                    RegressionFailure(
+                        scope=scope,
+                        metric="semantically_supported",
+                        actual=supported,
+                        expected=f"between 0 and {total}",
+                        message="supported findings must be within total findings",
+                    )
+                )
+            if conflicted < 0 or conflicted > total:
+                report.failures.append(
+                    RegressionFailure(
+                        scope=scope,
+                        metric="conflicted",
+                        actual=conflicted,
+                        expected=f"between 0 and {total}",
+                        message="conflicted findings must be within total findings",
+                    )
+                )
+        if coverage is not None and not 0 <= coverage <= 1:
+            report.failures.append(
+                RegressionFailure(
+                    scope=scope,
+                    metric="cited_source_snapshot_coverage",
+                    actual=coverage,
+                    expected="between 0 and 1",
+                    message="coverage must be a probability",
+                )
+            )
         for metric, actual, expected, relation in (
             (
                 "citation_snapshot_coverage",
@@ -154,6 +258,8 @@ def evaluate_regression(
             ),
             ("conflict_rate", conflict, policy.max_conflict_rate, "maximum"),
         ):
+            if actual is None:
+                continue
             report.checks += 1
             failed = actual < expected if relation == "minimum" else actual > expected
             if failed:
@@ -190,8 +296,10 @@ def evaluate_regression(
         scope = f"{key[1]}/{key[0]}"
         candidate_row = candidate_rows[key]
         baseline_row = baseline_rows[key]
-        candidate_score = _as_float(candidate_row.get("score_average"), field_name="score_average")
-        baseline_score = _as_float(baseline_row.get("score_average"), field_name="score_average")
+        candidate_score = _read_row_float(report, scope, candidate_row, "score_average")
+        baseline_score = _read_row_float(report, scope, baseline_row, "score_average")
+        if candidate_score is None or baseline_score is None:
+            continue
         score_drop = baseline_score - candidate_score
         report.checks += 1
         if score_drop > policy.max_judge_score_drop:
@@ -205,8 +313,10 @@ def evaluate_regression(
                 )
             )
 
-        candidate_tokens = _as_float(candidate_row.get("tokens"), field_name="tokens")
-        baseline_tokens = _as_float(baseline_row.get("tokens"), field_name="tokens")
+        candidate_tokens = _read_row_float(report, scope, candidate_row, "tokens")
+        baseline_tokens = _read_row_float(report, scope, baseline_row, "tokens")
+        if candidate_tokens is None or baseline_tokens is None:
+            continue
         if baseline_tokens == 0:
             token_increase = float("inf") if candidate_tokens > 0 else 0.0
         else:

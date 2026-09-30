@@ -41,6 +41,10 @@ class GoldQuantity:
     source_section: str = ""
     evidence_quote: str = ""
 
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.value):
+            raise ValueError("HSI gold quantity value must be finite")
+
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> GoldQuantity:
         conditions = raw.get("conditions")
@@ -84,6 +88,10 @@ class HsiGoldCase:
     annotation_status: str = "unreviewed"
     annotation_note: str = ""
     condition_evidence_quotes: tuple[str, ...] = ()
+    # Pairs that must remain separate.  This complements ``source_groups``:
+    # a source cluster can be correct for duplicate publication records while
+    # still incorrectly merging two genuinely independent measurements.
+    independent_source_pairs: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> HsiGoldCase:
@@ -94,6 +102,16 @@ class HsiGoldCase:
         )
         groups = raw.get("source_groups", {})
         assignments = raw.get("column_assignments", {})
+        independent_pairs = raw.get("independent_source_pairs", [])
+        parsed_independent_pairs: list[tuple[str, str]] = []
+        if isinstance(independent_pairs, Sequence) and not isinstance(
+            independent_pairs, (str, bytes, bytearray)
+        ):
+            for pair in independent_pairs:
+                if isinstance(pair, Sequence) and not isinstance(pair, (str, bytes, bytearray)):
+                    values = tuple(str(value) for value in pair)
+                    if len(values) == 2 and values[0] != values[1]:
+                        parsed_independent_pairs.append((values[0], values[1]))
         return cls(
             case_id=str(raw.get("case_id", raw.get("id", ""))),
             quantities=quantities,
@@ -117,56 +135,84 @@ class HsiGoldCase:
                 )
                 if str(quote)
             ),
+            independent_source_pairs=tuple(dict.fromkeys(parsed_independent_pairs)),
         )
 
 
 @dataclass(frozen=True)
 class HsiCaseMetrics:
     case_id: str
-    quantity_accuracy: float
-    condition_completeness: float
-    pseudo_dual_source_interception_rate: float
-    table_column_accuracy: float
+    quantity_precision: float | None
+    quantity_recall: float | None
+    quantity_f1: float | None
+    condition_completeness: float | None
+    pseudo_dual_source_interception_rate: float | None
+    source_false_merge_rate: float | None
+    table_column_accuracy: float | None
     quantity_expected: int = 0
+    quantity_predicted: int = 0
     quantity_matched: int = 0
     conditions_expected: int = 0
     conditions_complete: int = 0
     pseudo_pairs: int = 0
     pseudo_pairs_blocked: int = 0
+    independent_pairs: int = 0
+    independent_pairs_merged: int = 0
     columns_expected: int = 0
     columns_matched: int = 0
+
+    @property
+    def quantity_accuracy(self) -> float | None:
+        """Compatibility alias; numeric quality is now reported as F1."""
+
+        return self.quantity_f1
 
 
 @dataclass(frozen=True)
 class HsiBenchmarkMetrics:
     cases: tuple[HsiCaseMetrics, ...]
-    quantity_accuracy: float
-    condition_completeness: float
-    pseudo_dual_source_interception_rate: float
-    table_column_accuracy: float
+    quantity_precision: float | None
+    quantity_recall: float | None
+    quantity_f1: float | None
+    condition_completeness: float | None
+    pseudo_dual_source_interception_rate: float | None
+    source_false_merge_rate: float | None
+    table_column_accuracy: float | None
 
     @property
-    def benchmark_numeric_accuracy(self) -> float:
+    def benchmark_numeric_accuracy(self) -> float | None:
         """Readable alias used by release dashboards."""
 
-        return self.quantity_accuracy
+        return self.quantity_f1
 
     @property
-    def experiment_condition_completeness(self) -> float:
+    def experiment_condition_completeness(self) -> float | None:
         return self.condition_completeness
 
     @property
-    def false_double_source_interception_rate(self) -> float:
+    def false_double_source_interception_rate(self) -> float | None:
         return self.pseudo_dual_source_interception_rate
+
+    @property
+    def quantity_accuracy(self) -> float | None:
+        """Compatibility alias; do not interpret this as gold-only accuracy."""
+
+        return self.quantity_f1
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            # Keep the old key for consumers, but make the precision/recall
+            # semantics explicit and expose F1 as the compatibility value.
             "quantity_accuracy": self.quantity_accuracy,
+            "quantity_precision": self.quantity_precision,
+            "quantity_recall": self.quantity_recall,
+            "quantity_f1": self.quantity_f1,
             "benchmark_numeric_accuracy": self.benchmark_numeric_accuracy,
             "condition_completeness": self.condition_completeness,
             "experiment_condition_completeness": self.experiment_condition_completeness,
             "pseudo_dual_source_interception_rate": self.pseudo_dual_source_interception_rate,
             "false_double_source_interception_rate": self.false_double_source_interception_rate,
+            "source_false_merge_rate": self.source_false_merge_rate,
             "table_column_accuracy": self.table_column_accuracy,
             "cases": [case.__dict__ for case in self.cases],
         }
@@ -182,20 +228,21 @@ def evaluate_hsi_case(
     """Evaluate one case with conservative, deterministic matching."""
 
     gold_case = gold if isinstance(gold, HsiGoldCase) else HsiGoldCase.from_dict(gold)
-    matched = sum(1 for expected in gold_case.quantities if _quantity_match(expected, findings))
+    matched, matched_findings = _match_quantities(gold_case.quantities, findings)
     quantity_expected = len(gold_case.quantities)
+    quantity_predicted = sum(1 for finding in findings if _is_quantity_prediction(finding))
 
     condition_total = len(gold_case.quantities)
     condition_complete = sum(
         1
-        for expected in gold_case.quantities
-        if _condition_complete(
-            _find_quantity(expected, findings), gold_case.required_condition_fields
-        )
+        for index in range(quantity_expected)
+        if _condition_complete(matched_findings.get(index), gold_case.required_condition_fields)
     )
 
     pseudo_pairs = _pseudo_pairs(gold_case.source_groups)
     blocked = _count_blocked_pairs(pseudo_pairs, source_identities or {})
+    independent_pairs = gold_case.independent_source_pairs
+    independent_merged = _count_merged_pairs(independent_pairs, source_identities or {})
 
     assignments = predicted_columns or {}
     column_total = len(gold_case.column_assignments)
@@ -207,16 +254,22 @@ def evaluate_hsi_case(
 
     return HsiCaseMetrics(
         case_id=gold_case.case_id,
-        quantity_accuracy=_ratio(matched, quantity_expected),
+        quantity_precision=_ratio(matched, quantity_predicted),
+        quantity_recall=_ratio(matched, quantity_expected),
+        quantity_f1=_f1(_ratio(matched, quantity_predicted), _ratio(matched, quantity_expected)),
         condition_completeness=_ratio(condition_complete, condition_total),
         pseudo_dual_source_interception_rate=_ratio(blocked, len(pseudo_pairs)),
+        source_false_merge_rate=_ratio(independent_merged, len(independent_pairs)),
         table_column_accuracy=_ratio(column_matched, column_total),
         quantity_expected=quantity_expected,
+        quantity_predicted=quantity_predicted,
         quantity_matched=matched,
         conditions_expected=condition_total,
         conditions_complete=condition_complete,
         pseudo_pairs=len(pseudo_pairs),
         pseudo_pairs_blocked=blocked,
+        independent_pairs=len(independent_pairs),
+        independent_pairs_merged=independent_merged,
         columns_expected=column_total,
         columns_matched=column_matched,
     )
@@ -228,9 +281,16 @@ def evaluate_hsi_benchmark(
     *,
     source_identities: Mapping[str, Mapping[str, SourceIdentity]] | None = None,
     predicted_columns: Mapping[str, Mapping[str, str]] | None = None,
+    require_release_ready: bool = False,
 ) -> HsiBenchmarkMetrics:
     """Evaluate all cases and aggregate by annotated item, not by case size."""
 
+    parsed_cases = tuple(
+        case if isinstance(case, HsiGoldCase) else HsiGoldCase.from_dict(case)
+        for case in gold_cases
+    )
+    if require_release_ready:
+        _validate_release_cases(parsed_cases)
     case_metrics = tuple(
         evaluate_hsi_case(
             case,
@@ -238,27 +298,43 @@ def evaluate_hsi_benchmark(
             source_identities=(source_identities or {}).get(_case_id(case), {}),
             predicted_columns=(predicted_columns or {}).get(_case_id(case), {}),
         )
-        for case in gold_cases
+        for case in parsed_cases
     )
     quantity_expected = sum(item.quantity_expected for item in case_metrics)
+    quantity_predicted = sum(item.quantity_predicted for item in case_metrics)
     quantity_matched = sum(item.quantity_matched for item in case_metrics)
     condition_expected = sum(item.conditions_expected for item in case_metrics)
     condition_complete = sum(item.conditions_complete for item in case_metrics)
     pair_total = sum(item.pseudo_pairs for item in case_metrics)
     pair_blocked = sum(item.pseudo_pairs_blocked for item in case_metrics)
+    independent_total = sum(item.independent_pairs for item in case_metrics)
+    independent_merged = sum(item.independent_pairs_merged for item in case_metrics)
     column_expected = sum(item.columns_expected for item in case_metrics)
     column_matched = sum(item.columns_matched for item in case_metrics)
     return HsiBenchmarkMetrics(
         cases=case_metrics,
-        quantity_accuracy=_ratio(quantity_matched, quantity_expected),
+        quantity_precision=_ratio(quantity_matched, quantity_predicted),
+        quantity_recall=_ratio(quantity_matched, quantity_expected),
+        quantity_f1=_f1(
+            _ratio(quantity_matched, quantity_predicted),
+            _ratio(quantity_matched, quantity_expected),
+        ),
         condition_completeness=_ratio(condition_complete, condition_expected),
         pseudo_dual_source_interception_rate=_ratio(pair_blocked, pair_total),
+        source_false_merge_rate=_ratio(independent_merged, independent_total),
         table_column_accuracy=_ratio(column_matched, column_expected),
     )
 
 
-def load_hsi_gold(path: str | Path) -> tuple[HsiGoldCase, ...]:
-    """Load a JSON object with ``schema_version: 1`` and ``cases``."""
+def load_hsi_gold(
+    path: str | Path, *, require_release_ready: bool = False
+) -> tuple[HsiGoldCase, ...]:
+    """Load a JSON object with ``schema_version: 1`` and ``cases``.
+
+    ``curated_draft`` fixtures remain useful for local smoke tests, but a
+    release gate must opt into ``require_release_ready`` so a single checked
+    paper cannot masquerade as an independently reviewed baseline.
+    """
 
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, Mapping) or raw.get("schema_version") != 1:
@@ -269,6 +345,8 @@ def load_hsi_gold(path: str | Path) -> tuple[HsiGoldCase, ...]:
     parsed = tuple(HsiGoldCase.from_dict(item) for item in cases if isinstance(item, Mapping))
     for case in parsed:
         _validate_curated_provenance(case)
+    if require_release_ready:
+        _validate_release_cases(parsed)
     return parsed
 
 
@@ -349,6 +427,52 @@ def _find_quantity(expected: GoldQuantity, findings: Sequence[Finding]) -> Findi
     return None
 
 
+def _match_quantities(
+    expected_quantities: Sequence[GoldQuantity], findings: Sequence[Finding]
+) -> tuple[int, dict[int, Finding]]:
+    """Match predictions to gold one-to-one to expose duplicate predictions."""
+
+    used: set[int] = set()
+    matched: dict[int, Finding] = {}
+    for finding in findings:
+        if not _is_quantity_prediction(finding):
+            continue
+        for index, expected in enumerate(expected_quantities):
+            if index in used or not _quantity_matches(expected, finding):
+                continue
+            used.add(index)
+            matched[index] = finding
+            break
+    return len(matched), matched
+
+
+def _is_quantity_prediction(finding: Finding) -> bool:
+    quantity = finding.quantity
+    return quantity is not None and quantity.value is not None
+
+
+def _quantity_matches(expected: GoldQuantity, finding: Finding) -> bool:
+    quantity = finding.quantity
+    if quantity is None or quantity.value is None:
+        return False
+    if finding.entity.strip().casefold() != expected.entity.strip().casefold():
+        return False
+    if quantity.metric.strip().casefold() != expected.metric.strip().casefold():
+        return False
+    if _condition_signature(finding.conditions) != _condition_signature(expected.conditions):
+        return False
+    expected_unit, scale = normalize_unit(expected.unit)
+    actual_unit, actual_scale = normalize_unit(quantity.unit)
+    if expected_unit != actual_unit:
+        return False
+    target = expected.value * scale
+    actual = float(quantity.value) * actual_scale
+    tolerance = tolerance_for(expected.rendered or str(expected.value), target)
+    if not math.isfinite(actual) or abs(actual - target) > tolerance:
+        return False
+    return not expected.comparator or quantity.comparator == expected.comparator
+
+
 def _condition_complete(finding: Finding | None, fields: Sequence[str]) -> bool:
     if finding is None:
         return False
@@ -363,14 +487,24 @@ def _condition_complete(finding: Finding | None, fields: Sequence[str]) -> bool:
 def _condition_signature(conditions: ExperimentConditions | None) -> tuple[Any, ...]:
     if conditions is None or conditions.is_empty():
         return ()
-    return (
-        conditions.dataset.strip().casefold(),
-        conditions.split.strip().casefold(),
-        conditions.bands,
-        conditions.spatial_size.strip().casefold(),
-        conditions.protocol.strip().casefold(),
-        conditions.train_data.strip().casefold(),
-        conditions.hardware.strip().casefold(),
+    return tuple(
+        value.strip().casefold() if isinstance(value, str) else value
+        for value in (
+            conditions.dataset,
+            conditions.split,
+            conditions.bands,
+            conditions.spectral_range,
+            conditions.scenes,
+            conditions.acquisition,
+            conditions.spatial_size,
+            conditions.calibration,
+            conditions.prototype_validation,
+            conditions.coding_mode,
+            conditions.dispersive_element,
+            conditions.protocol,
+            conditions.train_data,
+            conditions.hardware,
+        )
     )
 
 
@@ -393,8 +527,35 @@ def _count_blocked_pairs(
     return sum(1 for left, right in pairs if graph.same_publisher(left, right))
 
 
-def _ratio(numerator: int, denominator: int) -> float:
-    return round(numerator / denominator, 6) if denominator else 1.0
+def _count_merged_pairs(
+    pairs: Sequence[tuple[str, str]], identities: Mapping[str, SourceIdentity]
+) -> int:
+    if not pairs:
+        return 0
+    graph = cluster_sources(identities)
+    return sum(1 for left, right in pairs if graph.same_publisher(left, right))
+
+
+def _ratio(numerator: int, denominator: int) -> float | None:
+    return round(numerator / denominator, 6) if denominator else None
+
+
+def _f1(precision: float | None, recall: float | None) -> float | None:
+    if precision is None or recall is None or precision + recall == 0:
+        return None if precision is None or recall is None else 0.0
+    return round(2 * precision * recall / (precision + recall), 6)
+
+
+def _validate_release_cases(cases: Sequence[HsiGoldCase]) -> None:
+    if not cases:
+        raise ValueError("HSI release baseline must contain at least one case")
+    accepted = {"reviewed", "independently_reviewed"}
+    for case in cases:
+        if case.annotation_status not in accepted:
+            raise ValueError(
+                f"HSI case {case.case_id} is {case.annotation_status!r}; "
+                "curated_draft fixtures are not release-ready"
+            )
 
 
 __all__ = [

@@ -122,6 +122,26 @@ def test_missing_metrics_and_rows_fail_closed() -> None:
     assert {"dataset", "metrics", "missing_rows"} <= metrics
 
 
+def test_empty_candidate_rows_are_not_a_passing_zero_sample() -> None:
+    candidate = _payload()
+    candidate["rows"] = []
+    report = evaluate_regression(candidate)
+    assert "empty_rows" in {failure.metric for failure in report.failures}
+
+
+def test_missing_required_metric_is_reported_instead_of_defaulting_to_zero() -> None:
+    row = _row()
+    del row["metrics"]["semantically_supported"]
+    report = evaluate_regression(_payload(row))
+    assert "missing_semantically_supported" in {failure.metric for failure in report.failures}
+
+
+def test_non_finite_metric_is_rejected() -> None:
+    row = _row(coverage=float("nan"))
+    report = evaluate_regression(_payload(row))
+    assert "cited_source_snapshot_coverage" in {failure.metric for failure in report.failures}
+
+
 def test_load_benchmark_validates_schema(tmp_path) -> None:
     valid = tmp_path / "valid.json"
     valid.write_text(json.dumps(_payload()), encoding="utf-8")

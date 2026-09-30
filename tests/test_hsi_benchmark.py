@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
+
+import pytest
 
 from deep_research.models import (
     EvidenceVerification,
@@ -108,11 +111,82 @@ def test_wrong_unit_or_missing_condition_is_not_counted() -> None:
 def test_benchmark_aggregates_item_counts_and_accepts_empty_dimensions() -> None:
     gold = [HsiGoldCase(case_id="empty")]
     metrics = evaluate_hsi_benchmark(gold, {})
-    assert metrics.quantity_accuracy == 1.0
-    assert metrics.condition_completeness == 1.0
-    assert metrics.pseudo_dual_source_interception_rate == 1.0
-    assert metrics.table_column_accuracy == 1.0
+    assert metrics.quantity_precision is None
+    assert metrics.quantity_recall is None
+    assert metrics.quantity_f1 is None
+    assert metrics.condition_completeness is None
+    assert metrics.pseudo_dual_source_interception_rate is None
+    assert metrics.source_false_merge_rate is None
+    assert metrics.table_column_accuracy is None
     assert metrics.as_dict()["cases"][0]["case_id"] == "empty"
+
+
+def test_numeric_metrics_penalize_extra_predictions_and_report_precision_recall() -> None:
+    gold = HsiGoldCase(
+        case_id="extra",
+        quantities=(GoldQuantity(entity="MST-L", metric="PSNR", value=38.36, unit="dB"),),
+    )
+    findings = [
+        _finding("MST-L", "PSNR", 38.36, unit="dB"),
+        _finding("MST-L", "PSNR", 39.10, unit="dB"),
+    ]
+    metrics = evaluate_hsi_case(gold, findings)
+    assert metrics.quantity_precision == 0.5
+    assert metrics.quantity_recall == 1.0
+    assert metrics.quantity_f1 == pytest.approx(2 / 3, abs=1e-6)
+    assert metrics.quantity_accuracy == metrics.quantity_f1
+
+
+def test_condition_signature_covers_acquisition_and_optical_fields() -> None:
+    gold_conditions = ExperimentConditions(
+        dataset="KAIST",
+        bands=28,
+        spectral_range="400-700 nm",
+        acquisition="real capture",
+        coding_mode="CASSI",
+        dispersive_element="prism",
+    )
+    finding_conditions = gold_conditions.model_copy(update={"acquisition": "simulated"})
+    gold = HsiGoldCase(
+        case_id="conditions",
+        quantities=(
+            GoldQuantity(
+                entity="MST-L", metric="PSNR", value=38.36, unit="dB", conditions=gold_conditions
+            ),
+        ),
+    )
+    metrics = evaluate_hsi_case(
+        gold, [_finding("MST-L", "PSNR", 38.36, conditions=finding_conditions)]
+    )
+    assert metrics.quantity_recall == 0.0
+    assert metrics.condition_completeness == 0.0
+
+
+def test_independent_source_pairs_measure_false_merges_separately() -> None:
+    gold = HsiGoldCase(
+        case_id="sources",
+        source_groups={"preprint": "work-a", "publisher": "work-a"},
+        independent_source_pairs=(("preprint", "publisher"),),
+    )
+    identities = {
+        "preprint": SourceIdentity(doi="10.1/same", domain="arxiv.org"),
+        "publisher": SourceIdentity(doi="10.1/same", domain="opg.optica.org"),
+    }
+    metrics = evaluate_hsi_case(gold, [], source_identities=identities)
+    assert metrics.pseudo_dual_source_interception_rate == 1.0
+    assert metrics.source_false_merge_rate == 1.0
+    assert metrics.independent_pairs_merged == 1
+
+
+def test_release_gate_rejects_curated_draft_fixture() -> None:
+    path = Path(__file__).parents[1] / "eval" / "baselines" / "hsi_gold.json"
+    with pytest.raises(ValueError, match="not release-ready"):
+        load_hsi_gold(path, require_release_ready=True)
+
+
+def test_non_finite_gold_quantity_is_rejected() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        GoldQuantity(entity="MST-L", metric="PSNR", value=math.nan)
 
 
 def test_checked_fixture_keeps_paper_provenance_and_draft_status() -> None:
