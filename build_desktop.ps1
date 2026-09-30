@@ -51,10 +51,12 @@ if (-not (Test-Path $VenvPython)) {
     Invoke-Native python -m venv $Venv
 }
 Invoke-Native $VenvPython -m pip --version
-Invoke-Native $VenvPython -m pip install --disable-pip-version-check -r requirements.txt pyinstaller
+Invoke-Native $VenvPython -m pip install --disable-pip-version-check pyinstaller
 if ($Windowed) {
     Invoke-Native $VenvPython -m pip install --disable-pip-version-check "pywebview>=5,<6"
 }
+Invoke-Native $VenvPython -m pip install --disable-pip-version-check --require-hashes -r requirements.lock -r requirements-workbench.lock
+Invoke-Native $VenvPython -m pip check
 
 $pyInstallerArgs = @(
     "--noconfirm",

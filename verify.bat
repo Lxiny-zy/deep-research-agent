@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0" || exit /b 1
 
 echo === [1/10] Install locked development dependencies ===
-python -m pip install --require-hashes -r requirements-dev.lock || goto :failed
+python -m pip install --require-hashes -r requirements-dev.lock -r requirements-workbench.lock || goto :failed
 
 echo.
 echo === [2/10] Check dependency lock consistency ===

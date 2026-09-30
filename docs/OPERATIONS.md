@@ -1,17 +1,22 @@
 # 运行、权限与恢复
 
-本指南对应数据库迁移 `0027`。升级前先取得一致备份；不需要连接实验室服务器。
+升级前先取得一致备份，并以 `alembic heads` 查看当前代码要求的迁移版本；不要使用历史文档中的版本号判断数据库已是最新。本地验证不需要连接实验室服务器。
 
 ## 部署能力
 
-| 能力 | 源码 + requirements.lock | 隔离安装 wheel | 基础 Docker 镜像 |
+| 能力 | 源码安装 | 隔离安装 wheel | 基础 Docker 镜像 |
 | --- | --- | --- | --- |
 | inline / 独立 worker | 支持，两者共用数据库配置、租约和事件 | 支持 | 支持，worker 需启用 profile |
 | React 页面与公共图像 | 先构建 frontend/dist | 构建 wheel 前须先构建前端 | 多阶段构建自动打包 |
 | Markdown / CSV / XLSX | 支持；openpyxl 已是默认运行依赖 | 支持 | 支持 |
 | 报告 PDF | 安装 PDF 锁文件及系统 Pango/字体 | 安装 pdf extra 及系统库 | 已安装 WeasyPrint、Pango 与中文字体 |
 | 外部归档/文档命令 | Linux 沙箱和相应工具可用后启用 | 同左 | 默认未安装，拒绝执行 |
-| PDF 全文解析 | 可选 PyMuPDF，缺失时按解析器能力降级 | fulltext extra | 以实际镜像安装情况为准 |
+| PDF 全文解析 | 安装工作台锁文件（包含 PyMuPDF） | 另装工作台锁文件或 fulltext extra | 已安装 PyMuPDF |
+| 工作台 Word / PPT / 统计分析 | 安装基础与工作台锁文件 | 除 wheel 外另装工作台锁文件 | 已安装工作台依赖 |
+
+源码快速开始安装 `requirements.lock` 与 `requirements-workbench.lock`；完整传统报告 PDF
+另需 `requirements-pdf.lock` 和系统渲染库。开发环境使用 `make install` 或 `verify.bat` 安装
+开发与工作台依赖。仅安装 wheel 的基础依赖，不代表所有工作台导出能力已具备。
 
 `GET /api/capabilities` 返回当前导出能力，前端据此展示可用操作。报告 PDF 渲染和
 `pdf.convert`（LibreOffice 文件转换）是两条不同执行路径。

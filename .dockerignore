@@ -2,8 +2,11 @@
 .git
 .github
 .gitignore
+.claude/
+docs/archive/
+apevon-full-package/
+apevon-full-package.zip
 *.md
-LICENSE
 
 # Runtime skill contracts are consumed by SkillResolver inside the image.
 # Re-include this subtree after the broad markdown exclusion above.

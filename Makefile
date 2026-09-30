@@ -16,16 +16,16 @@ help:  ## 显示可用命令
 	@$(PYTHON) -c "import re; from pathlib import Path; [print(f'  {m.group(1):<12} {m.group(2)}') for line in Path('Makefile').read_text(encoding='utf-8').splitlines() if (m := re.match(r'^([A-Za-z_-]+):.*?## (.*)$$', line))]"
 
 install:  ## 安装开发依赖（含 lint/类型/测试工具）
-	$(PYTHON) -m pip install --require-hashes -r requirements-dev.lock
-	$(PYTHON) -m pip install --require-hashes -r requirements-workbench.lock
+	$(PYTHON) -m pip install --require-hashes -r requirements-dev.lock -r requirements-workbench.lock
 
-lock:  ## 根据人工维护的 requirements*.txt 更新带哈希锁文件（需要 uv）
+lock:  ## 按基础 → PDF → 工作台 → 开发顺序生成互相兼容的锁文件（需要 uv）
 	$(UV) pip compile requirements.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements.lock
-	$(UV) pip compile requirements-pdf.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements-pdf.lock
-	$(UV) pip compile requirements-workbench.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements-workbench.lock
-	$(UV) pip compile requirements-dev.txt --universal --python-version 3.11 --generate-hashes --custom-compile-command "make lock" --output-file requirements-dev.lock
+	$(UV) pip compile requirements-pdf.txt --universal --python-version 3.11 --generate-hashes --constraint requirements.lock --custom-compile-command "make lock" --output-file requirements-pdf.lock
+	$(UV) pip compile requirements-workbench.txt --universal --python-version 3.11 --generate-hashes --constraint requirements.lock --constraint requirements-pdf.lock --custom-compile-command "make lock" --output-file requirements-workbench.lock
+	$(UV) pip compile requirements-dev.txt --universal --python-version 3.11 --generate-hashes --constraint requirements.lock --constraint requirements-pdf.lock --constraint requirements-workbench.lock --custom-compile-command "make lock" --output-file requirements-dev.lock
+	$(PYTHON) scripts/check_dependency_locks.py
 
-dependency-check:  ## 校验直接依赖均被锁文件以兼容版本覆盖
+dependency-check:  ## 校验直接依赖及跨锁文件版本一致性
 	$(PYTHON) scripts/check_dependency_locks.py
 
 audit: dependency-check  ## 审计 Python 与前端依赖漏洞

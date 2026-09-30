@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that direct requirements are represented by compatible locked versions."""
+"""Check direct requirements and shared versions across dependency lock groups."""
 
 from __future__ import annotations
 
@@ -73,8 +73,25 @@ def _check(requirements_path: Path, lock_path: Path) -> list[str]:
     return errors
 
 
+def _check_shared_versions(lock_paths: list[Path]) -> list[str]:
+    """All deployment groups share one environment and must agree on versions."""
+    versions: dict[str, tuple[Version, str]] = {}
+    errors: list[str] = []
+    for path in lock_paths:
+        for name, version in _locked(path).items():
+            previous = versions.get(name)
+            if previous is not None and previous[0] != version:
+                errors.append(
+                    f"{name}: {previous[1]} locks {previous[0]}, but {path.name} locks {version}"
+                )
+            else:
+                versions[name] = (version, path.name)
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
+    lock_paths: list[Path] = []
     lock_pairs = (
         ("requirements.txt", "requirements.lock"),
         ("requirements-pdf.txt", "requirements-pdf.lock"),
@@ -89,13 +106,15 @@ def main() -> int:
             continue
         try:
             errors.extend(_check(requirements_path, lock_path))
+            lock_paths.append(lock_path)
         except (OSError, ValueError) as exc:
             errors.append(str(exc))
+    errors.extend(_check_shared_versions(lock_paths))
     if errors:
         for error in errors:
             print(f"dependency lock check failed: {error}", file=sys.stderr)
         return 1
-    print("dependency locks contain compatible versions for all direct requirements")
+    print("dependency locks contain compatible direct requirements and shared versions")
     return 0
 
 

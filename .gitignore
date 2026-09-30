@@ -1,6 +1,10 @@
 __pycache__/
-*.pyc
+*.py[cod]
 .env
+.env.*
+!.env.example
+.claude/settings.local.json
+.claude/worktrees/
 .venv/
 .wheel-smoke/
 .ci-wheel-venv/

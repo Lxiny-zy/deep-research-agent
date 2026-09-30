@@ -2,16 +2,19 @@
 
 项目将人工维护的依赖范围与实际交付锁文件分开：
 
-- `requirements.txt` / `requirements-dev.txt` 声明直接依赖及允许版本范围；
-- `requirements.lock` / `requirements-pdf.lock` / `requirements-dev.lock` 锁定完整传递依赖并记录发行包哈希；
+- `requirements.txt` / `requirements-pdf.txt` / `requirements-workbench.txt` / `requirements-dev.txt` 声明各组直接依赖及允许版本范围；
+- 对应的四份 `requirements*.lock` 锁定完整传递依赖并记录发行包哈希；
 - `frontend/package-lock.json` 锁定前端完整依赖树及 npm integrity；
-- Docker 和 CI 只使用锁文件安装依赖，Python 安装强制启用 `--require-hashes`。
+- Docker 和 CI 的 Python 依赖安装强制启用 `--require-hashes`，前端使用 `npm ci`。
 
-修改依赖范围后运行 `make lock` 并提交受影响的 Python 锁文件。`make dependency-check`
-会离线检查每个直接依赖是否存在于对应锁文件且版本满足声明范围；CI 会据此阻止只修改
-依赖声明、遗漏锁文件的提交。
+四组 Python 锁分别服务于基础运行、PDF 渲染/全文解析、科研工作台、开发测试，不能当成缓存删除。
+`make lock` 按基础 → PDF → 工作台 → 开发的顺序生成；后续组以上游锁为约束，避免共同依赖
+被锁成不同版本。修改依赖范围后应运行该命令，并提交所有受影响的锁文件。
 
-`make audit` 对 Python 核心/PDF 生产依赖和完整前端依赖执行漏洞审计。CI 对中危及以上前端漏洞、
+`make dependency-check` 离线检查直接依赖范围及跨锁文件共同依赖的版本一致性；CI 会据此阻止
+声明与锁不同步、或者单份合法但组合安装冲突的提交。此检查不替代实际安装与漏洞审计。
+
+`make audit` 对 Python 基础/PDF/工作台生产依赖和完整前端依赖执行漏洞审计。CI 对中危及以上前端漏洞、
 以及任何存在于 Python Advisory Database 中的生产依赖漏洞直接失败。修复应升级依赖并
 重新生成锁文件，不应通过忽略列表永久绕过；短期无法修复时，应在变更说明中记录公告
 编号、影响分析、缓解措施、责任人和到期时间。

@@ -893,29 +893,29 @@ Judge 使用独立 Tracer，避免污染被评估 Agent 的 Token 统计。它�
 
 | 主题 | 文件 |
 |---|---|
-| Agent 协议、Blackboard、RunContext | [deep_research/agents/base.py](deep_research/agents/base.py) |
-| Planner | [deep_research/agents/planner.py](deep_research/agents/planner.py) |
-| Researcher 与来源过滤 | [deep_research/agents/researcher.py](deep_research/agents/researcher.py) |
-| Reflector | [deep_research/agents/reflector.py](deep_research/agents/reflector.py) |
-| Synthesizer 与引用 | [deep_research/agents/synthesizer.py](deep_research/agents/synthesizer.py) |
-| Coordinator / Aggregator / Critic | [deep_research/agents/coordinator.py](deep_research/agents/coordinator.py)、[deep_research/agents/aggregator.py](deep_research/agents/aggregator.py)、[deep_research/agents/critic.py](deep_research/agents/critic.py) |
-| 数据驱动 CardAgent | [deep_research/agents/card_agent.py](deep_research/agents/card_agent.py) |
-| LLM 结构化解析、流式调用与重试 | [deep_research/llm.py](deep_research/llm.py) |
-| 内置工作流 | [deep_research/workflows.py](deep_research/workflows.py) |
-| WorkflowEngine 与可靠性策略 | [deep_research/workflow.py](deep_research/workflow.py) |
-| 条件表达式与图结构 | [deep_research/orchestration/conditions.py](deep_research/orchestration/conditions.py)、[deep_research/orchestration/graph.py](deep_research/orchestration/graph.py) |
-| WorkflowRun / StepRun 状态模型 | [deep_research/orchestration/types.py](deep_research/orchestration/types.py)、[deep_research/orchestration/runtime.py](deep_research/orchestration/runtime.py) |
-| 子问题 DAG 调度 | [deep_research/dag.py](deep_research/dag.py)、[deep_research/scheduler.py](deep_research/scheduler.py) |
-| 应用编排门面 | [deep_research/orchestrator.py](deep_research/orchestrator.py) |
-| 事件、Token 与 EventHub | [deep_research/observability.py](deep_research/observability.py) |
-| API、SSE、后台执行和恢复 | [deep_research/api.py](deep_research/api.py) |
-| Catalog Runtime 与模型路由 | [deep_research/catalog/runtime.py](deep_research/catalog/runtime.py) |
-| Catalog API 与工作流保存校验 | [deep_research/catalog_api.py](deep_research/catalog_api.py) |
-| ORM 与 SQL Repository | [deep_research/persistence/orm.py](deep_research/persistence/orm.py)、[deep_research/persistence/sql_repository.py](deep_research/persistence/sql_repository.py) |
-| 工作流可视化编辑器 | [frontend/src/components/WorkflowEditor.tsx](frontend/src/components/WorkflowEditor.tsx)、[frontend/src/components/WorkflowFlowCanvas.tsx](frontend/src/components/WorkflowFlowCanvas.tsx)、[frontend/src/components/workflowEditorLogic.ts](frontend/src/components/workflowEditorLogic.ts) |
-| 前端 SSE 状态归并 | [frontend/src/hooks/useResearchStream.ts](frontend/src/hooks/useResearchStream.ts) |
-| 自动化评估 | [eval/run_eval.py](eval/run_eval.py)、[eval/judge.py](eval/judge.py) |
-| 部署 | [Dockerfile](Dockerfile)、[docker-compose.yml](docker-compose.yml)、[docker/entrypoint.sh](docker/entrypoint.sh) |
+| Agent 协议、Blackboard、RunContext | [deep_research/agents/base.py](../../../deep_research/agents/base.py) |
+| Planner | [deep_research/agents/planner.py](../../../deep_research/agents/planner.py) |
+| Researcher 与来源过滤 | [deep_research/agents/researcher.py](../../../deep_research/agents/researcher.py) |
+| Reflector | [deep_research/agents/reflector.py](../../../deep_research/agents/reflector.py) |
+| Synthesizer 与引用 | [deep_research/agents/synthesizer.py](../../../deep_research/agents/synthesizer.py) |
+| Coordinator / Aggregator / Critic | [deep_research/agents/coordinator.py](../../../deep_research/agents/coordinator.py)、[deep_research/agents/aggregator.py](../../../deep_research/agents/aggregator.py)、[deep_research/agents/critic.py](../../../deep_research/agents/critic.py) |
+| 数据驱动 CardAgent | [deep_research/agents/card_agent.py](../../../deep_research/agents/card_agent.py) |
+| LLM 结构化解析、流式调用与重试 | [deep_research/llm.py](../../../deep_research/llm.py) |
+| 内置工作流 | [deep_research/workflows.py](../../../deep_research/workflows.py) |
+| WorkflowEngine 与可靠性策略 | [deep_research/workflow.py](../../../deep_research/workflow.py) |
+| 条件表达式与图结构 | [deep_research/orchestration/conditions.py](../../../deep_research/orchestration/conditions.py)、[deep_research/orchestration/graph.py](../../../deep_research/orchestration/graph.py) |
+| WorkflowRun / StepRun 状态模型 | [deep_research/orchestration/types.py](../../../deep_research/orchestration/types.py)、[deep_research/orchestration/runtime.py](../../../deep_research/orchestration/runtime.py) |
+| 子问题 DAG 调度 | [deep_research/dag.py](../../../deep_research/dag.py)、[deep_research/scheduler.py](../../../deep_research/scheduler.py) |
+| 应用编排门面 | [deep_research/orchestrator.py](../../../deep_research/orchestrator.py) |
+| 事件、Token 与 EventHub | [deep_research/observability.py](../../../deep_research/observability.py) |
+| API、SSE、后台执行和恢复 | [deep_research/api.py](../../../deep_research/api.py) |
+| Catalog Runtime 与模型路由 | [deep_research/catalog/runtime.py](../../../deep_research/catalog/runtime.py) |
+| Catalog API 与工作流保存校验 | [deep_research/catalog_api.py](../../../deep_research/catalog_api.py) |
+| ORM 与 SQL Repository | [deep_research/persistence/orm.py](../../../deep_research/persistence/orm.py)、[deep_research/persistence/sql_repository.py](../../../deep_research/persistence/sql_repository.py) |
+| 工作流可视化编辑器 | [frontend/src/components/WorkflowEditor.tsx](../../../frontend/src/components/WorkflowEditor.tsx)、[frontend/src/components/WorkflowFlowCanvas.tsx](../../../frontend/src/components/WorkflowFlowCanvas.tsx)、[frontend/src/components/workflowEditorLogic.ts](../../../frontend/src/components/workflowEditorLogic.ts) |
+| 前端 SSE 状态归并 | [frontend/src/hooks/useResearchStream.ts](../../../frontend/src/hooks/useResearchStream.ts) |
+| 自动化评估 | [eval/run_eval.py](../../../eval/run_eval.py)、[eval/judge.py](../../../eval/judge.py) |
+| 部署 | [Dockerfile](../../../Dockerfile)、[docker-compose.yml](../../../docker-compose.yml)、[docker/entrypoint.sh](../../../docker/entrypoint.sh) |
 
 ---
 
