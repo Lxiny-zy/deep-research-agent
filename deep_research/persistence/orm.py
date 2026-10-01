@@ -623,3 +623,15 @@ class QaMessageRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversation: Mapped[QaConversationRow] = relationship(back_populates="messages")
+
+
+class QaStreamEventRow(Base):
+    """Ordered provisional events, shared across API processes until finalization."""
+
+    __tablename__ = "qa_stream_event"
+    message_id: Mapped[str] = mapped_column(
+        ForeignKey("qa_message.id", ondelete="CASCADE"), primary_key=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    payload: Mapped[dict] = mapped_column(JSON)

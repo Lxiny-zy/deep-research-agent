@@ -74,6 +74,57 @@ async def test_qa_request_migration_preserves_legacy_messages(tmp_path):
         await engine.dispose()
 
 
+async def test_qa_stream_migration_roundtrips_without_changing_existing_requests(tmp_path):
+    from sqlalchemy import inspect
+
+    from alembic import command
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'stream-upgrade.db'}"
+    config = AlembicConfig("alembic.ini")
+    config.attributes["database_url"] = url
+    await asyncio.to_thread(command.upgrade, config, "0033")
+    engine = make_engine(url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO qa_conversation (id, owner_id, title) "
+                    "VALUES ('c', 'local', 'keep')"
+                )
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO qa_message (id, conversation_id, position, query, answer, "
+                    "citations, evidence, thoughts, status, request_id, request_hash) "
+                    "VALUES ('m', 'c', 0, 'question', 'answer', "
+                    "'[]', '[]', '[]', 'done', 'r', 'hash')"
+                )
+            )
+    finally:
+        await engine.dispose()
+    for target in ("0034", "0033", "0034"):
+        method = command.downgrade if target == "0033" else command.upgrade
+        await asyncio.to_thread(method, config, target)
+        engine = make_engine(url)
+        try:
+            async with engine.connect() as connection:
+                row = (
+                    await connection.execute(
+                        text(
+                            "SELECT answer, status, request_id, request_hash "
+                            "FROM qa_message WHERE id='m'"
+                        )
+                    )
+                ).one()
+                assert tuple(row) == ("answer", "done", "r", "hash")
+                exists = await connection.run_sync(
+                    lambda sync: inspect(sync).has_table("qa_stream_event")
+                )
+                assert exists == (target == "0034")
+        finally:
+            await engine.dispose()
+
+
 async def test_model_capacity_migration_preserves_existing_profile_and_roundtrips(tmp_path):
     from alembic import command
 

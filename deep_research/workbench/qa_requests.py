@@ -11,7 +11,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from ..persistence import orm
 from ..persistence.coordination import transaction_lock
@@ -54,6 +54,59 @@ def _complete(row: Any, result: dict[str, Any]) -> None:
 class SqlQaRequests:
     def __init__(self, sessions: Any) -> None:
         self.sessions = sessions
+
+    async def events(self, cid: str, rid: str, after: int) -> list[tuple[int, str, dict]]:
+        async with self.sessions() as session:
+            records = (
+                await session.scalars(
+                    select(orm.QaStreamEventRow)
+                    .join(orm.QaMessageRow)
+                    .where(
+                        orm.QaMessageRow.conversation_id == cid,
+                        orm.QaMessageRow.request_id == rid,
+                        orm.QaStreamEventRow.sequence > after,
+                    )
+                    .order_by(orm.QaStreamEventRow.sequence)
+                    .limit(128)
+                )
+            ).all()
+            return [(record.sequence, record.kind, record.payload) for record in records]
+
+    async def append_events(
+        self, cid: str, rid: str, owner: str, events: list[tuple[str, dict]]
+    ) -> bool:
+        async with self.sessions() as session, session.begin():
+            await transaction_lock(session, f"qa:{cid}")
+            row = await session.scalar(
+                select(orm.QaMessageRow).where(
+                    orm.QaMessageRow.conversation_id == cid,
+                    orm.QaMessageRow.request_id == rid,
+                )
+            )
+            if (
+                row is None
+                or row.status != "running"
+                or row.execution_owner != owner
+                or _expired(row, datetime.now(UTC))
+            ):
+                return False
+            last = (
+                await session.scalar(
+                    select(func.max(orm.QaStreamEventRow.sequence)).where(
+                        orm.QaStreamEventRow.message_id == row.id
+                    )
+                )
+                or 0
+            )
+            session.add_all(
+                [
+                    orm.QaStreamEventRow(
+                        message_id=row.id, sequence=last + i, kind=kind, payload=payload
+                    )
+                    for i, (kind, payload) in enumerate(events, 1)
+                ]
+            )
+            return True
 
     async def pending(self) -> list[tuple[str, QaMessage]]:
         async with self.sessions() as session:
@@ -123,6 +176,18 @@ class SqlQaRequests:
             return _message(row)
 
     async def get(self, cid: str, rid: str, *, now: datetime | None = None) -> QaMessage | None:
+        # Streaming observers read frequently. Only take the shared write lock
+        # when a lease appears expired, then recheck it after acquiring the lock.
+        now = now or datetime.now(UTC)
+        async with self.sessions() as session:
+            row = await session.scalar(
+                select(orm.QaMessageRow).where(
+                    orm.QaMessageRow.conversation_id == cid,
+                    orm.QaMessageRow.request_id == rid,
+                )
+            )
+            if row is None or not _expired(row, now):
+                return _message(row) if row else None
         async with self.sessions() as session, session.begin():
             await transaction_lock(session, f"qa:{cid}")
             row = await session.scalar(
@@ -131,7 +196,7 @@ class SqlQaRequests:
                     orm.QaMessageRow.request_id == rid,
                 )
             )
-            if row is not None and _expired(row, now or datetime.now(UTC)):
+            if row is not None and _expired(row, now):
                 _expire(row)
             return _message(row) if row else None
 
@@ -197,6 +262,11 @@ class SqlQaRequests:
                 row.error = error
             elif result is not None:
                 _complete(row, result)
+                # The final message owns the verified body and full reasoning.
+                # Drop transient copies atomically; errors retain their trace.
+                await session.execute(
+                    delete(orm.QaStreamEventRow).where(orm.QaStreamEventRow.message_id == row.id)
+                )
                 conversation = await session.get(orm.QaConversationRow, cid)
                 if conversation:
                     conversation.updated_at = now
@@ -207,6 +277,31 @@ class MemoryQaRequests:
     def __init__(self, store: InMemoryQaStore) -> None:
         self.store = store
         self.lock = asyncio.Lock()
+
+    async def events(self, cid: str, rid: str, after: int) -> list[tuple[int, str, dict]]:
+        row = next((m for m in self._rows(cid) if m.request_id == rid), None)
+        if row is None:
+            return []
+        return deepcopy(self.store._stream_events.get(row.id, [])[after : after + 128])
+
+    async def append_events(
+        self, cid: str, rid: str, owner: str, events: list[tuple[str, dict]]
+    ) -> bool:
+        async with self.lock:
+            row = next((m for m in self._rows(cid) if m.request_id == rid), None)
+            if (
+                row is None
+                or row.status != "running"
+                or row.execution_owner != owner
+                or _expired(row, datetime.now(UTC))
+            ):
+                return False
+            records = self.store._stream_events.setdefault(row.id, [])
+            last = len(records)
+            records.extend(
+                (last + i, kind, deepcopy(data)) for i, (kind, data) in enumerate(events, 1)
+            )
+            return True
 
     async def pending(self) -> list[tuple[str, QaMessage]]:
         return [
@@ -300,4 +395,5 @@ class MemoryQaRequests:
                 row.error = error
             elif result is not None:
                 _complete(row, result)
+                self.store._stream_events.pop(row.id, None)
             return True

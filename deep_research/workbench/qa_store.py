@@ -213,6 +213,7 @@ class SqlQaStore:
 class InMemoryQaStore:
     def __init__(self) -> None:
         self._items: dict[str, QaConversation] = {}
+        self._stream_events: dict[str, list[tuple[int, str, dict[str, Any]]]] = {}
 
     async def create(self, owner_id: str, title: str, run_id: str | None = None) -> QaConversation:
         now = datetime.now(UTC)
@@ -270,7 +271,11 @@ class InMemoryQaStore:
         return stored
 
     async def delete(self, conversation_id: str) -> bool:
-        return self._items.pop(conversation_id, None) is not None
+        conversation = self._items.pop(conversation_id, None)
+        if conversation is not None:
+            for message in conversation.messages:
+                self._stream_events.pop(message.id, None)
+        return conversation is not None
 
 
 __all__ = [

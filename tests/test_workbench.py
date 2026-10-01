@@ -899,6 +899,37 @@ async def test_qa_endpoints_round_trip_and_isolate_owners(api_repo, monkeypatch)
     assert deleted.status_code == 204 and gone.status_code == 404
 
 
+async def test_qa_preserves_evidence_beyond_thirtieth_finding(api_repo, monkeypatch):
+    from deep_research.workbench import qa_api
+    from deep_research.workbench.qa import QaAnswer
+    from deep_research.workbench.qa_store import InMemoryQaStore
+    from tests.fakes import verified_finding
+
+    api, _ = api_repo
+    api.app.state.qa_store = InMemoryQaStore()
+    findings = [verified_finding(source_url=f"https://paper.example/{i}") for i in range(44)]
+
+    async def fake_build_agent(app, settings, **kwargs):
+        return DeepResearchAgent(settings, llm=QaLLM(), search_tool=FakeSearch()), None
+
+    async def answer(*args, **kwargs):
+        return QaAnswer(
+            answer="The final source [44].",
+            citations=[f.source_url for f in findings],
+            findings=findings,
+        )
+
+    monkeypatch.setattr(api, "_build_agent", fake_build_agent)
+    monkeypatch.setattr(qa_api, "answer_question", answer)
+    async with _client(api.app) as client:
+        cid = (await client.post("/api/qa/conversations", json={})).json()["id"]
+        response = await client.post(f"/api/qa/conversations/{cid}/messages", json={"query": "q"})
+    assert response.status_code == 201
+    data = response.json()
+    assert len(data["evidence"]) == 44
+    assert data["evidence"][-1]["source_url"] == data["citations"][-1]
+
+
 @pytest.mark.asyncio
 async def test_qa_stream_keeps_source_free_turn_on_model_knowledge_path(
     api_repo, monkeypatch

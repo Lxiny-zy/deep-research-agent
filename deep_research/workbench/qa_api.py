@@ -292,7 +292,7 @@ async def _answer(
             "source_reference": finding.verification.source_reference,
             "origin": result.origins.get(finding.source_url, "web"),
         }
-        for finding in result.findings[:30]
+        for finding in result.findings
     ]
     stored = QaMessage(
         id="",

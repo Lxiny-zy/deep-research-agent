@@ -96,6 +96,187 @@ async def test_deletion_during_generation_rejects_late_updates(stores):
         await jobs.reserve(cid, "request-one", "hash", {"query": "q"})
 
 
+async def test_stream_journal_is_ordered_fenced_and_removed_only_after_success(stores):
+    store, jobs, other, cid = stores
+    rid = "request-stream"
+    await jobs.reserve(cid, rid, rid, {"query": "q"})
+    assert await jobs.claim(cid, rid, "owner", 90)
+    batch = [
+        ("reasoning", {"call_id": "one", "reasoning_delta": "thinking"}),
+        ("delta", {"delta": "draft"}),
+    ]
+    assert not await other.append_events(cid, rid, "wrong-owner", batch)
+    assert await jobs.append_events(cid, rid, "owner", batch)
+    assert await jobs.append_events(cid, rid, "owner", [("reset", {"type": "reset"})])
+    events = await other.events(cid, rid, 0)
+    assert [item[0] for item in events] == [1, 2, 3]
+    assert [item[1] for item in events] == ["reasoning", "delta", "reset"]
+    assert await other.events(cid, rid, 2) == [events[-1]]
+    assert (await store.get(cid)).messages[0].answer == ""
+    assert await jobs.update(cid, rid, "owner", result={"answer": "validated"})
+    assert await other.events(cid, rid, 0) == []
+    assert not await jobs.append_events(cid, rid, "owner", batch)
+
+
+async def test_interrupted_stream_trace_is_readable_but_not_writable_and_deletes_with_conversation(
+    stores,
+):
+    store, jobs, other, cid = stores
+    rid = "request-stream"
+    await jobs.reserve(cid, rid, rid, {"query": "q"})
+    assert await jobs.claim(cid, rid, "owner", 90)
+    batch = [("delta", {"delta": "unfinished draft"})]
+    assert await jobs.append_events(cid, rid, "owner", batch)
+    assert await jobs.update(cid, rid, "owner", error="interrupted")
+    assert (await other.events(cid, rid, 0))[0][2]["delta"] == "unfinished draft"
+    assert not await other.append_events(cid, rid, "owner", batch)
+    await store.delete(cid)
+    assert await other.events(cid, rid, 0) == []
+    if isinstance(store, SqlQaStore):
+        from sqlalchemy import func, select
+
+        from deep_research.persistence.orm import QaStreamEventRow
+
+        async with store._sm() as session:
+            assert await session.scalar(select(func.count()).select_from(QaStreamEventRow)) == 0
+
+
+async def test_another_api_instance_receives_live_reasoning_resets_and_text_before_completion(
+    stores, monkeypatch
+):
+    from starlette.requests import Request
+
+    from deep_research import api
+    from deep_research.config import Settings
+    from deep_research.workbench import qa_api, qa_jobs
+
+    store, jobs, other, cid = stores
+    other_store = SqlQaStore(store._sm) if isinstance(store, SqlQaStore) else store
+    applications = [
+        SimpleNamespace(state=SimpleNamespace(settings=Settings(), qa_store=s))
+        for s in (store, other_store)
+    ]
+    requests = [Request({"type": "http", "app": app}) for app in applications]
+    first, revise, finish = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def answer(*args, on_delta, on_event):
+        nonlocal calls
+        calls += 1
+        on_event({"type": "reasoning", "call_id": "one", "reasoning_delta": "thinking first"})
+        on_delta("draft first")
+        first.set()
+        await revise.wait()
+        on_event({"type": "reset", "message": "revise"})
+        on_event({"type": "reasoning", "call_id": "two", "reasoning_delta": "thinking second"})
+        on_delta("draft second")
+        await finish.wait()
+        return {"answer": "validated final", "status": "done"}
+
+    monkeypatch.setattr(api, "_check_rate_limit", AsyncMock())
+    monkeypatch.setattr(qa_api, "_answer", answer)
+    monkeypatch.setattr(qa_jobs, "POLL_SECONDS", 0.01)
+    monkeypatch.setattr(qa_jobs, "FLUSH_SECONDS", 0.01)
+    body = qa_api.AskRequest(query="q", request_id="shared-stream-request")
+    owner = await qa_api._prepare_turn(cid, body, requests[0])
+    stream = None
+    observed = []
+    try:
+        await asyncio.wait_for(first.wait(), 3)
+        response = await qa_api.ask_stream(cid, body, requests[1])
+        stream = response.body_iterator
+
+        async def until(marker):
+            while True:
+                event = await asyncio.wait_for(anext(stream), 3)
+                observed.append(event)
+                if marker in event:
+                    return
+
+        await until("draft first")
+        assert not owner.task.done() and calls == 1
+        assert any("thinking first" in event for event in observed)
+        revise.set()
+        await until("draft second")
+        assert any("event: reset" in event for event in observed)
+        assert any("thinking second" in event for event in observed)
+        assert not owner.task.done() and calls == 1
+        finish.set()
+        await until("validated final")
+        assert (await other.get(cid, body.request_id)).answer == "validated final"
+        assert await jobs.events(cid, body.request_id, 0) == []
+    finally:
+        revise.set()
+        finish.set()
+        if stream is not None:
+            await stream.aclose()
+        await asyncio.gather(
+            *(t for app in applications for t in app.state.qa_tasks), return_exceptions=True
+        )
+
+
+async def test_stream_storage_failure_stops_inference_and_does_not_retry_it(stores, monkeypatch):
+    from deep_research.workbench import qa_jobs
+
+    _, jobs, _, cid = stores
+    rid = "failed-stream-request"
+    await jobs.reserve(cid, rid, rid, {"query": "q"})
+    cancelled = asyncio.Event()
+    calls = 0
+
+    async def execute(*, on_delta, on_event):
+        nonlocal calls
+        calls += 1
+        on_delta("draft")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def fail(*args):
+        raise OSError("simulated persistence failure")
+
+    monkeypatch.setattr(jobs, "append_events", fail)
+    monkeypatch.setattr(qa_jobs, "FLUSH_SECONDS", 0.01)
+    app = SimpleNamespace(state=SimpleNamespace())
+    runtime = qa_jobs.start_turn(app, jobs, cid, rid, execute, 5)
+    message = await asyncio.wait_for(runtime.task, 3)
+    assert message["status"] == "error" and cancelled.is_set()
+    assert "OSError" in message["error"]
+    again = qa_jobs.start_turn(app, jobs, cid, rid, execute, 5)
+    assert (await asyncio.wait_for(again.task, 3))["status"] == "error"
+    assert calls == 1
+
+
+async def test_stream_fragments_are_batched_without_losing_content(stores, monkeypatch):
+    from deep_research.workbench.qa_jobs import start_turn
+
+    _, jobs, _, cid = stores
+    rid = "batched-stream-request"
+    await jobs.reserve(cid, rid, rid, {"query": "q"})
+    batches = []
+    append = jobs.append_events
+
+    async def record(*args):
+        batches.append(args[-1])
+        return await append(*args)
+
+    async def execute(*, on_delta, on_event):
+        for _ in range(500):
+            on_event({"type": "reasoning", "call_id": "one", "reasoning_delta": "x"})
+        for _ in range(500):
+            on_delta("y")
+        return {"answer": "verified"}
+
+    monkeypatch.setattr(jobs, "append_events", record)
+    app = SimpleNamespace(state=SimpleNamespace())
+    runtime = start_turn(app, jobs, cid, rid, execute, 5)
+    assert (await asyncio.wait_for(runtime.task, 3))["status"] == "done"
+    assert len(batches) == 1 and len(batches[0]) == 2
+    assert batches[0][0][1]["reasoning_delta"] == "x" * 500
+    assert batches[0][1][1]["delta"] == "y" * 500
+
+
 async def test_api_turns_see_previous_completed_answers_and_duplicate_posts_reuse_result(
     stores, monkeypatch
 ):

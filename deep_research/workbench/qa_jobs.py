@@ -15,7 +15,9 @@ from .qa_store import message_payload
 
 LEASE_SECONDS = 90.0
 HEARTBEAT_SECONDS = 20.0
-POLL_SECONDS = 1.0
+POLL_SECONDS = 0.25
+FLUSH_SECONDS = 0.2
+MAX_QUEUED_EVENTS = 128
 
 
 async def resume_pending(app: Any) -> None:
@@ -85,11 +87,17 @@ class LiveTurn:
         elif kind == "status":
             self.status = str(payload.get("message", ""))
         for queue in self.listeners:
-            queue.put_nowait((kind, payload))
+            if queue.qsize() >= MAX_QUEUED_EVENTS:
+                # A slow browser gets the current state, not an unbounded queue
+                # of obsolete token fragments. Revision resets remain intact.
+                while not queue.empty():
+                    queue.get_nowait()
+                self._replay(queue, force=True)
+            else:
+                queue.put_nowait((kind, payload))
 
-    def attach(self) -> asyncio.Queue:
-        queue: asyncio.Queue = asyncio.Queue()
-        if self.draft or self.reasoning:
+    def _replay(self, queue: asyncio.Queue, *, force: bool = False) -> None:
+        if force or self.draft or self.reasoning:
             queue.put_nowait(
                 ("reset", {"type": "reset", "replay": True, "message": "恢复已有生成内容"})
             )
@@ -98,6 +106,10 @@ class LiveTurn:
             if self.draft:
                 queue.put_nowait(("delta", {"delta": self.draft}))
         queue.put_nowait(("status", {"type": "status", "message": self.status}))
+
+    def attach(self) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue()
+        self._replay(queue)
         self.listeners.add(queue)
         if self.task is not None and self.task.done():
             queue.put_nowait(None)
@@ -123,28 +135,76 @@ def start_turn(
 
     async def drive() -> dict[str, Any]:
         owner = str(uuid4())
+        cursor = 0
         while True:
             row = await requests.get(cid, rid)
             if row is None:
                 raise HTTPException(404, "本轮问题已删除")
+            # Another API process may own the lease. Read only its committed
+            # events, including any trace retained by an interrupted request.
+            records = await requests.events(cid, rid, cursor)
+            for sequence, kind, payload in records:
+                runtime.emit(kind, payload)
+                cursor = sequence
+            if len(records) == 128:
+                continue
             if row.status not in ACTIVE:
                 return message_payload(row)
-            if await requests.claim(cid, rid, owner, LEASE_SECONDS):
+            if row.status == "pending" and await requests.claim(cid, rid, owner, LEASE_SECONDS):
                 break
             label = (
                 "正在等待前一个问题完成…"
                 if row.status == "pending"
                 else "本轮正在生成，已连接到原任务…"
             )
-            if runtime.status != label:
+            if not cursor and runtime.status != label:
                 runtime.emit("status", {"type": "status", "message": label})
             await asyncio.sleep(POLL_SECONDS)
+
+        pending: list[tuple[str, dict[str, Any]]] = []
+
+        def emit(kind: str, payload: dict[str, Any]) -> None:
+            runtime.emit(kind, payload)
+            field = (
+                "delta" if kind == "delta" else "reasoning_delta" if kind == "reasoning" else None
+            )
+            if (
+                field
+                and pending
+                and pending[-1][0] == kind
+                and pending[-1][1].get("call_id") == payload.get("call_id")
+            ):
+                pending[-1][1][field] += payload.get(field, "")
+            else:
+                pending.append((kind, dict(payload)))
+
         work = asyncio.create_task(
             execute(
-                on_delta=lambda text: runtime.emit("delta", {"delta": text}),
-                on_event=lambda event: runtime.emit(event["type"], event),
+                on_delta=lambda text: emit("delta", {"delta": text}),
+                on_event=lambda event: emit(event["type"], event),
             )
         )
+        stop_writing = asyncio.Event()
+
+        async def persist_events() -> None:
+            nonlocal pending
+            try:
+                while True:
+                    try:
+                        await asyncio.wait_for(stop_writing.wait(), FLUSH_SECONDS)
+                    except TimeoutError:
+                        pass
+                    if pending:
+                        batch, pending = pending, []
+                        if not await requests.append_events(cid, rid, owner, batch):
+                            raise HTTPException(409, "执行状态已改变，实时内容未覆盖原任务")
+                    if stop_writing.is_set():
+                        return
+            except Exception:
+                work.cancel()
+                raise
+
+        writer = asyncio.create_task(persist_events())
 
         async def heartbeat() -> None:
             try:
@@ -158,7 +218,13 @@ def start_turn(
 
         beat = asyncio.create_task(heartbeat())
         try:
-            result = await asyncio.wait_for(work, timeout=max_seconds)
+            try:
+                result = await asyncio.wait_for(work, timeout=max_seconds)
+            finally:
+                # Finish the in-flight transaction before finalization. Cancelling
+                # it here could lose a batch or append it again after a commit.
+                stop_writing.set()
+                await writer
             if not await requests.update(cid, rid, owner, result=result):
                 raise HTTPException(409, "执行状态已改变，未覆盖已有结果")
         except asyncio.CancelledError:

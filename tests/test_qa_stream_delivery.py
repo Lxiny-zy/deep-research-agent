@@ -112,3 +112,29 @@ async def test_reconnect_replays_snapshot_and_shares_the_original_model_task(mon
     await stream.aclose()
     assert calls == 1 and not runtime.listeners
     assert (await store.get(cid)).messages[0].answer == "final"
+
+
+def test_slow_subscriber_recovers_current_state_without_unbounded_token_queue():
+    from deep_research.workbench.qa_jobs import MAX_QUEUED_EVENTS, LiveTurn
+
+    runtime = LiveTurn()
+    queue = runtime.attach()
+    for i in range(MAX_QUEUED_EVENTS * 20):
+        runtime.emit("delta", {"delta": str(i) + ","})
+    runtime.emit("reset", {"type": "reset"})
+    for _ in range(MAX_QUEUED_EVENTS * 2):
+        runtime.emit("reasoning", {"call_id": "r", "reasoning_delta": "x"})
+    runtime.emit("delta", {"delta": "revised"})
+    assert queue.qsize() < MAX_QUEUED_EVENTS + 5
+    draft, reasoning = "", ""
+    while not queue.empty():
+        kind, payload = queue.get_nowait()
+        if kind == "reset":
+            draft = ""
+            if payload.get("replay"):
+                reasoning = ""
+        elif kind == "delta":
+            draft += payload["delta"]
+        elif kind == "reasoning":
+            reasoning += payload["reasoning_delta"]
+    assert draft == "revised" and reasoning == "x" * MAX_QUEUED_EVENTS * 2
