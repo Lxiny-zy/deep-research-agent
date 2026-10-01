@@ -170,6 +170,7 @@ describe('NewResearchPage task templates', () => {
       </MemoryRouter>,
     )
     expect(screen.getByText(/今日研究 2\/10 次/)).toBeInTheDocument()
+    expect(screen.queryByText(/预算.*token/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('轻量'))
     fireEvent.change(screen.getByLabelText('深度研究输入'), { target: { value: '一个问题' } })
     mocks.assessIntent.mockResolvedValue({

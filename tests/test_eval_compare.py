@@ -78,7 +78,7 @@ async def test_run_comparison_records_wall_clock(settings) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_comparison_passes_budget_through_settings(settings) -> None:
+async def test_run_comparison_ignores_legacy_budget(settings) -> None:
     seen: list[Settings] = []
 
     def factory(run_settings: Settings, _workflow: str):
@@ -88,9 +88,9 @@ async def test_run_comparison_passes_budget_through_settings(settings) -> None:
     rows = await run_comparison(
         settings, FakeJudge(), CASES[:2], ["deep"], agent_factory=factory, budget=5000
     )
-    # 预算经 Settings.max_tokens 透传给每次运行（与 API per-run params 同机制）
-    assert all(s.max_tokens == 5000 for s in seen)
-    assert all(r.budget == 5000 for r in rows)
+    # 兼容旧参数但不收紧实际执行，也不记录误导性的预算声明。
+    assert all(s.max_tokens is None for s in seen)
+    assert all(r.budget is None for r in rows)
     # 原 settings 不被就地修改（replace 生成副本）
     assert settings.max_tokens != 5000 or seen[0] is not settings
 
@@ -164,7 +164,7 @@ def test_format_markdown_renders_tables_and_conclusion() -> None:
     ]
     md = format_markdown(rows, ["deep", "quick"], cases=CASES, budget=30000, run_date="2026-07-26")
     assert "# 编排对照实验结果（2026-07-26）" in md
-    assert "单次运行 token 预算：30000" in md
+    assert "预算" not in md
     assert f"用例：{len(CASES)} 条" in md
     assert "| c1 | deep | - | 4 | 4 | 4 | 4 | 4.0 | n/a | n/a | n/a | n/a | 12000" in md
     assert "## 工作流汇总" in md
@@ -177,7 +177,7 @@ def test_format_markdown_single_workflow_has_no_delta() -> None:
     rows = [EvalRow("c1", "deep", score, 1000, wall_seconds=1.0)]
     md = format_markdown(rows, ["deep"], run_date="2026-07-26")
     assert "无对照结论" in md
-    assert "预算：不限" in md
+    assert "预算" not in md
 
 
 def test_write_results_creates_missing_directories(tmp_path) -> None:

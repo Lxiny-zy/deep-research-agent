@@ -24,7 +24,7 @@ Science Research 是面向科研人员的研究工作台：一级入口是科研
 | 幻灯片 `slides` | **quick** / deep | `slides` / `slides_deep` | slide_writer | pptx / md |
 | 思维导图 `mindmap` | **quick** / deep | `mindmap` / `mindmap_deep` | mindmap_writer | 交互 html / png / md |
 
-创建运行时传 `template` 和可选的 `strategy`；任务不支持的策略返回 422 `unsupported_strategy`。策略写进任务契约并冻结进 checkpoint。档位（见下文）只调节检索深度和 token 预算。课题调研仍可在「高级：自定义研究流程」里改用自定义工作流。
+创建运行时传 `template` 和可选的 `strategy`；任务不支持的策略返回 422 `unsupported_strategy`。策略写进任务契约并冻结进 checkpoint。档位（见下文）调节检索深度，不设置 token 预算。课题调研仍可在「高级：自定义研究流程」里改用自定义工作流。
 
 模板定义在 `workbench/templates.py`，是纯数据：包括输入类型、策略表、必答章节（及其同义标题）、交付格式、最少引用数和篇幅下限。前端、任务契约、写作者提示词和验收门都读取这同一张表，所以新增一类任务只需要改这一处。
 
@@ -99,7 +99,7 @@ Science Research 是面向科研人员的研究工作台：一级入口是科研
 
 ## 档位、额度与计算资源
 
-- **档位**（`GET /api/tiers`）：轻量 / 标准 / 深度三档，对应子问题数、补洞轮数、每次检索结果数和 token 预算。创建研究时用 `tier` 字段指定；不指定时取模板的 `tier_default`。档位只会收紧部署上限：`max_tokens` 取档位值与部署值中较小的一个。用户显式给出的 `params` 优先于档位。档位最终生效的参数随运行设置一起冻结进 checkpoint。
+- **档位**（`GET /api/tiers`）：轻量 / 标准 / 深度三档，对应子问题数、补洞轮数和每次检索结果数。创建研究时用 `tier` 字段指定；不指定时取模板的 `tier_default`。用户显式给出的 `params` 优先于档位。档位最终生效的参数随运行设置一起冻结进 checkpoint；token 仅统计消耗，不设累计或每日 token 额度。
 - **额度**（`GET /api/usage`）：`DAILY_RUN_QUOTA` 和 `DAILY_TOKEN_QUOTA` 限制每个身份每个 UTC 自然日的研究次数和 token 用量，用量直接由运行记录汇总。额度只在创建研究时检查，超出返回 429 `quota_exhausted`，已开始的运行不会被中途打断。前端在档位选择器旁显示今日用量。
 - **GPU**：本项目不调度 GPU。外部计划中有步骤声明 `resource.gpu` 时，创建运行直接返回 422 `gpu_unsupported`；执行层也会拒绝这类步骤，不会降级到 CPU 静默运行。
 

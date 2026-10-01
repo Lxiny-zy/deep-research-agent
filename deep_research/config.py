@@ -159,13 +159,13 @@ class Settings:
         default_factory=lambda: _bool_env("REQUIRE_CORROBORATION", False)
     )
 
-    # 单次研究累计 token 预算上限（防反思/补洞无限烧）；None＝不限。引擎以 Tracer 累计为准，
-    # 耗尽则跳过后续研究/反思但仍综合，产出尽力而为的部分报告而非报错。
-    max_tokens: int | None = field(default_factory=lambda: _int_env_opt("MAX_TOKENS"))
-    # 每个身份每个自然日（UTC）的研究额度：运行次数与累计 token。None＝不限。
+    # Legacy constructor fields are accepted for compatibility, but no longer
+    # configure execution limits. Tokens are observation data only.
+    max_tokens: int | None = None
+    # 每个身份每个自然日（UTC）的研究次数额度。None＝不限。
     # 额度只在创建研究时检查（已开始的运行不会被中途打断），并在 /api/usage 中展示。
     daily_run_quota: int | None = field(default_factory=lambda: _int_env_opt("DAILY_RUN_QUOTA"))
-    daily_token_quota: int | None = field(default_factory=lambda: _int_env_opt("DAILY_TOKEN_QUOTA"))
+    daily_token_quota: int | None = None
     # 交付质量策略（workbench/quality.py 的 QualityPolicy，以 dict 保存便于持久化与冻结进
     # checkpoint）。空 dict＝全部取默认值；前端「设置 → 交付质量」读写这一项。
     quality: dict[str, Any] = field(default_factory=dict)
@@ -270,8 +270,8 @@ class Settings:
             raise ValueError("fulltext_max_chars 必须 >= 1")
         if not isinstance(self.require_corroboration, bool):
             raise ValueError("require_corroboration must be a boolean")
-        if self.max_tokens is not None and self.max_tokens < 1:
-            raise ValueError("max_tokens 必须 >= 1 或为 None（不限）")
+        self.max_tokens = None
+        self.daily_token_quota = None
         if self.max_replans < 0:
             raise ValueError("max_replans 必须 >= 0")
         for name in ("intent_enabled", "intent_llm_fallback", "intent_source_screening"):

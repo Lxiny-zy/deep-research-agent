@@ -14,7 +14,6 @@ SETTING_FIELDS = (
     "fulltext_enabled",
     "fulltext_max_chars",
     "require_corroboration",
-    "max_tokens",
     "max_replans",
     "request_timeout",
     "llm_max_input_chars",

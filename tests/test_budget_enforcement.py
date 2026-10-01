@@ -1,4 +1,4 @@
-"""预算受限引擎：token 预算耗尽时跳过研究/反思，但仍综合产出尽力而为的报告（不崩）。
+"""累计用量仅作统计；旧 token 预算不再跳过研究或缩减交付。
 
 FakeLLM 默认不计 token，故现有测试预算永不触发；这里用会计入 token 的假实现来逼近真实。
 """
@@ -40,8 +40,8 @@ class BudgetBurnerLLM(FakeLLM):
 
 
 @pytest.mark.asyncio
-async def test_budget_exhaustion_yields_partial_report(settings) -> None:
-    settings.max_tokens = 5_000  # 小于单次 parse 的 10k → planner 跑完即耗尽
+async def test_legacy_budget_does_not_truncate_research(settings) -> None:
+    settings.max_tokens = 5_000  # 模拟旧配置，不得限制每次 parse 消耗 10k 的完整研究
     llm = BudgetBurnerLLM(charge=10_000)
     agent = DeepResearchAgent(settings, llm=llm, search_tool=FakeSearch(), workflow="deep")
     llm.tracer = agent.tracer  # 注入 tracer（唯一真相源）
@@ -50,8 +50,9 @@ async def test_budget_exhaustion_yields_partial_report(settings) -> None:
 
     assert isinstance(report, Report)  # 不抛异常，仍产出报告
     stages = {e.stage for e in agent.tracer.events}
-    assert "RESEARCHER" not in stages  # 预算在 planner 后耗尽 → 研究被跳过
-    assert any(e.type == "info" and "预算" in e.message for e in agent.tracer.events)
+    assert {"PLANNER", "RESEARCHER", "SYNTHESIZER"} <= stages
+    assert agent.tracer.total_tokens > 5_000
+    assert not any("token 预算耗尽" in e.message for e in agent.tracer.events)
     assert any(
         e.stage == "ORCHESTRATOR" and e.type == "done" for e in agent.tracer.events
     )  # 仍走到终态

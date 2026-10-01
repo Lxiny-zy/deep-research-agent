@@ -31,9 +31,17 @@ def test_bool_env_invalid_fails_fast(monkeypatch):
 
 
 def test_optional_int_env_invalid_fails_fast(monkeypatch):
-    monkeypatch.setenv("MAX_TOKENS", "not-a-number")
-    with pytest.raises(ValueError, match="MAX_TOKENS"):
+    monkeypatch.setenv("DAILY_RUN_QUOTA", "not-a-number")
+    with pytest.raises(ValueError, match="DAILY_RUN_QUOTA"):
         Settings()
+
+
+def test_legacy_token_limits_are_ignored(monkeypatch):
+    monkeypatch.setenv("MAX_TOKENS", "1")
+    monkeypatch.setenv("DAILY_TOKEN_QUOTA", "not-a-number")
+    settings = Settings(max_tokens=1, daily_token_quota=1)
+    assert settings.max_tokens is None
+    assert settings.daily_token_quota is None
 
 
 def test_post_init_rejects_invalid():

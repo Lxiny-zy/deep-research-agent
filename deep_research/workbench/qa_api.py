@@ -1,7 +1,7 @@
 """学术问答 HTTP 接口：会话的增删查与「提问一轮」。
 
-提问在服务端仍复用一次性问答执行，但对外优先使用带心跳的 SSE：
-检索、核验和作答期间每 15 秒发送 keep-alive，完成后返回已持久化消息。
+提问通过 SSE 推送正文增量，空闲期间每 15 秒发送 keep-alive；
+完成后返回核验并持久化的消息，替换前端的生成中正文。
 客户端断线不会取消后台任务，刷新会话仍可读到结果；旧的同步 JSON 接口保留给兼容调用方。
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict
 from typing import Any, Literal
 
@@ -114,6 +114,16 @@ async def delete_conversation(conversation_id: str, request: Request) -> None:
 
 @router.post("/conversations/{conversation_id}/messages", status_code=201)
 async def ask(conversation_id: str, body: AskRequest, request: Request) -> dict[str, Any]:
+    return await _answer(conversation_id, body, request)
+
+
+async def _answer(
+    conversation_id: str,
+    body: AskRequest,
+    request: Request,
+    *,
+    on_delta: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     from .. import api as api_module
 
     principal = principal_for(request)
@@ -130,7 +140,9 @@ async def ask(conversation_id: str, body: AskRequest, request: Request) -> dict[
     agent, search_tool = await api_module._build_agent(request.app, settings)
     try:
         ctx = await agent.one_shot_context()
-        result = await answer_question(body.query, history=history, ctx=ctx, **scope)
+        result = await answer_question(
+            body.query, history=history, ctx=ctx, on_delta=on_delta, **scope
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -178,35 +190,55 @@ async def ask_stream(conversation_id: str, body: AskRequest, request: Request) -
     """Run a normal persisted QA turn while keeping idle HTTP connections alive."""
     tasks: set[asyncio.Task[dict[str, Any]]] = getattr(request.app.state, "qa_tasks", set())
     request.app.state.qa_tasks = tasks
-    task = asyncio.create_task(ask(conversation_id, body, request))
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    connected = True
+
+    def on_delta(delta: str) -> None:
+        if connected:
+            queue.put_nowait(delta)
+
+    task = asyncio.create_task(_answer(conversation_id, body, request, on_delta=on_delta))
     tasks.add(task)
 
     def discard_task(completed: asyncio.Task[dict[str, Any]]) -> None:
         tasks.discard(completed)
+        if connected:
+            queue.put_nowait(None)
         if not completed.cancelled():
             completed.exception()  # Retrieve exceptions if the client disconnected.
 
     task.add_done_callback(discard_task)
 
     async def events() -> AsyncIterator[str]:
-        yield ": connected\n\n"
-        while not task.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(task), timeout=_SSE_HEARTBEAT_SECONDS)
-            except TimeoutError:
-                yield ": keep-alive\n\n"
-            except Exception:
-                break
+        nonlocal connected
         try:
-            message = task.result()
-        except HTTPException as exc:
-            payload = {"status": exc.status_code, "detail": exc.detail}
-            yield "event: error\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
-        except Exception as exc:
-            payload = {"status": 502, "detail": {"code": "qa_failed", "message": str(exc)}}
-            yield "event: error\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
-        else:
-            yield "event: complete\ndata: " + json.dumps(message, ensure_ascii=False) + "\n\n"
+            yield ": connected\n\n"
+            while True:
+                try:
+                    delta = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
+                if delta is None:
+                    break
+                yield (
+                    "event: delta\ndata: "
+                    + json.dumps({"delta": delta}, ensure_ascii=False)
+                    + "\n\n"
+                )
+            try:
+                message = task.result()
+            except HTTPException as exc:
+                payload = {"status": exc.status_code, "detail": exc.detail}
+                yield "event: error\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+            except Exception as exc:
+                payload = {"status": 502, "detail": {"code": "qa_failed", "message": str(exc)}}
+                yield "event: error\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+            else:
+                # The final, validated and persisted answer replaces provisional text.
+                yield "event: complete\ndata: " + json.dumps(message, ensure_ascii=False) + "\n\n"
+        finally:
+            connected = False
 
     return StreamingResponse(
         events(),

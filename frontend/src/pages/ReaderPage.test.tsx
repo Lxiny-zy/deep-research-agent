@@ -105,6 +105,28 @@ beforeEach(() => {
 })
 
 describe('ReaderPage', () => {
+  it('streams a draft while reading and replaces it with the saved answer', async () => {
+    const final = { ...answered.messages[0], answer: '已核验的精读结论' }
+    mocks.getConversation.mockResolvedValue({ ...answered, messages: [], message_count: 0 })
+    let finish!: (message: typeof final) => void
+    mocks.askQuestion.mockImplementationOnce((_id, _query, _signal, _scope, onDelta) => {
+      onDelta('精读结论正在生成')
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    renderPage()
+    await screen.findByTestId('pdf')
+    fireEvent.change(screen.getByLabelText('向这篇论文提问'), { target: { value: final.query } })
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    expect(await screen.findByTestId('qa-streaming-answer')).toHaveTextContent('精读结论正在生成')
+    expect(screen.queryByText('已核验的精读结论')).not.toBeInTheDocument()
+    mocks.getConversation.mockResolvedValue({ ...answered, messages: [final] })
+    finish(final)
+    expect(await screen.findByText('已核验的精读结论')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByTestId('qa-streaming-answer')).not.toBeInTheDocument())
+  })
+
   it('does not allow questions until the paper intake run is done', async () => {
     mocks.getReader.mockResolvedValue({ ...reader, status: 'running' })
     renderPage()
@@ -175,10 +197,13 @@ describe('ReaderPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
     await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalled())
     expect(mocks.createConversation).toHaveBeenCalledWith('用了什么数据集？', 'r1')
-    expect(mocks.askQuestion).toHaveBeenCalledWith('c1', '用了什么数据集？', undefined, {
-      sources: [],
-      projectId: undefined,
-    })
+    expect(mocks.askQuestion).toHaveBeenCalledWith(
+      'c1',
+      '用了什么数据集？',
+      undefined,
+      { sources: [], projectId: undefined },
+      expect.any(Function),
+    )
   })
 
   it('requires a project before the library joins, then sends the chosen sources', async () => {
@@ -195,10 +220,13 @@ describe('ReaderPage', () => {
     fireEvent.change(select, { target: { value: 'p1' } })
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
     await waitFor(() =>
-      expect(mocks.askQuestion).toHaveBeenCalledWith('c1', '和综述比呢？', undefined, {
-        sources: ['library', 'web'],
-        projectId: 'p1',
-      }),
+      expect(mocks.askQuestion).toHaveBeenCalledWith(
+        'c1',
+        '和综述比呢？',
+        undefined,
+        { sources: ['library', 'web'], projectId: 'p1' },
+        expect.any(Function),
+      ),
     )
   })
 

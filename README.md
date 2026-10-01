@@ -20,7 +20,7 @@
 - **意图识别与请求侧门禁**：用户 query 与检索来源各走一条意图判定通道。输入侧是「多轮指代消解 → 三级意图级联 → 槽位抽取 → 澄清判定」四步：级联内部为「正则规则 → 本地 TF-IDF+逻辑回归（0 token，随包分发的 JSON 权重，纯 Python 推理）→ LLM 兜底」的成本阶梯；12 类可路由任务意图（另有 `unknown` 弃权态）会生成可审计的执行策略，决定工作流、子问题数、反思轮数、并发和证据要求。槽位覆盖时间、领域、语言、实体、输出格式、读者、地域、来源类型、新鲜度等约束并注入 Planner；风险意图（越狱 / 套取系统提示词 / 越权指令）在研究开始前拒识并产出说明性报告。策略与风险都只能收紧用户配置，显式 workflow 始终优先（详见 [docs/INTENT_RECOGNITION.md](docs/INTENT_RECOGNITION.md)）。
 - **Workflow-as-Data 编排引擎**：工作流以带版本的图数据（节点 / 边 / 条件 / Join 模式）落库执行。用户界面提供 deep（完整深度研究）、quick（快速检索）和 hsi_review（HSI/AI4S 文献审查）三种公共模板；其它控制原语由默认 planner-driven 运行时统一编排，历史模板保留为兼容入口，也可在前端画布自组工作流。`guarded` 仅是内部兼容别名，不出现在 UI，也不作为自动路由目标。
 - **全局提示词与流程规则**：`framework/06_global_rules.md` 作为共享系统上下文注入内置、自定义和 planner-authored 的每个 Agent；默认 `DR_ORCHESTRATION_MODE=planner-driven`，因此提示词约束、计划与 artifact 交接对所有入口一致生效。
-- **可靠性设计**：节点级超时 / 重试 / 退避 / fallback、token 预算、Blackboard checkpoint、崩溃后启动自动恢复，多实例场景用可续期租约 fencing 防止旧实例写脏数据。
+- **可靠性设计**：节点级超时 / 重试 / 退避 / fallback、token 消耗统计、Blackboard checkpoint、崩溃后启动自动恢复，多实例场景用可续期租约 fencing 防止旧实例写脏数据。研究不设累计 token 预算，不因用量跳过核验或降低交付质量。
 - **API 与执行分离**：`DR_EXECUTION_MODE=worker` 时 API 入队，由独立 worker 领取执行，租约 fencing 防止旧执行者覆盖新结果。`MAX_ACTIVE_RUNS` 与 `MAX_QUEUED_RUNS` 由数据库协调，是整个服务的上限；增加副本不会放大此上限。worker 通过持久化心跳参与就绪检查，合并后的正文增量支持跨进程 SSE 回放。默认 `inline` 由 API 自己执行。
 - **角色广场与检索资源**：统一维护多渠道 Key 池与检索档案，研究角色可继承默认检索或绑定专属服务；支持外接 Responses / Chat Completions 搜索模型，并可预览含固定契约的角色提示词。详见 [检索与角色配置指南](docs/SEARCH_AND_ROLE_CONFIGURATION.md)。
 - **研究项目与资料库**：Project / Corpus / Source / Chunk 四层数据持久化；支持网页、DOI、纯文本、Markdown 与 PDF 导入。URL/DOI 抓取拒绝私网与 DNS rebinding，输入受字节、页数和字符上限约束；PDF 保留页码/章节定位，文本生成稳定重叠片段。项目检索融合 BM25、标题/章节字段、短语命中和查询词覆盖率，并优先返回不同来源，避免长片段或单一文档垄断结果。用户可逐条纳入或排除来源，选定项目后这些片段会与公网检索共同进入来源策略和证据验证，而不是只做附件展示。
@@ -90,11 +90,11 @@ deep-research-agent/
 │   ├── dag.py               # 子问题依赖图：构建 / 环检测 / 拓扑分层
 │   ├── registry.py          # Agent 角色注册表
 │   ├── scheduler.py         # DAG 分层调度器
-│   ├── token_budget.py      # 并行调用前预留预算、完成后按 usage 结算
+│   ├── token_budget.py      # 调用用量记账兼容工具；实际研究不设累计上限
 │   ├── tools/               # 检索后端抽象 + Tavily / Brave / OpenAlex / arXiv 实现（含 key 主备池）
 │   ├── agents/              # Planner / Researcher / Reflector / Synthesizer / Critic / Coordinator / IntentRouter …
 │   ├── orchestration/       # 工作流图模型：节点 / 边 / 条件解释器 / 图运行时
-│   ├── workflow.py          # 工作流执行引擎（checkpoint / 重试 / fallback / 预算 / halt）
+│   ├── workflow.py          # 工作流执行引擎（checkpoint / 重试 / fallback / halt）
 │   ├── workflows.py         # 公共工作流模板（deep / quick / hsi_review）与内部兼容编排
 │   ├── catalog/             # 角色广场：角色卡 / 模型档案 / 检索 key 的仓储与运行时
 │   ├── library/             # 研究项目 / 资料库 / 来源摄取 / 分块定位 / 本地检索

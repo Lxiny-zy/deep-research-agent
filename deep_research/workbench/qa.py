@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -109,6 +110,7 @@ async def answer_question(
     paper_sources: list[Source] | None = None,
     include_web: bool = False,
     extra_search: SearchTool | None = None,
+    on_delta: Callable[[str], None] | None = None,
 ) -> QaAnswer:
     """一次学术问答：检索 → 核验 → 作答 → 复核。``ctx`` 为 ``RunContext``。
 
@@ -201,6 +203,8 @@ async def answer_question(
                 ctx.system_prompt(_KNOWLEDGE_SYSTEM), user, temperature=0.3
             ):
                 knowledge_chunks.append(delta)
+                if on_delta is not None:
+                    on_delta(delta)
             body = "".join(knowledge_chunks).strip()
             thoughts.append(
                 {
@@ -244,6 +248,8 @@ async def answer_question(
         ctx.system_prompt(system), user, temperature=0.3
     ):
         chunks.append(delta)
+        if on_delta is not None:
+            on_delta(delta)
     body = "".join(chunks).strip()
     check = validate_body(body, [ResearchResult(sub_question=query, findings=findings)], url_to_idx)
     thoughts.append(

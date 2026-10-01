@@ -11,6 +11,7 @@ import {
 import { RequestTimeoutError } from '../api/transport'
 import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
+import QaStreamingAnswer from '../components/QaStreamingAnswer'
 import ReportView from '../components/ReportView'
 import type { PdfHighlight } from '../components/PdfViewer'
 import { useProjects } from '../hooks/useLibrary'
@@ -56,6 +57,7 @@ export default function ReaderPage() {
 
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<string | null>(null)
+  const [streamingAnswer, setStreamingAnswer] = useState('')
   const [withLibrary, setWithLibrary] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [withWeb, setWithWeb] = useState(false)
@@ -89,10 +91,13 @@ export default function ReaderPage() {
       if (withLibrary) sources.push('library')
       if (withWeb) sources.push('web')
       try {
-        await askQuestion(target, text, undefined, {
-          sources,
-          projectId: withLibrary ? projectId : undefined,
-        })
+        await askQuestion(
+          target,
+          text,
+          undefined,
+          { sources, projectId: withLibrary ? projectId : undefined },
+          (delta) => setStreamingAnswer((current) => current + delta),
+        )
       } catch (error) {
         if (!(error instanceof RequestTimeoutError)) throw error
         const recovered = await recoverTimedOutAnswer(target, text, baselineCount)
@@ -100,12 +105,16 @@ export default function ReaderPage() {
       }
       return target
     },
-    onMutate: (text) => setPending(text),
+    onMutate: (text) => {
+      setPending(text)
+      setStreamingAnswer('')
+    },
     onError: (_error, text) => setDraft(text),
     onSettled: async (target) => {
       await queryClient.invalidateQueries({ queryKey: ['qa-conversations', 'run', id] })
       if (target) await queryClient.invalidateQueries({ queryKey: ['qa-conversation', target] })
       setPending(null)
+      setStreamingAnswer('')
     },
   })
 
@@ -170,10 +179,7 @@ export default function ReaderPage() {
               <div className="qa-question">
                 <p>{pending}</p>
               </div>
-              <div className="qa-answer qa-answer-pending" role="status">
-                <AppIcon name="loader" size={15} className="spin" aria-hidden="true" />
-                正在翻阅原文并核验…
-              </div>
+              <QaStreamingAnswer text={streamingAnswer} waiting="正在翻阅原文并核验…" />
             </article>
           )}
           {ask.isError && (

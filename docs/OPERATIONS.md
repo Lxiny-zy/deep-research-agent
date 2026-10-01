@@ -52,9 +52,11 @@ SQL 部署的在线设置以数据库不可变版本为准。密钥由 `CATALOG_
 共享调用租约、滚动窗口请求计数和冷却。LLM 与主要付费检索适配器接入此边界；第三方工具
 扩展须显式接入协调器。按凭据分组不能推断供应商的账号级、组织级或跨端点的总账单限额。
 
-LLM 和模型检索在请求前预留输入估计与输出预算，成功后按 usage 结算；无 usage 或无法
-确定是否已计费的失败保守计量。`LLM_MAX_INPUT_CHARS` 限制输入，`LLM_MAX_OUTPUT_TOKENS`
-限制单次输出。供应商隐藏 token、检索费用、外部重试与计价差异不属于硬账单保证。
+任务累计 token 只作消耗统计，不设置预算、档位配额或每日 token 门槛，也不会因累计用量
+而跳过检索、核验或写作。旧 `MAX_TOKENS` / `DAILY_TOKEN_QUOTA` 不再生效。
+LLM 根据流式 usage 结算；无 usage 或无法确定的调用明确标为估算。
+`LLM_MAX_INPUT_CHARS` 和 `LLM_MAX_OUTPUT_TOKENS` 是单次模型请求的输入/输出参数，
+与任务累计消耗无关。并发、请求频率、执行超时及重试次数仍按服务配置执行。
 
 合并后的 token 文本、累计用量和稳定 seq 入库；API 可回放 worker 产生的事件。
 `/healthz` 仅表示 API 活着，`/readyz` 还检查数据库及 worker 模式下的有效心跳。

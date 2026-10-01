@@ -266,11 +266,11 @@ export default function ReportActions({
               <option value="acmart">ACM · manuscript</option>
             </select>
           </label>
-          {exportItem('paper_pdf', '论文版 PDF', {
+          {exportItem('paper_pdf', '学术排版 PDF', {
             disabled: exportDisabled || available?.paper_pdf !== true,
             title:
               available?.paper_pdf !== true
-                ? '论文版 PDF 需要服务端安装 TeX Live 与 latexmk，可先下载 .tex 源文件'
+                ? '学术排版 PDF 需要服务端安装 TeX Live 与 latexmk，可先下载 .tex 源文件'
                 : exportHint,
             busyLabel: '编译中…',
             icon: 'file',

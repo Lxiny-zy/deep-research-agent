@@ -1738,7 +1738,7 @@ async def test_resume_restores_original_run_settings(repo, monkeypatch) -> None:
             RUN_SETTINGS_CHECKPOINT_KEY: {
                 "max_rounds": original.max_rounds,
                 "max_concurrency": original.max_concurrency,
-                "max_tokens": original.max_tokens,
+                "max_tokens": 321,  # historical checkpoints must not restore a token cap
                 "require_corroboration": original.require_corroboration,
             }
         },
@@ -1765,7 +1765,7 @@ async def test_resume_restores_original_run_settings(repo, monkeypatch) -> None:
     assert response.status_code == 202
     assert captured[0].max_rounds == 1
     assert captured[0].max_concurrency == 2
-    assert captured[0].max_tokens == 321
+    assert captured[0].max_tokens is None
     assert captured[0].require_corroboration is True
     detail = await repo.get_run(run_id)
     assert detail is not None and detail.status == "running"

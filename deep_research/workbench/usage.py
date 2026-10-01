@@ -42,7 +42,6 @@ async def usage_today(repo: Any, owner_id: str | None) -> dict[str, int]:
 
 def quota_view(used: dict[str, int], settings: Any) -> dict[str, Any]:
     run_quota = settings.daily_run_quota
-    token_quota = settings.daily_token_quota
     return {
         "period": "day",
         # 额度在下一个 UTC 零点重置；今天的零点已经过去
@@ -50,11 +49,8 @@ def quota_view(used: dict[str, int], settings: Any) -> dict[str, Any]:
             datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         ).isoformat(),
         "runs": {"used": used["runs"], "limit": run_quota},
-        "tokens": {"used": used["tokens"], "limit": token_quota},
-        "exhausted": bool(
-            (run_quota is not None and used["runs"] >= run_quota)
-            or (token_quota is not None and used["tokens"] >= token_quota)
-        ),
+        "tokens": {"used": used["tokens"], "limit": None},
+        "exhausted": bool(run_quota is not None and used["runs"] >= run_quota),
     }
 
 

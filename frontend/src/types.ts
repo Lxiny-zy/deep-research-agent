@@ -432,7 +432,6 @@ export interface ResearchParams {
   max_rounds?: number
   max_concurrency?: number
   results_per_search?: number
-  max_tokens?: number
   max_run_seconds?: number
   require_corroboration?: boolean
 }
@@ -1033,7 +1032,6 @@ export interface TierSpec {
   max_sub_questions: number
   max_rounds: number
   results_per_search: number
-  max_tokens: number
 }
 
 export interface UsageQuota {

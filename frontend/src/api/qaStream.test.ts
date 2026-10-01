@@ -8,6 +8,35 @@ afterEach(() => {
 })
 
 describe('QA stream deadline', () => {
+  it('delivers draft chunks before completion and returns the validated replacement', async () => {
+    const encoder = new TextEncoder()
+    let stream!: ReadableStreamDefaultController<Uint8Array>
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            stream = controller
+          },
+        }),
+      ),
+    )
+    const onDelta = vi.fn()
+    let completed = false
+    const result = askQuestion('c1', '问题', undefined, { sources: [] }, onDelta).then(
+      (message) => {
+        completed = true
+        return message
+      },
+    )
+    stream.enqueue(encoder.encode('event: delta\ndata: {"delta":"待核验的正文"}\n\n'))
+    await vi.waitFor(() => expect(onDelta).toHaveBeenCalledWith('待核验的正文'))
+    expect(completed).toBe(false)
+    const final = { id: 'm1', answer: '核验后的答案', citations: [] }
+    stream.enqueue(encoder.encode(`event: complete\ndata: ${JSON.stringify(final)}\n\n`))
+    await expect(result).resolves.toEqual(final)
+    expect(onDelta).toHaveBeenCalledTimes(1)
+  })
+
   it('times out while waiting for response headers so answer recovery can start', async () => {
     vi.useFakeTimers()
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(

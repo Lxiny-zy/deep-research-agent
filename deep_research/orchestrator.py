@@ -305,7 +305,7 @@ class DeepResearchAgent:
     ) -> None:
         self.settings = settings
         self.tracer = Tracer()
-        self.tracer.budget = TokenBudget(max_tokens=settings.max_tokens)
+        self.tracer.budget = TokenBudget()
         self.repo = repo
         self._run_id = run_id
         self._workflow_name = workflow
@@ -735,7 +735,7 @@ class DeepResearchAgent:
             artifact_slug=artifact_slug,
             global_rules=load_global_rules(),
         )
-        budget = self.tracer.budget or TokenBudget(max_tokens=self.settings.max_tokens)
+        budget = self.tracer.budget or TokenBudget()
 
         # The API normally performs this preflight before creating the durable
         # run.  Direct Python/CLI callers do not have that outer request layer,

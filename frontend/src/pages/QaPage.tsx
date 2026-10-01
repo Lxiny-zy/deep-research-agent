@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
+import QaStreamingAnswer from '../components/QaStreamingAnswer'
 import {
   askQuestion,
   createConversation,
@@ -36,6 +37,7 @@ export default function QaPage() {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<string | null>(null)
+  const [streamingAnswer, setStreamingAnswer] = useState('')
   const [withLibrary, setWithLibrary] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [withWeb, setWithWeb] = useState(false)
@@ -70,10 +72,13 @@ export default function QaPage() {
       if (withLibrary) sources.push('library')
       if (withWeb) sources.push('web')
       try {
-        await askQuestion(target, text, undefined, {
-          sources,
-          projectId: withLibrary ? projectId : undefined,
-        })
+        await askQuestion(
+          target,
+          text,
+          undefined,
+          { sources, projectId: withLibrary ? projectId : undefined },
+          (delta) => setStreamingAnswer((current) => current + delta),
+        )
       } catch (error) {
         if (!(error instanceof RequestTimeoutError)) throw error
         const recovered = await recoverTimedOutAnswer(target, text, baselineCount)
@@ -81,12 +86,16 @@ export default function QaPage() {
       }
       return target
     },
-    onMutate: (text) => setPending(text),
+    onMutate: (text) => {
+      setPending(text)
+      setStreamingAnswer('')
+    },
     onError: (_error, text) => setDraft(text),
     onSettled: async (target) => {
       await queryClient.invalidateQueries({ queryKey: ['qa-conversations'] })
       if (target) await queryClient.invalidateQueries({ queryKey: ['qa-conversation', target] })
       setPending(null)
+      setStreamingAnswer('')
       // The app remounts page content when the pathname changes. Keep the
       // first request and its error state visible until the answer is saved.
       if (target && !id) navigate(`/qa/${target}`, { replace: true })
@@ -187,10 +196,10 @@ export default function QaPage() {
                 <span className="qa-avatar" aria-hidden="true">
                   <AppIcon name="network" size={14} strokeWidth={2} />
                 </span>
-                <div className="qa-answer qa-answer-pending" role="status">
-                  <AppIcon name="loader" size={15} className="spin" aria-hidden="true" />
-                  {withLibrary || withWeb ? '正在检索并核验证据…' : '正在生成回答…'}
-                </div>
+                <QaStreamingAnswer
+                  text={streamingAnswer}
+                  waiting={withLibrary || withWeb ? '正在检索并核验证据…' : '正在生成回答…'}
+                />
               </div>
             </article>
           )}

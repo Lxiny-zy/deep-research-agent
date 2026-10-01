@@ -1,4 +1,4 @@
-"""LLM 非流式调用：瞬时错误退避重试、结构化解析回灌重试、token 记账与输入上限。"""
+"""LLM 聚合流式调用：瞬时错误重试、结构化解析回灌、token 记账与输入上限。"""
 
 from __future__ import annotations
 
@@ -19,9 +19,15 @@ class _Answer(BaseModel):
 
 def _response(content: str, total_tokens: int | None) -> Any:
     usage = SimpleNamespace(total_tokens=total_tokens) if total_tokens is not None else None
-    return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content))], usage=usage
-    )
+
+    async def chunks():  # type: ignore[no-untyped-def]
+        for part in (content[:2], content[2:]):
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=part))], usage=None
+            )
+        yield SimpleNamespace(choices=[], usage=usage)
+
+    return chunks()
 
 
 class _ScriptedCompletions:
@@ -64,6 +70,7 @@ async def test_complete_retries_transient_errors_with_backoff(make_llm):
     llm, completions, tracer, sleeps = make_llm(TimeoutError(), TimeoutError(), _response("ok", 9))
     assert await llm.complete("s", "u") == "ok"
     assert len(completions.requests) == 3
+    assert all(request["stream"] is True for request in completions.requests)
     assert sleeps == [1, 2]
     # 两次超时的用量不确定，按预留记为估算；成功那次按上游精确值
     assert tracer.total_tokens > 9 and tracer.tokens_estimated is True
@@ -110,6 +117,7 @@ async def test_parse_feeds_back_invalid_json_then_succeeds(make_llm):
     )
     answer = await llm.parse("s", "u", _Answer)
     assert answer.value == 7
+    assert all(request["stream"] is True for request in completions.requests)
     retry_user = completions.requests[1]["messages"][1]["content"]
     assert "上次输出无法解析" in retry_user
 

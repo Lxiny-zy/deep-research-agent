@@ -1057,6 +1057,7 @@
 /* ---- 证据抽屉 ---- */
 .evidence-overlay {
   inset: 0;
+  isolation: isolate;
   position: fixed;
   z-index: 60;
 }
@@ -1067,6 +1068,7 @@
   inset: 0;
   padding: 0;
   position: absolute;
+  z-index: 0;
 }
 
 .evidence-drawer {
@@ -1082,6 +1084,7 @@
   right: 0;
   top: 0;
   width: min(520px, 100vw);
+  z-index: 1;
 }
 
 @keyframes run-drawer-in {

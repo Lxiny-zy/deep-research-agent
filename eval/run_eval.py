@@ -7,14 +7,13 @@
   - 质量：LLM-as-judge 四维打分（覆盖/可靠/深度/可读）
   - 成本：单次研究累计 token（Tracer 真值）
   - 耗时：agent.run 的墙钟时间（time.monotonic）
-  - 预算：--budget 透传 per-run token 上限（Settings.max_tokens → TokenBudget），
-    可跑「同一工作流不同预算下的质量曲线」
+  - token 只统计消耗，不设置累计预算，不因用量缩减研究内容
 
 运行：
   python -m eval.run_eval                                        # 默认对比 deep vs auto
   # 评估公共模板与内部编排策略
   python -m eval.run_eval --workflows deep,quick,reviewed,auto,teams --output
-  python -m eval.run_eval --workflows deep --budget 30000 --output eval/results/deep-30k.md
+  python -m eval.run_eval --workflows deep --output eval/results/deep.md
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ import json
 import time
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -76,7 +75,7 @@ class EvalRow:
     score: EvalScore
     tokens: int
     wall_seconds: float = 0.0  # agent.run 墙钟耗时（不含 judge 打分）
-    budget: int | None = None  # 本次运行的 per-run token 预算（None＝不限）
+    budget: int | None = None  # 只保留旧评测记录兼容字段；新运行恒为 None
     run_id: str = ""
     manifest: RunManifest | None = None
     metrics: QualityMetrics | None = None
@@ -121,10 +120,9 @@ async def run_comparison(
 ) -> list[EvalRow]:
     """对每个 workflow × case 跑研究 + 打分，捕获 token 与墙钟耗时，返回明细行。
 
-    budget 非空时以 dataclasses.replace 覆盖 Settings.max_tokens 透传给每次运行
-    （与 API 的 per-run params 同机制），引擎内部由 TokenBudget 执行预算门禁。
+    budget 参数仅为旧调用方兼容保留，不限制新运行或写入新的预算声明。
     """
-    run_settings = replace(settings, max_tokens=budget) if budget is not None else settings
+    run_settings = settings
     rows: list[EvalRow] = []
     for wf in workflow_names:
         for case in cases:
@@ -163,7 +161,7 @@ async def run_comparison(
                     score,
                     agent.tracer.total_tokens,
                     wall_seconds=wall,
-                    budget=budget,
+                    budget=None,
                     run_id=run_id,
                     report_markdown=report.markdown,
                     source_snapshots=snapshots,
@@ -303,12 +301,10 @@ def format_markdown(
     run_date: str | None = None,
 ) -> str:
     """渲染 markdown 结果文档：元信息 + 明细表 + 汇总表 + 对照结论行。"""
-    budget_text = str(budget) if budget is not None else "不限"
     md: list[str] = [
         f"# 编排对照实验结果（{run_date or date.today().isoformat()}）",
         "",
         f"- 工作流：{', '.join(workflow_names)}",
-        f"- 单次运行 token 预算：{budget_text}",
     ]
     if cases:
         counts = Counter(c.category or "未分类" for c in cases)
@@ -320,16 +316,15 @@ def format_markdown(
         "",
         (
             "| 用例 | 流程 | Run ID | 覆盖 | 可靠 | 深度 | 可读 | 均分 | 验证率 | "
-            "支持率 | 准入率 | 引用快照覆盖 | token | 耗时(s) | 预算 |"
+            "支持率 | 准入率 | 引用快照覆盖 | token | 耗时(s) |"
         ),
         (
             "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | "
-            "---: | ---: | ---: | ---: | ---: |"
+            "---: | ---: | ---: | ---: |"
         ),
     ]
     for r in rows:
         s = r.score
-        row_budget = str(r.budget) if r.budget is not None else "不限"
         metrics = r.metrics
         verified_rate = f"{metrics.verified_finding_rate:.1%}" if metrics else "n/a"
         supported_rate = f"{metrics.supported_finding_rate:.1%}" if metrics else "n/a"
@@ -340,7 +335,7 @@ def format_markdown(
             f"| {s.groundedness or 'n/a'} | {s.depth} | {s.coherence} | {s.average} "
             f"| {verified_rate} | {supported_rate} | {eligible_rate} | {snapshot_coverage} "
             f"| {r.tokens} "
-            f"| {r.wall_seconds:.1f} | {row_budget} |"
+            f"| {r.wall_seconds:.1f} |"
         )
 
     summary = _summarize(rows, workflow_names)
@@ -425,7 +420,7 @@ def benchmark_payload(
         "review_status": "unreviewed",
         "generated_at": generated_at,
         "workflows": workflow_names,
-        "budget": budget,
+        "budget": None,
         "dataset": [record["id"] for record in dataset_records],
         "dataset_sha256": hashlib.sha256(dataset_encoded.encode("utf-8")).hexdigest(),
         "rows": [
@@ -494,7 +489,7 @@ async def _amain() -> None:
         "--budget",
         type=int,
         default=None,
-        help="单次研究 token 预算上限（透传 Settings.max_tokens，默认不限）",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--output",
@@ -518,8 +513,8 @@ async def _amain() -> None:
     parser.add_argument("--max-token-increase", type=float, default=0.25, metavar="RATE")
     args = parser.parse_args()
     workflow_names = [w.strip() for w in args.workflows.split(",") if w.strip()]
-    if args.budget is not None and args.budget < 1:
-        parser.error("--budget 必须 >= 1")
+    if args.budget is not None:
+        parser.error("任务累计 token 预算已移除，请省略 --budget")
     rate_values = (
         args.min_citation_coverage,
         args.max_unsupported_rate,
@@ -539,10 +534,7 @@ async def _amain() -> None:
     try:
         if args.persist_runs:
             repository, engine = await _open_benchmark_repository(settings)
-        budget_text = str(args.budget) if args.budget is not None else "不限"
-        print(
-            f"▶ 对照工作流：{', '.join(workflow_names)}（{len(CASES)} 用例，预算 {budget_text}）…"
-        )
+        print(f"▶ 对照工作流：{', '.join(workflow_names)}（{len(CASES)} 用例）…")
         rows = await run_comparison(
             settings,
             judge,

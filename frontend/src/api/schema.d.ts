@@ -3293,8 +3293,6 @@ export interface components {
             max_run_seconds?: number | null;
             /** Max Sub Questions */
             max_sub_questions?: number | null;
-            /** Max Tokens */
-            max_tokens?: number | null;
             /** Require Corroboration */
             require_corroboration?: boolean | null;
             /** Results Per Search */

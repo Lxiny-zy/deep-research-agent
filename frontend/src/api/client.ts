@@ -954,17 +954,19 @@ export function askQuestion(
   query: string,
   signal?: AbortSignal,
   scope?: { sources: QaSourceOption[]; projectId?: string },
+  onDelta?: (delta: string) => void,
 ): Promise<QaMessage> {
   const body = scope
     ? { query, sources: scope.sources, ...(scope.projectId ? { project_id: scope.projectId } : {}) }
     : { query }
-  return askQuestionStream(id, body, signal)
+  return askQuestionStream(id, body, signal, onDelta)
 }
 
 async function askQuestionStream(
   id: string,
   body: { query: string; sources?: QaSourceOption[]; project_id?: string },
   signal?: AbortSignal,
+  onDelta?: (delta: string) => void,
 ): Promise<QaMessage> {
   const key = getApiKey()
   const controller = new AbortController()
@@ -1033,6 +1035,10 @@ async function askQuestionStream(
             .filter((line) => line.startsWith('data:'))
             .map((line) => line.slice(5).replace(/^ /, ''))
             .join('\n')
+          if (event === 'delta' && data) {
+            const payload = JSON.parse(data) as { delta?: unknown }
+            if (typeof payload.delta === 'string') onDelta?.(payload.delta)
+          }
           if (event === 'complete' && data) return JSON.parse(data) as QaMessage
           if (event === 'error' && data) {
             const payload = JSON.parse(data) as { status?: number; detail?: unknown }

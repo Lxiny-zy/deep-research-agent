@@ -11,10 +11,6 @@ interface Props {
 function quotaText(usage: UsageQuota): string | null {
   const parts: string[] = []
   if (usage.runs.limit != null) parts.push(`今日研究 ${usage.runs.used}/${usage.runs.limit} 次`)
-  if (usage.tokens.limit != null)
-    parts.push(
-      `token ${Math.round(usage.tokens.used / 1000)}k/${Math.round(usage.tokens.limit / 1000)}k`,
-    )
   return parts.length ? parts.join(' · ') : null
 }
 
@@ -43,7 +39,7 @@ export default function TierSelector({ tiers, value, onChange, usage, disabled }
       {active && (
         <span className="hint">
           {active.description} · 最多 {active.max_sub_questions} 个子问题、{active.max_rounds}{' '}
-          轮补洞、预算约 {Math.round(active.max_tokens / 1000)}k token
+          轮补洞
         </span>
       )}
       {quota && (

@@ -1135,7 +1135,7 @@ def test_tier_overrides_respect_explicit_params_and_ceilings() -> None:
     from deep_research.workbench.tiers import tier_overrides
 
     deep = tier_overrides("deep", explicit={}, ceilings={"max_tokens": 100_000})
-    assert deep["max_rounds"] == 2 and deep["max_tokens"] == 100_000
+    assert deep["max_rounds"] == 2 and "max_tokens" not in deep
     light = tier_overrides("light", explicit={"max_rounds": 3}, ceilings={})
     assert "max_rounds" not in light and light["max_sub_questions"] == 3
     assert tier_overrides(None, explicit={}, ceilings={}) == {}
@@ -1154,6 +1154,21 @@ async def test_tier_is_frozen_into_run_settings(api_repo) -> None:
     assert detail is not None and detail.orchestration is not None
     frozen = detail.orchestration.checkpoint["scratch"][RUN_SETTINGS_KEY]
     assert frozen["max_rounds"] == 0 and frozen["max_sub_questions"] == 3
+    assert "max_tokens" not in frozen
+    assert all("max_tokens" not in tier for tier in tiers)
+
+
+def test_legacy_daily_token_quota_does_not_block_usage() -> None:
+    from types import SimpleNamespace
+
+    from deep_research.workbench.usage import quota_view
+
+    view = quota_view(
+        {"runs": 2, "tokens": 5_000_000},
+        SimpleNamespace(daily_run_quota=None, daily_token_quota=1),
+    )
+    assert view["tokens"] == {"used": 5_000_000, "limit": None}
+    assert view["exhausted"] is False
 
 
 @pytest.mark.asyncio

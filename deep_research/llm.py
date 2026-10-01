@@ -45,7 +45,7 @@ class LLM:
         self.tracer = tracer
         self.model = settings.llm_model
         if self.tracer.budget is None:
-            self.tracer.budget = TokenBudget(max_tokens=settings.max_tokens)
+            self.tracer.budget = TokenBudget()
         self.client = AsyncOpenAI(
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
@@ -137,33 +137,18 @@ class LLM:
         return {key: reservation.output_tokens}
 
     async def _complete_once(self, system: str, user: str, temperature: float) -> str:
-        reservation = self._reserve(system, user)
-        assert self.tracer.budget is not None
-        try:
-            async with provider_request(
+        # Structured consumers still receive one validated value, while the
+        # provider transport streams and usage updates throughout generation.
+        parts: list[str] = []
+        async with (
+            provider_request(
                 self.settings.llm_base_url or "https://api.openai.com", self.settings.llm_api_key
-            ):
-                resp = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    **self._generation_options(temperature),
-                    **self._output_options(reservation),
-                )
-            content = resp.choices[0].message.content or ""
-            usage = _tokens(resp)
-            self.tracer.add_tokens(
-                usage or _estimate_tokens(system, user, content), estimated=usage == 0
-            )
-            return content
-        except BaseException as exc:
-            if isinstance(exc, asyncio.CancelledError) or _uncertain_usage(exc):
-                self.tracer.add_tokens(reservation.total, estimated=True)
-            raise
-        finally:
-            self.tracer.budget.release(reservation)
+            ),
+            aclosing(self._stream_once(system, user, temperature=temperature)) as stream,
+        ):
+            async for delta in stream:
+                parts.append(delta)
+        return "".join(parts)
 
     async def parse(
         self, system: str, user: str, schema: type[T], *, temperature: float = 0.2, retries: int = 2

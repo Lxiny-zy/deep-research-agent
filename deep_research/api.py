@@ -187,7 +187,6 @@ class ResearchParams(BaseModel):
     max_concurrency: int | None = Field(default=None, ge=1, le=16)
     results_per_search: int | None = Field(default=None, ge=1, le=15)
     require_corroboration: bool | None = None
-    max_tokens: int | None = Field(default=None, ge=1, le=10_000_000)  # 本次研究 token 预算上限
     max_run_seconds: int | None = Field(default=None, ge=1, le=86_400)
 
 
@@ -1564,7 +1563,7 @@ async def create_run(
             raise HTTPException(404, "project not found")
     await _check_rate_limit(request)
     base_settings = request.app.state.settings
-    if base_settings.daily_run_quota is not None or base_settings.daily_token_quota is not None:
+    if base_settings.daily_run_quota is not None:
         from .workbench.usage import quota_view, usage_today
 
         quota = quota_view(await usage_today(repo, principal.id), base_settings)
@@ -1587,9 +1586,7 @@ async def create_run(
         from .workbench.tiers import tier_overrides
 
         explicit = req.params.model_dump() if req.params is not None else {}
-        overrides = tier_overrides(
-            tier_key, explicit=explicit, ceilings={"max_tokens": base_settings.max_tokens}
-        )
+        overrides = tier_overrides(tier_key, explicit=explicit, ceilings={})
         if overrides:
             base_settings = replace(base_settings, **overrides)
     settings = _settings_for(base_settings, req.params)

@@ -93,10 +93,13 @@ describe('QaPage', () => {
     fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: '新问题' } })
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
     await waitFor(() =>
-      expect(mocks.askQuestion).toHaveBeenCalledWith('c2', '新问题', undefined, {
-        sources: [],
-        projectId: undefined,
-      }),
+      expect(mocks.askQuestion).toHaveBeenCalledWith(
+        'c2',
+        '新问题',
+        undefined,
+        { sources: [], projectId: undefined },
+        expect.any(Function),
+      ),
     )
     expect(mocks.createConversation).toHaveBeenCalledWith('新问题')
   })
@@ -109,6 +112,27 @@ describe('QaPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('服务不可用')
     expect(screen.getByLabelText('输入问题')).toHaveValue('追问')
+  })
+
+  it('shows streamed text before completion and replaces it with the validated answer', async () => {
+    const final = { ...conversation.messages[0], query: '演示问题', answer: '核验后的正式结论' }
+    mocks.createConversation.mockResolvedValue({ ...conversation, id: 'c2', messages: [] })
+    mocks.getConversation.mockResolvedValue({ ...conversation, id: 'c2', messages: [final] })
+    let finish!: (message: typeof final) => void
+    mocks.askQuestion.mockImplementationOnce((_id, _query, _signal, _scope, onDelta) => {
+      onDelta('正在生成的临时结论')
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    renderAt('/qa')
+    fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: final.query } })
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    expect(await screen.findByTestId('qa-streaming-answer')).toHaveTextContent('正在生成的临时结论')
+    expect(screen.queryByText('核验后的正式结论')).not.toBeInTheDocument()
+    finish(final)
+    expect(await screen.findByText('核验后的正式结论')).toBeInTheDocument()
+    expect(screen.queryByTestId('qa-streaming-answer')).not.toBeInTheDocument()
   })
 
   it('recovers the new answer when the same question was answered after the cache loaded', async () => {
@@ -148,10 +172,13 @@ describe('QaPage', () => {
     fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: '首轮问题' } })
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
     await waitFor(() =>
-      expect(mocks.askQuestion).toHaveBeenCalledWith('c2', '首轮问题', undefined, {
-        sources: [],
-        projectId: undefined,
-      }),
+      expect(mocks.askQuestion).toHaveBeenCalledWith(
+        'c2',
+        '首轮问题',
+        undefined,
+        { sources: [], projectId: undefined },
+        expect.any(Function),
+      ),
     )
     expect(screen.getByText('正在生成回答…')).toBeInTheDocument()
     expect(screen.getByText('首轮问题')).toBeInTheDocument()
