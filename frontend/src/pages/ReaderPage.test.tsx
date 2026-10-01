@@ -105,6 +105,19 @@ beforeEach(() => {
 })
 
 describe('ReaderPage', () => {
+  it('keeps the parsed PDF viewer and scroll state mounted across report tab switches', async () => {
+    renderPage()
+    const pdf = await screen.findByTestId('pdf')
+    pdf.scrollTop = 500
+    fireEvent.click(screen.getByRole('tab', { name: '精读报告' }))
+    expect(pdf).toBeInTheDocument()
+    expect(pdf).not.toBeVisible()
+    fireEvent.click(screen.getByRole('tab', { name: '原文' }))
+    expect(screen.getByTestId('pdf')).toBe(pdf)
+    expect(pdf).toBeVisible()
+    expect(pdf.scrollTop).toBe(500)
+  })
+
   it('streams a draft while reading and replaces it with the saved answer', async () => {
     const final = {
       ...answered.messages[0],

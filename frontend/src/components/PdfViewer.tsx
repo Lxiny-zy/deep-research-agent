@@ -247,7 +247,10 @@ export default function PdfViewer({
   useEffect(() => {
     const element = scroller.current
     if (!element) return
-    const measure = () => setWidth(Math.max(element.clientWidth - 32, 0))
+    // A hidden report/PDF tab must not reset fit zoom and rerender every page.
+    const measure = () => {
+      if (element.clientWidth > 0) setWidth(Math.max(element.clientWidth - 32, 0))
+    }
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(measure)

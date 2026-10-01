@@ -23,7 +23,8 @@ from typing import Any
 
 from ..agents.researcher import Researcher
 from ..guardrails import report_eligible
-from ..models import Finding, ResearchResult, Source
+from ..models import Finding, FindingList, ResearchResult, Source
+from ..prompting import structured_system_prompt
 from ..report.validation import validate_body
 from ..tools.base import SearchTool
 from .qa_cache import PaperEvidenceCache, evidence_cache_key
@@ -158,24 +159,43 @@ async def answer_question(
     findings: list[Finding] = []
     if paper_sources is not None:
         from .intake import _FixedSources
-        from .reader import rank_paper_sources
+        from .paper_context import paper_context
 
-        chosen = rank_paper_sources(query, paper_sources)
         researcher.system += "\n\n" + _PAPER_EXTRACTION
-        researcher.search = _FixedSources(chosen)
+        # The same frozen paper is reused across DIFFERENT questions. Reserve
+        # fixed room for the dynamic query and JSON repair, including the actual
+        # schema/global rules in capacity accounting. This is per-call capacity,
+        # not a cumulative token budget.
+        from ..agents.base import direct_system_prompt
+
+        input_limit = getattr(
+            getattr(researcher.llm, "settings", None),
+            "llm_max_input_chars",
+            ctx.settings.llm_max_input_chars,
+        )
+        context_chars = max(
+            0,
+            input_limit
+            - len(structured_system_prompt(direct_system_prompt(researcher.system), FindingList))
+            - 8192,
+        )
+        researcher.source_context = lambda sources: paper_context(sources, query, context_chars)
+        researcher.search = _FixedSources(paper_sources)
         cache_query = (
             query
             if query == question
             else query + json.dumps(history, ensure_ascii=False, sort_keys=True)
         )
         cache_key = (
-            evidence_cache_key(cache_scope, cache_query, chosen, researcher) if paper_cache else ""
+            evidence_cache_key(cache_scope, cache_query, paper_sources, researcher)
+            if paper_cache
+            else ""
         )
         cached = paper_cache.get(cache_key) if paper_cache is not None else None
         if cached is not None:
             paper_findings, raw = cached
         else:
-            paper_findings, raw = (await _verified(researcher, query)) if chosen else ([], 0)
+            paper_findings, raw = (await _verified(researcher, query)) if paper_sources else ([], 0)
             if paper_cache is not None:
                 paper_cache.put(cache_key, paper_findings, raw)
         cache_event = {
@@ -194,7 +214,7 @@ async def answer_question(
         thoughts.append(
             {
                 "tool": "paper_read",
-                "input": f"{len(chosen)} 个论文片段",
+                "input": f"{len(paper_sources)} 个已读取论文片段，按单次上下文容量组装",
                 "observation": f"论文中保留 {len(paper_findings)} 条已核验证据"
                 + (
                     f"（{raw - len(paper_findings)} 条未通过核验）"
@@ -211,6 +231,7 @@ async def answer_question(
     if backends:
         from ..tools.composite import MultiBackendSearch
 
+        researcher.source_context = None
         researcher.search = backends[0] if len(backends) == 1 else MultiBackendSearch(backends)
         other, raw = await _verified(researcher, query)
         other = [f for f in other if f.source_url not in origins]

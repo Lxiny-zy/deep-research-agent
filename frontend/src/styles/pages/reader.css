@@ -172,6 +172,10 @@
   min-height: 0;
 }
 
+.reader-pane-body[hidden] {
+  display: none;
+}
+
 .reader-note {
   align-items: flex-start;
   display: grid;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import cast
 
 from ..config import Settings
@@ -16,7 +17,7 @@ from ..guardrails import (
     verify_claim_consistency,
 )
 from ..llm import LLM
-from ..models import Finding, FindingList, ResearchResult
+from ..models import Finding, FindingList, ResearchResult, Source
 from ..observability import Tracer
 from ..registry import register
 from ..scheduler import research_dag
@@ -73,6 +74,8 @@ class Researcher:
         self.semantic_verifier = semantic_verifier or SemanticEvidenceVerifier()
         self.consistency_verifier = consistency_verifier or ClaimConsistencyVerifier()
         self.system = SYSTEM  # 可被角色卡片覆盖
+        # Paper conversations supply a deterministic context AFTER source policy.
+        self.source_context: Callable[[list[Source]], str] | None = None
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         """工作流入口：对 bb.plan 中尚未研究的子问题做 DAG 分层并行检索，追加到 bb.results。
@@ -182,12 +185,16 @@ class Researcher:
             self.tracer.emit("RESEARCHER", "info", f"无安全可用来源：{sub_question}")
             return ResearchResult(sub_question=sub_question, findings=[])
 
-        context = "\n\n".join(
-            f"<<<来源 {i + 1} 开始>>>\n标题: {s.title}"
-            f"\n章节: {s.scholarly.section if s.scholarly and s.scholarly.section else '未知'}"
-            f"\nURL: {s.url}\n"
-            f"内容: {s.content}\n<<<来源 {i + 1} 结束>>>"
-            for i, s in enumerate(sources)
+        context = (
+            self.source_context(sources)
+            if self.source_context
+            else "\n\n".join(
+                f"<<<来源 {i + 1} 开始>>>\n标题: {s.title}"
+                f"\n章节: {s.scholarly.section if s.scholarly and s.scholarly.section else '未知'}"
+                f"\nURL: {s.url}\n"
+                f"内容: {s.content}\n<<<来源 {i + 1} 结束>>>"
+                for i, s in enumerate(sources)
+            )
         )
         # Keep the unchanged source payload ahead of per-question context so
         # compatible providers can reuse its prompt prefix across follow-ups.

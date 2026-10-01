@@ -343,58 +343,65 @@ export default function ReaderPage() {
           )}
         </div>
 
-        <div className="reader-pane-body" role="tabpanel">
-          {pane === 'pdf' ? (
-            !current ? (
-              <p className="reader-note hint">
-                {reader.isLoading ? '正在读取任务…' : '这次任务没有可查看的论文。'}
-              </p>
-            ) : current.pdf ? (
-              <Suspense
-                fallback={
-                  <p className="pdf-loading" role="status">
-                    <AppIcon name="loader" size={15} className="spin" aria-hidden="true" />
-                    正在准备阅读器…
-                  </p>
-                }
-              >
-                <PdfViewer
-                  key={current.id}
-                  runId={id}
-                  documentId={current.id}
-                  highlight={highlight}
-                />
-              </Suspense>
-            ) : (
-              <div className="reader-note">
-                <p className="hint">{current.note || '这份论文没有可显示的原版 PDF。'}</p>
-                {current.url && (
-                  <a
-                    className="btn btn-secondary btn-sm"
-                    href={current.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <AppIcon name="external" size={14} aria-hidden="true" />
-                    在原网站打开
-                  </a>
-                )}
-              </div>
-            )
-          ) : report?.markdown ? (
-            <div className="reader-report">
-              <ReportView
-                markdown={report.markdown}
-                streaming={false}
-                findings={flattenFindings(detail.data?.results)}
-                citations={report.citations ?? []}
-              />
-            </div>
-          ) : (
+        <div className="reader-pane-body" role="tabpanel" hidden={pane !== 'pdf'} aria-label="原文">
+          {!current ? (
             <p className="reader-note hint">
-              {running ? '精读报告还在撰写，写好后会出现在这里。' : '这次任务没有生成精读报告。'}
+              {reader.isLoading ? '正在读取任务…' : '这次任务没有可查看的论文。'}
             </p>
+          ) : current.pdf ? (
+            <Suspense
+              fallback={
+                <p className="pdf-loading" role="status">
+                  <AppIcon name="loader" size={15} className="spin" aria-hidden="true" />
+                  正在准备阅读器…
+                </p>
+              }
+            >
+              <PdfViewer
+                key={current.id}
+                runId={id}
+                documentId={current.id}
+                highlight={highlight}
+              />
+            </Suspense>
+          ) : (
+            <div className="reader-note">
+              <p className="hint">{current.note || '这份论文没有可显示的原版 PDF。'}</p>
+              {current.url && (
+                <a
+                  className="btn btn-secondary btn-sm"
+                  href={current.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <AppIcon name="external" size={14} aria-hidden="true" />
+                  在原网站打开
+                </a>
+              )}
+            </div>
           )}
+        </div>
+        <div
+          className="reader-pane-body"
+          role="tabpanel"
+          hidden={pane !== 'report'}
+          aria-label="精读报告"
+        >
+          {pane === 'report' &&
+            (report?.markdown ? (
+              <div className="reader-report">
+                <ReportView
+                  markdown={report.markdown}
+                  streaming={false}
+                  findings={flattenFindings(detail.data?.results)}
+                  citations={report.citations ?? []}
+                />
+              </div>
+            ) : (
+              <p className="reader-note hint">
+                {running ? '精读报告还在撰写，写好后会出现在这里。' : '这次任务没有生成精读报告。'}
+              </p>
+            ))}
         </div>
       </section>
     </div>

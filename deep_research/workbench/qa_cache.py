@@ -25,7 +25,7 @@ def evidence_cache_key(scope: str, query: str, sources: list[Source], researcher
         }
 
     payload = {
-        "version": 1,
+        "version": 2,
         "scope": scope,
         "query": query,
         "sources": [source.model_dump(mode="json") for source in sources],

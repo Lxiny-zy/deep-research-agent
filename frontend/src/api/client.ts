@@ -63,7 +63,14 @@ export const getSearchResourceImpact = () =>
   request<SearchResourceImpact>('/api/search-resources/impact')
 import { normalizeReportDocument } from '../lib/reportDocument'
 import { withResponse } from './transport'
-import { cacheReaderPdf, cachedReaderPdf, clearReaderPdfCache } from '../lib/readerPdfCache'
+import {
+  cacheReaderPdf,
+  cachedReaderPdf,
+  clearReaderPdfCache,
+  persistentReaderPdf,
+  persistReaderPdf,
+  readerPdfCacheGeneration,
+} from '../lib/readerPdfCache'
 import { QaStreamInterruptedError, RequestTimeoutError } from './transport'
 
 export class ApiError extends Error {
@@ -169,7 +176,7 @@ export function clearApiKey(): void {
 }
 
 export function clearWorkspaceState(): void {
-  clearReaderPdfCache()
+  void clearReaderPdfCache()
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('dr:credentials-cleared'))
   pendingSubmission = null
   try {
@@ -1103,7 +1110,13 @@ export async function fetchReaderPdf(
 ): Promise<ArrayBuffer> {
   const key = getApiKey()
   const cacheKey = JSON.stringify([key, runId, documentId])
-  const cached = cachedReaderPdf(cacheKey)
+  const epoch = readerPdfCacheGeneration()
+  signal?.throwIfAborted()
+  const cached = cachedReaderPdf(cacheKey) ?? (await persistentReaderPdf(cacheKey, epoch))
+  signal?.throwIfAborted()
+  if (epoch !== readerPdfCacheGeneration() || key !== getApiKey()) {
+    throw new DOMException('登录状态已改变', 'AbortError')
+  }
   if (cached) {
     signal?.throwIfAborted()
     return cached
@@ -1144,7 +1157,14 @@ export async function fetchReaderPdf(
     },
     120_000,
   )
-  if (!signal?.aborted && key === getApiKey()) cacheReaderPdf(cacheKey, bytes)
+  signal?.throwIfAborted()
+  if (epoch !== readerPdfCacheGeneration() || key !== getApiKey()) {
+    throw new DOMException('登录状态已改变', 'AbortError')
+  }
+  cacheReaderPdf(cacheKey, bytes)
+  await persistReaderPdf(cacheKey, bytes, epoch)
+  signal?.throwIfAborted()
+  if (epoch !== readerPdfCacheGeneration()) throw new DOMException('登录状态已改变', 'AbortError')
   return bytes
 }
 
