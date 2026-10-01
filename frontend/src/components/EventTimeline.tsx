@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppIcon } from './AppIcon'
 import { getStageMeta } from '../lib/stageMeta'
+import { isActivityEvent } from '../lib/researchEvents'
 import type { ResearchEvent } from '../types'
 
 // Follow the live event feed by default, while allowing readers to pause and inspect older entries.
 export default function EventTimeline({
-  events,
+  events: allEvents,
   streaming = false,
 }: {
   events: ResearchEvent[]
   streaming?: boolean
 }) {
+  // Filter before pagination and follow effects, including historical replays.
+  // A new reasoning fragment must not add a row/page or scroll this panel.
+  const events = useMemo(() => allEvents.filter(isActivityEvent), [allEvents])
   const timelineRef = useRef<HTMLDivElement>(null)
   const previousStreaming = useRef(streaming)
   const [followLatest, setFollowLatest] = useState(true)
@@ -132,7 +136,8 @@ export default function EventTimeline({
               <div className="event-main">
                 <span className="event-stage">
                   <AppIcon name={meta.icon} size={14} aria-hidden="true" />
-                  {meta.label} · {ev.stage}
+                  {meta.label}
+                  {meta.label !== ev.stage && ` · ${ev.stage}`}
                 </span>
                 <div className="event-msg">{ev.message}</div>
               </div>

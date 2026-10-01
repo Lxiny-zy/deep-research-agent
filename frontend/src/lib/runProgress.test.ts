@@ -33,6 +33,31 @@ function workflowRun(overrides: Partial<WorkflowRun>): WorkflowRun {
 }
 
 describe('runProgress', () => {
+  it('keeps the actual stage label while reasoning and usage arrive', () => {
+    const progress = deriveResearchProgress({
+      execution: null,
+      runStatus: 'running',
+      events: [
+        { stage: 'RESEARCHER', type: 'start', message: '正在核验论文证据', elapsed: 1 },
+        {
+          stage: 'LLM',
+          type: 'info',
+          message: '模型返回的思考内容',
+          elapsed: 2,
+          data: { call_id: 'one', reasoning_delta: '思考' },
+        },
+        {
+          stage: 'LLM',
+          type: 'info',
+          message: '模型用量已返回',
+          elapsed: 3,
+          data: { llm_usage: { input_tokens: 100 } },
+        },
+      ],
+    })
+    expect(progress.currentLabel).toBe('正在核验论文证据')
+  })
+
   it('用实时事件覆盖轮询详情中的滞后步骤状态', () => {
     const execution = {
       status: 'running',

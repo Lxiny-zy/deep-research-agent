@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { streamRun } from '../api/client'
+import { appendResearchEvent } from '../lib/researchEvents'
 import type { DagData, Report, ResearchEvent, RunStats } from '../types'
 
 // disconnected：连接中断但运行未到终态——由 RunPage 的详情轮询接管兜底
 export type StreamStatus = 'idle' | 'streaming' | 'disconnected' | 'done' | 'error' | 'cancelled'
 
 export interface ResearchStreamState {
-  events: ResearchEvent[] // 非 token 事件，喂给时间线
+  events: ResearchEvent[] // 活动及按调用合并的思考内容，分别交给对应视图
   reportMarkdown: string // token.delta 累加 / report 事件覆盖
   status: StreamStatus
   stats: RunStats | null
@@ -54,7 +55,7 @@ export function reduceStream(prev: ResearchStreamState, ev: ResearchEvent): Rese
     tokensEstimated: ev.tokens_estimated ?? prev.tokensEstimated,
   }
   const events =
-    ev.type === 'token' || ev.type === 'report' ? base.events : [...base.events.slice(-4999), ev]
+    ev.type === 'token' || ev.type === 'report' ? base.events : appendResearchEvent(base.events, ev)
   switch (ev.type) {
     case 'token': {
       const delta = (ev.data as { delta?: string } | null)?.delta ?? ''

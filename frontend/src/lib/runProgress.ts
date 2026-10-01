@@ -1,4 +1,5 @@
 import type { ResearchEvent, RunStatus, StepRun, StepRunStatus, WorkflowRun } from '../types'
+import { isActivityEvent } from './researchEvents'
 
 const TERMINAL_STEP_STATUSES = new Set<StepRunStatus>([
   'succeeded',
@@ -155,6 +156,7 @@ function latestActivityLabel(events: ResearchEvent[]): string {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
     if (event.type === 'token') return '正在撰写研究报告'
+    if (!isActivityEvent(event)) continue
     if (event.message && event.data?.event_name !== 'checkpoint.saved') return event.message
   }
   return '正在初始化研究流程'

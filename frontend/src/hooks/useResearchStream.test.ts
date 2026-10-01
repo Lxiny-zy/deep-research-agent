@@ -18,6 +18,50 @@ function ev(partial: Partial<ResearchEvent>): ResearchEvent {
 }
 
 describe('reduceStream', () => {
+  it('merges reasoning by call across interleaved activity without changing totals or earlier state', () => {
+    const first = ev({
+      stage: 'LLM',
+      type: 'info',
+      elapsed: 1,
+      tokens: 10,
+      data: { call_id: 'one', model: 'test', reasoning_delta: '先分析' },
+    })
+    let s = reduceStream(base, first)
+    s = reduceStream(s, ev({ stage: 'RESEARCHER', type: 'finding', data: { count: 2 } }))
+    s = reduceStream(
+      s,
+      ev({ ...first, data: { ...first.data, call_id: 'two', reasoning_delta: '并行调用' } }),
+    )
+    s = reduceStream(
+      s,
+      ev({ ...first, elapsed: 3, tokens: 30, data: { ...first.data, reasoning_delta: '再验证' } }),
+    )
+    expect(s.events).toHaveLength(3)
+    expect(s.events[0].data?.reasoning_delta).toBe('先分析再验证')
+    expect(s.events[2].data?.reasoning_delta).toBe('并行调用')
+    expect(first.data?.reasoning_delta).toBe('先分析')
+    expect(s.elapsed).toBe(3)
+    expect(s.tokens).toBe(30)
+    expect(s.findings).toBe(2)
+  })
+
+  it('does not let long reasoning streams evict stage events from the retained history', () => {
+    const start = ev({ stage: 'RESEARCHER', type: 'start', message: '开始检索' })
+    let s = reduceStream(base, start)
+    for (let i = 0; i < 5100; i += 1) {
+      s = reduceStream(
+        s,
+        ev({
+          stage: 'LLM',
+          data: { call_id: 'one', model: 'test', reasoning_delta: '字' },
+        }),
+      )
+    }
+    expect(s.events).toHaveLength(2)
+    expect(s.events[0]).toBe(start)
+    expect(s.events[1].data?.reasoning_delta).toBe('字'.repeat(5100))
+  })
+
   it('累加 token.delta 到报告，且 token 不进时间线', () => {
     let s = base
     s = reduceStream(s, ev({ stage: 'SYNTHESIZER', type: 'token', data: { delta: 'Hello ' } }))
