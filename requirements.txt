@@ -21,3 +21,7 @@ cryptography>=48.0.1,<51
 
 # XLSX is a standard report export in source, wheel and Docker installations.
 openpyxl>=3.1,<4
+
+# Shared Markdown/citation parsing also runs in the lightweight service.
+markdown-it-py>=4,<5
+mdit-py-plugins>=0.6,<0.7

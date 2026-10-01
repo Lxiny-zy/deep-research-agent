@@ -26,6 +26,7 @@ async def _run() -> None:
     from deep_research.intent.model import QUERY_MODEL_PATH
     from deep_research.persistence.db import _migration_root
     from deep_research.report.document import (
+        ProseBlock,
         ReportDocument,
         TableBlock,
         TableCell,
@@ -47,6 +48,13 @@ async def _run() -> None:
         raise RuntimeError(
             f"frontend resources are missing: index={_FRONTEND_DIST}, assets={_FRONTEND_ASSETS}"
         )
+    for pattern in (
+        "KaTeX_Main-Regular*.woff2",
+        "pdfjs/cmaps/*.bcmap",
+        "pdfjs/standard_fonts/*.ttf",
+    ):
+        if not any(_FRONTEND_ASSETS.glob(pattern)):
+            raise RuntimeError(f"installed frontend font resources are missing: {pattern}")
     migration_root = _migration_root()
     if not (migration_root / "alembic" / "versions").is_dir():
         raise RuntimeError(f"migration resources are missing: {migration_root}")
@@ -107,6 +115,16 @@ async def _run() -> None:
         values = [cell for row in workbook.active for cell in row if cell.value == "=1+1"]
         assert len(values) == 1 and values[0].data_type == "s", "unsafe or incomplete XLSX export"
         workbook.close()
+        # Plain export and citation checks must work with base dependencies;
+        # native PDF/math rendering remains optional in this minimal install.
+        from deep_research.report.latex import render_latex
+        from deep_research.report.pdf import render_pdf_html
+        from deep_research.workbench.delivery.math_markdown import citation_text
+
+        document = ReportDocument(query="Plain export", blocks=[ProseBlock(markdown="Result [1].")])
+        assert "Result" in render_latex(document) and "Result" in render_pdf_html(document)
+        masked = citation_text("$x=[2]$ citation [1]")
+        assert "[1]" in masked and "[2]" not in masked
 
 
 def main() -> None:

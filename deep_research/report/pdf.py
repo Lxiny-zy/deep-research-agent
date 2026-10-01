@@ -114,6 +114,9 @@ def render_pdf_html(document: ReportDocument) -> str:
         ".appendix { break-before: page; }",
         "ol { margin-top: 4pt; padding-left: 18pt; }",
         "li { margin: 0 0 4pt; }",
+        ".math-svg {display:inline-block} .math-svg svg {width:100%;height:100%}",
+        ".math-accessible {display:none}",
+        ".display-math {display:block;text-align:center;margin:12pt 0}",
         "</style></head><body>",
     ]
     heading = document.title or document.query
@@ -192,6 +195,14 @@ def _inline(text: str) -> str:
     this function emits are real markup. Code spans are extracted before the
     emphasis rules run so that ``*`` inside a span is not treated as emphasis.
     """
+    if any(mark in text for mark in ("$", r"\(", r"\[")):
+        from ..workbench.delivery.html import _inline_html
+        from ..workbench.delivery.markdown import _inlines, _parser
+
+        tokens = _parser().parseInline(text)
+        items = _inlines(tokens[0]) if tokens else []
+        if any(item.math for item in items):
+            return _inline_html(items)
     out = escape(text)
     stash: list[str] = []
 
@@ -289,6 +300,10 @@ def _append_prose(parts: list[str], markdown: str) -> None:
     and inline emphasis are therefore all handled; ``[n]`` citation markers are
     left as literal text because the reference list resolves them by number.
     """
+    from ..workbench.delivery.math_markdown import math_blocks
+    from ..workbench.delivery.math_pdf import math_html
+
+    equations = math_blocks(markdown)
     lines = markdown.split("\n")
     index = 0
     total = len(lines)
@@ -302,6 +317,12 @@ def _append_prose(parts: list[str], markdown: str) -> None:
         paragraph.clear()
 
     while index < total:
+        if index in equations:
+            flush_paragraph()
+            end, formula = equations[index]
+            parts.append(math_html(formula, display=True))
+            index = end
+            continue
         line = lines[index]
         stripped = line.strip()
 

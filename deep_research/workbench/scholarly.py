@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .delivery.markdown import parse_blocks, plain
+from .delivery.math_markdown import citation_text
 from .quality import QualityPolicy
 
 Severity = Literal["error", "warning"]
@@ -223,7 +224,7 @@ def _sections(markdown: str) -> list[tuple[str, str]]:
 def check_abstract(markdown: str) -> list[Finding]:
     for title, text in _sections(markdown):
         if any(key in title.casefold() for key in _ABSTRACT_TITLES):
-            if _CITE.search(text):
+            if _CITE.search(citation_text(text)):
                 return [
                     Finding(
                         "abstract-citation",
@@ -237,7 +238,7 @@ def check_abstract(markdown: str) -> list[Finding]:
 def check_clusters(markdown: str, policy: QualityPolicy) -> list[Finding]:
     worst = 0
     example = ""
-    for match in _CITE.finditer(_body(markdown)):
+    for match in _CITE.finditer(citation_text(_body(markdown))):
         size = len(re.split(r"\s*[,，]\s*", match.group(1)))
         if size > worst:
             worst, example = size, match.group(0)

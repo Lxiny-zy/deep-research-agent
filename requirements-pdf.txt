@@ -9,3 +9,7 @@ CairoSVG>=2.8,<3
 # degrade silently to abstract-only.  Keep the specifier equal to the
 # ``fulltext`` extra in pyproject.toml.
 PyMuPDF>=1.24,<2
+# Mathematical SVG assets shared by both PDF renderers.
+latex2mathml==3.81.1
+ziamath==0.13
+fonttools>=4.22,<5

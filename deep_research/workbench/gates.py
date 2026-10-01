@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .delivery.markdown import parse_blocks, plain
+from .delivery.math_markdown import citation_text
 from .templates import TaskTemplate
 
 Status = Literal["pass", "warn", "fail"]
@@ -57,7 +58,7 @@ def citation_gate(
     template: TaskTemplate,
     min_citations: int | None = None,
 ) -> GateResult:
-    body = _body_without_references(markdown)
+    body = citation_text(_body_without_references(markdown))
     used = {
         int(number) for match in _CITE.findall(body) for number in re.split(r"\s*[,，]\s*", match)
     }

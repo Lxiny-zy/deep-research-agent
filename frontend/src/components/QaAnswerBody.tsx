@@ -1,5 +1,6 @@
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { mathRemarkPlugins, mathRehypePlugins, normalizeMathMarkdown } from '../lib/scientificMath'
 import { CITE_HREF_PREFIX, remarkCitations } from '../lib/evidence'
 import type { QaEvidence } from '../types'
 
@@ -126,8 +127,13 @@ export default function QaAnswerBody({
 }) {
   return (
     <CitationContext.Provider value={{ citations, evidence, onLocate, streaming }}>
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkCitations]} components={components} skipHtml>
-        {text}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, ...mathRemarkPlugins, remarkCitations]}
+        rehypePlugins={mathRehypePlugins}
+        components={components}
+        skipHtml
+      >
+        {normalizeMathMarkdown(text)}
       </ReactMarkdown>
     </CitationContext.Provider>
   )

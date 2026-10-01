@@ -50,9 +50,9 @@ def _lock(store: ArtifactStore) -> Iterator[None]:
         raise ValueError("delivery lock must not be a symlink")
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(descriptor, "r+b") as handle:
-        if not path.stat().st_size:
-            handle.write(b"0")
-            handle.flush()
+        # Both flock and Windows byte-range locks work beyond EOF. Writing a
+        # sentinel before acquiring the lock races with another opener: its
+        # Windows lock can deny our buffered flush (and even handle.close()).
         deadline = time.monotonic() + 300
         while True:
             try:

@@ -15,7 +15,10 @@ dynamic = ["dependencies"]
 [project.optional-dependencies]
 # Keep heavyweight document/full-text libraries out of the service startup
 # path.  Install only the export/parser capabilities needed by a deployment.
-pdf = ["weasyprint>=70,<71", "CairoSVG>=2.8,<3"]
+pdf = [
+    "weasyprint>=70,<71", "CairoSVG>=2.8,<3", "PyMuPDF>=1.24,<2",
+    "latex2mathml==3.81.1", "ziamath==0.13", "fonttools>=4.22,<5",
+]
 xlsx = ["openpyxl>=3.1,<4"]
 fulltext = ["PyMuPDF>=1.24,<2"]
 
@@ -38,7 +41,13 @@ deep_research = ["py.typed"]
 "share/deep-research-agent/framework" = ["framework/01_planner_system_prompt.md", "framework/04_executor_prompt.md", "framework/05_aggregator_prompt.md", "framework/06_global_rules.md", "framework/09_long_research.md", "framework/10_research_plan.json"]
 "share/deep-research-agent/framework/skills" = ["framework/skills/*.md"]
 "share/deep-research-agent/frontend" = ["frontend/dist/index.html", "frontend/dist/*.js", "frontend/dist/*.svg", "frontend/dist/*.png", "frontend/dist/*.ico", "frontend/dist/*.webp"]
-"share/deep-research-agent/frontend/assets" = ["frontend/dist/assets/*"]
+"share/deep-research-agent/frontend/assets" = [
+    "frontend/dist/assets/*.js", "frontend/dist/assets/*.mjs", "frontend/dist/assets/*.css",
+    "frontend/dist/assets/*.woff", "frontend/dist/assets/*.woff2", "frontend/dist/assets/*.ttf",
+    "frontend/dist/assets/*.svg", "frontend/dist/assets/*.png", "frontend/dist/assets/*.webp",
+]
+"share/deep-research-agent/frontend/assets/pdfjs/cmaps" = ["frontend/dist/assets/pdfjs/cmaps/*"]
+"share/deep-research-agent/frontend/assets/pdfjs/standard_fonts" = ["frontend/dist/assets/pdfjs/standard_fonts/*"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

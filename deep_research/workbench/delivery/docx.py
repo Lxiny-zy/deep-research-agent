@@ -19,6 +19,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 from .markdown import Block, Inline, parse_blocks, plain
+from .math import office_math
 
 _BODY_FONT = "Microsoft YaHei"
 _ACCENT = RGBColor(0x1F, 0x5F, 0x8B)
@@ -82,12 +83,42 @@ def _base_document():  # type: ignore[no-untyped-def]
 
 def _add_runs(paragraph, inlines: list[Inline]) -> None:  # type: ignore[no-untyped-def]
     for item in inlines:
+        if item.math:
+            _add_math(paragraph, item.text, item.display)
+            continue
         run = paragraph.add_run(item.text)
         run.bold = item.bold or None
         run.italic = item.italic or item.math or None
         if item.code or item.math:
             run.font.name = "Consolas" if item.code else "Cambria Math"
             _set_east_asian(run, run.font.name)
+
+
+def _add_math(paragraph, tex: str, display: bool = False) -> None:  # type: ignore[no-untyped-def]
+    from lxml import etree
+
+    xml = office_math(tex, display)
+    xml = xml.replace(
+        "<m:oMath>",
+        '<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" '
+        'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+        1,
+    )
+    root = etree.fromstring(xml.encode())
+    for run in root.findall(".//" + qn("m:r")):
+        properties = OxmlElement("w:rPr")
+        fonts = OxmlElement("w:rFonts")
+        fonts.set(qn("w:ascii"), "Cambria Math")
+        fonts.set(qn("w:hAnsi"), "Cambria Math")
+        fonts.set(qn("w:eastAsia"), _BODY_FONT)
+        properties.append(fonts)
+        run.insert(1 if run.find(qn("m:rPr")) is not None else 0, properties)
+    if display:
+        wrapper = OxmlElement("m:oMathPara")
+        wrapper.append(root)
+        paragraph._p.append(wrapper)
+    else:
+        paragraph._p.append(root)
 
 
 def _shade(cell, fill: str) -> None:  # type: ignore[no-untyped-def]
@@ -129,11 +160,13 @@ def render_docx(
     markdown, title, meta = (_XML_ILLEGAL.sub("", value) for value in (markdown, title, meta))
     blocks = parse_blocks(markdown)
     document = _base_document()
+    title_inlines = [Inline(title)]
     if blocks and blocks[0].kind == "heading" and blocks[0].level == 1:
+        title_inlines = blocks[0].inlines
         title = plain(blocks[0].inlines) or title
         blocks = blocks[1:]
     document.core_properties.title = title[:200]
-    document.add_heading(title, level=1)
+    _add_runs(document.add_heading(level=1), title_inlines)
     if meta:
         paragraph = document.add_paragraph()
         run = paragraph.add_run(meta)
@@ -141,7 +174,11 @@ def render_docx(
         run.font.color.rgb = _MUTED
     for block in blocks:
         if block.kind == "heading":
-            document.add_heading(plain(block.inlines), level=min(max(block.level, 2), 4))
+            _add_runs(document.add_heading(level=min(max(block.level, 2), 4)), block.inlines)
+        elif block.kind == "math":
+            paragraph = document.add_paragraph()
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _add_math(paragraph, block.text, True)
         elif block.kind == "paragraph":
             paragraph = document.add_paragraph()
             if len(block.inlines) == 1 and block.inlines[0].math:

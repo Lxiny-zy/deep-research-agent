@@ -14,6 +14,8 @@ from collections.abc import Mapping
 from html import escape
 
 from .markdown import Block, Inline, parse_blocks, plain
+from .math import MathAsset
+from .math_pdf import math_html
 
 _READING_CSS = """
 :root{--ink:#1c2430;--muted:#5b6675;--line:#dfe4ea;--accent:#1f5f8b;
@@ -54,6 +56,10 @@ figure img{max-width:100%;height:auto;border:1px solid var(--line);border-radius
 figcaption{color:var(--muted);font-size:13px;margin-top:6px}
 .math{font-family:"Latin Modern Math","Cambria Math",serif;font-style:italic}
 .math-block{display:block;text-align:center;margin:1em 0}
+.rendered-math{color:var(--ink)}
+.math-svg{display:inline-block;max-width:100%}.math-svg svg{width:100%;height:100%}
+.display-math{display:block;text-align:center;overflow-x:auto;margin:1em 0}
+.math-accessible{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(1px,1px,1px,1px)}
 sup.cite a{text-decoration:none}
 @media print{nav.toc{display:none}main{max-width:none;padding:0}a{color:inherit}}
 """
@@ -82,12 +88,20 @@ blockquote{margin:6pt 0 6pt 12pt;color:#5b6675}
 """
 
 
-def _inline_html(inlines: list[Inline]) -> str:
+def _inline_html(
+    inlines: list[Inline],
+    *,
+    pdf: bool = False,
+    math_assets: dict[bytes, MathAsset] | None = None,
+    size: float | None = None,
+) -> str:
     out: list[str] = []
     for item in inlines:
         text = escape(item.text)
         if item.math:
-            out.append(f'<span class="math">{text}</span>')
+            out.append(
+                math_html(item.text, display=item.display, pdf=pdf, assets=math_assets, size=size)
+            )
             continue
         if item.code:
             text = f"<code>{text}</code>"
@@ -101,7 +115,9 @@ def _inline_html(inlines: list[Inline]) -> str:
     return "".join(out).replace("\n", "<br>")
 
 
-def _list_html(block: Block) -> str:
+def _list_html(
+    block: Block, *, pdf: bool = False, math_assets: dict[bytes, MathAsset] | None = None
+) -> str:
     html: list[str] = []
     stack: list[str] = []
     for item in block.items:
@@ -111,7 +127,7 @@ def _list_html(block: Block) -> str:
         while len(stack) < item.depth + 1:
             stack.append(tag)
             html.append(f"<{tag}>")
-        html.append(f"<li>{_inline_html(item.inlines)}</li>")
+        html.append(f"<li>{_inline_html(item.inlines, pdf=pdf, math_assets=math_assets)}</li>")
     while stack:
         html.append(f"</{stack.pop()}>")
     return "".join(html)
@@ -131,35 +147,54 @@ def blocks_html(
     images: Mapping[str, bytes] | None = None,
     pdf: bool = False,
     anchors: bool = True,
+    math_assets: dict[bytes, MathAsset] | None = None,
 ) -> str:
     images = images or {}
     parts: list[str] = []
     heading_index = 0
+
+    def inline(items: list[Inline]) -> str:
+        return _inline_html(items, pdf=pdf, math_assets=math_assets)
+
     for block in blocks:
         if block.kind == "heading":
             level = min(max(block.level, 1), 4)
             heading_index += 1
             anchor = f' id="h-{heading_index}"' if anchors and not pdf else ""
-            parts.append(f"<h{level}{anchor}>{_inline_html(block.inlines)}</h{level}>")
+            content = _inline_html(
+                block.inlines,
+                pdf=pdf,
+                math_assets=math_assets,
+                size={1: 20, 2: 14, 3: 12, 4: 10.5}[level],
+            )
+            parts.append(f"<h{level}{anchor}>{content}</h{level}>")
+        elif block.kind == "math":
+            parts.append(math_html(block.text, display=True, pdf=pdf, assets=math_assets))
         elif block.kind == "paragraph":
             if len(block.inlines) == 1 and block.inlines[0].math:
-                parts.append(f'<p class="math math-block">{escape(block.inlines[0].text)}</p>')
+                parts.append(
+                    math_html(
+                        block.inlines[0].text,
+                        display=block.inlines[0].display,
+                        pdf=pdf,
+                        assets=math_assets,
+                    )
+                )
             else:
-                parts.append(f"<p>{_inline_html(block.inlines)}</p>")
+                parts.append(f"<p>{inline(block.inlines)}</p>")
         elif block.kind == "quote":
-            parts.append(f"<blockquote>{_inline_html(block.inlines)}</blockquote>")
+            parts.append(f"<blockquote>{inline(block.inlines)}</blockquote>")
         elif block.kind == "list":
-            parts.append(_list_html(block))
+            parts.append(_list_html(block, pdf=pdf, math_assets=math_assets))
         elif block.kind == "code":
             parts.append(f"<pre><code>{escape(block.text)}</code></pre>")
         elif block.kind == "rule":
             parts.append("<hr>")
         elif block.kind == "table" and block.rows:
             head, *body = block.rows
-            rows = ["<tr>" + "".join(f"<th>{_inline_html(c)}</th>" for c in head) + "</tr>"]
+            rows = ["<tr>" + "".join(f"<th>{inline(c)}</th>" for c in head) + "</tr>"]
             rows += [
-                "<tr>" + "".join(f"<td>{_inline_html(c)}</td>" for c in row) + "</tr>"
-                for row in body
+                "<tr>" + "".join(f"<td>{inline(c)}</td>" for c in row) + "</tr>" for row in body
             ]
             parts.append(
                 "<table><thead>"
@@ -196,10 +231,12 @@ def render_html(
 ) -> str:
     """交付用自包含 HTML：一份文件，离线可读，无任何外链资源与脚本。"""
     blocks = parse_blocks(markdown)
+    title_inlines = [Inline(title)]
     # 正文若以一级标题开头，把它提升为文档标题，避免与页眉重复出现。
     # 必须先剥离再编号：目录锚点与 blocks_html 的标题序号出自同一份块列表。
     if blocks and blocks[0].kind == "heading" and blocks[0].level == 1:
-        title = plain(blocks[0].inlines) or title
+        title_inlines = blocks[0].inlines
+        title = plain(title_inlines) or title
         blocks = blocks[1:]
     headings = [(i + 1, b) for i, b in enumerate(b for b in blocks if b.kind == "heading")]
     toc_items = [
@@ -218,21 +255,30 @@ def render_html(
         '<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{escape(title)}</title><style>{_READING_CSS}</style></head><body><main>"
-        f'<header class="doc"><div class="kicker">{escape(kicker)}</div><h1>{escape(title)}</h1>'
+        f'<header class="doc"><div class="kicker">{escape(kicker)}</div>'
+        f"<h1>{_inline_html(title_inlines)}</h1>"
         + (f'<div class="meta">{escape(meta)}</div>' if meta else "")
         + f"</header>{toc}<article>{body}</article></main></body></html>\n"
     )
 
 
 def pdf_html(
-    markdown: str, *, title: str, meta: str = "", images: Mapping[str, bytes] | None = None
+    markdown: str,
+    *,
+    title: str,
+    meta: str = "",
+    images: Mapping[str, bytes] | None = None,
+    math_assets: dict[bytes, MathAsset] | None = None,
 ) -> tuple[str, str]:
     blocks = parse_blocks(markdown)
+    title_inlines = [Inline(title)]
     if blocks and blocks[0].kind == "heading" and blocks[0].level == 1:
-        title = plain(blocks[0].inlines) or title
+        title_inlines = blocks[0].inlines
         blocks = blocks[1:]
-    head = f"<h1>{escape(title)}</h1>" + (f'<p class="meta">{escape(meta)}</p>' if meta else "")
-    return head + blocks_html(blocks, images=images, pdf=True), _PDF_CSS
+    content = _inline_html(title_inlines, pdf=True, math_assets=math_assets, size=20)
+    head = f"<h1>{content}</h1>"
+    head += f'<p class="meta">{escape(meta)}</p>' if meta else ""
+    return head + blocks_html(blocks, images=images, pdf=True, math_assets=math_assets), _PDF_CSS
 
 
 __all__ = ["blocks_html", "pdf_html", "render_html"]

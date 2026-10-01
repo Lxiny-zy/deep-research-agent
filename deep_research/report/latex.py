@@ -75,6 +75,27 @@ def _inline(value: str) -> str:
 
     # 行内参数（\title、表格单元格、标题）里的空行会结束段落，LaTeX 直接报错；
     # 多行正文走 ``_prose`` 逐行调用，这里折叠换行不影响段落结构。
+    if any(marker in value for marker in ("$", r"\(", r"\[")):
+        from ..workbench.delivery.markdown import _inlines, _parser
+        from ..workbench.delivery.math import native_tex
+
+        tokens = _parser().parseInline(value)
+        items = _inlines(tokens[0]) if tokens else []
+        if any(item.math for item in items):
+            parts = []
+            for item in items:
+                if item.math:
+                    parts.append(r"\(" + native_tex(item.text) + r"\)")
+                else:
+                    text = _escape(item.text)
+                    if item.code:
+                        text = r"\texttt{" + text + "}"
+                    elif item.bold:
+                        text = r"\textbf{" + text + "}"
+                    elif item.italic:
+                        text = r"\emph{" + text + "}"
+                    parts.append(text)
+            return "".join(parts)
     escaped = _escape(re.sub(r"\s*[\r\n]+\s*", " ", value))
     # The replacements operate on escaped text and only emit fixed LaTeX
     # commands.  This intentionally supports a small, predictable subset.
@@ -94,6 +115,10 @@ def _inline(value: str) -> str:
 def _prose(markdown: str) -> str:
     """Project the portable Markdown subset to safe LaTeX paragraphs."""
 
+    from ..workbench.delivery.math import native_tex
+    from ..workbench.delivery.math_markdown import math_blocks
+
+    equations = math_blocks(markdown)
     lines = markdown.replace("\r\n", "\n").splitlines()
     out: list[str] = []
     list_kind: str | None = None
@@ -108,12 +133,23 @@ def _prose(markdown: str) -> str:
     def close_code() -> None:
         nonlocal code
         if code is not None:
-            out.append(r"\begin{verbatim}")
-            out.extend(code)
-            out.append(r"\end{verbatim}")
+            # Literal code cannot terminate a TeX environment and execute a
+            # following command. Preserve spaces while escaping every line.
+            rendered = "\n".join((_escape(line) if line else r"\mbox{}") + r"\par" for line in code)
+            out.append(
+                r"\begin{quote}\ttfamily\obeyspaces" + "\n" + rendered + "\n" + r"\end{quote}"
+            )
             code = None
 
-    for raw in lines:
+    skip_until = 0
+    for line_index, raw in enumerate(lines):
+        if line_index < skip_until:
+            continue
+        if line_index in equations:
+            close_list()
+            skip_until, formula = equations[line_index]
+            out.append(r"\[" + native_tex(formula) + r"\]")
+            continue
         line = raw.strip()
         if line.startswith("```") or line.startswith("~~~"):
             close_list()
@@ -284,6 +320,7 @@ def render_latex(
         [
             rf"\usepackage{{{','.join(spec.packages)}}}",
             r"\usepackage{graphicx}",
+            r"\usepackage{amsmath,amssymb}",
             r"\hypersetup{hidelinks}",
             r"\setlength{\parindent}{2em}",
             r"\setlength{\parskip}{0.35em}",
@@ -461,6 +498,7 @@ def render_latex_pdf(
             for key, value in os.environ.items()
             if key in {"PATH", "HOME", "TEMP", "TMP", "LANG", "LC_ALL", "TEXMFVAR"}
         }
+        env.update(openin_any="p", openout_any="p")
         try:
             completed = subprocess.run(
                 argv,

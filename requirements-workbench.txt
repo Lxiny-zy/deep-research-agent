@@ -1,6 +1,11 @@
 # 科研工作台交付与附件解析依赖（Word / PPT / PDF 渲染、统计图表、上传文件读取）。
 # 部署镜像需要安装；锁文件由 `make lock` 生成（requirements-workbench.lock）。
 markdown-it-py>=4,<5
+mdit-py-plugins>=0.6,<0.7
+latex2mathml==3.81.1
+ziamath==0.13
+mathml2omml==0.0.2
+fonttools>=4.22,<5
 python-docx>=1.1,<2
 python-pptx>=1.0,<2
 PyMuPDF>=1.24,<2

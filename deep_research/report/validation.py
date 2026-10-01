@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
 from ..guardrails import report_eligible
 from ..models import Report, ResearchResult
+from ..workbench.delivery.math_markdown import (
+    citation_text,
+    only_math,
+    replace_citations,
+    validation_paragraphs,
+)
 
 _CITATION = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
 _NUMBER = re.compile(r"(?<![A-Za-z0-9_.])[-+]?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][-+]?\d+)?")
@@ -31,8 +38,8 @@ def _excerpt(text: str) -> str:
 
 
 def _numbers(text: str) -> set[Decimal]:
-    text = text.replace("−", "-")
-    text = _CITATION.sub("", text)
+    text = unicodedata.normalize("NFKC", text).replace("−", "-")
+    text = replace_citations(text, lambda _: "")
     text = re.sub(r"(?m)^\s*\d+[.)、]\s+", "", text)
     values = set()
     for raw in _NUMBER.findall(text):
@@ -41,6 +48,10 @@ def _numbers(text: str) -> set[Decimal]:
         except InvalidOperation:
             pass
     return values
+
+
+def _citation_text(text: str) -> str:
+    return citation_text(text)
 
 
 def validate_body(
@@ -71,7 +82,7 @@ def validate_body(
             ):
                 continue
             evidence.setdefault(index, []).append(f"{finding.statement}\n{finding.evidence_quote}")
-            statement = _CITATION.sub("", finding.statement).strip()
+            statement = replace_citations(finding.statement, lambda _: "").strip()
             safe_statements.append(f"- {statement} [{index}]")
     if not evidence:
         return ReportCheck(
@@ -82,7 +93,7 @@ def validate_body(
     problems: list[tuple[str, str, str]] = []
     all_indices = {
         int(number)
-        for match in _CITATION.findall(body)
+        for match in _CITATION.findall(_citation_text(body))
         for number in re.split(r"\s*[,，]\s*", match)
     }
     if not all_indices.issubset(evidence):
@@ -91,7 +102,7 @@ def validate_body(
         problems.append(("invalid_citation", "", f"引用了不存在的素材编号 {unknown}"))
     all_support = _numbers("\n".join(text for items in evidence.values() for text in items))
     heading = ""
-    for paragraph in re.split(r"\n\s*\n", body):
+    for paragraph in validation_paragraphs(body):
         headings = [
             line.lstrip("# ").strip()
             for line in paragraph.splitlines()
@@ -109,9 +120,11 @@ def validate_body(
             continue
         indices = {
             int(number)
-            for match in _CITATION.findall(content)
+            for match in _CITATION.findall(_citation_text(content))
             for number in re.split(r"\s*[,，]\s*", match)
         }
+        if not indices and not exempt:
+            exempt = only_math(content)
         if not indices and exempt:
             unsupported = sorted(_numbers(content) - all_support)
             if unsupported:
@@ -195,7 +208,7 @@ def finalize_report(
             + "]"
         )
 
-    checked_body = _CITATION.sub(replace_citation, check.body)
+    checked_body = replace_citations(check.body, replace_citation)
     references = "\n".join(
         f"[{index}] {eligible[url]}" for index, (url, _) in enumerate(included, 1)
     )

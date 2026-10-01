@@ -66,15 +66,56 @@ def table_from_html(html: str, width: float) -> PdfTable:
         for i in range(columns)
     ]
 
+    # Formula images cannot wrap like text. Reserve their intrinsic width
+    # before distributing the remaining space according to prose length.
+    minimums = [
+        max(
+            [12.0]
+            + [
+                float(value) + 1
+                for row in cells
+                for value in re.findall(r'<img\b[^>]*\bwidth="([\d.]+)"', row[i])
+            ]
+        )
+        for i in range(columns)
+    ]
+    available = max(1, width - columns * 10)
+    if sum(minimums) > available:
+        raise ValueError("表格公式总宽度超过版心，请将公式拆为多行或移到表格外")
+    widths = [weight / sum(weights) * available for weight in weights]
+    pending = set(range(columns))
+    remaining = available
+    while pending:
+        total = sum(weights[i] for i in pending)
+        constrained = {i for i in pending if weights[i] / total * remaining < minimums[i]}
+        if not constrained:
+            for i in pending:
+                widths[i] = weights[i] / total * remaining
+            break
+        for i in constrained:
+            widths[i] = minimums[i]
+            remaining -= minimums[i]
+        pending -= constrained
+
     def fixed_width(row: str, row_index: int) -> str:
         index = 0
 
         def cell(match: re.Match[str]) -> str:
             nonlocal index
-            cell_width = weights[index] / sum(weights) * max(1, width - columns * 10)
+            cell_width = widths[index]
+            # Story lowers inline formula images without extending the cell
+            # for their descent. Keep denominators clear of the bottom rule.
+            descent = max(
+                [0.0]
+                + [
+                    float(value)
+                    for value in re.findall(r"vertical-align:-([\d.]+)pt", cells[row_index][index])
+                ]
+            )
+            padding = f";padding-bottom:{4 + descent:.4f}pt" if descent else ""
             identity = f"dr-cell-{row_index}-{index}"
             index += 1
-            return f'<{match[1]} id="{identity}" style="width:{cell_width:.4f}pt">'
+            return f'<{match[1]} id="{identity}" style="width:{cell_width:.4f}pt{padding}">'
 
         return re.sub(r"<(th|td)>", cell, row)
 

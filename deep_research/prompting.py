@@ -17,6 +17,16 @@ from pydantic import BaseModel
 _RULES_FILE = "06_global_rules.md"
 _RULES_MARKER = "## 全局编排规则"
 
+# A fixed instruction shared by answers and report writers. It stays in the
+# system prefix, never interleaved with changing questions or source material.
+SCIENTIFIC_MARKDOWN = (
+    "数学表达使用 $...$ 行内公式或独立行的 $$...$$，保持原始变量、单位与适用条件。"
+    "较长表达式用 aligned 分行，不把长公式挤进窄表格；中文标注放在 "
+    r"\text{...} 内。不要输出完整 TeX 文档、自定义宏、包导入或文件命令。"
+    "文献 [n] 标记写在公式外的解释句中，不把公式编号当成来源编号；"
+    r"正文中的美元金额写为 \$，代码放在代码标记内。"
+)
+
 # Keep production runs usable when a wheel/container omits the optional
 # framework directory.  This is deliberately short and only contains rules
 # that protect the execution boundary; the repository file remains the

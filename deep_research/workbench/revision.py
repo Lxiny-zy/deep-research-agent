@@ -28,6 +28,7 @@ from typing import Any
 from ..models import ResearchResult
 from ..persistence.repository import LeaseLostError
 from ..report.validation import describe_problems, validate_body
+from .delivery.math_markdown import citation_text
 from .quality import QualityPolicy
 from .scholarly import abstract_sections, evaluate, revision_brief
 from .templates import TaskTemplate
@@ -67,7 +68,9 @@ class RevisionLog:
 
 def _used_indices(body: str) -> set[int]:
     return {
-        int(number) for match in _CITE.findall(body) for number in re.split(r"\s*[,，]\s*", match)
+        int(number)
+        for match in _CITE.findall(citation_text(body))
+        for number in re.split(r"\s*[,，]\s*", match)
     }
 
 

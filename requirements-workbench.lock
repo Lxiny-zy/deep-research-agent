@@ -155,6 +155,7 @@ fonttools==4.64.0 \
     --hash=sha256:ff7aff4637fbf71394df139c63ccfe08a47aa4252d2f91224ddb3335c716c925
     # via
     #   -c requirements-pdf.lock
+    #   -r requirements-workbench.txt
     #   matplotlib
 kiwisolver==1.5.1 \
     --hash=sha256:007a5553dfc4f4e8d184f588a0200e2cd4b63a59cc8796df3c39909e679dc7a0 \
@@ -299,6 +300,13 @@ kiwisolver==1.5.1 \
     --hash=sha256:fc271a6f0a2126958f4090e5507b9da5848927dae331f8f763bd4aa642b3d2cd \
     --hash=sha256:febcce10f2bcdbb80b4ea919238a6a4ac13dbc4c7cadbe8d5d75c3682f8b5404
     # via matplotlib
+latex2mathml==3.81.1 \
+    --hash=sha256:c337668441b71c819b6733905a8058ba9a9d767bae11a0c5fdacb3aff31361bd \
+    --hash=sha256:c95add0c0fcdecad2d70567e0643050d5ea1149fb2e98a5d5792fb1c8eea2ed5
+    # via
+    #   -c requirements-pdf.lock
+    #   -r requirements-workbench.txt
+    #   ziamath
 lxml==6.1.3 \
     --hash=sha256:032a0a97eed428bd143c75a11118238546424ceb2fa311cca5f073aa44658dc4 \
     --hash=sha256:05f5bce9af14fd1506997594bd81cee6d9c6b58ea80a39c058327aa6371ed9e9 \
@@ -482,6 +490,13 @@ lxml==6.1.3 \
 markdown-it-py==4.2.0 \
     --hash=sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49 \
     --hash=sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a
+    # via
+    #   -c requirements.lock
+    #   -r requirements-workbench.txt
+    #   mdit-py-plugins
+mathml2omml==0.0.2 \
+    --hash=sha256:6a2a1a10e90d7d8a672a1b37b6b49a6187e6720439aeb922949d254bb4656f25 \
+    --hash=sha256:c67b289cd09208c4b6f3c4f74653f6d86edfd8fff4c18e6c95a7afa9994e7323
     # via -r requirements-workbench.txt
 matplotlib==3.11.2 \
     --hash=sha256:01dc8eaaab5a9fce9ff615eca82345728f289e4715b186ee10c6d85272fc26bb \
@@ -538,10 +553,18 @@ matplotlib==3.11.2 \
     --hash=sha256:f2ac30cf5eb5dff1b584627ae0b0e1186551a4f69ae3c75073911da497a29170 \
     --hash=sha256:fea03cf56568cc1cba08b470be6a0559e71c3a5b688d54b7179bb35ba23d0821
     # via -r requirements-workbench.txt
+mdit-py-plugins==0.6.1 \
+    --hash=sha256:214c82fb2ac524472ab6a5bcab1de80f73b50443e187f401bfd77efbc7c6481d \
+    --hash=sha256:a2bca0f039f39dbd35fb74ae1b5f998608c437463371f0ff7f49a19a17a114d0
+    # via
+    #   -c requirements.lock
+    #   -r requirements-workbench.txt
 mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
     --hash=sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba
-    # via markdown-it-py
+    # via
+    #   -c requirements.lock
+    #   markdown-it-py
 numpy==2.4.6 \
     --hash=sha256:001fbb8e08d942dd57599e781f2472269ee7f2755fae407b4f67b2f0b17da3f1 \
     --hash=sha256:0280e0356c0829a18d9de1cb7eee50ec22ca639878d7240307ca0943d73cd2c4 \
@@ -900,3 +923,15 @@ xlsxwriter==3.2.9 \
     --hash=sha256:254b1c37a368c444eac6e2f867405cc9e461b0ed97a3233b2ac1e574efb4140c \
     --hash=sha256:9a5db42bc5dff014806c58a20b9eae7322a134abb6fce3c92c181bfb275ec5b3
     # via python-pptx
+ziafont==0.11 \
+    --hash=sha256:b2a9991948b232640215236efdf603f372403b0e000598971a84cae35880d50c \
+    --hash=sha256:b62132be3da9667a80d048ab5498f107e49761722b69965788c2c747a38e7373
+    # via
+    #   -c requirements-pdf.lock
+    #   ziamath
+ziamath==0.13 \
+    --hash=sha256:4f56e9d0b6489f01bcf19c05d68e6da84ed6601d2e1262a62d3a9a7e7c33a171 \
+    --hash=sha256:67a9b9714101fc90c2d6d0328e578f3ac311fb007644f2bbb9314ba2bc1c1459
+    # via
+    #   -c requirements-pdf.lock
+    #   -r requirements-workbench.txt

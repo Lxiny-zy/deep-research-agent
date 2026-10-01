@@ -13,7 +13,9 @@ from typing import Literal
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-BlockKind = Literal["heading", "paragraph", "list", "table", "code", "quote", "rule", "image"]
+BlockKind = Literal[
+    "heading", "paragraph", "list", "table", "code", "quote", "rule", "image", "math"
+]
 
 
 @dataclass
@@ -26,6 +28,7 @@ class Inline:
     code: bool = False
     href: str = ""
     math: bool = False
+    display: bool = False
 
 
 @dataclass
@@ -48,7 +51,7 @@ class Block:
     lang: str = ""
 
     def plain(self) -> str:
-        if self.kind in {"code"}:
+        if self.kind in {"code", "math"}:
             return self.text
         if self.kind == "list":
             return "\n".join(plain(item.inlines) for item in self.items)
@@ -64,9 +67,12 @@ def plain(inlines: list[Inline]) -> str:
 
 
 def _parser() -> MarkdownIt:
+    from .math_markdown import math_plugin
+
     md = MarkdownIt("commonmark", {"html": False, "linkify": False, "typographer": False})
     md.enable("table")
     md.enable("strikethrough")
+    md.use(math_plugin)
     return md
 
 
@@ -95,31 +101,11 @@ def _inlines(token: Token | None) -> list[Inline]:
             out.append(Inline("\n" if child.type == "hardbreak" else " "))
         elif child.type == "image":
             out.append(Inline(child.content or str(child.attrs.get("alt", ""))))
+        elif child.type in {"math_inline", "math_inline_double"}:
+            out.append(Inline(child.content, math=True, display=child.type == "math_inline_double"))
         elif child.type == "text":
-            out.extend(_split_math(child.content, bold=bold, italic=italic, href=href))
+            out.append(Inline(child.content, bold=bold, italic=italic, href=href))
     return out
-
-
-def _split_math(text: str, *, bold: bool, italic: bool, href: str) -> list[Inline]:
-    """把 ``$...$`` 行内公式标出来（交付层按等宽/斜体呈现，不做 TeX 渲染）。"""
-    parts: list[Inline] = []
-    buffer = ""
-    index = 0
-    while index < len(text):
-        if text[index] == "$" and (index == 0 or text[index - 1] != "\\"):
-            end = text.find("$", index + 1)
-            if end > index + 1:
-                if buffer:
-                    parts.append(Inline(buffer, bold=bold, italic=italic, href=href))
-                    buffer = ""
-                parts.append(Inline(text[index + 1 : end], math=True))
-                index = end + 1
-                continue
-        buffer += text[index]
-        index += 1
-    if buffer:
-        parts.append(Inline(buffer, bold=bold, italic=italic, href=href))
-    return parts
 
 
 def parse_blocks(markdown: str) -> list[Block]:
@@ -136,6 +122,13 @@ def parse_blocks(markdown: str) -> list[Block]:
             blocks.append(Block("heading", level=level, inlines=_inlines(tokens[index + 1])))
             index += 3
             continue
+        if kind == "math_block":
+            if list_stack and blocks and blocks[-1].kind == "list":
+                blocks[-1].items[-1].inlines.append(Inline(token.content, math=True, display=True))
+            else:
+                blocks.append(Block("math", text=token.content))
+            index += 1
+            continue
         if kind in {"bullet_list_open", "ordered_list_open"}:
             start = int(token.attrs.get("start", 1)) if token.attrs else 1
             list_stack.append({"ordered": kind == "ordered_list_open", "counter": start - 1})
@@ -150,32 +143,24 @@ def parse_blocks(markdown: str) -> list[Block]:
         if kind == "list_item_open":
             frame = list_stack[-1]
             frame["counter"] = int(frame["counter"]) + 1
-            # 列表项内第一段是该项的正文；嵌套列表会以新的 list_open 出现
-            inline = next(
-                (tokens[j] for j in range(index + 1, len(tokens)) if tokens[j].type == "inline"),
-                None,
-            )
             item = ListItem(
-                inlines=_inlines(inline),
+                inlines=[],
                 depth=len(list_stack) - 1,
                 ordered=bool(frame["ordered"]),
                 number=int(frame["counter"]),
             )
             blocks[-1].items.append(item)
-            # 跳到这一项的首个段落之后
-            j = index + 1
-            while j < len(tokens) and tokens[j].type not in {"paragraph_close", "list_item_close"}:
-                if tokens[j].type in {"bullet_list_open", "ordered_list_open"}:
-                    break
-                j += 1
-            index = j + 1 if j < len(tokens) and tokens[j].type == "paragraph_close" else j
+            index += 1
             continue
         if kind == "paragraph_open":
             inline = tokens[index + 1]
             if list_stack:
                 # 列表项中的后续段落并入该项
                 if blocks and blocks[-1].kind == "list" and blocks[-1].items:
-                    blocks[-1].items[-1].inlines += [Inline(" ")] + _inlines(inline)
+                    current_inlines = blocks[-1].items[-1].inlines
+                    current_inlines.extend(
+                        ([Inline(" ")] if current_inlines else []) + _inlines(inline)
+                    )
                 index += 3
                 continue
             children = inline.children or []
@@ -205,8 +190,13 @@ def parse_blocks(markdown: str) -> list[Block]:
         if kind in {"fence", "code_block"}:
             info = token.info.strip() if token.info else ""
             text = token.content.rstrip("\n")
-            if info in {"math", "latex", "tex"}:
-                blocks.append(Block("paragraph", inlines=[Inline(text, math=True)]))
+            if info in {"math", "latex", "tex"} and not any(
+                command in text for command in (r"\documentclass", r"\begin{document}")
+            ):
+                if list_stack and blocks and blocks[-1].kind == "list":
+                    blocks[-1].items[-1].inlines.append(Inline(text, math=True, display=True))
+                else:
+                    blocks.append(Block("math", text=text))
             else:
                 blocks.append(Block("code", text=text, lang=info))
             index += 1
@@ -233,12 +223,6 @@ def parse_blocks(markdown: str) -> list[Block]:
             index = j + 1
             continue
         index += 1
-    # 块级 $$...$$ 公式：markdown-it 会把它当普通段落；按段落整体标为公式
-    for block in blocks:
-        if block.kind == "paragraph":
-            text = plain(block.inlines).strip()
-            if text.startswith("$$") and text.endswith("$$") and len(text) > 4:
-                block.inlines = [Inline(text[2:-2].strip(), math=True)]
     return blocks
 
 

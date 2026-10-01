@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import multiprocessing
+import threading
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from deep_research.models import Report
 from deep_research.persistence.repository import RunDetail
 from deep_research.workbench.delivery_store import (
     INDEX,
+    _lock,
     build_or_load,
     delivery_store,
     load_version,
@@ -103,6 +105,25 @@ def test_two_processes_share_one_render(tmp_path):
         versions = list(pool.map(_process_build, [str(tmp_path), str(tmp_path)]))
     assert versions[0] == versions[1]
     assert (tmp_path / "build-count.txt").read_text().splitlines() == ["render"]
+
+
+def test_empty_lock_file_serializes_contenders_without_writing_locked_bytes(tmp_path):
+    store, _ = delivery_store(detail(), str(tmp_path))
+    waiting, entered = threading.Event(), threading.Event()
+
+    def contender():
+        waiting.set()
+        with _lock(store):
+            entered.set()
+
+    with ThreadPoolExecutor(1) as pool:
+        with _lock(store):
+            assert store.control_path("deliveries/render.lock").stat().st_size == 0
+            future = pool.submit(contender)
+            assert waiting.wait(5)
+            assert not entered.wait(0.1)
+        future.result(timeout=5)
+    assert entered.is_set()
 
 
 def test_nested_workspace_and_legacy_storage_remain_readable(tmp_path):

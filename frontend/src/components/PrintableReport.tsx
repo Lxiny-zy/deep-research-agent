@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { mathRemarkPlugins, mathRehypePlugins, normalizeMathMarkdown } from '../lib/scientificMath'
 import StructuredDocumentPreview from './StructuredDocumentPreview'
 import {
   citedSources,
@@ -290,8 +291,12 @@ export default function PrintableReport({
       )}
 
       <section className="print-body markdown-content">
-        <Markdown remarkPlugins={[remarkGfm, remarkCitations]} components={components}>
-          {body}
+        <Markdown
+          remarkPlugins={[remarkGfm, ...mathRemarkPlugins, remarkCitations]}
+          rehypePlugins={mathRehypePlugins}
+          components={components}
+        >
+          {normalizeMathMarkdown(body)}
         </Markdown>
       </section>
 

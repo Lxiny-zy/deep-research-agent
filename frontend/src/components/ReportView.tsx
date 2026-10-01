@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { mathRemarkPlugins, mathRehypePlugins, normalizeMathMarkdown } from '../lib/scientificMath'
 import {
   CITE_HREF_PREFIX,
   citedSources,
@@ -205,8 +206,12 @@ export default function ReportView({
               <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{body}</div>
             </>
           ) : (
-            <Markdown remarkPlugins={[remarkGfm, remarkCitations]} components={components}>
-              {body}
+            <Markdown
+              remarkPlugins={[remarkGfm, ...mathRemarkPlugins, remarkCitations]}
+              rehypePlugins={mathRehypePlugins}
+              components={components}
+            >
+              {normalizeMathMarkdown(body)}
             </Markdown>
           )}
           {streaming && <span className="report-caret" aria-hidden="true" />}

@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from html import unescape
 
 from .html import pdf_html
+from .math import MathAsset
+from .math_pdf import place_vector_math
 from .pdf_tables import (
     PdfTable,
     plain_html,
@@ -84,7 +86,16 @@ def _tail_sentinel(markdown: str) -> str:
     for block in reversed(parse_blocks(markdown)):
         if block.kind not in {"paragraph", "list", "quote", "heading", "table"}:
             continue
-        text = re.sub(r"[\s\[\]\d.,，。:：;；|*`#>-]+", "", block.plain())
+        inlines = block.inlines
+        if block.kind == "list":
+            inlines = [inline for item in block.items for inline in item.inlines]
+        elif block.kind == "table":
+            inlines = [inline for row in block.rows for cell in row for inline in cell]
+        # Vector equations carry ActualText in separate PDF streams; their
+        # extraction order need not match their visual position in a sentence.
+        # Formula completeness is checked independently during vector placement.
+        prose = "".join(inline.text for inline in inlines if not inline.math)
+        text = re.sub(r"[\s\[\]\d.,，。:：;；|*`#>-]+", "", prose)
         if len(text) >= 4:
             return text[-6:]
     return ""
@@ -102,7 +113,8 @@ def render_pdf(
     images: Mapping[str, bytes] | None = None,
 ) -> bytes:
     pymupdf = _fitz()
-    body, css = pdf_html(markdown, title=title, meta=meta, images=images)
+    math_assets: dict[bytes, MathAsset] = {}
+    body, css = pdf_html(markdown, title=title, meta=meta, images=images, math_assets=math_assets)
     archive, font_css = _archive_fonts(pymupdf)
     family = "cjk, sans-serif" if font_css else "sans-serif"
     user_css = font_css + css.replace("font-family:sans-serif", f"font-family:{family}")
@@ -135,7 +147,25 @@ def render_pdf(
         story = pymupdf.Story(html=html, user_css=user_css, archive=archive)
         more, filled = story.place(pymupdf.Rect(where.x0, top, where.x1, where.y1))
         rect = pymupdf.Rect(filled)
-        return story, not more and rect.y1 <= where.y1 + 0.1, rect
+        sizes_valid = True
+
+        def check_math(position):  # type: ignore[no-untyped-def]
+            nonlocal sizes_valid
+            if position.id and position.id.startswith("math-"):
+                asset = math_assets.get(bytes.fromhex(position.id[5:]))
+                placed = pymupdf.Rect(position.rect)
+                if (
+                    asset
+                    and placed.width > 0
+                    and (
+                        abs(placed.width - math.ceil(asset.width)) > 0.1
+                        or abs(placed.height - math.ceil(asset.height)) > 0.1
+                    )
+                ):
+                    sizes_valid = False
+
+        story.element_positions(check_math)
+        return story, not more and rect.y1 <= where.y1 + 0.1 and sizes_valid, rect
 
     def draw_table(table: PdfTable) -> None:
         nonlocal cursor
@@ -227,6 +257,7 @@ def render_pdf(
     # 页码：在已排版的 PDF 上逐页写页脚
     document = pymupdf.open(stream=data, filetype="pdf")
     try:
+        place_vector_math(document, math_assets)
         for number, page in enumerate(document, 1):
             rect = page.rect
             page.insert_text(
@@ -265,11 +296,22 @@ def _layout_parts(
     from PIL import Image
 
     parts: list[LayoutPart] = []
-    for part in re.split(r'(<div class="figure">.*?</div>|<table>.*?</table>)', body, flags=re.S):
+    pattern = (
+        r'(<div class="figure">.*?</div>|<div class="equation">.*?</div>|<table>.*?</table>'
+        r'|<p[^>]*>(?:(?!</p>).)*class="math-image"(?:(?!</p>).)*</p>)'
+    )
+    for part in re.split(pattern, body, flags=re.S):
         if not part.strip():
             continue
         minimum = 0.0
         figure_width = None
+        if (
+            part.startswith('<div class="equation">')
+            or 'class="math-image"' in part
+            and part.startswith("<p")
+        ):
+            parts.append(LayoutPart(part, minimum_height=heading_height(part)))
+            continue
         if part.startswith("<table>"):
             table = table_from_html(part, page_width)
             if parts and parts[-1].table is None and parts[-1].figure_width is None:

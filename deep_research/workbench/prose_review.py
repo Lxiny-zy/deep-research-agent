@@ -13,6 +13,7 @@ from typing import Any
 
 from ..models import ResearchResult
 from .delivery.markdown import _parser
+from .delivery.math_markdown import citation_text, only_math
 from .gates import _body_without_references
 from .support import SupportDecision, SupportReviewer, SupportUnit, digest, evidence_records
 
@@ -58,7 +59,15 @@ def prose_units(
             table_header = ""
             previous = table_text
         if (
-            token.type not in {"heading_open", "paragraph_open", "tr_open", "fence", "code_block"}
+            token.type
+            not in {
+                "heading_open",
+                "paragraph_open",
+                "tr_open",
+                "fence",
+                "code_block",
+                "math_block",
+            }
             or not token.map
         ):
             continue
@@ -77,13 +86,16 @@ def prose_units(
         section = " / ".join(name for _, name in headings)
         kind = "prose"
         # Code literals and code spans are not bibliography references.
-        cite_text = "" if token.type in {"fence", "code_block"} else re.sub(r"`[^`]*`", "", text)
+        cite_text = (
+            "" if token.type in {"fence", "code_block", "math_block"} else citation_text(text)
+        )
         cited = sorted(
             {int(n) for group in _CITE.findall(cite_text) for n in re.split(r"\s*[,，]\s*", group)}
         )
         implicit_here = (
             implicit
-            or token.type == "heading_open"
+            or token.type in {"heading_open", "math_block"}
+            or only_math(text)
             or any(word.casefold() in section.casefold() for word in uncited_sections)
         )
         if not cited and implicit_here:
@@ -174,7 +186,7 @@ class ProseReviewer:
     def signature(self, markdown: str) -> str:
         return digest(
             {
-                "version": 2,
+                "version": 3,
                 "body": body_text(markdown, strip_references=False),
                 "evidence": self.evidence,
                 "source_version": self.source_version,
@@ -205,7 +217,7 @@ class ProseReviewer:
         by_id = {unit.id: unit for unit in units}
         positions = {loc["id"]: loc["start_line"] for loc in locations}
         record = {
-            "version": 2,
+            "version": 3,
             "input_hash": signature,
             "status": "fail" if problems or not units else "pass",
             "scope": "model_assessed_final_prose_support",
