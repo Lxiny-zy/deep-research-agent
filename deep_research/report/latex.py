@@ -311,6 +311,10 @@ def render_latex(
         lines.append(rf"\noindent\textbf{{关键词：}}{_inline('；'.join(document.keywords))}")
     if document.disclaimer:
         lines.extend([r"\begin{quote}\small", _inline(document.disclaimer), r"\end{quote}"])
+    if document.final_validation and document.final_validation.support_status == "fail":
+        lines.extend(
+            [r"\begin{quote}", _inline("待核验草稿：正文结论依据尚未通过核验。"), r"\end{quote}"]
+        )
     if document.sections:
         for section in document.sections:
             lines.append(rf"\{_section_command(section)}{{{_inline(section.title)}}}")

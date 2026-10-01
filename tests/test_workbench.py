@@ -801,6 +801,7 @@ async def test_answer_question_verifies_and_cites(settings) -> None:
     assert [t["tool"] for t in result.thoughts] == [
         "rewrite",
         "search_and_verify",
+        "claim_check",
         "citation_check",
     ]
 

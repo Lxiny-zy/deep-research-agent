@@ -3,6 +3,19 @@ import userEvent from '@testing-library/user-event'
 import type { Finding } from '../types'
 import ReportView from './ReportView'
 
+it('distinguishes failed final prose review from verified source evidence', async () => {
+  render(
+    <ReportView
+      markdown="未经支持的结论 [1]。"
+      streaming={false}
+      finalReview={{ status: 'fail', issues: ['引用只支持相关，不能证明因果'] }}
+    />,
+  )
+  expect(screen.getByRole('alert')).toHaveTextContent('正式交付暂不可用')
+  await userEvent.click(screen.getByText('查看未通过的内容'))
+  expect(screen.getByText('引用只支持相关，不能证明因果')).toBeVisible()
+})
+
 // 可审计报告：[n] 引用可点击 → 证据侧栏（论断/逐字 quote/验证徽章/哈希缩写/矛盾链接）；
 // 报告头部证据链概览条；流式无 findings 时优雅降级为不可点击角标。
 

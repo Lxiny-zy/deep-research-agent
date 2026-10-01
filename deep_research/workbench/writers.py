@@ -28,6 +28,7 @@ from ..report.validation import finalize_report
 from ..token_budget import TokenBudgetExceeded
 from .contract import TaskContract, contract_from_scratch
 from .mindmap_contract import Mindmap, MindmapNode, review_record, structural_issues, units
+from .prose_review import PROSE_REVIEW_KEY, ProseReviewer
 from .quality import QualityPolicy, coerce_policy
 from .revision import Assessment, RevisionLog, assess_draft, write_with_revisions
 from .scholarly import abstract_sections
@@ -53,12 +54,11 @@ _BASE_SYSTEM = (
 
 
 def eligible_material(
-    results: list[ResearchResult], *, require_corroboration: bool = False, limit: int = 120
+    results: list[ResearchResult], *, require_corroboration: bool = False
 ) -> tuple[str, dict[str, int]]:
     """把合格发现渲染为带固定编号的素材块，返回 (素材文本, url→编号)。"""
     url_to_idx: dict[str, int] = {}
     blocks: list[str] = []
-    count = 0
     for result in results:
         verified = [
             finding
@@ -69,15 +69,12 @@ def eligible_material(
             continue
         blocks.append(f"\n### {result.sub_question}")
         for finding in verified:
-            if count >= limit:
-                break
             index = url_to_idx.setdefault(finding.source_url, len(url_to_idx) + 1)
             section = finding.verification.source_title or ""
             blocks.append(
                 f"- [{index}] {finding.statement}\n  原文：{finding.evidence_quote}"
                 + (f"\n  出处：{section}" if section else "")
             )
-            count += 1
     return "\n".join(blocks).strip(), url_to_idx
 
 
@@ -183,9 +180,20 @@ class TemplateWriter:
         policy: QualityPolicy,
         min_citations: int,
         require_corroboration: bool,
+        reviewer: ProseReviewer | None = None,
     ) -> tuple[str, RevisionLog]:
         """写作 + 确定性检查 + 按问题清单返工（见 ``revision.py``）。"""
         versions: dict[str, dict[str, Any]] = {}
+        if reviewer is None and url_to_idx:
+            reviewer = ProseReviewer.research(
+                ctx.llm_for("evidence_verifier"),
+                bb.results,
+                url_to_idx,
+                ctx.settings.llm_max_input_chars,
+                query=bb.query,
+                uncited_sections=abstract_sections(template.key, policy),
+                corroboration=require_corroboration,
+            )
 
         async def write(revision: str | None) -> str:
             if revision is not None:
@@ -196,8 +204,8 @@ class TemplateWriter:
             }
             return body
 
-        def assess(body: str) -> Assessment:
-            return assess_draft(
+        async def assess(body: str) -> Assessment:
+            assessment = assess_draft(
                 body,
                 template=template,
                 query=bb.query,
@@ -208,6 +216,12 @@ class TemplateWriter:
                 require_corroboration=require_corroboration,
                 check_citations=self.check_citations,
             )
+            if reviewer is not None:
+                ctx.tracer.emit("SYNTHESIZER", "info", "核对终稿结论与引用的支持关系…")
+                audit = await reviewer.review(body)
+                assessment.hard.extend(audit["issues"])
+                assessment.can_revise = audit["can_revise"]
+            return assessment
 
         def on_event(name: str, data: dict[str, Any]) -> None:
             hard = data.get("hard") or []
@@ -243,6 +257,19 @@ class TemplateWriter:
             else policy.min_citations_for(template.key, template.min_citations)
         )
         revision_log: RevisionLog | None = None
+        reviewer = (
+            ProseReviewer.research(
+                ctx.llm_for("evidence_verifier"),
+                bb.results,
+                url_to_idx,
+                ctx.settings.llm_max_input_chars,
+                query=bb.query,
+                uncited_sections=abstract_sections(template.key, policy),
+                corroboration=corroboration,
+            )
+            if url_to_idx
+            else None
+        )
         if not url_to_idx and template.min_citations:
             body = (
                 f"# {template.title}\n\n没有通过证据门禁的可用素材，无法生成事实性内容。"
@@ -260,12 +287,14 @@ class TemplateWriter:
                     policy=policy,
                     min_citations=min_citations,
                     require_corroboration=corroboration,
+                    reviewer=reviewer,
                 )
             except TokenBudgetExceeded:
                 ctx.tracer.emit("SYNTHESIZER", "info", "预算不足，使用已核验素材摘要交付")
                 body = "预算不足，以下仅提供已核验素材摘要。"
         citations = [url for url, _ in sorted(url_to_idx.items(), key=lambda item: item[1])]
         report = Report(query=bb.query, markdown=body.strip(), citations=citations)
+        body_replaced = False
         if url_to_idx:
             report, check = finalize_report(
                 report,
@@ -273,6 +302,7 @@ class TemplateWriter:
                 require_corroboration=corroboration,
                 uncited_sections=abstract_sections(template.key, policy),
             )
+            body_replaced = bool(check.issues)
             ctx.tracer.emit(
                 "SYNTHESIZER",
                 "info",
@@ -289,6 +319,12 @@ class TemplateWriter:
             )
         bb.report = report
         extras = self.postprocess(bb, report, template)
+        if reviewer is not None:
+            extras[PROSE_REVIEW_KEY] = await reviewer.review(report.markdown)
+            # The body crossed deterministic finalization above. Only this
+            # writer's trusted postprocess (e.g. a subjective review score) ran after it.
+            extras[PROSE_REVIEW_KEY]["mechanically_finalized"] = True
+            extras[PROSE_REVIEW_KEY]["body_replaced"] = body_replaced
         if revision_log is not None:
             extras["revision"] = revision_log.to_dict()
         figure = await self.concept_figure(ctx, template, material)
@@ -341,6 +377,7 @@ class PeerReviewer(TemplateWriter):
     """
 
     template_key = "peerReview"
+    output_keys = ("_review_score",)
 
     async def write(
         self,

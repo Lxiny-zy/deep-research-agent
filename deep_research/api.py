@@ -2605,6 +2605,7 @@ async def get_run_document_pdf(
 ) -> Response:
     """Download a server-rendered PDF when the optional PDF extra is installed."""
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
+    _require_supported_report(document)
     try:
         pdf_bytes = await run_blocking(render_pdf, document)
     except PdfExportUnavailable as exc:
@@ -2697,6 +2698,7 @@ async def get_run_document_paper_pdf(
 ) -> Response:
     """Compile a paper-style PDF from the fixed XeLaTeX template."""
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
+    _require_supported_report(document)
     try:
         pdf_bytes = await run_blocking(
             render_latex_pdf,
@@ -2713,6 +2715,19 @@ async def get_run_document_paper_pdf(
         media_type="application/pdf",
         headers=_download_headers(run_id, document, "-paper.pdf"),
     )
+
+
+def _require_supported_report(document: ReportDocument) -> None:
+    validation = document.final_validation
+    if validation is not None and validation.support_status == "fail":
+        raise HTTPException(
+            409,
+            {
+                "code": "report_support_failed",
+                "message": "正文结论依据未通过核验，暂不生成正式 PDF",
+                "issues": validation.issues,
+            },
+        )
 
 
 @app.get("/api/runs/{run_id}/events", dependencies=[Depends(require_api_key)])

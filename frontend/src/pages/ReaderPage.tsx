@@ -14,6 +14,7 @@ import { documentForEvidence } from '../lib/readerDocuments'
 import { pendingQaId, reconcileQaRequests, runQaRequest } from '../lib/qaRequest'
 import type { QaActivity, QaEvidence, QaSourceOption, QaMessage } from '../types'
 import { appendQaActivity } from '../lib/qaActivity'
+import { finalProseReview } from '../lib/workbench'
 
 // PDF.js 体积较大，只在打开原文时加载
 const PdfViewer = lazy(() => import('../components/PdfViewer'))
@@ -449,6 +450,7 @@ export default function ReaderPage() {
                   streaming={false}
                   findings={flattenFindings(detail.data?.results)}
                   citations={report.citations ?? []}
+                  finalReview={finalProseReview(detail.data)}
                 />
               </div>
             ) : (

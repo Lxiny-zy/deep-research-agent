@@ -219,6 +219,49 @@ async def test_missing_invalid_or_conflicting_keys_fail_closed(access_client):
     assert (await client.get("/api/runs", headers={"X-API-Key": ALICE})).status_code == 200
 
 
+async def test_known_failed_or_stale_prose_review_blocks_both_pdf_routes(
+    access_client, monkeypatch
+):
+    from deep_research.models import Report
+    from deep_research.orchestrator import create_initial_execution
+    from deep_research.workbench.prose_review import ProseReviewer
+    from tests.test_prose_review import Judge, findings
+
+    client, repo = access_client
+    execution = create_initial_execution("解释相关关系", "quick", api.app.state.settings)
+    run_id, _ = await repo.create_run_once(
+        "解释相关关系", request_hash="", owner_id="alice", execution=execution
+    )
+    results = findings()
+    body = "变量已经证明因果关系 [1]。"
+    audit = await ProseReviewer.research(
+        Judge(), results, {"https://a.com": 1}, 50000, query="解释相关关系"
+    ).review(body)
+    execution.checkpoint["scratch"]["prose_review"] = audit
+    await repo.save_orchestration(run_id, execution)
+    await repo.save_result(run_id, results[0])
+    await repo.save_report(
+        run_id, Report(query="解释相关关系", markdown=body, citations=["https://a.com"])
+    )
+    await repo.set_status(run_id, "done")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("failed report must not reach a PDF renderer")
+
+    monkeypatch.setattr(api, "render_pdf", forbidden)
+    monkeypatch.setattr(api, "render_latex_pdf", forbidden)
+    for endpoint in ("document.pdf", "document.paper.pdf"):
+        response = await client.get(f"/api/runs/{run_id}/{endpoint}", headers=_headers(ALICE))
+        assert (
+            response.status_code == 409
+            and response.json()["detail"]["code"] == "report_support_failed"
+        )
+    document = (await client.get(f"/api/runs/{run_id}/document", headers=_headers(ALICE))).json()
+    assert document["final_validation"]["support_status"] == "fail"
+    markdown = await client.get(f"/api/runs/{run_id}/document.md", headers=_headers(ALICE))
+    assert markdown.status_code == 200 and "待核验草稿" in markdown.text
+
+
 def test_credential_revocation_and_invalid_configuration_do_not_echo_keys(monkeypatch):
     credentials = (ApiCredential(Principal("alice", "researcher"), ALICE),)
     assert authenticate(ADMIN, credentials, [ALICE]) == Principal("alice", "researcher")

@@ -30,6 +30,7 @@ export default function ReportActions({
   previewing = false,
   onTogglePreview,
   capabilities,
+  supportFailed = false,
 }: {
   markdown: string
   query: string
@@ -41,6 +42,7 @@ export default function ReportActions({
   previewing?: boolean
   onTogglePreview?: () => void
   capabilities?: Partial<Record<RunDocumentFormat, boolean>>
+  supportFailed?: boolean
 }) {
   const [copied, setCopied] = useState(false)
   const [selectedTableId, setSelectedTableId] = useState('')
@@ -103,7 +105,10 @@ export default function ReportActions({
 
   function downloadLocalMarkdown() {
     const short = runId ? `-${runId.slice(0, 8)}` : ''
-    downloadText(`${slugify(query)}${short}.md`, markdown)
+    const text = supportFailed
+      ? '> 待核验草稿：正文结论依据尚未通过核验。\n\n' + markdown
+      : markdown
+    downloadText(`${slugify(query)}${short}.md`, text)
   }
 
   async function downloadMarkdown() {
@@ -156,14 +161,15 @@ export default function ReportActions({
     options: { disabled: boolean; title?: string; busyLabel?: string; icon?: 'download' | 'file' },
   ) {
     const busy = exporting === format
+    const failedReview = supportFailed && (format === 'pdf' || format === 'paper_pdf')
     return (
       <button
         type="button"
         className="run-export-item"
         onClick={() => void exportDocument(format)}
-        disabled={options.disabled}
+        disabled={options.disabled || failedReview}
         aria-busy={busy}
-        title={options.title}
+        title={failedReview ? '正文结论依据尚未通过核验' : options.title}
       >
         <AppIcon
           name={busy ? 'loader' : (options.icon ?? 'download')}

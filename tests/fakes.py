@@ -80,7 +80,10 @@ class FakeLLM:
                 decisions=[
                     {
                         "unit_id": unit["id"],
-                        "verdict": "supported" if unit["kind"] == "claim" else "non_factual",
+                        "verdict": "supported"
+                        if unit["kind"] == "claim"
+                        or (unit["kind"] in {"prose", "summary"} and unit["citations"])
+                        else "non_factual",
                         "evidence_ids": [
                             e["id"] for e in data["evidence"] if e["citation"] in unit["citations"]
                         ],

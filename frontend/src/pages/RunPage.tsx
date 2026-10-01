@@ -26,6 +26,7 @@ import { appendTurn, turnFromRun } from '../lib/conversation'
 import { countBlockedSources, flattenFindings, reportEvidenceToFindings } from '../lib/evidence'
 import { displayReportTitle } from '../lib/reportTitle'
 import { deriveResearchProgress } from '../lib/runProgress'
+import { finalProseReview } from '../lib/workbench'
 import type { ReportDocument, RunDetail, RunStatus } from '../types'
 
 /**
@@ -415,6 +416,10 @@ export default function RunPage() {
                   includeHsiTables={includeHsiTables}
                   tableOptions={tableOptions}
                   documentReady={Boolean(structuredDocument.data)}
+                  supportFailed={
+                    structuredDocument.data?.final_validation?.support_status === 'fail' ||
+                    finalProseReview(detail.data)?.status === 'fail'
+                  }
                   previewing={printPreview}
                   onTogglePreview={() => setPrintPreview((value) => !value)}
                 />
@@ -430,21 +435,24 @@ export default function RunPage() {
                 blockedSources={blockedSources}
                 createdAt={detail.data?.created_at}
                 preview
+                title={structuredDocument.data?.title}
                 document={structuredDocument.data}
+                supportFailed={finalProseReview(detail.data)?.status === 'fail'}
               />
             ) : (
               <>
-                {!streaming && structuredDocument.data?.final_validation && (
-                  <p className="run-validation-note" role="status">
-                    <AppIcon name="shield" size={14} aria-hidden="true" />
-                    <span>
-                      {structuredDocument.data.final_validation.fallback
-                        ? '正文未通过引用或数值检查，已替换为核验素材摘要。'
-                        : '已检查正文的引用与数值一致性。'}
-                      证据标签仅反映素材状态，不代表逐段语义审核。
-                    </span>
-                  </p>
-                )}
+                {!streaming &&
+                  structuredDocument.data?.final_validation?.scope === 'citation_and_numbers' && (
+                    <p className="run-validation-note" role="status">
+                      <AppIcon name="shield" size={14} aria-hidden="true" />
+                      <span>
+                        {structuredDocument.data.final_validation.fallback
+                          ? '正文未通过引用或数值检查，已替换为核验素材摘要。'
+                          : '已检查正文的引用与数值一致性。'}
+                        证据标签仅反映素材状态，不代表逐段语义审核。
+                      </span>
+                    </p>
+                  )}
                 <ReportView
                   markdown={markdown}
                   streaming={streaming}
@@ -452,6 +460,7 @@ export default function RunPage() {
                   findings={evidenceFindings}
                   citations={citations}
                   blockedSources={blockedSources}
+                  finalReview={finalProseReview(detail.data)}
                 />
               </>
             )}
@@ -480,6 +489,8 @@ export default function RunPage() {
                 blockedSources={blockedSources}
                 createdAt={detail.data?.created_at}
                 document={structuredDocument.data}
+                title={structuredDocument.data?.title}
+                supportFailed={finalProseReview(detail.data)?.status === 'fail'}
               />
             </>
           )}

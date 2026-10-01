@@ -304,6 +304,7 @@ HARD_GATES = frozenset(
         "analysis",
         "structured_content",
         "node_evidence",
+        "prose_evidence",
     }
 )
 

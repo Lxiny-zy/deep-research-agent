@@ -2490,14 +2490,16 @@ export interface components {
             /**
              * Scope
              * @default citation_and_numbers
-             * @constant
+             * @enum {string}
              */
-            scope?: "citation_and_numbers";
+            scope?: "citation_and_numbers" | "model_assessed_final_prose_support" | "model_assessed_node_evidence_and_relations";
             /**
              * Semantic Verification
              * @default false
              */
             semantic_verification?: boolean;
+            /** Support Status */
+            support_status?: ("pass" | "fail") | null;
         };
         /** Finding */
         Finding: {

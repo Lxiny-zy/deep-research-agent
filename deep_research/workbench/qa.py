@@ -25,7 +25,7 @@ from ..agents.researcher import Researcher
 from ..guardrails import report_eligible
 from ..models import Finding, FindingList, ResearchResult, Source
 from ..prompting import structured_system_prompt
-from ..report.validation import validate_body
+from ..report.validation import ReportCheck, validate_body
 from ..tools.base import SearchTool
 from .qa_cache import PaperEvidenceCache, evidence_cache_key
 from .qa_context import dialogue_context
@@ -342,11 +342,31 @@ async def answer_question(
             on_delta(delta)
     body = "".join(chunks).strip()
     results = [ResearchResult(sub_question=query, findings=findings)]
-    check = validate_body(body, results, url_to_idx, fallback=False)
+    from .prose_review import ProseReviewer
+
+    reviewer = ProseReviewer.research(
+        ctx.llm_for("evidence_verifier"),
+        results,
+        url_to_idx,
+        ctx.settings.llm_max_input_chars,
+        query=f"{context}\n\n本轮问题：{question}",
+    )
+
+    async def assess_answer(text: str) -> tuple[ReportCheck, dict[str, Any] | None]:
+        mechanical = validate_body(text, results, url_to_idx, fallback=False)
+        audit = None
+        if not mechanical.issues:
+            if on_event is not None:
+                on_event({"type": "status", "message": "正在核对结论是否得到引用支持…"})
+            audit = await reviewer.review(mechanical.body)
+        return mechanical, audit
+
+    check, audit = await assess_answer(body)
     from .quality import coerce_policy
 
     for _ in range(coerce_policy(ctx.settings.quality).max_revisions):
-        if not check.issues:
+        support_issues = audit["issues"] if audit and audit["status"] != "pass" else []
+        if (not check.issues and not support_issues) or (audit and not audit["can_revise"]):
             break
         # Repair citation/number problems against the same frozen evidence
         # before falling back to a generic extractive summary.
@@ -354,7 +374,7 @@ async def answer_question(
             {
                 "tool": "answer_revision",
                 "input": "",
-                "observation": "按核验问题修订回答：" + "、".join(check.issues),
+                "observation": "按核验问题修订回答：" + "、".join([*check.issues, *support_issues]),
             }
         )
         if on_event is not None:
@@ -365,6 +385,7 @@ async def answer_question(
             + body
             + "\n\n【核验问题】\n"
             + "\n".join(f"- {reason}: {excerpt}" for _code, excerpt, reason in check.problems)
+            + "\n".join(f"\n- {issue}" for issue in support_issues)
             + "\n请直接给出修订后的完整回答，仅使用已有素材编号，不添加新事实或数值。"
         )
         repaired: list[str] = []
@@ -385,8 +406,27 @@ async def answer_question(
                 }
             )
             break
-        check = validate_body(body, results, url_to_idx, fallback=False)
+        check, audit = await assess_answer(body)
     check = validate_body(body, results, url_to_idx)
+    semantic_failed = bool(audit and audit["status"] != "pass")
+    answer = check.body
+    if semantic_failed and audit is not None:
+        reason = "本轮结论核验未完成" if not audit["can_revise"] else "部分表述未通过结论核验"
+        answer = (
+            reason + "，以下仅保留已核验素材。\n\n" + validate_body("", results, url_to_idx).body
+        )
+    if audit:
+        thoughts.append(
+            {
+                "tool": "claim_check",
+                "input": f"{len(audit['units'])} 个正文单元",
+                "observation": "结论与引用支持关系已核对"
+                if not semantic_failed
+                else "；".join(audit["issues"]),
+                "review": audit,
+                **({"unapproved_draft": body} if semantic_failed else {}),
+            }
+        )
     thoughts.append(
         {
             "tool": "citation_check",
@@ -396,11 +436,11 @@ async def answer_question(
     )
     citations = [url for url, _ in sorted(url_to_idx.items(), key=lambda item: item[1])]
     return QaAnswer(
-        answer=check.body,
+        answer=answer,
         citations=citations,
         findings=findings,
         thoughts=thoughts,
-        fallback=bool(check.issues),
+        fallback=bool(check.issues) or semantic_failed,
         origins={url: origins.get(url, "web") for url in citations},
     )
 

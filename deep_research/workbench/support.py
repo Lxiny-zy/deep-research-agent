@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from ..guardrails import report_eligible
 from ..models import ResearchResult
+from ..persistence.repository import LeaseLostError
 from ..prompting import structured_system_prompt
 
 
@@ -53,6 +54,12 @@ _SYSTEM = (
     "context 用于理解主题与层级；不要把上下文中的其他节点文字当成本单元的断言。"
     "根节点若附有用户范围和完整导图，还要检查是否遗漏用户明确点名的主题或混入无关内容，"
     "不要求固定分支数。"
+    "prose/summary 为正文单元，可能是段落、标题、表格的一行或代码；仍须逐项核对其中事实，"
+    "只能对纯标题、明确的主观评分、建议或不预设结论的问题判 non_factual。"
+    "summary 单元按版式可以省略印刷引用，其 citations 是后台允许的证据范围，不是事实免检。"
+    "不要将来源时间范围内的‘目前’扩大为今天的状态，或将特定条件下结果扩大为所有场景。"
+    "统计场景要区分相关、因果和一致性；均值/中位数接近不能证明分布形状；"
+    "不同变量的标准差与配对差值标准差不可混称为方法间总体变异或模型残差。"
 )
 
 
@@ -74,6 +81,8 @@ def evidence_records(
                     "statement": finding.statement,
                     "quote": finding.evidence_quote,
                     "source": finding.source_url,
+                    "reference": finding.verification.source_reference
+                    or finding.verification.source_title,
                 }
             )
     return records
@@ -86,10 +95,13 @@ def digest(value: Any) -> str:
 
 
 class SupportReviewer:
-    def __init__(self, llm: Any, evidence: list[dict[str, Any]], capacity: int) -> None:
+    def __init__(
+        self, llm: Any, evidence: list[dict[str, Any]], capacity: int, *, context: str = ""
+    ) -> None:
         self.llm, self.evidence = llm, evidence
         self.capacity = getattr(llm, "input_capacity_chars", capacity)
         self.cache: dict[str, SupportDecision] = {}
+        self.context = context
 
     @property
     def provenance(self) -> dict[str, Any]:
@@ -104,6 +116,7 @@ class SupportReviewer:
         results: dict[str, SupportDecision] = {}
         pending: list[SupportUnit] = []
         keys: dict[str, str] = {}
+        known_citations = {e["citation"] for e in self.evidence}
         for unit in units:
             selected = [e for e in self.evidence if e["citation"] in unit.citations]
             key = digest([asdict(unit), selected])
@@ -111,7 +124,13 @@ class SupportReviewer:
             if key in self.cache:
                 results[unit.id] = self.cache[key]
                 continue
-            if unit.kind == "claim" and not selected:
+            if not set(unit.citations).issubset(known_citations):
+                results[unit.id] = SupportDecision(
+                    unit_id=unit.id,
+                    verdict="unsupported",
+                    reason="本单元使用了不存在或未通过准入的引用编号",
+                )
+            elif unit.kind == "claim" and not selected:
                 results[unit.id] = SupportDecision(
                     unit_id=unit.id, verdict="unsupported", reason="事实节点没有可用的引用证据"
                 )
@@ -147,7 +166,8 @@ class SupportReviewer:
         evidence = [e for e in self.evidence if e["citation"] in cited]
         # Evidence stays first and unchanged for a batch's revision follow-up.
         return json.dumps(
-            {"evidence": evidence, "units": [asdict(u) for u in units]}, ensure_ascii=False
+            {"evidence": evidence, "context": self.context, "units": [asdict(u) for u in units]},
+            ensure_ascii=False,
         )
 
     async def _judge(self, units: list[SupportUnit]) -> dict[str, SupportDecision]:
@@ -155,6 +175,8 @@ class SupportReviewer:
             response = await self.llm.parse(
                 _SYSTEM, self._prompt(units), SupportDecisions, temperature=0.0
             )
+        except LeaseLostError:
+            raise
         except Exception as exc:
             return {
                 unit.id: SupportDecision(

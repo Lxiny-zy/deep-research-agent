@@ -187,6 +187,8 @@ export default function PrintableReport({
   createdAt,
   preview = false,
   document,
+  supportFailed = false,
+  title,
 }: {
   markdown: string
   query: string
@@ -197,6 +199,8 @@ export default function PrintableReport({
   createdAt?: string | null
   preview?: boolean
   document?: ReportDocument
+  supportFailed?: boolean
+  title?: string
 }) {
   const targets = useMemo(() => resolveCitationTargets(markdown, citations), [markdown, citations])
   const overview = useMemo(() => summarizeEvidence(findings), [findings])
@@ -228,7 +232,7 @@ export default function PrintableReport({
     >
       <header className="print-head">
         <p className="print-kicker">Science Research · Evidence Report</p>
-        <h1>{displayReportTitle(query)}</h1>
+        <h1>{title || displayReportTitle(query)}</h1>
         <p className="print-meta">
           {createdAt && <span>生成时间：{createdAt}</span>}
           {runId && <span> · 运行 {runId}</span>}
@@ -236,6 +240,11 @@ export default function PrintableReport({
       </header>
 
       <p className="print-disclaimer">{document?.disclaimer?.trim() || PRINT_DISCLAIMER}</p>
+      {(supportFailed || document?.final_validation?.support_status === 'fail') && (
+        <p className="print-disclaimer" role="alert">
+          待核验草稿：正文结论依据尚未全部核验通过。
+        </p>
+      )}
 
       {findings.length > 0 && (
         <section className="print-overview">

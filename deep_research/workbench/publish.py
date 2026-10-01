@@ -161,7 +161,7 @@ def _file_stem(title: str) -> str:
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     payload = {
-        "format_version": 4,
+        "format_version": 6,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,
@@ -202,6 +202,11 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     meta = f"{template.title} · 引用 {len(citations)} 个已核验来源" + (
         f" · {created[:10]}" if created else ""
     )
+    if template.key == "dataAnalysis" and isinstance(scratch.get("analysis"), dict):
+        from .titles import analysis_meta, analysis_title
+
+        title = analysis_title(scratch["analysis"])
+        meta = analysis_meta(scratch["analysis"]) + (f" · {created[:10]}" if created else "")
     stem = _file_stem(title)
     images: dict[str, bytes] = {}
     files: list[DeliveryFile] = []
@@ -321,6 +326,35 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         if review is None and issues and issues[0].startswith("历史导图"):
             status = "warn"
         gates.append(GateResult("node_evidence", status, issues))
+    if template.key != "mindmap" and report is not None:
+        from ..report.service import requires_corroboration
+        from .prose_review import reviewer_for_report, stored_review
+
+        prose = reviewer_for_report(
+            None,
+            detail.query,
+            detail.results,
+            citations,
+            scratch,
+            0,
+            corroboration=requires_corroboration(detail),
+        )
+        record = stored_review(scratch)
+        if prose is not None:
+            if record is None:
+                gates.append(
+                    GateResult("prose_evidence", "warn", ["该历史正文没有终稿支持关系核验记录"])
+                )
+            else:
+                bound, issues = prose.check(report.markdown, record)
+                gates.append(
+                    GateResult(
+                        "prose_evidence",
+                        "fail" if issues or not bound else "pass",
+                        issues,
+                        {"units": len(record.get("units", [])), "method": "model_assessment"},
+                    )
+                )
     if min_citations or citations:
         gates.append(citation_gate(markdown, citations, template, min_citations))
     if template.key not in {"slides", "mindmap"}:
@@ -342,13 +376,22 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     if template.key == "peerReview":
         gates.append(review_gate(extras))
     citation_failed = any(
-        g.name in {"citation", "node_evidence"} and g.status == "fail" for g in gates
+        g.name in {"citation", "node_evidence", "prose_evidence"} and g.status == "fail"
+        for g in gates
     )
 
     files.insert(
         0,
         DeliveryFile(
-            f"{stem}.md", "md", f"{title}（Markdown 源）", "source", markdown.encode("utf-8")
+            f"{stem}.md",
+            "md",
+            f"{title}（Markdown 源）",
+            "source",
+            (
+                ("# " + title + "\n\n" + markdown)
+                if template.key == "dataAnalysis" and not markdown.lstrip().startswith("# ")
+                else markdown
+            ).encode("utf-8"),
         ),
     )
     wants = set(template.deliverables)
@@ -363,12 +406,15 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             render_failures.append(f"{label} 生成失败：{type(exc).__name__}: {exc}"[:300])
 
     if not citation_failed:
+        from .titles import without_repeated_title
+
+        render_body = without_repeated_title(markdown, title)
 
         def build_html() -> None:
             from .delivery.html import render_html
 
             html = render_html(
-                markdown, title=title, kicker=template.title, meta=meta, images=images
+                render_body, title=title, kicker=template.title, meta=meta, images=images
             )
             files.append(
                 DeliveryFile(
@@ -379,14 +425,14 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         def build_docx() -> None:
             from .delivery.docx import render_docx
 
-            data = render_docx(markdown, title=title, meta=meta, images=images)
+            data = render_docx(render_body, title=title, meta=meta, images=images)
             files.append(DeliveryFile(f"{stem}.docx", "docx", f"{title}（Word）", "report", data))
 
         def build_pdf() -> None:
             from .delivery.pdf import PdfRenderError, render_pdf
 
             try:
-                pdf = render_pdf(markdown, title=title, meta=meta, images=images)
+                pdf = render_pdf(render_body, title=title, meta=meta, images=images)
             except PdfRenderError as exc:
                 gates.append(GateResult("pdf", "fail", [f"PDF 生成失败：{exc}"]))
                 return

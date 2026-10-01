@@ -22,9 +22,11 @@ const GATE_LABEL: Record<string, string> = {
   analysis: '统计分析',
   structured_content: '定稿一致性',
   node_evidence: '节点证据与关系',
+  prose_evidence: '终稿结论依据',
 }
 
 const GATE_HELP: Record<string, string> = {
+  prose_evidence: '逐段核对最终表述是否得到所引证据支持；记录绑定最终正文，模型判断仍需人工复核。',
   citation: '正文引用编号必须全部指向已核验来源，并达到本任务的引用下限。',
   scholarly:
     '学术文体（口语化、套话句式、生产过程描述）、摘要不带引用、引用堆砌、重复来源、时效覆盖与局限说明。',

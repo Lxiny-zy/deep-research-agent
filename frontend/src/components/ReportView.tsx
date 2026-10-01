@@ -27,6 +27,7 @@ export default function ReportView({
   findings = [],
   citations = [],
   blockedSources = null,
+  finalReview,
 }: {
   markdown: string
   streaming: boolean
@@ -34,6 +35,7 @@ export default function ReportView({
   findings?: Finding[]
   citations?: string[]
   blockedSources?: number | null
+  finalReview?: { status: string; issues: string[]; fallback?: boolean }
 }) {
   const [activeCitation, setActiveCitation] = useState<number | null>(null)
   const activeCitationRef = useRef(activeCitation)
@@ -121,6 +123,30 @@ export default function ReportView({
     <div
       className={`report-view${activeCitation != null ? ' has-evidence' : ''}${reportIsLive ? ' is-streaming' : ''}`}
     >
+      {!streaming && finalReview && (
+        <div
+          className="run-validation-note"
+          role={finalReview.status === 'fail' ? 'alert' : 'status'}
+        >
+          <span>
+            {finalReview.status === 'fail'
+              ? '正文的结论依据尚未全部核验通过，正式交付暂不可用。'
+              : finalReview.fallback
+                ? '已回退为核验素材摘要，并完成结论依据核对（模型辅助）。'
+                : '已完成终稿结论依据核对（模型辅助）。'}
+          </span>
+          {finalReview.status === 'fail' && finalReview.issues.length > 0 && (
+            <details>
+              <summary>查看未通过的内容</summary>
+              <ul>
+                {finalReview.issues.map((issue, index) => (
+                  <li key={index}>{issue}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
       {findings.length > 0 && (
         <div className="evidence-overview" data-testid="evidence-overview">
           <span className="evidence-stat" data-testid="evidence-records">

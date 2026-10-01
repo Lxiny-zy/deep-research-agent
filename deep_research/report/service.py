@@ -61,4 +61,51 @@ class ReportService:
         validation = scratch.get("_report_validation") if isinstance(scratch, dict) else None
         if isinstance(validation, dict):
             document.final_validation = FinalReportValidation.model_validate(validation)
+        if detail.report is not None and isinstance(scratch, dict):
+            from ..workbench.prose_review import reviewer_for_report, stored_review
+
+            checker = reviewer_for_report(
+                None,
+                detail.query,
+                detail.results,
+                detail.report.citations,
+                scratch,
+                0,
+                corroboration=requires_corroboration(detail),
+            )
+            record = stored_review(scratch)
+            if checker is not None and record is not None:
+                bound, issues = checker.check(detail.report.markdown, record)
+                document.final_validation = FinalReportValidation(
+                    scope="model_assessed_final_prose_support",
+                    issues=issues,
+                    fallback=bool(record.get("body_replaced")),
+                    semantic_verification=True,
+                    support_status="fail" if issues or not bound else "pass",
+                )
+            workbench = scratch.get("workbench", {})
+            if workbench.get("template") == "dataAnalysis" and isinstance(
+                scratch.get("analysis"), dict
+            ):
+                from ..workbench.titles import analysis_title
+
+                document.title = analysis_title(scratch["analysis"])
+            if workbench.get("template") == "mindmap":
+                from ..workbench.mindmap_contract import checked_review
+
+                extras = workbench.get("extras", {})
+                if extras.get("node_review") is not None and extras.get("mindmap"):
+                    bound, issues = checked_review(
+                        extras["mindmap"],
+                        detail.report.citations,
+                        detail.results,
+                        extras["node_review"],
+                        detail.report.markdown,
+                    )
+                    document.final_validation = FinalReportValidation(
+                        scope="model_assessed_node_evidence_and_relations",
+                        issues=issues,
+                        semantic_verification=True,
+                        support_status="fail" if issues or not bound else "pass",
+                    )
         return document

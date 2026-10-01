@@ -67,7 +67,8 @@ class AnalysisResult:
     def snapshot(self) -> dict[str, Any]:
         """Freeze computed values; plots can be redrawn from these and the same input."""
         return {
-            "version": 2,
+            "version": 3,
+            "facts": self.facts(),
             **{
                 name: getattr(self, name)
                 for name in (
@@ -172,6 +173,55 @@ class AnalysisResult:
 
     def summary_table(self) -> list[dict[str, Any]]:
         return self.describe
+
+
+def ledger_facts(snapshot: dict[str, Any]) -> str:
+    """Reuse the writer's exact frozen facts; project old snapshots without recalculating."""
+    if isinstance(snapshot.get("facts"), str):
+        return snapshot["facts"]
+    required = {
+        "rows",
+        "columns",
+        "numeric",
+        "categorical",
+        "missing",
+        "describe",
+        "tests",
+        "correlations",
+    }
+    if not required.issubset(snapshot):
+        import json
+
+        known = {key: value for key, value in snapshot.items() if key != "synthetic"}
+        return (
+            "历史统计记录仅保留以下字段，未补算缺失值、列角色或检验前提；"
+            "未保留的信息不可视为不存在：\n" + json.dumps(known, ensure_ascii=False)
+        )
+    fields = {
+        key: snapshot[key]
+        for key in (
+            "rows",
+            "columns",
+            "numeric",
+            "categorical",
+            "missing",
+            "describe",
+            "tests",
+            "correlations",
+        )
+    }
+    result = AnalysisResult(
+        question="",
+        **fields,
+        synthetic=bool(snapshot.get("synthetic")),
+        source=dict(snapshot.get("source", {})),
+        issues=list(snapshot.get("issues", [])),
+    )
+    result.figures = [
+        Figure(name=f["name"], title=f["title"], caption=f["caption"], png=b"")
+        for f in snapshot.get("figures", [])
+    ]
+    return result.facts()
 
 
 def _fmt(value: float) -> float | str:
@@ -664,6 +714,9 @@ class DataAnalyst:
             "引用数字时原样照抄台账写法。用中文写作。"
             "相关分析不能替代配对差异、显著性或一致性检验。"
             "未执行的检验只能标注本轮未执行，不要将其说成用户没有提供原始数据。"
+            "均值与中位数接近不能证明分布对称、无偏或满足检验前提。"
+            "区分各方法的标准差、配对差值标准差与方法间均值差，不把它们统称为残余或总体离散。"
+            "不要在报告中声明‘所有数字照抄、未经改写’等写作过程保证，直接陈述统计事实。"
         )
         user = f"分析问题：{question or '对数据做探索性分析'}\n\n## 统计台账\n{facts}\n"
         from .gates import structure_gate
@@ -672,6 +725,18 @@ class DataAnalyst:
         from .scholarly import check_register
 
         policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
+        from .prose_review import PROSE_REVIEW_KEY, reviewer_for_report
+
+        review_scratch = {"workbench": {"template": "dataAnalysis"}, "analysis": result.snapshot()}
+        reviewer = reviewer_for_report(
+            ctx.llm_for("evidence_verifier"),
+            bb.query,
+            [],
+            [],
+            review_scratch,
+            ctx.settings.llm_max_input_chars,
+        )
+        assert reviewer is not None
 
         async def write(revision: str | None) -> str:
             chunks: list[str] = []
@@ -682,7 +747,7 @@ class DataAnalyst:
                 chunks.append(delta)
             return "".join(chunks).strip()
 
-        def assess(draft: str) -> Assessment:
+        async def assess(draft: str) -> Assessment:
             # 数字与章节是硬性要求；文体问题同样要求修订。三者都是确定性检查。
             hard = [f"数字「{n}」不在统计台账中" for n in check_numbers(draft, facts)[:10]]
             if not draft:
@@ -694,7 +759,9 @@ class DataAnalyst:
                 soft = [f.render() for f in findings if f.severity == "warning"]
             else:
                 soft = []
-            return Assessment(hard=hard, soft=soft)
+            audit = await reviewer.review(draft)
+            hard.extend(audit["issues"])
+            return Assessment(hard=hard, soft=soft, can_revise=audit["can_revise"])
 
         body = ""
         revision_log = None
@@ -734,6 +801,9 @@ class DataAnalyst:
         # 图片不进 checkpoint：分析是确定性的（合成数据也用固定种子），交付层按
         # 同一份数据重算即可得到逐字节相同的图，checkpoint 不必背几百 KB 的 PNG。
         extras: dict[str, Any] = {"figures": len(result.figures)}
+        extras[PROSE_REVIEW_KEY] = await reviewer.review(bb.report.markdown)
+        extras[PROSE_REVIEW_KEY]["mechanically_finalized"] = True
+        extras[PROSE_REVIEW_KEY]["body_replaced"] = bool(unsupported)
         if revision_log is not None:
             extras["revision"] = revision_log.to_dict()
         bb.scratch[WORKBENCH_SCRATCH_KEY] = WriterState(

@@ -1,5 +1,23 @@
 import type { AppIconName } from '../components/AppIcon'
-import type { DeliverableFormat } from '../types'
+import type { DeliverableFormat, RunDetail } from '../types'
+
+export function finalProseReview(
+  detail?: RunDetail,
+): { status: string; issues: string[]; fallback: boolean } | undefined {
+  const scratch = detail?.orchestration?.checkpoint?.scratch as Record<string, unknown> | undefined
+  const workbench = scratch?.workbench as { extras?: Record<string, unknown> } | undefined
+  const value = scratch?.prose_review ?? workbench?.extras?.prose_review
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  if (record.status !== 'pass' && record.status !== 'fail') return undefined
+  return {
+    status: record.status,
+    fallback: record.body_replaced === true,
+    issues: Array.isArray(record.issues)
+      ? record.issues.filter((item): item is string => typeof item === 'string')
+      : [],
+  }
+}
 
 const FORMAT_LABEL: Record<DeliverableFormat, string> = {
   md: 'Markdown',

@@ -1099,7 +1099,25 @@ class DeepResearchAgent:
                     if engine.runtime.run is not None:
                         engine.runtime.run.checkpoint = bb.model_dump(mode="json")
                         await save_checkpoint(engine.runtime.run)
-        if not reviewed_mindmap and (bb.results or bb.report.citations):
+        from .workbench.prose_review import PROSE_REVIEW_KEY, reviewer_for_report, stored_review
+
+        prose_reviewer = reviewer_for_report(
+            ctx.llm_for("evidence_verifier"),
+            bb.query,
+            bb.results,
+            bb.report.citations,
+            bb.scratch,
+            self.settings.llm_max_input_chars,
+            corroboration=effective_require_corroboration(bb, self.settings),
+        )
+        previous_review = stored_review(bb.scratch)
+        reviewed_prose = bool(
+            prose_reviewer
+            and isinstance(previous_review, dict)
+            and previous_review.get("mechanically_finalized")
+            and prose_reviewer.check(bb.report.markdown, previous_review)[0]
+        )
+        if not reviewed_mindmap and not reviewed_prose and (bb.results or bb.report.citations):
             from .workbench.scholarly import uncited_sections_for
 
             bb.report, check = await run_blocking(
@@ -1135,6 +1153,47 @@ class DeepResearchAgent:
             if engine.runtime.run is not None:
                 engine.runtime.run.checkpoint = bb.model_dump(mode="json")
                 await save_checkpoint(engine.runtime.run)
+        if not reviewed_mindmap:
+            # Finalization or a custom terminal role may change the body. Verify
+            # the exact final version, never reuse a judgement for an older draft.
+            assert bb.report is not None
+            prose_reviewer = reviewer_for_report(
+                ctx.llm_for("evidence_verifier"),
+                bb.query,
+                bb.results,
+                bb.report.citations,
+                bb.scratch,
+                self.settings.llm_max_input_chars,
+                corroboration=effective_require_corroboration(bb, self.settings),
+            )
+            if prose_reviewer is not None:
+                if reviewed_prose:
+                    audit = previous_review
+                else:
+                    self.tracer.emit("ORCHESTRATOR", "info", "核对最终正文的事实与引用支持关系…")
+                    audit = await prose_reviewer.review(bb.report.markdown)
+                    audit["mechanically_finalized"] = True
+                    audit["body_replaced"] = bool(
+                        bb.scratch.get("_report_validation", {}).get("fallback")
+                    )
+                bb.scratch[PROSE_REVIEW_KEY] = audit
+                validation = {
+                    "scope": "model_assessed_final_prose_support",
+                    "issues": audit["issues"],
+                    "fallback": bool(audit.get("body_replaced")),
+                    "semantic_verification": True,
+                    "support_status": audit["status"],
+                }
+                bb.scratch["_report_validation"] = validation
+                self.tracer.emit(
+                    "ORCHESTRATOR",
+                    "info",
+                    "最终正文支持关系核对完成",
+                    data={"report_validation": validation},
+                )
+                if engine.runtime.run is not None:
+                    engine.runtime.run.checkpoint = bb.model_dump(mode="json")
+                    await save_checkpoint(engine.runtime.run)
         report = bb.report
         assert report is not None
         if self.repo is not None and run_id is not None:

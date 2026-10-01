@@ -11,6 +11,7 @@ const THOUGHT_LABEL: Record<string, string> = {
   paper_read: '查阅本论文',
   search_and_verify: '检索与逐字核验',
   citation_check: '引用复核',
+  claim_check: '结论依据核对',
   answer_revision: '回答修订',
 }
 

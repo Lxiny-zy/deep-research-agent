@@ -56,6 +56,8 @@ def render_markdown(doc: ReportDocument) -> str:
     title = doc.title.strip() or doc.query.strip()
     if title:
         sections.append(f"# {_inline(title)}")
+    if doc.final_validation and doc.final_validation.support_status == "fail":
+        sections.append("> **待核验草稿**：正文结论依据尚未通过核验，本文件供检查。")
     if doc.abstract:
         sections.append("## 摘要\n\n" + doc.abstract.strip())
     if doc.keywords:
