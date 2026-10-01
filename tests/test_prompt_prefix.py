@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from deep_research.agents.base import Blackboard, RunContext
 from deep_research.agents.researcher import Researcher
-from deep_research.models import FindingList, Source
+from deep_research.models import ExtractedFindingList, Source
 from deep_research.observability import Tracer
 from deep_research.workbench.paper_context import paper_context
 from deep_research.workbench.qa import answer_question
@@ -18,7 +18,7 @@ async def test_research_questions_share_the_unchanged_source_prefix(settings) ->
 
     class Capture(FakeLLM):
         async def parse(self, system, user, schema, **kwargs):  # type: ignore[no-untyped-def]
-            if schema is FindingList:
+            if schema is ExtractedFindingList:
                 prompts.append(user)
             return await super().parse(system, user, schema, **kwargs)
 
@@ -61,7 +61,7 @@ async def test_paper_followups_share_all_frozen_material_not_question_ranked_chu
 
     class Capture(FakeLLM):
         async def parse(self, system, user, schema, **kwargs):  # type: ignore[no-untyped-def]
-            if schema is FindingList:
+            if schema is ExtractedFindingList:
                 prompts.append((system, user))
             return await super().parse(system, user, schema, **kwargs)
 
@@ -129,7 +129,7 @@ async def test_paper_capacity_includes_schema_and_long_contextual_question(setti
 
     class Capture(FakeLLM):
         async def parse(self, system, user, schema, **kwargs):  # type: ignore[no-untyped-def]
-            if schema is FindingList:
+            if schema is ExtractedFindingList:
                 captured.append(user)
                 assert len(structured_system_prompt(system, schema)) + len(user) <= 24000
             return await super().parse(system, user, schema, **kwargs)

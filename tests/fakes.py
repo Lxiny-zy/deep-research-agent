@@ -13,8 +13,8 @@ from deep_research.intent.context import ResolvedQuery
 from deep_research.intent.slots import SlotExtraction
 from deep_research.models import (
     EvidenceVerification,
+    ExtractedFindingList,
     Finding,
-    FindingList,
     Reflection,
     ResearchPlan,
     Source,
@@ -100,8 +100,8 @@ class FakeLLM:
                     SubQuestion(question="子问题B", rationale="r"),
                 ],
             )
-        if schema is FindingList:
-            return FindingList(
+        if schema is ExtractedFindingList:
+            return ExtractedFindingList(
                 findings=[
                     Finding(
                         statement="发现X",

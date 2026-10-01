@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from deep_research.agents.base import RunContext
-from deep_research.models import FindingList
+from deep_research.models import ExtractedFindingList
 from deep_research.observability import Tracer
 from deep_research.workbench.qa import answer_question
 from deep_research.workbench.qa_cache import PaperEvidenceCache
@@ -17,7 +17,7 @@ class CountingLLM(FakeLLM):
         self.fail_once = False
 
     async def parse(self, system, user, schema, **kwargs):  # type: ignore[no-untyped-def]
-        if schema is FindingList:
+        if schema is ExtractedFindingList:
             self.extractions += 1
             assert "采用已有算法不能自动当作原创贡献" in system
             if self.fail_once:

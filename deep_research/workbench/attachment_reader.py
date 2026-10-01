@@ -13,7 +13,7 @@ from __future__ import annotations
 from ..agents.base import Blackboard, RunContext, direct_system_prompt
 from ..agents.researcher import Researcher, source_context
 from ..guardrails import verify_claim_consistency
-from ..models import FindingList, ResearchResult, Source
+from ..models import ExtractedFindingList, ResearchResult, Source
 from ..persistence.repository import LeaseLostError
 from ..prompting import structured_system_prompt
 from ..registry import register
@@ -30,7 +30,9 @@ def source_batches(
     capacity = getattr(
         researcher.llm, "input_capacity_chars", researcher.settings.llm_max_input_chars
     )
-    rules = len(structured_system_prompt(direct_system_prompt(researcher.system), FindingList))
+    rules = len(
+        structured_system_prompt(direct_system_prompt(researcher.system), ExtractedFindingList)
+    )
     available = max(0, capacity - rules - len(question) - 128)
     # Repair/framing space scales to the real remaining context, not a token budget.
     room = max(0, available - min(8192, max(256, available // 8)))

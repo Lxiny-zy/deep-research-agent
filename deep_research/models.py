@@ -329,7 +329,9 @@ class EvidenceVerification(BaseModel):
     corroboration_reason: str = ""
 
 
-class Finding(BaseModel):
+class FindingContent(BaseModel):
+    """Model-authored content only; verification and provenance belong to the program."""
+
     statement: str = Field(..., description="一条具体、自洽的事实/发现")
     source_url: str = Field(..., description="该发现的出处 URL（必须来自给定来源）")
     evidence_quote: str = Field(
@@ -346,7 +348,21 @@ class Finding(BaseModel):
     # EvidenceVerification.quantity_status 的三态说明）。
     quantity: Quantity | None = None
     conditions: ExperimentConditions | None = None
+
+    def as_unverified(self) -> Finding:
+        # Whitelist even for a subclass returned by an adapter: a model must
+        # never import a pre-existing 'verified' flag into the trust boundary.
+        return Finding.model_validate(self.model_dump(include=set(FindingContent.model_fields)))
+
+
+class Finding(FindingContent):
     verification: EvidenceVerification = Field(default_factory=EvidenceVerification)
+
+
+class ExtractedFindingList(BaseModel):
+    """Compact extraction response. Keep the persisted FindingList contract separate."""
+
+    findings: list[FindingContent] = Field(default_factory=list)
 
 
 class FindingList(BaseModel):

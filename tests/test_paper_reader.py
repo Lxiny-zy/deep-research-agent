@@ -12,7 +12,7 @@ import pytest
 from deep_research import api
 from deep_research.access import ApiCredential, Principal
 from deep_research.config import Settings
-from deep_research.models import FindingList
+from deep_research.models import ExtractedFindingList
 from deep_research.orchestrator import create_initial_execution
 from deep_research.persistence.memory_repository import InMemoryRepository
 from deep_research.workbench.attachments import (
@@ -261,10 +261,10 @@ class _PaperLLM(FakeLLM):
     """抽取时，论文片段引用附件 URL；联网检索的片段交给 FakeLLM 默认行为。"""
 
     async def parse(self, system, user, schema, *, temperature=0.2, retries=2):  # type: ignore[no-untyped-def]
-        if schema is FindingList and ATTACHMENT_URL_PREFIX in user:
+        if schema is ExtractedFindingList and ATTACHMENT_URL_PREFIX in user:
             start = user.index(ATTACHMENT_URL_PREFIX)
             url = user[start:].split()[0].rstrip("）)]，,")
-            return FindingList(
+            return ExtractedFindingList(
                 findings=[
                     {
                         "statement": "方法在 CAVE 上的重建 PSNR 为 38.4 dB",

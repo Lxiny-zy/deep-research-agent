@@ -4,7 +4,7 @@ import pytest
 
 from deep_research.agents.base import direct_system_prompt
 from deep_research.agents.researcher import Researcher, source_context
-from deep_research.models import FindingList, Source
+from deep_research.models import ExtractedFindingList, Source
 from deep_research.observability import Tracer
 from deep_research.prompting import structured_system_prompt
 from deep_research.workbench.attachment_reader import source_batches
@@ -40,7 +40,7 @@ def test_small_capacity_splits_without_changing_order_or_content(settings):
     batches = source_batches(items, researcher, question)
     assert len(batches) > 1
     assert [source for batch in batches for source in batch] == items
-    rules = structured_system_prompt(direct_system_prompt(researcher.system), FindingList)
+    rules = structured_system_prompt(direct_system_prompt(researcher.system), ExtractedFindingList)
     for batch in batches:
         assert (
             len(rules) + len(question) + len(source_context(batch)) + 128 < llm.input_capacity_chars

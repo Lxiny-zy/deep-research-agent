@@ -99,7 +99,7 @@ def role_prompt_parts(behavior: str, custom: str = "", mode: str = "append") -> 
     # Lazy imports keep the shared prompting module independent at import time.
     from .agents.card_agent import behavior_impls
     from .agents.critic import Critique
-    from .models import FindingList, Reflection, ResearchPlan
+    from .models import ExtractedFindingList, Reflection, ResearchPlan
 
     implementations = behavior_impls()
     if behavior not in implementations or mode not in {"append", "replace"}:
@@ -115,7 +115,7 @@ def role_prompt_parts(behavior: str, custom: str = "", mode: str = "append") -> 
     system = compose_system_prompt(role, rules)
     schemas: dict[str, type[BaseModel]] = {
         "plan": ResearchPlan,
-        "research": FindingList,
+        "research": ExtractedFindingList,
         "reflect": Reflection,
         "critique": Critique,
     }

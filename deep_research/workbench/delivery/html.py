@@ -60,7 +60,7 @@ sup.cite a{text-decoration:none}
 
 # PyMuPDF Story 支持的 CSS 子集：不用变量、flex、媒体查询。
 _PDF_CSS = """
-body{font-family:sans-serif;font-size:10.5pt;line-height:1.6;color:#1c2430}
+body{margin:0;font-family:sans-serif;font-size:10.5pt;line-height:1.6;color:#1c2430}
 h1{font-size:20pt;margin:0 0 8pt 0;color:#111}
 h2{font-size:14pt;margin:16pt 0 6pt 0;color:#111;page-break-after:avoid}
 h3{font-size:12pt;margin:12pt 0 4pt 0;page-break-after:avoid}

@@ -15,10 +15,18 @@ import base64
 import io
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from html import unescape
 
 from .html import pdf_html
+from .pdf_tables import (
+    PdfTable,
+    plain_html,
+    table_from_html,
+    take_table_prefix,
+    take_trailing_heading,
+)
 
 
 class PdfRenderError(RuntimeError):
@@ -106,14 +114,16 @@ def render_pdf(
     device = None
     cursor = where.y0
     figure_widths: list[float] = []
+    table_fragments: list[tuple[int, str, float, float]] = []
+    table_cells: list[tuple[int, tuple[float, ...]]] = []
 
     def next_page():  # type: ignore[no-untyped-def]
         nonlocal pages, device, cursor
         if device is not None:
             writer.end_page()
+            device = None
         pages += 1
         if pages > 400:
-            writer.close()
             raise PdfRenderError("PDF 页数超过 400 页上限，疑似排版死循环")
         device = writer.begin_page(mediabox)
         cursor = where.y0
@@ -121,22 +131,98 @@ def render_pdf(
     # Story shrinks images to the *remaining* page space instead of moving them
     # intact. Reserve a whole figure and caption before handing it to Story.
     # This also avoids relying on unsupported CSS page-break-inside behavior.
-    for part, minimum_height, figure_width in _layout_parts(body, where.height):
-        if figure_width is not None:
-            figure_widths.append(figure_width)
-        if device is None or where.y1 - cursor < max(minimum_height, 36):
+    def fit(html: str, top: float):  # type: ignore[no-untyped-def]
+        story = pymupdf.Story(html=html, user_css=user_css, archive=archive)
+        more, filled = story.place(pymupdf.Rect(where.x0, top, where.x1, where.y1))
+        rect = pymupdf.Rect(filled)
+        return story, not more and rect.y1 <= where.y1 + 0.1, rect
+
+    def draw_table(table: PdfTable) -> None:
+        nonlocal cursor
+        if device is None:
             next_page()
-        story = pymupdf.Story(html=part, user_css=user_css, archive=archive)
-        while True:
-            more, filled = story.place(pymupdf.Rect(where.x0, cursor, where.x1, where.y1))
-            story.draw(device)
-            if not more:
-                cursor = pymupdf.Rect(filled).y1
-                break
-            next_page()
-    if device is not None:
-        writer.end_page()
-    writer.close()
+        full = table.html(table.rows)
+        _, fits_page, _ = fit(full, where.y0)
+        if fits_page:
+            story, fits_here, rect = fit(full, cursor)
+            if not fits_here:
+                next_page()
+                story, fits_here, rect = fit(full, cursor)
+            if not fits_here:
+                raise PdfRenderError("表格不能完整放入页面，未裁剪内容")
+            draw_cells(story)
+            table_fragments.append((pages - 1, table.header, cursor, rect.y1))
+            cursor = rect.y1
+            return
+        if not table.rows:
+            raise PdfRenderError("表格表头或表题超过一页可用高度，未裁剪内容")
+        start = 0
+        while start < len(table.rows):
+            low, high, count = 1, len(table.rows) - start, 0
+            while low <= high:
+                mid = (low + high) // 2
+                _, fits_here, _ = fit(
+                    table.html(table.rows[start : start + mid], continued=start > 0), cursor
+                )
+                if fits_here:
+                    count, low = mid, mid + 1
+                else:
+                    high = mid - 1
+            if count < min(2, len(table.rows) - start) and cursor > where.y0 + 0.1:
+                next_page()
+                continue
+            if count == 0:
+                raise PdfRenderError("表格单行或表题超过一页可用高度，未裁剪内容；请拆分长单元格")
+            # Do not leave a lone final row if both fragments can hold more.
+            if len(table.rows) - start - count == 1 and count > 2:
+                count -= 1
+            story, fits_here, rect = fit(
+                table.html(table.rows[start : start + count], continued=start > 0), cursor
+            )
+            if not fits_here:
+                raise PdfRenderError("表格分页测量不一致，未交付截断表格")
+            draw_cells(story)
+            table_fragments.append((pages - 1, table.header, cursor, rect.y1))
+            cursor = rect.y1
+            start += count
+            if start < len(table.rows):
+                next_page()
+
+    def draw_cells(story):  # type: ignore[no-untyped-def]
+        def record(position):  # type: ignore[no-untyped-def]
+            if position.id and position.id.startswith("dr-cell-") and position.open_close == 1:
+                table_cells.append((pages - 1, tuple(position.rect)))
+
+        story.element_positions(record)
+        story.draw(device)
+
+    def heading_height(html: str) -> float:
+        _, fits_page, rect = fit(html, where.y0)
+        if not fits_page:
+            raise PdfRenderError("图表标题超过一页可用高度")
+        return float(rect.height)
+
+    try:
+        for part in _layout_parts(body, where.height, where.width, heading_height):
+            if part.table is not None:
+                draw_table(part.table)
+                continue
+            if part.figure_width is not None:
+                figure_widths.append(part.figure_width)
+            if device is None or where.y1 - cursor < max(part.minimum_height, 36):
+                next_page()
+            story = pymupdf.Story(html=part.html, user_css=user_css, archive=archive)
+            while True:
+                more, filled = story.place(pymupdf.Rect(where.x0, cursor, where.x1, where.y1))
+                story.draw(device)
+                if not more:
+                    cursor = pymupdf.Rect(filled).y1
+                    break
+                next_page()
+    finally:
+        if device is not None:
+            writer.end_page()
+        writer.close()
     data = stream.getvalue()
     # 页码：在已排版的 PDF 上逐页写页脚
     document = pymupdf.open(stream=data, filetype="pdf")
@@ -154,21 +240,51 @@ def render_pdf(
         data = document.tobytes(deflate=True, garbage=3)
     finally:
         document.close()
-    verify_pdf(data, markdown, figure_widths=figure_widths)
+    verify_pdf(
+        data,
+        markdown,
+        figure_widths=figure_widths,
+        table_fragments=table_fragments,
+        table_cells=table_cells,
+    )
     return data
 
 
-def _layout_parts(body: str, page_height: float) -> list[tuple[str, float, float | None]]:
-    """Split only the renderer-owned figure wrapper; external HTML is escaped."""
+@dataclass
+class LayoutPart:
+    html: str
+    minimum_height: float = 0.0
+    figure_width: float | None = None
+    table: PdfTable | None = None
+
+
+def _layout_parts(
+    body: str, page_height: float, page_width: float, heading_height: Callable[[str], float]
+) -> list[LayoutPart]:
+    """Split renderer-owned tables/figures; external HTML has already been escaped."""
     from PIL import Image
 
-    parts: list[tuple[str, float, float | None]] = []
-    for part in re.split(r'(<div class="figure">.*?</div>)', body, flags=re.S):
+    parts: list[LayoutPart] = []
+    for part in re.split(r'(<div class="figure">.*?</div>|<table>.*?</table>)', body, flags=re.S):
         if not part.strip():
             continue
         minimum = 0.0
         figure_width = None
+        if part.startswith("<table>"):
+            table = table_from_html(part, page_width)
+            if parts and parts[-1].table is None and parts[-1].figure_width is None:
+                parts[-1].html, table.caption, table.lead = take_table_prefix(parts[-1].html)
+                if not parts[-1].html.strip():
+                    parts.pop()
+            parts.append(LayoutPart("", table=table))
+            continue
         if part.startswith('<div class="figure">'):
+            lead = ""
+            if parts and parts[-1].table is None and parts[-1].figure_width is None:
+                parts[-1].html, lead = take_trailing_heading(parts[-1].html)
+                if not parts[-1].html.strip():
+                    parts.pop()
+            lead_height = heading_height(lead) if lead else 0.0
             encoded = re.search(r'src="data:image/[^;]+;base64,([^"]+)"', part)
             caption_match = re.search(r'<p class="caption">(.*?)</p>', part, flags=re.S)
             if encoded is None:
@@ -178,13 +294,16 @@ def _layout_parts(body: str, page_height: float) -> list[tuple[str, float, float
             caption = unescape(caption_match[1]) if caption_match else ""
             line_width = sum(9 if ord(char) > 255 else 5 for char in caption)
             caption_height = max(1, math.ceil(line_width / 440)) * 15 + 66
-            if caption_height >= page_height - 80:
+            if caption_height + lead_height >= page_height - 80:
                 raise PdfRenderError("图注过长，无法与图像在同一页清晰排版")
-            width = min(440.0, (page_height - caption_height) * image_width / image_height)
-            minimum = width * image_height / image_width + caption_height
+            width = min(
+                440.0, (page_height - caption_height - lead_height) * image_width / image_height
+            )
+            minimum = width * image_height / image_width + caption_height + lead_height
             figure_width = width
             part = part.replace('width="440"', f'width="{width:.3f}"', 1)
-        parts.append((part, minimum, figure_width))
+            part = lead + part
+        parts.append(LayoutPart(part, minimum, figure_width))
     return parts
 
 
@@ -197,7 +316,14 @@ def pdf_text(data: bytes) -> tuple[int, str]:
         document.close()
 
 
-def verify_pdf(data: bytes, markdown: str, *, figure_widths: list[float] | None = None) -> None:
+def verify_pdf(
+    data: bytes,
+    markdown: str,
+    *,
+    figure_widths: list[float] | None = None,
+    table_fragments: list[tuple[int, str, float, float]] | None = None,
+    table_cells: list[tuple[int, tuple[float, ...]]] | None = None,
+) -> None:
     pages, text = pdf_text(data)
     if pages < 1:
         raise PdfRenderError("PDF 没有页面")
@@ -206,6 +332,28 @@ def verify_pdf(data: bytes, markdown: str, *, figure_widths: list[float] | None 
     sentinel = _tail_sentinel(markdown)
     if sentinel and sentinel not in _squash(text):
         raise PdfRenderError("PDF 末尾缺少正文最后一段，疑似被截断")
+    if table_fragments:
+        with _fitz().open(stream=data, filetype="pdf") as document:
+            for page_number, header, top, bottom in table_fragments:
+                page = document[page_number]
+                page_text = re.sub(r"\s+", "", page.get_text())
+                for cell in re.findall(r"<th[^>]*>(.*?)</th>", header, re.S):
+                    if re.sub(r"\s+", "", plain_html(cell)) not in page_text:
+                        raise PdfRenderError("PDF 表格续页缺少完整表头")
+                for word in page.get_text("words"):
+                    if top <= (word[1] + word[3]) / 2 <= bottom and (
+                        word[0] < 52 or word[2] > page.rect.width - 52
+                    ):
+                        raise PdfRenderError("PDF 表格内容超出版心，未通过可读性检查")
+    if table_cells:
+        with _fitz().open(stream=data, filetype="pdf") as document:
+            words = {i: page.get_text("words") for i, page in enumerate(document)}
+            for page_number, box in table_cells:
+                x0, y0, x1, y1 = box
+                for word in words[page_number]:
+                    if y0 <= (word[1] + word[3]) / 2 <= y1 and x0 - 0.5 <= word[0] < x1:
+                        if word[2] > x1 + 1:
+                            raise PdfRenderError("PDF 表格单元格文字越界，可能覆盖相邻列")
     if figure_widths:
         pymupdf = _fitz()
         with pymupdf.open(stream=data, filetype="pdf") as document:

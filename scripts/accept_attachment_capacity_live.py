@@ -111,7 +111,7 @@ async def main() -> None:
             ],
         }
         save("acceptance.json", record)
-        assert len(attachment.chunks) > 4 and calls.get("FindingList") == 1
+        assert len(attachment.chunks) > 4 and calls.get("ExtractedFindingList") == 1
         assert record["first_found"] and record["last_found"]
         print(
             f"Passed: one extraction includes both markers; tokens={tracer.total_tokens}",

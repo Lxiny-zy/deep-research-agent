@@ -4,7 +4,7 @@ import json
 from copy import deepcopy
 
 from deep_research.agents.base import Blackboard, RunContext
-from deep_research.models import FindingList, ResearchResult, Source
+from deep_research.models import ExtractedFindingList, ResearchResult, Source
 from deep_research.observability import Tracer
 from deep_research.report.validation import validate_body
 from deep_research.workbench.prose_review import ProseReviewer, prose_units
@@ -45,8 +45,8 @@ class Judge(FakeLLM):
         self.judged = []
 
     async def parse(self, system, user, schema, **kwargs):
-        if schema is FindingList:
-            return FindingList(findings=findings()[0].findings)
+        if schema is ExtractedFindingList:
+            return ExtractedFindingList(findings=findings()[0].findings)
         if schema is not SupportDecisions:
             return await super().parse(system, user, schema, **kwargs)
         data = json.loads(user)

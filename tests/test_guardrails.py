@@ -17,8 +17,8 @@ from deep_research.guardrails import (
 )
 from deep_research.models import (
     EvidenceVerification,
+    ExtractedFindingList,
     Finding,
-    FindingList,
     ResearchResult,
     Source,
 )
@@ -363,8 +363,8 @@ def test_evidence_verifier_propagates_retraction_and_audit_reason() -> None:
 async def test_researcher_rejects_unverifiable_finding_and_audits_reason(settings) -> None:
     class ParaphrasingLLM(FakeLLM):
         async def parse(self, system, user, schema, *, temperature=0.2, retries=2):
-            if schema is FindingList:
-                return FindingList(
+            if schema is ExtractedFindingList:
+                return ExtractedFindingList(
                     findings=[
                         Finding(
                             statement="Unsupported claim",

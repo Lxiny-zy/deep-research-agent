@@ -10,7 +10,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from deep_research.models import FindingList
+from deep_research.models import ExtractedFindingList
 from deep_research.workbench.attachments import (
     ATTACHMENT_URL_PREFIX,
     ATTACHMENTS_SCRATCH_KEY,
@@ -163,10 +163,10 @@ class AttachmentLLM(FakeLLM):
     """抽取时引用附件片段 URL 与其中逐字出现的原文。"""
 
     async def parse(self, system, user, schema, *, temperature=0.2, retries=2):  # type: ignore[no-untyped-def]
-        if schema is FindingList and ATTACHMENT_URL_PREFIX in user:
+        if schema is ExtractedFindingList and ATTACHMENT_URL_PREFIX in user:
             start = user.index(ATTACHMENT_URL_PREFIX)
             url = user[start:].split()[0].rstrip("）)]，,")
-            return FindingList(
+            return ExtractedFindingList(
                 findings=[
                     {
                         "statement": "方法在 CAVE 数据集上达到 38.4 dB PSNR",

@@ -107,12 +107,12 @@ async def main() -> None:
 
         async def parse(self, system, user, schema, **kwargs):
             if args.replay_extraction and schema.__name__ in {
-                "FindingList",
+                "ExtractedFindingList",
                 "SemanticEvidenceDecisionList",
             }:
                 from deep_research.llm import extract_json
 
-                index = 1 if schema.__name__ == "FindingList" else 2
+                index = 1 if schema.__name__ == "ExtractedFindingList" else 2
                 record = json.loads(
                     (args.replay_extraction / f"call-{index}.json").read_text(encoding="utf-8")
                 )

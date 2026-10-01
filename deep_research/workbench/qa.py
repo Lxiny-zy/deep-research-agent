@@ -23,7 +23,7 @@ from typing import Any
 
 from ..agents.researcher import Researcher
 from ..guardrails import report_eligible
-from ..models import Finding, FindingList, ResearchResult, Source
+from ..models import ExtractedFindingList, Finding, ResearchResult, Source
 from ..prompting import structured_system_prompt
 from ..report.validation import ReportCheck, validate_body
 from ..tools.base import SearchTool
@@ -179,7 +179,7 @@ async def answer_question(
             ctx.settings.llm_max_input_chars,
         )
         system_chars = len(
-            structured_system_prompt(direct_system_prompt(researcher.system), FindingList)
+            structured_system_prompt(direct_system_prompt(researcher.system), ExtractedFindingList)
         )
         available = max(0, input_limit - system_chars)
         # Schema can dominate a small context window. Reserve framing/repair

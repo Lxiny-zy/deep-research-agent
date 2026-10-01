@@ -14,7 +14,14 @@ from deep_research.guardrails import (
     ClaimConsistencyReport,
     SemanticEvidenceDecisionList,
 )
-from deep_research.models import Finding, FindingList, Report, ResearchPlan, Source, SubQuestion
+from deep_research.models import (
+    ExtractedFindingList,
+    Finding,
+    Report,
+    ResearchPlan,
+    Source,
+    SubQuestion,
+)
 from deep_research.observability import Tracer
 from deep_research.orchestrator import DeepResearchAgent
 from deep_research.token_budget import TokenBudget
@@ -146,9 +153,9 @@ class _ConflictAcrossTeamsLLM(FakeLLM):
                     SubQuestion(question="decrease team"),
                 ],
             )
-        if schema is FindingList:
+        if schema is ExtractedFindingList:
             if "Revenue decreased in 2025." in user:
-                return FindingList(
+                return ExtractedFindingList(
                     findings=[
                         Finding(
                             statement="Revenue decreased in 2025.",
@@ -157,7 +164,7 @@ class _ConflictAcrossTeamsLLM(FakeLLM):
                         )
                     ]
                 )
-            return FindingList(
+            return ExtractedFindingList(
                 findings=[
                     Finding(
                         statement="Revenue increased in 2025.",

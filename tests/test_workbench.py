@@ -470,12 +470,12 @@ PASTED_ABSTRACT = (
 
 class _PastedLLM(FakeLLM):
     async def parse(self, system, user, schema, *, temperature=0.2, retries=2):  # type: ignore[no-untyped-def]
-        from deep_research.models import FindingList
+        from deep_research.models import ExtractedFindingList
 
-        if schema is FindingList and "https://workspace.invalid/pasted/" in user:
+        if schema is ExtractedFindingList and "https://workspace.invalid/pasted/" in user:
             start = user.index("https://workspace.invalid/pasted/")
             url = user[start:].split()[0].rstrip("）)]，,")
-            return FindingList(
+            return ExtractedFindingList(
                 findings=[
                     {
                         "statement": "方法在仿真数据上平均 PSNR 为 38.4 dB",
