@@ -165,7 +165,7 @@ def _file_stem(title: str) -> str:
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     payload = {
-        "format_version": 11,
+        "format_version": 12,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,
@@ -203,9 +203,13 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     title = (contract.title if contract else "") or f"{template.title}：{detail.query[:40]}"
     created_at = detail.created_at
     created = created_at.isoformat() if created_at is not None else ""
-    meta = f"{template.title} · 引用 {len(citations)} 个已核验来源" + (
-        f" · {created[:10]}" if created else ""
-    )
+    from .scholarly import source_counts
+
+    distinct_sources = source_counts(citations, _references(detail))[0]
+    meta = f"{template.title} · {distinct_sources} 个已核验来源"
+    if len(citations) > distinct_sources:
+        meta += f" · {len(citations)} 处引用定位"
+    meta += f" · {created[:10]}" if created else ""
     if template.key == "dataAnalysis" and isinstance(scratch.get("analysis"), dict):
         from .titles import analysis_meta, analysis_title
 

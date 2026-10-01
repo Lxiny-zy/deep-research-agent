@@ -353,6 +353,15 @@ async def test_writer_revises_draft_that_fails_quality_checks(settings) -> None:
     assert any("20" in issue for issue in by_name["citation"].issues)
 
 
+async def test_rejected_writer_draft_is_retained_for_repair_without_repeating_research(settings):
+    settings.quality = {"max_revisions": 0}
+    body = "## 结论\n\n准确率达到 99.99% [1]。"
+    report, detail, _ = await _run("autoResearch", "研究结论", body, settings)
+    assert "99.99" not in report.markdown
+    extras = detail.orchestration.checkpoint["scratch"]["workbench"]["extras"]
+    assert "99.99" in extras["unapproved_draft"]
+
+
 @pytest.mark.asyncio
 async def test_peer_review_uses_named_paper_not_open_search(settings, monkeypatch) -> None:
     from deep_research.workbench import intake

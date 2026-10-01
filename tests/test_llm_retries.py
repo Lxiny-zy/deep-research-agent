@@ -17,6 +17,83 @@ class _Answer(BaseModel):
     value: int
 
 
+async def test_fixed_user_message_survives_json_repairs_without_promoting_source_to_system(
+    make_llm,
+):
+    from deep_research.prompting import PrefixPrompt
+
+    llm, completions, _, _ = make_llm(_response("bad", 5), _response('{"value": 2}', 6))
+    prompt = PrefixPrompt("untrusted fixed paper", "\nquestion")
+    answer = await llm.parse("rules", prompt, _Answer)
+    assert answer.value == 2
+    first, repaired = [call["messages"] for call in completions.requests]
+    assert [item["role"] for item in first] == ["system", "user", "user"]
+    assert first[1] == repaired[1] == {"role": "user", "content": "untrusted fixed paper"}
+    assert "上次输出无法解析" in repaired[-1]["content"]
+    assert "untrusted fixed paper" not in first[0]["content"]
+
+
+async def test_alternating_role_provider_falls_back_before_generation(make_llm):
+    import httpx
+    from openai import BadRequestError
+
+    from deep_research.prompting import PrefixPrompt
+
+    error = BadRequestError(
+        "user/assistant roles must alternate",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://provider.test/chat")),
+        body=None,
+    )
+    llm, completions, _, _ = make_llm(error, _response("ok", 4), _response("again", 4))
+    prompt = PrefixPrompt("fixed", " question")
+    assert await llm.complete("rules", prompt) == "ok"
+    assert len(completions.requests[0]["messages"]) == 3
+    assert len(completions.requests[1]["messages"]) == 2
+    assert completions.requests[1]["messages"][1]["content"] == "fixed question"
+    assert await llm.complete("rules", prompt) == "again"
+    assert len(completions.requests[2]["messages"]) == 2
+
+
+@pytest.mark.parametrize("structured", [False, True])
+async def test_reasoning_only_disconnect_never_restarts_generation(make_llm, structured):
+    from deep_research.llm import ModelStreamInterrupted
+
+    async def interrupted():
+        yield SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=None, reasoning_content="visible reasoning")
+                )
+            ],
+            usage=None,
+        )
+        raise TimeoutError("connection lost after reasoning")
+
+    llm, completions, tracer, sleeps = make_llm(interrupted())
+    with pytest.raises(ModelStreamInterrupted):
+        if structured:
+            await llm.parse("rules", "question", _Answer)
+        else:
+            _ = [part async for part in llm.stream("rules", "question")]
+    assert len(completions.requests) == 1 and not sleeps
+    assert any(
+        (event.data or {}).get("reasoning_delta") == "visible reasoning" for event in tracer.events
+    )
+
+
+async def test_stream_cleanup_failure_does_not_repeat_successful_generation(make_llm):
+    class ClosingFailure:
+        def __aiter__(self):
+            return _response('{"value": 7}', 10)
+
+        async def close(self):
+            raise TimeoutError("close failed")
+
+    llm, completions, _, _ = make_llm(ClosingFailure())
+    assert (await llm.parse("s", "u", _Answer)).value == 7
+    assert len(completions.requests) == 1
+
+
 def _response(content: str, total_tokens: int | None) -> Any:
     usage = SimpleNamespace(total_tokens=total_tokens) if total_tokens is not None else None
 

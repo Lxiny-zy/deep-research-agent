@@ -24,7 +24,7 @@ from typing import Any
 from ..agents.researcher import Researcher
 from ..guardrails import report_eligible
 from ..models import ExtractedFindingList, Finding, ResearchResult, Source
-from ..prompting import SCIENTIFIC_MARKDOWN, structured_system_prompt
+from ..prompting import SCIENTIFIC_MARKDOWN, PrefixPrompt, structured_system_prompt
 from ..report.validation import ReportCheck, validate_body
 from ..tools.base import SearchTool
 from .qa_cache import PaperEvidenceCache, evidence_cache_key
@@ -124,6 +124,7 @@ async def answer_question(
     history: list[dict[str, str]],
     ctx: Any,
     paper_sources: list[Source] | None = None,
+    paper_evidence: list[Finding] | None = None,
     include_web: bool = False,
     extra_search: SearchTool | None = None,
     on_delta: Callable[[str], None] | None = None,
@@ -214,17 +215,37 @@ async def answer_question(
             else ""
         )
         cached = paper_cache.get(cache_key) if paper_cache is not None else None
+        reused = False
         if cached is not None:
             paper_findings, raw = cached
         else:
-            paper_findings, raw = (await _verified(researcher, query)) if paper_sources else ([], 0)
+            from .paper_evidence import current_findings, merge_findings, select_findings
+
+            pool_key = "pool:" + evidence_cache_key(cache_scope, "", paper_sources, researcher)
+            pooled = paper_cache.get(pool_key) if paper_cache is not None else None
+            candidates = await current_findings(
+                merge_findings(paper_evidence or [], pooled[0] if pooled else []),
+                paper_sources,
+                researcher,
+            )
+            if candidates and on_event is not None:
+                on_event({"type": "status", "message": "正在核对已有论文证据能否回答本轮问题…"})
+            selected = await select_findings(candidates, question, history, researcher)
+            if selected is not None:
+                paper_findings, raw, reused = selected, len(selected), True
+            else:
+                paper_findings, raw = (
+                    (await _verified(researcher, query)) if paper_sources else ([], 0)
+                )
             if paper_cache is not None:
                 paper_cache.put(cache_key, paper_findings, raw)
+                merged = merge_findings(candidates, paper_findings)
+                paper_cache.put(pool_key, merged, len(merged))
         cache_event = {
             "type": "cache",
-            "hit": cached is not None,
+            "hit": cached is not None or reused,
             "message": "复用已核验的论文证据"
-            if cached is not None
+            if cached is not None or reused
             else ("本轮已读取并核验论文证据" if paper_findings else "当前原文片段未得到可用证据"),
         }
         if on_event is not None:
@@ -329,7 +350,12 @@ async def answer_question(
         capacity - len(ctx.system_prompt(system)) - sum(map(len, lines)) - len(question) - 8192,
     )
     # Stable evidence precedes changing dialogue and the current question.
-    user = "【已核验素材】\n" + "\n".join(lines) + f"\n\n{context}\n\n【用户问题】\n{question}"
+    user = PrefixPrompt(
+        "【已核验素材】\n" + "\n".join(lines),
+        f"\n\n{context}\n\n【用户问题】\n{question}\n\n本次可用引用编号："
+        + " ".join(f"[{index}]" for index in url_to_idx.values())
+        + "。引用只选这些编号，不复制引句中原论文的文献编号。",
+    )
     system = _SYSTEM + (_PAPER_SYSTEM if paper_sources is not None else "")
     if on_event is not None:
         on_event({"type": "status", "message": "正在组织回答…"})

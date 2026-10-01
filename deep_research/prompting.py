@@ -17,6 +17,43 @@ from pydantic import BaseModel
 _RULES_FILE = "06_global_rules.md"
 _RULES_MARKER = "## 全局编排规则"
 
+
+class PrefixPrompt(str):
+    """A normal string for adapters, with explicit user-message cache boundaries."""
+
+    prefix: str
+    suffix: str
+
+    def __new__(cls, prefix: str, suffix: str = "") -> PrefixPrompt:
+        prefix, suffix = str(prefix), str(suffix)
+        value = super().__new__(cls, prefix + suffix)
+        value.prefix, value.suffix = prefix, suffix
+        return value
+
+    def __add__(self, other: str) -> PrefixPrompt:
+        return PrefixPrompt(self.prefix, self.suffix + other)
+
+    def __radd__(self, other: str) -> PrefixPrompt:
+        return PrefixPrompt(other + self.prefix, self.suffix)
+
+    def __getnewargs__(self) -> tuple[str, str]:  # type: ignore[override]
+        return self.prefix, self.suffix
+
+
+def prompt_messages(system: str, user: str, *, split: bool = True) -> list[dict[str, str]]:
+    messages = [{"role": "system", "content": system}]
+    if split and isinstance(user, PrefixPrompt) and user.prefix and user.suffix:
+        messages.extend(
+            [
+                {"role": "user", "content": user.prefix},
+                {"role": "user", "content": user.suffix},
+            ]
+        )
+    else:
+        messages.append({"role": "user", "content": str(user)})
+    return messages
+
+
 # A fixed instruction shared by answers and report writers. It stays in the
 # system prefix, never interleaved with changing questions or source material.
 SCIENTIFIC_MARKDOWN = (

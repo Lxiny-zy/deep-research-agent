@@ -272,21 +272,50 @@ def _normalize_url(url: str) -> str:
     return url
 
 
-def check_sources(
-    citations: list[str], used: int, minimum: int, *, references: dict[str, str] | None = None
-) -> list[Finding]:
-    findings: list[Finding] = []
+def source_counts(
+    citations: list[str], references: dict[str, str] | None = None
+) -> tuple[int, list[str]]:
+    from urllib.parse import parse_qs, urlsplit
+
+    def chunk_family(url: str) -> str | None:
+        parts = urlsplit(url)
+        if (
+            parts.hostname == "workspace.invalid"
+            and parts.path.startswith("/attachments/")
+            and "chunk" in parse_qs(parts.query)
+        ):
+            return _normalize_url(url)
+        return None
+
     seen: dict[str, str] = {}
     duplicates: list[str] = []
+    repeated = 0
     for url in citations:
         key = _normalize_url(url)
         reference = (references or {}).get(url, "")
         title_key = re.sub(r"\W+", "", reference.casefold())[:80] if reference else ""
         for candidate in filter(None, (key, title_key)):
-            if candidate in seen and seen[candidate] != url:
-                duplicates.append(url)
+            if candidate in seen:
+                repeated += 1
+                # Multiple quote locations in one uploaded document are valid
+                # anchors. Count one document without asking the writer to erase them.
+                family = chunk_family(url)
+                if (
+                    seen[candidate] == url
+                    or family is None
+                    or family != chunk_family(seen[candidate])
+                ):
+                    duplicates.append(url)
                 break
             seen[candidate] = url
+    return max(0, len(citations) - repeated), duplicates
+
+
+def check_sources(
+    citations: list[str], used: int, minimum: int, *, references: dict[str, str] | None = None
+) -> list[Finding]:
+    findings: list[Finding] = []
+    unique, duplicates = source_counts(citations, references)
     if duplicates:
         findings.append(
             Finding(
@@ -296,7 +325,7 @@ def check_sources(
                 _short(duplicates[0], 60),
             )
         )
-    distinct = used - len(duplicates)
+    distinct = max(0, used - (len(citations) - unique))
     if minimum and distinct < minimum:
         findings.append(
             Finding(
@@ -399,7 +428,8 @@ def evaluate(
     report.metrics = {
         "errors": len(report.errors),
         "warnings": len(report.warnings),
-        "citations_used": used_citations,
+        "citations_used": source_counts(citations, references)[0],
+        "citation_anchors_used": used_citations,
         "citations_required": min_citations,
     }
     return report

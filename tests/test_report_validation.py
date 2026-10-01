@@ -51,3 +51,17 @@ def test_original_source_reference_numbers_cannot_break_fallback():
     assert validation.issues
     assert "[88]" not in checked.markdown and "[99]" not in checked.markdown
     assert "原文发现 [1]" in checked.markdown
+
+
+def test_document_labels_are_not_empirical_numbers_but_measurements_remain_checked():
+    from deep_research.report.validation import validate_body
+
+    finding = verified_finding(statement="准确率42%", evidence_quote="准确率42%")
+    results = [ResearchResult(sub_question="q", findings=[finding])]
+    mapping = {finding.source_url: 1}
+    body = "**1. 结果。** 表 2、Figure 3 和公式 (4) 总结准确率42% [1]。"
+    assert not validate_body(body, results, mapping, fallback=False).issues
+    invalid = validate_body(body.replace("42%", "99%"), results, mapping, fallback=False)
+    assert "unsupported_number" in invalid.issues
+    math = validate_body("表达式 $x=2$ [1]。", results, mapping, fallback=False)
+    assert "unsupported_number" in math.issues

@@ -7,6 +7,7 @@ The caller must apply source policy before invoking this formatter.
 from __future__ import annotations
 
 from ..models import Source
+from ..prompting import PrefixPrompt
 from .reader import rank_paper_sources
 
 _CHUNK_CHARS = 4000
@@ -36,7 +37,7 @@ def paper_context(sources: list[Source], query: str, max_chars: int) -> str:
         _block(source, index + 1, source.content) for index, source in enumerate(sources)
     )
     if len(full) <= max_chars:
-        return full
+        return PrefixPrompt(full)
 
     fragments: list[tuple[Source, str]] = []
     for source in sources:
@@ -67,4 +68,4 @@ def paper_context(sources: list[Source], query: str, max_chars: int) -> str:
         if id(source) in selected and len(block) + 2 <= room:
             supplements.append(block)
             room -= len(block) + 2
-    return _PARTIAL + "\n\n".join(core) + _SUPPLEMENT + "\n\n".join(supplements)
+    return PrefixPrompt(_PARTIAL + "\n\n".join(core), _SUPPLEMENT + "\n\n".join(supplements))

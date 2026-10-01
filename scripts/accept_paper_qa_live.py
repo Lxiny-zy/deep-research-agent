@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
+import pickle
 import subprocess
 import sys
 from pathlib import Path
@@ -64,6 +66,11 @@ async def main() -> None:
     parser.add_argument("--authorized-ssh", required=True)
     parser.add_argument("--run", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--local-detail",
+        type=Path,
+        help="Trusted local run pickle; reuse its frozen paper and verified findings",
+    )
     parser.add_argument("--max-output-tokens", type=int)
     parser.add_argument("--context-window-tokens", type=int)
     parser.add_argument(
@@ -81,11 +88,22 @@ async def main() -> None:
     if args.context_window_tokens is not None:
         profile["context_window_tokens"] = args.context_window_tokens
     cache_file = args.output / "paper-sources.json"
-    raw_sources = (
-        json.loads(cache_file.read_text(encoding="utf-8"))
-        if cache_file.exists()
-        else fetch_sources(args.authorized_ssh, args.run)
-    )
+    evidence = []
+    if args.local_detail:
+        from deep_research.persistence.repository import RunDetail
+        from deep_research.workbench.reader import paper_sources
+
+        detail = pickle.loads(args.local_detail.read_bytes())
+        if not isinstance(detail, RunDetail) or detail.id != args.run:
+            raise ValueError("Expected a trusted local snapshot for the requested run")
+        raw_sources = [source.model_dump(mode="json") for source in paper_sources(detail)]
+        evidence = [finding for result in detail.results for finding in result.findings]
+    else:
+        raw_sources = (
+            json.loads(cache_file.read_text(encoding="utf-8"))
+            if cache_file.exists()
+            else fetch_sources(args.authorized_ssh, args.run)
+        )
     cache_file.write_text(json.dumps(raw_sources, ensure_ascii=False, indent=2), encoding="utf-8")
     sources = [Source.model_validate(item) for item in raw_sources]
     print(
@@ -101,11 +119,20 @@ async def main() -> None:
             raise RuntimeError("Refusing to persist credential")
         (args.output / name).write_text(text, encoding="utf-8")
 
+    schemas: dict[str, int] = {}
+    selection_prefixes = []
+
     class CaptureLLM(LLM):
         calls = 0
         streams = 0
 
         async def parse(self, system, user, schema, **kwargs):
+            schemas[schema.__name__] = schemas.get(schema.__name__, 0) + 1
+            if schema.__name__ == "PaperEvidenceSelection":
+                selection_prefixes.append(
+                    hashlib.sha256(user.split("\n\n", 1)[0].encode()).hexdigest()
+                )
+                print("Checking reusable evidence coverage", flush=True)
             if args.replay_extraction and schema.__name__ in {
                 "ExtractedFindingList",
                 "SemanticEvidenceDecisionList",
@@ -117,7 +144,10 @@ async def main() -> None:
                     (args.replay_extraction / f"call-{index}.json").read_text(encoding="utf-8")
                 )
                 return schema.model_validate(extract_json(record["output"]))
-            return await super().parse(system, user, schema, **kwargs)
+            value = await super().parse(system, user, schema, **kwargs)
+            if schema.__name__ == "PaperEvidenceSelection":
+                save(f"selection-{len(selection_prefixes)}.json", value.model_dump(mode="json"))
+            return value
 
         async def stream(self, system, user, **kwargs):
             self.streams += 1
@@ -176,13 +206,17 @@ async def main() -> None:
     )
     history = []
     cache = PaperEvidenceCache()
+    results = []
     try:
         for index, question in enumerate(args.questions, 1):
+            tokens_before = tracer.total_tokens
+            schemas_before = dict(schemas)
             result = await answer_question(
                 question,
                 history=history,
                 ctx=ctx,
                 paper_sources=sources,
+                paper_evidence=evidence,
                 paper_cache=cache,
                 cache_scope=args.run,
             )
@@ -191,9 +225,22 @@ async def main() -> None:
             record["validation_scope"] = (
                 "replayed real extraction/verifier; fresh answer"
                 if args.replay_extraction
+                else "fresh selection, answer and support review over frozen verified evidence"
+                if args.local_detail
                 else "fresh model pipeline"
             )
             save(f"answer-{index}.json", record)
+            results.append(
+                {
+                    "question": question,
+                    "fallback": result.fallback,
+                    "tokens": tracer.total_tokens - tokens_before,
+                    "schemas": {
+                        name: count - schemas_before.get(name, 0) for name, count in schemas.items()
+                    },
+                    "findings": len(result.findings),
+                }
+            )
             history.append({"query": question, "answer": result.answer})
             print(
                 f"Answer {index}: fallback={result.fallback}; evidence={len(result.findings)}; "
@@ -207,6 +254,16 @@ async def main() -> None:
             if not (event.data or {}).get("reasoning_delta")
         ]
         save("events.json", safe_events)
+        save(
+            "acceptance.json",
+            {
+                "model": profile["model"],
+                "questions": results,
+                "tokens": tracer.total_tokens,
+                "selection_prefixes": selection_prefixes,
+                "reused_input": str(args.local_detail) if args.local_detail else None,
+            },
+        )
         await llm.aclose()
 
 

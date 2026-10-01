@@ -325,7 +325,9 @@ def test_document_identity_retains_meaningful_query_parameters():
         "https://workspace.invalid/attachments/paper?chunk=1",
         "https://workspace.invalid/attachments/paper?chunk=2",
     ]
-    assert any(item.code == "duplicate-source" for item in check_sources(chunks, 2, 2))
+    issues = check_sources(chunks, 2, 2)
+    assert [item.code for item in issues] == ["citation-shortfall"]
+    assert "1 个" in issues[0].message
 
 
 def test_numeric_verification_distinguishes_opposite_scientific_exponents():

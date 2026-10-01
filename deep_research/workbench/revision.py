@@ -30,7 +30,7 @@ from ..persistence.repository import LeaseLostError
 from ..report.validation import describe_problems, validate_body
 from .delivery.math_markdown import citation_text
 from .quality import QualityPolicy
-from .scholarly import abstract_sections, evaluate, revision_brief
+from .scholarly import abstract_sections, evaluate, revision_brief, source_counts
 from .templates import TaskTemplate
 
 _CITE = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
@@ -109,10 +109,10 @@ def assess_draft(
         )
         hard += describe_problems(check)
     hard += _missing_sections(body, template)
-    available = len(url_to_idx)
+    available = source_counts(list(url_to_idx))[0]
     # 可用来源不足下限是检索问题：只要求写作者用上全部可用来源，不要求它凑数。
     effective_minimum = min(min_citations, available)
-    used = len(_used_indices(body) & set(range(1, available + 1)))
+    used = len(_used_indices(body) & set(url_to_idx.values()))
     idx_to_url = {index: url for url, index in url_to_idx.items()}
     cited_urls = [idx_to_url[i] for i in sorted(_used_indices(body)) if i in idx_to_url]
     report = evaluate(

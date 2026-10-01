@@ -58,6 +58,8 @@ def citation_gate(
     template: TaskTemplate,
     min_citations: int | None = None,
 ) -> GateResult:
+    from .scholarly import source_counts
+
     body = citation_text(_body_without_references(markdown))
     used = {
         int(number) for match in _CITE.findall(body) for number in re.split(r"\s*[,，]\s*", match)
@@ -67,7 +69,9 @@ def citation_gate(
     if out_of_range:
         issues.append(f"引用编号越界：{out_of_range}（共 {len(citations)} 个已核验来源）")
     unused = [i for i in range(1, len(citations) + 1) if i not in used]
-    distinct = len(used - set(out_of_range))
+    anchor_count = len(used - set(out_of_range))
+    distinct = source_counts([citations[i - 1] for i in sorted(used - set(out_of_range))])[0]
+    available = source_counts(citations)[0]
     minimum = template.min_citations if min_citations is None else min_citations
     if minimum and distinct < minimum:
         issues.append(f"已核验引用 {distinct} 个，少于要求的 {minimum} 个")
@@ -78,8 +82,10 @@ def citation_gate(
         issues,
         {
             "used": distinct,
-            "available": len(citations),
-            "unused": len(unused),
+            "available": available,
+            "unused": max(0, available - distinct),
+            "anchors_used": anchor_count,
+            "unused_anchors": len(unused),
             "required": minimum,
         },
     )

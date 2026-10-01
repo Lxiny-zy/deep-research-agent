@@ -18,6 +18,11 @@ from ..workbench.delivery.math_markdown import (
 
 _CITATION = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
 _NUMBER = re.compile(r"(?<![A-Za-z0-9_.])[-+]?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][-+]?\d+)?")
+_STRUCTURAL_REF = re.compile(
+    r"(?<![A-Za-z])(?:图|表|公式|式|Figure|Fig\.?|Table|Equation|Eq\.?)"
+    r"\s*\(?[A-Z]?\d+(?:[.-]\d+)*[a-z]?\)?",
+    re.I,
+)
 _REFERENCES = re.compile(r"\n#{1,3}\s*(?:参考来源|参考文献|References)\s*\n.*\Z", re.S | re.I)
 
 
@@ -40,7 +45,11 @@ def _excerpt(text: str) -> str:
 def _numbers(text: str) -> set[Decimal]:
     text = unicodedata.normalize("NFKC", text).replace("−", "-")
     text = replace_citations(text, lambda _: "")
-    text = re.sub(r"(?m)^\s*\d+[.)、]\s+", "", text)
+    text = re.sub(r"(?m)^\s*(?:\*\*|__)?\d+[.)、]\s+", "", text)
+    # Figure/table/equation references are document labels, not measurements.
+    # Mask only prose positions so numerical expressions inside math stay checked.
+    for match in reversed(list(_STRUCTURAL_REF.finditer(citation_text(text)))):
+        text = text[: match.start()] + " " * len(match[0]) + text[match.end() :]
     values = set()
     for raw in _NUMBER.findall(text):
         try:

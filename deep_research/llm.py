@@ -13,7 +13,7 @@ import json
 import re
 import time
 from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import aclosing
+from contextlib import aclosing, suppress
 from typing import Any, TypeVar
 from uuid import uuid4
 
@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from .config import Settings
 from .observability import Tracer
-from .prompting import structured_system_prompt
+from .prompting import prompt_messages, structured_system_prompt
 from .provider_limits import provider_request
 from .security import provider_http_client
 from .token_budget import TokenBudget, TokenReservation
@@ -37,6 +37,11 @@ class ModelOutputTruncated(RuntimeError):
             "模型输出被渠道截断，尚未生成完整结果；这不表示论文缺少依据。"
             "请在模型档案中设置该渠道支持的最大输出容量（包含思考与正文）"
         )
+
+
+class ModelStreamInterrupted(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("模型已返回部分思考或正文，但连接中断；未自动重发同一请求。")
 
 
 def extract_json(text: str) -> dict:
@@ -118,6 +123,7 @@ class LLM:
     parameter_mode: str = "temperature"
     reasoning_effort: str = "medium"
     context_window_tokens: int | None = None
+    _prefix_messages_supported: bool = True
 
     @property
     def input_capacity_chars(self) -> int:
@@ -203,7 +209,7 @@ class LLM:
                 return schema.model_validate(extract_json(raw))
             except Exception as e:  # JSON 非法或字段缺失 → 把错误回灌再试
                 err = e
-                user = f"{user}\n\n（上次输出无法解析：{e}；请只输出合法 JSON）"
+                user = user + f"\n\n（上次输出无法解析：{e}；请只输出合法 JSON）"
         raise ValueError(f"结构化输出解析失败：{err}")
 
     async def stream(
@@ -244,10 +250,7 @@ class LLM:
         affinity = self._cache_affinity()
         request = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": prompt_messages(system, user, split=self._prefix_messages_supported),
             **self._generation_options(temperature),
             **self._output_options(reservation),
             "stream": True,
@@ -280,15 +283,37 @@ class LLM:
                 last_reasoning_emit = time.monotonic()
 
         estimated_added = 0
+        output_started = False
         try:
-            try:
-                resp = await self.client.chat.completions.create(
-                    **request, stream_options={"include_usage": True}
-                )
-            except APIStatusError as exc:
-                if exc.status_code not in {400, 422} or "stream_options" not in str(exc):
-                    raise
-                resp = await self.client.chat.completions.create(**request)
+            include_usage = True
+            while True:
+                try:
+                    stream_options: dict[str, Any] = (
+                        {"stream_options": {"include_usage": True}} if include_usage else {}
+                    )
+                    resp = await self.client.chat.completions.create(
+                        **{**request, **stream_options},
+                    )
+                    break
+                except APIStatusError as exc:
+                    message = str(exc).lower()
+                    if exc.status_code not in {400, 422}:
+                        raise
+                    if include_usage and "stream_options" in message:
+                        include_usage = False
+                    elif (
+                        len(request["messages"]) > 2
+                        and "user" in message
+                        and any(
+                            word in message for word in ("alternat", "consecutive", "multiple user")
+                        )
+                    ):
+                        # Some chat templates require alternating roles. Fall
+                        # back only on an explicit pre-generation schema error.
+                        self._prefix_messages_supported = False
+                        request["messages"] = prompt_messages(system, user, split=False)
+                    else:
+                        raise
             usage_report = _header_usage(resp)
             input_estimate = _estimate_tokens(system, user)
             self.tracer.add_tokens(input_estimate, estimated=True)
@@ -318,6 +343,7 @@ class LLM:
                     if time.monotonic() - last_reasoning_emit >= 0.15:
                         flush_reasoning()
                 if delta or reasoning:
+                    output_started = True
                     out_chars += len(delta or "") + len(reasoning)
                     output_estimate = out_chars // 2
                     increment = output_estimate - accounted_output
@@ -362,12 +388,17 @@ class LLM:
         except BaseException as exc:
             if isinstance(exc, (asyncio.CancelledError, GeneratorExit)) or _uncertain_usage(exc):
                 self.tracer.add_tokens(max(0, reservation.total - estimated_added), estimated=True)
+            if output_started and _retryable(exc):
+                raise ModelStreamInterrupted() from exc
             raise
         finally:
             flush_reasoning()
             self.tracer.budget.release(reservation)
             if resp is not None and hasattr(resp, "close"):
-                await resp.close()
+                # A cleanup error after a completed response must not initiate
+                # another billed generation or replace the successful answer.
+                with suppress(Exception):
+                    await resp.close()
 
     def _cache_affinity(self) -> str:
         identity = json.dumps(

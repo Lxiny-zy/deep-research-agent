@@ -405,6 +405,7 @@ async def _paper_scope(
             )
         scope = {
             "paper_sources": frozen_paper_sources,
+            "paper_evidence": [finding for result in detail.results for finding in result.findings],
             "include_web": "web" in body.sources,
         }
     if "library" in body.sources:

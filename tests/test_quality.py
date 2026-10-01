@@ -121,6 +121,19 @@ def test_duplicate_sources_and_shortfall() -> None:
     assert "1 个" in findings[1].message  # 去重后只剩 1 个不同来源
 
 
+def test_fragment_anchors_count_one_document_without_forcing_writer_to_delete_citations():
+    from deep_research.workbench.gates import citation_gate
+
+    citations = [f"https://workspace.invalid/attachments/paper?chunk={i}" for i in range(1, 5)]
+    assert not check_sources(citations, 4, 1)
+    assert [f.code for f in check_sources(citations, 4, 2)] == ["citation-shortfall"]
+    template = get_template("paperRead")
+    assert template is not None
+    gate = citation_gate("结论 [1][2][3][4]。", citations, template, min_citations=1)
+    assert gate.status == "pass" and gate.metrics["used"] == 1
+    assert gate.metrics["anchors_used"] == 4
+
+
 def test_recency_requires_sources_from_requested_year() -> None:
     assert requested_year("2025 年以来扩散模型用于光谱重建的进展") == 2025
     assert requested_year("progress since 2024") == 2024
