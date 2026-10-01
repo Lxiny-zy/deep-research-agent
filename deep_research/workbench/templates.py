@@ -341,8 +341,8 @@ MINDMAP = TaskTemplate(
     title="思维导图",
     tagline="把一个主题的知识结构整理为可交互的思维导图（HTML / PNG / Markdown）",
     description=(
-        "检索主题的核心概念与相互关系，组织成至少 6 个分支、每个分支 5 个以上节点的"
-        "思维导图，交付可交互 HTML、静态 PNG 与 Markdown 大纲。"
+        "按主题范围组织核心概念、已核验结论与待研究问题，分支与深度由内容决定，"
+        "事实节点保留引用，交付可交互 HTML、静态 PNG 与完整 Markdown 大纲。"
     ),
     icon="mindmap",
     strategies={"quick": "mindmap", "deep": "mindmap_deep"},
@@ -353,7 +353,7 @@ MINDMAP = TaskTemplate(
     sections=(),
     deliverables=("mindmap", "md"),
     examples=("高光谱计算成像的知识体系：光学编码、重建算法、数据集与评价",),
-    writer_brief="至少 6 个一级分支，每个分支至少 5 个节点；节点用名词短语，不写长句。",
+    writer_brief="覆盖用户指定范围，不凑节点数；区分概念、事实与问题，事实绑定引用，关系与层级清晰。",
     min_citations=0,
     tier_default="light",
     tags=("导图", "知识结构"),

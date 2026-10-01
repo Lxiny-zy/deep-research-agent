@@ -21,6 +21,7 @@ from deep_research.models import (
     SubQuestion,
 )
 from deep_research.tools.base import SearchTool
+from deep_research.workbench.support import SupportDecisions
 
 
 def verified_finding(
@@ -71,6 +72,23 @@ class FakeLLM:
         self, system: str, user: str, schema, *, temperature: float = 0.2, retries: int = 2
     ):
         self.parse_calls += 1
+        if schema is SupportDecisions:
+            import json
+
+            data = json.loads(user)
+            return SupportDecisions(
+                decisions=[
+                    {
+                        "unit_id": unit["id"],
+                        "verdict": "supported" if unit["kind"] == "claim" else "non_factual",
+                        "evidence_ids": [
+                            e["id"] for e in data["evidence"] if e["citation"] in unit["citations"]
+                        ],
+                        "reason": "fixture judgement; not a factual accuracy test",
+                    }
+                    for unit in data["units"]
+                ]
+            )
         if schema is ResearchPlan:
             return ResearchPlan(
                 interpretation="测试理解",

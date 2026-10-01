@@ -162,10 +162,18 @@ async def test_mindmap_own_revision_path_also_restores_the_selected_version(sett
                 "root": "主题",
                 "branches": [
                     {
-                        "label": "分支",
-                        "children": [{"label": "节点"} for _ in range(4 if self.count == 1 else 1)],
+                        "label": f"分支{i}",
+                        "children": [
+                            {
+                                "label": f"节点{i}-{j}",
+                                "kind": "claim"
+                                if (i == 0 and (j == 0 or self.count > 1))
+                                else "concept",
+                            }
+                            for j in range(4 if self.count == 1 else 2)
+                        ],
                     }
-                    for _ in range(6 if self.count == 1 else 1)
+                    for i in range(6 if self.count == 1 else 1)
                 ],
             }
             bb.scratch["_mindmap"] = raw

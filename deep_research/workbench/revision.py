@@ -6,8 +6,9 @@
 
 循环的纪律：
 
-* **检查是确定性的**：引用 / 数值复核（``validate_body``）、模板章节、学术文体与来源
-  检查（``scholarly.evaluate``）。模型只负责按问题清单修改，不负责判断自己合格。
+* **基础检查是确定性的**：引用 / 数值复核（``validate_body``）、模板章节、学术文体与来源
+  检查（``scholarly.evaluate``）。特定交付物可以加入异步证据核对，并明确记录模型判断
+  的范围；不能用模型判断冒充事实真值。核验服务失败时可停止无效的内容返工。
 * **只让写作者修它能修的问题**：素材本身不足（可用来源少于下限、缺少指定年份的
   文献）是检索问题，重写不会变好；这类问题交给反思补洞与交付门报告，不消耗返工次数。
 * **取最好的一版**：每一版都记下硬性问题数，最终交付问题最少的一版（同分取后者），
@@ -18,6 +19,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -38,6 +40,7 @@ class Assessment:
     hard: list[str] = field(default_factory=list)
     soft: list[str] = field(default_factory=list)
     brief: str = ""
+    can_revise: bool = True
 
     @property
     def clean(self) -> bool:
@@ -147,7 +150,7 @@ def revision_prompt(previous: str, assessment: Assessment) -> str:
 
 async def write_with_revisions(
     write: Callable[[str | None], Awaitable[str]],
-    assess: Callable[[str], Assessment],
+    assess: Callable[[str], Assessment | Awaitable[Assessment]],
     *,
     max_revisions: int,
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
@@ -170,7 +173,8 @@ async def write_with_revisions(
             if best is None:
                 raise
             break
-        assessment = assess(body)
+        result = assess(body)
+        assessment = await result if inspect.isawaitable(result) else result
         log.attempts = attempt + 1
         log.history.append({"attempt": attempt + 1, "hard": len(assessment.hard)})
         if best is None or len(assessment.hard) <= best[0]:
@@ -185,7 +189,7 @@ async def write_with_revisions(
                     "soft": assessment.soft[:5],
                 },
             )
-        if assessment.clean or attempt == max_revisions:
+        if assessment.clean or not assessment.can_revise or attempt == max_revisions:
             break
         revision = revision_prompt(body, assessment)
     assert best is not None

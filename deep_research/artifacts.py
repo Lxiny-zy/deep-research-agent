@@ -181,6 +181,20 @@ def _validate_relative_name(value: object, *, label: str = "artifact name") -> s
     return canonical
 
 
+def _resolved(path: Path) -> Path:
+    resolved = path.resolve(strict=False)
+    if os.name == "nt":
+        # During concurrent creation Python/Windows can return the extended
+        # spelling for only one of two related paths. Canonicalize DOS/UNC
+        # aliases after resolving links, before comparing containment.
+        text = os.fspath(resolved)
+        if text[:8].upper() == "\\\\?\\UNC\\":
+            resolved = Path("\\\\" + text[8:])
+        elif text.startswith("\\\\?\\") and text[4:5].isalpha() and text[5:7] == ":\\":
+            resolved = Path(text[4:])
+    return resolved
+
+
 def _contained(path: Path, base: Path) -> Path:
     """Resolve a path and ensure it remains below ``base``.
 
@@ -188,8 +202,8 @@ def _contained(path: Path, base: Path) -> Path:
     not protect a stage directory that was replaced by a symlink between calls.
     """
 
-    resolved_base = base.resolve(strict=False)
-    resolved = path.resolve(strict=False)
+    resolved_base = _resolved(base)
+    resolved = _resolved(path)
     try:
         resolved.relative_to(resolved_base)
     except ValueError as exc:
@@ -494,7 +508,7 @@ class ArtifactStore:
             max_bytes = max_file_size
         if max_bytes is not None and (not isinstance(max_bytes, int) or max_bytes < 0):
             raise ValueError("max_bytes must be a non-negative integer or None")
-        self.workspace_root = Path(workspace_root).expanduser().resolve()
+        self.workspace_root = _resolved(Path(workspace_root).expanduser())
         self.work_root = self.workspace_root / "work"
         self.output_root = self.workspace_root / "output"
         self.framework_root = self.workspace_root / ".framework"
@@ -598,7 +612,7 @@ class ArtifactStore:
     ) -> Path:
         safe_area = self._area(area, root=root, kind=kind, destination=destination, output=output)
         safe_name = _validate_relative_name(name)
-        base = self._root_for(safe_area).resolve(strict=False)
+        base = _resolved(self._root_for(safe_area))
         stage_path = self.stage_dir(
             slug,
             stage,

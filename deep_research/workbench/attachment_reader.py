@@ -4,24 +4,48 @@
 指定论文完全同权：同样经过来源门禁、逐字核验与语义核验，写作阶段按同一套 [n]
 引用编号标注；交付物里的参考来源会显示为文件名与定位（「第 3 页」「第 2 张幻灯片」）。
 
-批量阅读：每 4 个片段一次抽取调用。整个文件塞进一次调用会超出上下文，也会让模型
-只盯住开头；分批让每一段都被读到。
+按模型容量组批，扣除真实系统规则、结构化输出 Schema、问题和修订空间；
+保留完整片段及原始顺序，不以固定片段数量限制大上下文模型。
 """
 
 from __future__ import annotations
 
-from ..agents.base import Blackboard, RunContext
-from ..agents.researcher import Researcher
+from ..agents.base import Blackboard, RunContext, direct_system_prompt
+from ..agents.researcher import Researcher, source_context
 from ..guardrails import verify_claim_consistency
-from ..models import ResearchResult
+from ..models import FindingList, ResearchResult, Source
 from ..persistence.repository import LeaseLostError
+from ..prompting import structured_system_prompt
 from ..registry import register
 from .attachments import attachments_from_scratch
 from .contract import contract_from_scratch
 from .intake import _FixedSources
 
 ATTACHMENT_READER_ROLE = "attachment_reader"
-_BATCH = 4
+
+
+def source_batches(
+    sources: list[Source], researcher: Researcher, question: str
+) -> list[list[Source]]:
+    capacity = getattr(
+        researcher.llm, "input_capacity_chars", researcher.settings.llm_max_input_chars
+    )
+    rules = len(structured_system_prompt(direct_system_prompt(researcher.system), FindingList))
+    available = max(0, capacity - rules - len(question) - 128)
+    # Repair/framing space scales to the real remaining context, not a token budget.
+    room = max(0, available - min(8192, max(256, available // 8)))
+    batches: list[list[Source]] = []
+    batch: list[Source] = []
+    for source in sources:
+        if len(source_context([source])) > room:
+            raise ValueError("模型输入容量无法容纳一个完整附件片段，请调整模型容量；未截断原文")
+        if batch and len(source_context([*batch, source])) > room:
+            batches.append(batch)
+            batch = []
+        batch.append(source)
+    if batch:
+        batches.append(batch)
+    return batches
 
 
 def _question(query: str, focus: str) -> str:
@@ -58,8 +82,13 @@ class AttachmentReader:
         before = len(bb.results)
         for attachment in attachments:
             sources = attachment.sources()
-            for index in range(0, len(sources), _BATCH):
-                batch = sources[index : index + _BATCH]
+            batches = source_batches(sources, researcher, question)
+            ctx.tracer.emit(
+                "RESEARCHER",
+                "info",
+                f"「{attachment.filename}」按模型容量分为 {len(batches)} 批读取",
+            )
+            for index, batch in enumerate(batches, 1):
                 researcher.search = _FixedSources(batch)
                 try:
                     result = await researcher.run(question)
@@ -69,14 +98,13 @@ class AttachmentReader:
                     ctx.tracer.emit(
                         "RESEARCHER",
                         "error",
-                        f"阅读「{attachment.filename}」第 {index // _BATCH + 1} 批失败：{exc}",
+                        f"阅读「{attachment.filename}」第 {index} 批失败：{exc}",
                     )
                     continue
                 if result is not None and result.findings:
                     bb.results.append(
                         ResearchResult(
-                            sub_question=f"上传文件「{attachment.filename}」"
-                            f"（第 {index // _BATCH + 1} 组片段）",
+                            sub_question=f"上传文件「{attachment.filename}」（第 {index} 组片段）",
                             findings=result.findings,
                         )
                     )

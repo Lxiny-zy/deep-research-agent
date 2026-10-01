@@ -61,6 +61,25 @@ def test_output_tree_and_nested_names_are_canonical(tmp_path: Path) -> None:
     assert store.output_dir("topic", "final") == tmp_path / "output" / "topic" / "final"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended path aliases")
+def test_concurrent_path_resolution_alias_does_not_bypass_or_break_containment(
+    tmp_path, monkeypatch
+):
+    from deep_research.artifacts import _contained
+
+    base = tmp_path / "framework"
+    original = Path.resolve
+
+    def mixed_resolve(path, *args, **kwargs):
+        resolved = original(path, *args, **kwargs)
+        return Path("\\\\?\\" + str(resolved)) if path == base else resolved
+
+    monkeypatch.setattr(Path, "resolve", mixed_resolve)
+    assert _contained(base / "deliveries/render.lock", base) == base / "deliveries/render.lock"
+    with pytest.raises(PathTraversalError):
+        _contained(tmp_path / "outside.txt", base)
+
+
 @pytest.mark.parametrize(
     ("slug", "stage", "name"),
     [

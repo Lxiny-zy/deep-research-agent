@@ -1066,7 +1066,40 @@ class DeepResearchAgent:
 
         if bb.report is None:  # WorkflowEngine(require_report=True) should have raised first.
             raise RuntimeError("工作流结束但未生成报告")
-        if bb.results or bb.report.citations:
+        reviewed_mindmap = False
+        workbench = bb.scratch.get("workbench", {})
+        if isinstance(workbench, dict) and workbench.get("template") == "mindmap":
+            from .workbench.mindmap_contract import checked_review
+
+            extras = workbench.get("extras", {})
+            if extras.get("mindmap"):
+                reviewed_mindmap, map_issues = checked_review(
+                    extras["mindmap"],
+                    bb.report.citations,
+                    bb.results,
+                    extras.get("node_review"),
+                    bb.report.markdown,
+                )
+                if reviewed_mindmap:
+                    # A concept hierarchy is not a sequence of factual prose
+                    # paragraphs. Its bound node review is the relevant contract.
+                    validation = {
+                        "scope": "model_assessed_node_evidence_and_relations",
+                        "issues": map_issues,
+                        "fallback": False,
+                        "semantic_verification": True,
+                    }
+                    bb.scratch["_report_validation"] = validation
+                    self.tracer.emit(
+                        "ORCHESTRATOR",
+                        "info",
+                        "导图节点证据核对记录已校验",
+                        data={"report_validation": validation},
+                    )
+                    if engine.runtime.run is not None:
+                        engine.runtime.run.checkpoint = bb.model_dump(mode="json")
+                        await save_checkpoint(engine.runtime.run)
+        if not reviewed_mindmap and (bb.results or bb.report.citations):
             from .workbench.scholarly import uncited_sections_for
 
             bb.report, check = await run_blocking(

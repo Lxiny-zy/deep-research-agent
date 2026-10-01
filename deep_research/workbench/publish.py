@@ -9,8 +9,8 @@
 
 验收失败的格式**仍然发布**但在登记里标为 ``status=fail`` 并附问题清单——
 用户需要知道「PDF 自检失败」，而不是看到一个少了 PDF 的交付列表却不知道为什么。
-唯一例外是 fail 级的引用越界：它意味着正文引用了不存在的来源，那份正文不应以
-任何格式对外，此时只发布 Markdown 并标 fail，供排查。
+fail 级引用越界和导图节点证据失败不生成正式格式：只保留标记 fail 的 Markdown
+用于排查，不把错误引用或未获支持的图当成正式交付。
 
 HTTP 入口通过 delivery_store 持久化不可变交付版本，后续下载核对登记并读取原文件，
 跨进程重启不重新渲染。publish() 保留为工作流显式发布的兼容入口。
@@ -31,6 +31,7 @@ from .contract import contract_from_scratch
 from .gates import (
     HARD_GATES,
     GateResult,
+    Status,
     citation_gate,
     consistency_gate,
     length_gate,
@@ -160,7 +161,7 @@ def _file_stem(title: str) -> str:
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     payload = {
-        "format_version": 3,
+        "format_version": 4,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,
@@ -310,6 +311,16 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         length_gate(markdown, template),
     ]
     gates.append(structure_gate(markdown, template, extras))
+    if template.key == "mindmap" and extras.get("mindmap"):
+        from .mindmap_contract import checked_review
+
+        raw = extras["mindmap"]
+        review = extras.get("node_review")
+        _bound, issues = checked_review(raw, citations, detail.results, review, markdown)
+        status: Status = "fail" if issues else "pass"
+        if review is None and issues and issues[0].startswith("历史导图"):
+            status = "warn"
+        gates.append(GateResult("node_evidence", status, issues))
     if min_citations or citations:
         gates.append(citation_gate(markdown, citations, template, min_citations))
     if template.key not in {"slides", "mindmap"}:
@@ -330,7 +341,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         gates.append(revision)
     if template.key == "peerReview":
         gates.append(review_gate(extras))
-    citation_failed = any(g.name == "citation" and g.status == "fail" for g in gates)
+    citation_failed = any(
+        g.name in {"citation", "node_evidence"} and g.status == "fail" for g in gates
+    )
 
     files.insert(
         0,
@@ -391,15 +404,41 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
 
         def build_mindmap() -> None:
             from .delivery.mindmap import render_mindmap_html, render_mindmap_png
+            from .support import evidence_records
 
-            mindmap = extras["mindmap"]
+            used_evidence = {
+                key
+                for decision in (extras.get("node_review") or {}).get("decisions", [])
+                for key in decision.get("evidence_ids", [])
+            }
+            records = evidence_records(
+                detail.results, {url: i for i, url in enumerate(citations, 1)}
+            )
+            mindmap = {
+                **extras["mindmap"],
+                "sources": [
+                    {
+                        "index": i,
+                        "url": url,
+                        "title": _references(detail).get(url, url),
+                        "quotes": list(
+                            dict.fromkeys(
+                                e["quote"]
+                                for e in records
+                                if e["citation"] == i and e["id"] in used_evidence
+                            )
+                        ),
+                    }
+                    for i, url in enumerate(citations, 1)
+                ],
+            }
             html = render_mindmap_html(mindmap, title=title).encode("utf-8")
-            png = render_mindmap_png(mindmap)
             files.append(
                 DeliveryFile(
                     f"{stem}-mindmap.html", "html", f"{title}（交互导图）", "reading", html
                 )
             )
+            png = render_mindmap_png(mindmap)
             files.append(
                 DeliveryFile(f"{stem}-mindmap.png", "png", f"{title}（导图图片）", "figure", png)
             )

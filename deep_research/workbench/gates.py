@@ -2,10 +2,11 @@
 
 每道门返回 ``GateResult``：``status`` 为 pass / warn / fail，``issues`` 是可读的问题清单。
 门只读取已生成的产物与运行数据，不调用模型——「我看过了」不算验收。
+节点证据门校验已有模型核对记录的版本和完整性，不将其视为确定性的事实真值。
 
 * ``citation``   —— 正文引用编号必须全部落在已核验来源内；至少满足模板的最少引用数；
 * ``markdown``   —— 交付 Markdown 不含裸 HTML 标签、页内锚点链接与未闭合代码块；
-* ``structure``  —— 模板承诺的章节都在（按标题或别名匹配），思维导图满足分支/节点下限；
+* ``structure``  —— 模板承诺的章节都在（按标题或别名匹配），导图结构完整且不重复；
 * ``length``     —— 正文不短于模板下限；
 * ``consistency``—— 同源多格式交叉计数：DOCX 内嵌图 = HTML 内联图 = Markdown 图数，
                     PDF 可抽出正文且末段不缺失；
@@ -104,12 +105,13 @@ def structure_gate(
 ) -> GateResult:
     extras = extras or {}
     if template.key == "mindmap":
+        from .mindmap_contract import Mindmap, structural_issues
+
         stats = extras.get("stats", {})
-        issues = []
-        if stats.get("branches", 0) < 6:
-            issues.append(f"一级分支 {stats.get('branches', 0)} 个，少于 6 个")
-        if stats.get("min_branch_nodes", 0) < 5:
-            issues.append(f"最小分支只有 {stats.get('min_branch_nodes', 0)} 个节点，少于 5 个")
+        raw = extras.get("mindmap")
+        issues = (
+            structural_issues(Mindmap.model_validate(raw), 10**9) if raw else ["没有可用的导图结构"]
+        )
         return GateResult("structure", "warn" if issues else "pass", issues, dict(stats))
     if template.key == "slides":
         deck = extras.get("deck") or {}
@@ -293,7 +295,16 @@ def revision_gate(extras: dict[str, Any]) -> GateResult | None:
 
 
 HARD_GATES = frozenset(
-    {"citation", "structure", "scholarly", "review", "revision", "analysis", "structured_content"}
+    {
+        "citation",
+        "structure",
+        "scholarly",
+        "review",
+        "revision",
+        "analysis",
+        "structured_content",
+        "node_evidence",
+    }
 )
 
 

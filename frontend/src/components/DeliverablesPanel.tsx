@@ -21,6 +21,7 @@ const GATE_LABEL: Record<string, string> = {
   territory: '地名规范',
   analysis: '统计分析',
   structured_content: '定稿一致性',
+  node_evidence: '节点证据与关系',
 }
 
 const GATE_HELP: Record<string, string> = {
@@ -29,7 +30,8 @@ const GATE_HELP: Record<string, string> = {
     '学术文体（口语化、套话句式、生产过程描述）、摘要不带引用、引用堆砌、重复来源、时效覆盖与局限说明。',
   revision: '写作者按质量检查结果返工的次数，以及返工用尽后仍未解决的问题。',
   markdown: '交付源文件不含裸 HTML、页内锚点与未闭合代码块，保证各格式渲染一致。',
-  structure: '任务模板承诺的章节必须齐全；思维导图须满足分支与节点数下限。',
+  structure: '任务模板承诺的章节必须齐全；导图结构应完整，避免重复节点和缺失关系。',
+  node_evidence: '区分概念、事实与研究问题；逐节点核对事实引用和上下级关系。模型判断仍需人工审阅。',
   length: '正文篇幅不低于任务模板的下限。',
   consistency: 'Word、PDF、HTML 与 Markdown 源的图片数量一致，PDF 可完整抽出正文。',
   slides: '每页都有要点与演讲备注，且没有文字溢出页面的风险。',
