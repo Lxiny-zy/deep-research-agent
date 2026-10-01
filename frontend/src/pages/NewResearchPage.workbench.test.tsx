@@ -23,7 +23,9 @@ vi.mock('../api/client', () => mocks)
 vi.mock('../hooks/useConfig', () => ({
   useConfig: () => ({ data: { require_corroboration: false } }),
 }))
-vi.mock('../hooks/useLibrary', () => ({ useProjects: () => ({ data: [] }) }))
+vi.mock('../hooks/useLibrary', () => ({
+  useProjects: () => ({ data: [{ id: 'p1', name: '光谱重建', included_source_count: 2 }] }),
+}))
 vi.mock('../components/ResourcePreflightPanel', () => ({ default: () => null }))
 
 function template(key: TaskTemplate['key'], title: string, workflow: string): TaskTemplate {
@@ -44,6 +46,7 @@ function template(key: TaskTemplate['key'], title: string, workflow: string): Ta
     tier_default: 'standard',
     min_citations: 1,
     tags: [],
+    supports_library: !['peerReview', 'paperRead', 'dataAnalysis'].includes(key),
   }
 }
 
@@ -119,12 +122,26 @@ describe('NewResearchPage task templates', () => {
     mocks.assessIntent.mockReset()
   })
 
+  it('only offers a library project to templates that consume library search', async () => {
+    render(
+      <MemoryRouter>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByLabelText(/资料库项目/)).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText(/同行评审/))
+    expect(screen.queryByLabelText(/资料库项目/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText(/数据分析/))
+    expect(screen.queryByLabelText(/资料库项目/)).not.toBeInTheDocument()
+  })
+
   it('submits a specialised template directly with its key and no workflow', async () => {
     render(
       <MemoryRouter>
         <NewResearchPage />
       </MemoryRouter>,
     )
+    fireEvent.change(await screen.findByLabelText(/资料库项目/), { target: { value: 'p1' } })
     fireEvent.click(screen.getByLabelText(/同行评审/))
     expect(screen.getByLabelText('同行评审输入')).toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: /研究流程/ })).not.toBeInTheDocument()
@@ -138,6 +155,7 @@ describe('NewResearchPage task templates', () => {
       query: 'https://arxiv.org/abs/2205.10102',
       template: 'peerReview',
       workflow: null,
+      project_id: null,
       clarified: true,
     })
     // 专项任务不经意图澄清；档位默认取模板的 tier_default

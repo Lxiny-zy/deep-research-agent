@@ -240,7 +240,7 @@ async def get_workspace_file(run_id: str, path: str, request: Request) -> Respon
 @router.get("/runs/{run_id}/reader")
 async def get_reader(run_id: str, request: Request) -> dict[str, Any]:
     """论文精读工作区：这次任务的研究对象，以及每份能否显示原版 PDF。"""
-    from .reader import reader_documents
+    from .reader import paper_sources, reader_documents
 
     detail = await request.app.state.repo.get_run(run_id)
     if detail is None:
@@ -250,6 +250,7 @@ async def get_reader(run_id: str, request: Request) -> dict[str, Any]:
         "status": detail.status,
         "documents": reader_documents(detail),
         "has_report": detail.report is not None,
+        "can_ask": detail.status == "done" and bool(paper_sources(detail)),
     }
 
 

@@ -897,7 +897,9 @@ async def test_qa_endpoints_round_trip_and_isolate_owners(api_repo, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_qa_stream_keeps_source_free_turn_on_model_knowledge_path(api_repo, monkeypatch) -> None:
+async def test_qa_stream_keeps_source_free_turn_on_model_knowledge_path(
+    api_repo, monkeypatch
+) -> None:
     api, _ = api_repo
     from deep_research.workbench.qa_store import InMemoryQaStore
 

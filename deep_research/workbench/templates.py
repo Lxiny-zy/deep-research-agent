@@ -68,6 +68,9 @@ class TaskTemplate:
     accepts_attachments: bool = False
     tier_default: Literal["light", "standard", "deep"] = "standard"
     tags: tuple[str, ...] = field(default_factory=tuple)
+    # Whether a selected private-library project is consumed by this task.
+    # Specialised paper/data workflows use their own fixed inputs instead.
+    supports_library: bool = True
 
     @property
     def workflow(self) -> str:
@@ -116,6 +119,7 @@ class TaskTemplate:
             "tier_default": self.tier_default,
             "min_citations": self.min_citations,
             "tags": list(self.tags),
+            "supports_library": self.supports_library,
         }
 
 
@@ -227,6 +231,7 @@ PEER_REVIEW = TaskTemplate(
     accepts_attachments=True,
     tier_default="standard",
     tags=("评审", "论文"),
+    supports_library=False,
 )
 
 PAPER_READ = TaskTemplate(
@@ -261,6 +266,7 @@ PAPER_READ = TaskTemplate(
     accepts_attachments=True,
     tier_default="standard",
     tags=("精读", "论文"),
+    supports_library=False,
 )
 
 DATA_ANALYSIS = TaskTemplate(
@@ -294,6 +300,7 @@ DATA_ANALYSIS = TaskTemplate(
     accepts_attachments=True,
     tier_default="light",
     tags=("数据", "统计"),
+    supports_library=False,
 )
 
 SLIDES = TaskTemplate(

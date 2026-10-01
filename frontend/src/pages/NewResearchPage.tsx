@@ -55,6 +55,10 @@ function ResearchComposer() {
   )
   const activeTemplate = templates.data?.find((item) => item.key === templateKey)
   const isDataTask = activeTemplate?.input_kind === 'dataset'
+  const supportsLibrary = activeTemplate
+    ? activeTemplate.supports_library !== false
+    : !['peerReview', 'paperRead', 'dataAnalysis'].includes(templateKey)
+  const effectiveProjectId = supportsLibrary ? projectId : ''
   // 课题调研允许在「高级」里改用自定义流程；其它任务由「任务 + 检索策略」决定流程。
   const templateOwnsWorkflow = Boolean(activeTemplate && activeTemplate.key !== 'autoResearch')
   const strategies = activeTemplate?.strategies ?? []
@@ -149,7 +153,7 @@ function ResearchComposer() {
             : null,
         demo_data: isDataTask && !datasetSheet && demoData,
         tier,
-        project_id: projectId || null,
+        project_id: effectiveProjectId || null,
         history: thread,
         clarified,
         attachments: attachments.payloads,
@@ -159,7 +163,7 @@ function ResearchComposer() {
         query,
         params,
         workflow,
-        projectId,
+        projectId: effectiveProjectId,
         thread,
         templateKey,
         tier,
@@ -542,7 +546,7 @@ function ResearchComposer() {
               disabled={busy}
             />
           )}
-          {projects.data && projects.data.length > 0 && (
+          {supportsLibrary && projects.data && projects.data.length > 0 && (
             <label className="field-label" htmlFor="research-project">
               资料库项目
               <span className="select-with-icon">

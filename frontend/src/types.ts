@@ -770,6 +770,8 @@ export interface TaskTemplate {
   tier_default: 'light' | 'standard' | 'deep'
   min_citations: number
   tags: string[]
+  /** Whether a selected private-library project is consumed by this template. */
+  supports_library?: boolean
 }
 
 export interface PaperReference {
@@ -950,6 +952,7 @@ export interface RunReader {
   status: RunStatus
   documents: ReaderDocument[]
   has_report: boolean
+  can_ask?: boolean
 }
 
 export interface NarrativeSection {

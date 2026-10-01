@@ -948,7 +948,7 @@ export function deleteConversation(id: string): Promise<void> {
   return requestVoid(`/api/qa/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
-/** 精读会话可逐轮选择额外参考来源；普通问答忽略 scope。 */
+/** 每轮显式选择额外参考来源；精读会话始终保留本论文。 */
 export function askQuestion(
   id: string,
   query: string,
@@ -980,6 +980,8 @@ async function askQuestionStream(
   }
   if (signal?.aborted) cancel()
   signal?.addEventListener('abort', cancel, { once: true })
+  // Include connection setup and response headers in the idle deadline.
+  refreshIdleTimer()
   try {
     const response = await fetch(
       `/api/qa/conversations/${encodeURIComponent(id)}/messages/stream`,

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -48,6 +50,7 @@ def _headers(key: str) -> dict[str, str]:
 async def reader_client(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
     from deep_research.workbench.qa_store import InMemoryQaStore
 
+    monkeypatch.setattr(api, "_run_limiter", api._RateLimiter(max_calls=10, window_seconds=60))
     repo = InMemoryRepository()
     settings = Settings(
         api_key=ADMIN,
@@ -123,6 +126,19 @@ async def test_uploaded_pdf_is_stored_and_served_only_to_the_run_owner(reader_cl
     run_id = await _paper_run(repo, settings, attachments=[attachment])
     reader = await client.get(f"/api/runs/{run_id}/reader", headers=_headers(ALICE))
     assert reader.status_code == 200
+    assert reader.json()["can_ask"] is False
+    conversation = await client.post(
+        "/api/qa/conversations",
+        headers=_headers(ALICE),
+        json={"title": "尚未完成的精读", "run_id": run_id},
+    )
+    blocked = await client.post(
+        f"/api/qa/conversations/{conversation.json()['id']}/messages",
+        headers=_headers(ALICE),
+        json={"query": "现在可以提问吗？"},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "paper_not_ready"
     document = reader.json()["documents"][0]
     assert document == {**document, "id": f"att-{attachment.id}", "pdf": True}
 
@@ -142,6 +158,91 @@ async def test_uploaded_pdf_is_stored_and_served_only_to_the_run_owner(reader_cl
     assert other.status_code == 404
     assert stranger.status_code == 404
     assert bogus.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["pending", "running", "failed", "cancelled", "done"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_reader_blocks_unready_or_missing_paper_before_building_agent(
+    reader_client, monkeypatch, status, stream
+) -> None:
+    client, repo, settings = reader_client
+    run_id = await _paper_run(repo, settings)
+    await repo.set_status(run_id, status)
+    build_agent = AsyncMock()
+    monkeypatch.setattr(api, "_build_agent", build_agent)
+    reader = await client.get(f"/api/runs/{run_id}/reader", headers=_headers(ALICE))
+    assert reader.json()["can_ask"] is False
+    conversation = await client.post(
+        "/api/qa/conversations", headers=_headers(ALICE), json={"run_id": run_id}
+    )
+    cid = conversation.json()["id"]
+    response = await client.post(
+        f"/api/qa/conversations/{cid}/messages" + ("/stream" if stream else ""),
+        headers=_headers(ALICE),
+        json={"query": "原文的实验条件是什么？", "sources": ["web"]},
+    )
+    if stream:
+        assert response.status_code == 200
+        assert "event: error" in response.text and "event: complete" not in response.text
+        payload = json.loads(
+            next(line[6:] for line in response.text.splitlines() if line.startswith("data: "))
+        )
+        assert payload["status"] == 409
+    else:
+        assert response.status_code == 409
+        payload = response.json()
+    expected = "paper_sources_unavailable" if status == "done" else "paper_not_ready"
+    assert payload["detail"]["code"] == expected
+    build_agent.assert_not_awaited()
+    stored = await client.get(f"/api/qa/conversations/{cid}", headers=_headers(ALICE))
+    assert stored.json()["messages"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_reader_enables_paper_only_questions_after_run_completion(
+    reader_client, monkeypatch, stream
+) -> None:
+    from deep_research.orchestrator import DeepResearchAgent
+
+    client, repo, settings = reader_client
+    attachment = Attachment(
+        id="a" * 24,
+        filename="paper.txt",
+        kind="text",
+        size=80,
+        char_count=30,
+        chunks=[AttachmentChunk(ordinal=0, content="方法在 CAVE 上的重建 PSNR 达到 38.4 dB")],
+    )
+    run_id = await _paper_run(repo, settings, attachments=[attachment])
+    await repo.set_status(run_id, "done")
+    search = FakeSearch()
+    search_call = AsyncMock(return_value=[])
+    monkeypatch.setattr(search, "search", search_call)
+
+    async def fake_build_agent(app, settings, **kwargs):  # type: ignore[no-untyped-def]
+        return DeepResearchAgent(settings, llm=_PaperLLM(), search_tool=search), None
+
+    monkeypatch.setattr(api, "_build_agent", fake_build_agent)
+    reader = await client.get(f"/api/runs/{run_id}/reader", headers=_headers(ALICE))
+    assert reader.json()["can_ask"] is True
+    conversation = await client.post(
+        "/api/qa/conversations", headers=_headers(ALICE), json={"run_id": run_id}
+    )
+    cid = conversation.json()["id"]
+    response = await client.post(
+        f"/api/qa/conversations/{cid}/messages" + ("/stream" if stream else ""),
+        headers=_headers(ALICE),
+        json={"query": "PSNR 是多少？", "sources": []},
+    )
+    assert response.status_code == (200 if stream else 201), response.text
+    if stream:
+        assert "event: complete" in response.text
+    stored = await client.get(f"/api/qa/conversations/{cid}", headers=_headers(ALICE))
+    assert len(stored.json()["messages"]) == 1
+    assert stored.json()["messages"][0]["evidence"][0]["origin"] == "paper"
+    search_call.assert_not_awaited()
 
 
 @pytest.mark.asyncio

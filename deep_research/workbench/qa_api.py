@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Any, Literal
 
@@ -187,13 +188,11 @@ async def ask_stream(conversation_id: str, body: AskRequest, request: Request) -
 
     task.add_done_callback(discard_task)
 
-    async def events():
+    async def events() -> AsyncIterator[str]:
         yield ": connected\n\n"
         while not task.done():
             try:
-                await asyncio.wait_for(
-                    asyncio.shield(task), timeout=_SSE_HEARTBEAT_SECONDS
-                )
+                await asyncio.wait_for(asyncio.shield(task), timeout=_SSE_HEARTBEAT_SECONDS)
             except TimeoutError:
                 yield ": keep-alive\n\n"
             except Exception:
@@ -237,8 +236,26 @@ async def _paper_scope(
         detail = await request.app.state.repo.get_run(conversation.run_id)
         if detail is None:
             raise HTTPException(404, "run not found")
+        if detail.status != "done":
+            raise HTTPException(
+                409,
+                {
+                    "code": "paper_not_ready",
+                    "message": "论文仍在导入或任务未成功完成，完成后才能提问",
+                    "status": detail.status,
+                },
+            )
+        frozen_paper_sources = paper_sources(detail)
+        if not frozen_paper_sources:
+            raise HTTPException(
+                409,
+                {
+                    "code": "paper_sources_unavailable",
+                    "message": "这次任务没有可用的论文原文材料，暂时不能提问",
+                },
+            )
         scope = {
-            "paper_sources": paper_sources(detail),
+            "paper_sources": frozen_paper_sources,
             "include_web": "web" in body.sources,
         }
     if "library" in body.sources:

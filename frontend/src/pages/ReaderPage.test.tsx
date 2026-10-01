@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ReaderPage from './ReaderPage'
 import { documentForEvidence } from '../lib/readerDocuments'
+import { RequestTimeoutError } from '../api/transport'
 import type { QaConversation, ReaderDocument, RunReader } from '../types'
 
 const mocks = vi.hoisted(() => ({
@@ -104,6 +105,62 @@ beforeEach(() => {
 })
 
 describe('ReaderPage', () => {
+  it('does not allow questions until the paper intake run is done', async () => {
+    mocks.getReader.mockResolvedValue({ ...reader, status: 'running' })
+    renderPage()
+    expect(await screen.findByTestId('pdf')).toBeInTheDocument()
+    expect(screen.getByLabelText('向这篇论文提问')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '提问' })).toBeDisabled()
+    expect(screen.getByText(/论文正在导入/)).toBeInTheDocument()
+  })
+
+  it('recovers a late answer after the SSE request times out', async () => {
+    mocks.askQuestion.mockRejectedValueOnce(new RequestTimeoutError())
+    renderPage()
+    await screen.findByTestId('pdf')
+    fireEvent.change(screen.getByLabelText('向这篇论文提问'), {
+      target: { value: '用了什么数据集？' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('list', { name: '本论文引用' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText(/正在翻阅原文并核验/)).not.toBeInTheDocument())
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(mocks.createConversation).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables questions when a completed run has no usable paper sources', async () => {
+    mocks.getReader.mockResolvedValue({ ...reader, can_ask: false })
+    renderPage()
+    await screen.findByTestId('pdf')
+    expect(screen.getByLabelText('向这篇论文提问')).toBeDisabled()
+    expect(screen.getByText('没有可用的论文原文材料，暂时不可提问')).toBeInTheDocument()
+    expect(mocks.askQuestion).not.toHaveBeenCalled()
+  })
+
+  it('does not recover an old repeated answer from a stale conversation cache', async () => {
+    mocks.listConversations.mockResolvedValue([answered])
+    renderPage()
+    await screen.findByRole('list', { name: '本论文引用' })
+    const oldRepeat = { ...answered.messages[0], id: 'm2', position: 1, answer: '之前的回答' }
+    const durable = { ...answered, message_count: 2, messages: [...answered.messages, oldRepeat] }
+    const latest = { ...oldRepeat, id: 'm3', position: 2, answer: '本轮迟到的回答' }
+    mocks.getConversation
+      .mockResolvedValueOnce(durable)
+      .mockResolvedValueOnce(durable)
+      .mockResolvedValue({ ...durable, message_count: 3, messages: [...durable.messages, latest] })
+    mocks.askQuestion.mockRejectedValueOnce(new RequestTimeoutError())
+    fireEvent.change(screen.getByLabelText('向这篇论文提问'), {
+      target: { value: oldRepeat.query },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    expect(await screen.findByText('本轮迟到的回答', {}, { timeout: 3500 })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText(/正在翻阅原文并核验/)).not.toBeInTheDocument())
+    expect(mocks.askQuestion).toHaveBeenCalledTimes(1)
+    expect(mocks.createConversation).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('shows the original PDF and asks with only the paper by default', async () => {
     renderPage()
     expect(await screen.findByTestId('pdf')).toHaveAttribute('data-doc', `att-${ATT}`)

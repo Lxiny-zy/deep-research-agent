@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import QaPage from './QaPage'
+import { RequestTimeoutError } from '../api/transport'
 import type { QaConversation } from '../types'
 
 const mocks = vi.hoisted(() => ({
@@ -108,6 +109,30 @@ describe('QaPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('服务不可用')
     expect(screen.getByLabelText('输入问题')).toHaveValue('追问')
+  })
+
+  it('recovers the new answer when the same question was answered after the cache loaded', async () => {
+    renderAt('/qa/c1')
+    await screen.findByText('CASSI 是什么？')
+    const previous = { ...conversation.messages[0], id: 'm2', position: 1, answer: '上一轮回答' }
+    const durable = {
+      ...conversation,
+      message_count: 2,
+      messages: [...conversation.messages, previous],
+    }
+    const latest = { ...previous, id: 'm3', position: 2, answer: '这次回答已恢复' }
+    mocks.getConversation
+      .mockResolvedValueOnce(durable)
+      .mockResolvedValueOnce(durable)
+      .mockResolvedValue({ ...durable, message_count: 3, messages: [...durable.messages, latest] })
+    mocks.askQuestion.mockRejectedValueOnce(new RequestTimeoutError())
+    fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: previous.query } })
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    expect(await screen.findByText('这次回答已恢复', {}, { timeout: 3500 })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('正在生成回答…')).not.toBeInTheDocument())
+    expect(mocks.askQuestion).toHaveBeenCalledTimes(1)
+    expect(mocks.createConversation).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('keeps the first question visible while waiting and retries in the same conversation', async () => {

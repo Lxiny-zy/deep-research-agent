@@ -232,6 +232,7 @@ async def test_ingestion_extracts_html_and_validates_doi() -> None:
 
 @pytest.fixture
 async def library_client(monkeypatch):  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(api, "_run_limiter", api._RateLimiter(max_calls=10, window_seconds=60))
     run_repo = InMemoryRepository()
     library = InMemoryLibraryRepository()
     settings = Settings(
@@ -313,6 +314,74 @@ async def test_project_api_enforces_ownership_and_binds_run(library_client) -> N
     assert detail is not None and detail.project_id == project_id
     assert detail.orchestration is not None
     assert detail.orchestration.checkpoint["scratch"]["project_id"] == project_id
+
+    for template, query, extra in (
+        ("paperRead", "https://arxiv.org/abs/2205.10102", {}),
+        ("dataAnalysis", "compare the uploaded measurements", {"demo_data": True}),
+    ):
+        unsupported = await client.post(
+            "/api/runs",
+            headers=_headers(ALICE),
+            json={
+                "query": query,
+                "template": template,
+                "project_id": project_id,
+                "clarified": True,
+                **extra,
+            },
+        )
+        assert unsupported.status_code == 422
+        assert unsupported.json()["detail"]["code"] == "library_unsupported"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("steps", "nodes", "consumes_library"),
+    [
+        ([{"agent": "synthesizer"}], [], False),
+        ([{"agent": "researcher"}, {"agent": "synthesizer"}], [], True),
+        ([{"kind": "reflect_loop"}, {"agent": "synthesizer"}], [], True),
+        ([{"kind": "team_fanout"}], [], True),
+        ([{"kind": "compose", "agent": "coordinator"}], [], True),
+        ([], [{"id": "search", "step": {"agent": "researcher"}}], True),
+        (
+            [{"agent": "researcher"}],
+            [{"id": "write", "step": {"agent": "synthesizer"}}],
+            False,
+        ),
+    ],
+)
+async def test_library_binding_checks_executable_workflow_steps(
+    library_client, monkeypatch, steps, nodes, consumes_library
+) -> None:
+    from deep_research.workflow import Workflow
+
+    client, run_repo = library_client
+    project = await client.post(
+        "/api/projects", headers=_headers(ALICE), json={"name": "Library input"}
+    )
+    # Serialize through the real model: ordinary steps also carry the default
+    # researcher field, but only reflect_loop executes that field.
+    workflow = Workflow(name="deep", steps=steps, nodes=nodes)
+    monkeypatch.setattr("deep_research.orchestrator.get_workflow", lambda _: workflow)
+    response = await client.post(
+        "/api/runs",
+        headers=_headers(ALICE),
+        json={
+            "query": "Analyze the controlled experiment",
+            "workflow": "deep",
+            "project_id": project.json()["id"],
+            "clarified": True,
+        },
+    )
+    if consumes_library:
+        assert response.status_code == 202, response.text
+        detail = await run_repo.get_run(response.json()["run_id"])
+        assert detail is not None and detail.project_id == project.json()["id"]
+    else:
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "library_unsupported"
+        assert not await run_repo.list_runs()
 
 
 @pytest.mark.asyncio

@@ -36,7 +36,8 @@ _SYSTEM = (
 _KNOWLEDGE_SYSTEM = (
     "你是严谨的学术问答助手。当前没有启用外部检索，只能使用模型自身已有知识和用户提供的对话上下文。"
     "直接回答问题，区分确定事实与不确定判断；不要编造论文、作者、年份、数字或 URL。"
-    "当前回答没有外部出处，不要添加 [n] 引用标记；如果问题依赖最新资料或精确出处，明确建议用户开启联网检索。"
+    "当前回答没有外部出处，不要添加 [n] 引用标记；"
+    "如果问题依赖最新资料或精确出处，明确建议用户开启联网检索。"
 )
 _PAPER_SYSTEM = (
     "这是针对一篇论文的精读对话。标注【本论文】的素材来自这篇论文，是回答的主体；"
@@ -50,9 +51,7 @@ _PAPER_FALLBACK = (
 _SEARCH_FALLBACK = (
     "现有检索结果不足以回答这个问题。可以尝试补充更具体的方法名、数据集或年份后再问。"
 )
-_CASUAL_REPLY = (
-    "你好！我可以帮你查找和核对学术资料。请直接告诉我想了解的主题、方法、数据集或论文。"
-)
+_CASUAL_REPLY = "你好！我可以帮你查找和核对学术资料。请直接告诉我想了解的主题、方法、数据集或论文。"
 _CASUAL_RE = re.compile(
     r"^(?:你好|您好|嗨|哈喽|hello|hi|hey|谢谢|感谢|再见|拜拜|早上好|晚上好|晚安|你好吗|在吗)"
     r"[!！。？?、,，…~\s]*$",
@@ -197,12 +196,12 @@ async def answer_question(
                     for turn in history[-MAX_HISTORY_TURNS:]
                 )
             user = f"{context}\n\n【用户问题】\n{question}"
-            chunks: list[str] = []
+            knowledge_chunks: list[str] = []
             async for delta in ctx.llm_for("synthesizer").stream(
                 ctx.system_prompt(_KNOWLEDGE_SYSTEM), user, temperature=0.3
             ):
-                chunks.append(delta)
-            body = "".join(chunks).strip()
+                knowledge_chunks.append(delta)
+            body = "".join(knowledge_chunks).strip()
             thoughts.append(
                 {
                     "tool": "model_knowledge",

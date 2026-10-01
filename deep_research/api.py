@@ -397,6 +397,18 @@ def _run_request_hash(request: CreateRunRequest) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _workflow_consumes_library(definition: dict[str, Any]) -> bool:
+    """Check executable roles, including graph nodes and dynamic research steps."""
+    from .orchestrator import workflow_catalog_roles
+    from .workflow import Workflow
+
+    workflow = Workflow.model_validate(definition)
+    if workflow.nodes:
+        # Graph execution supersedes the legacy flat steps kept for compatibility.
+        workflow = workflow.model_copy(update={"steps": []})
+    return "researcher" in workflow_catalog_roles(workflow)
+
+
 def _checked_dataset(contract: Any, submitted: str) -> Any:
     """数据分析任务建 run 前校验数据：缺数据、超长或无法解析都直接 422，不截断、不代换。
 
@@ -1622,6 +1634,15 @@ async def create_run(
         raise HTTPException(
             422, {"code": "unknown_template", "message": f"未知任务模板：{req.template}"}
         )
+    if project is not None and task_template is not None and not task_template.supports_library:
+        raise HTTPException(
+            422,
+            {
+                "code": "library_unsupported",
+                "message": f"「{task_template.title}」使用论文或数据输入，请取消资料库项目选择",
+                "template": task_template.key,
+            },
+        )
     if task_template is not None and not task_template.supports(req.strategy):
         raise HTTPException(
             422,
@@ -1829,6 +1850,15 @@ async def create_run(
             execution.definition = get_workflow(workflow_name).model_dump(mode="json")
         execution.workflow_name = str(execution.definition["name"])
     try:
+        if project is not None and not _workflow_consumes_library(execution.definition):
+            raise HTTPException(
+                422,
+                {
+                    "code": "library_unsupported",
+                    "message": "当前工作流没有资料检索步骤，请取消资料库项目选择或更换工作流",
+                    "workflow": execution.workflow_name,
+                },
+            )
         await snapshot_catalog_for_execution(execution, catalog, settings)
     except ValueError as exc:
         raise HTTPException(

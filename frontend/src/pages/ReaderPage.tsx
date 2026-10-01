@@ -8,6 +8,7 @@ import {
   getReader,
   listConversations,
 } from '../api/client'
+import { RequestTimeoutError } from '../api/transport'
 import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
 import ReportView from '../components/ReportView'
@@ -16,6 +17,7 @@ import { useProjects } from '../hooks/useLibrary'
 import { useRunDetail } from '../hooks/useRuns'
 import { flattenFindings } from '../lib/evidence'
 import { documentForEvidence } from '../lib/readerDocuments'
+import { recoverTimedOutAnswer } from '../lib/qaRecovery'
 import type { QaEvidence, QaSourceOption } from '../types'
 
 // PDF.js 体积较大，只在打开原文时加载
@@ -69,21 +71,33 @@ export default function ReaderPage() {
     documents[0]
   const projectList = projects.data ?? []
   const libraryReady = !withLibrary || Boolean(projectId)
+  const canAsk = reader.data?.status === 'done' && reader.data.can_ask !== false
 
   const ask = useMutation({
     mutationFn: async (text: string) => {
       let target = conversationId
+      let baselineCount = 0
       if (!target) {
         target = (await createConversation(text.slice(0, 60), id)).id
         setChosen(target)
+      } else {
+        // Cache data may still be loading or predate another tab's answer.
+        // Freeze the durable history before sending a repeated question.
+        baselineCount = (await getConversation(target)).messages.length
       }
       const sources: QaSourceOption[] = []
       if (withLibrary) sources.push('library')
       if (withWeb) sources.push('web')
-      await askQuestion(target, text, undefined, {
-        sources,
-        projectId: withLibrary ? projectId : undefined,
-      })
+      try {
+        await askQuestion(target, text, undefined, {
+          sources,
+          projectId: withLibrary ? projectId : undefined,
+        })
+      } catch (error) {
+        if (!(error instanceof RequestTimeoutError)) throw error
+        const recovered = await recoverTimedOutAnswer(target, text, baselineCount)
+        if (!recovered) throw error
+      }
       return target
     },
     onMutate: (text) => setPending(text),
@@ -102,7 +116,7 @@ export default function ReaderPage() {
 
   function submit() {
     const value = draft.trim()
-    if (!value || ask.isPending || !libraryReady) return
+    if (!value || ask.isPending || !libraryReady || !canAsk) return
     setDraft('')
     ask.mutate(value)
   }
@@ -188,6 +202,7 @@ export default function ReaderPage() {
               <input
                 type="checkbox"
                 checked={withLibrary}
+                disabled={!canAsk || ask.isPending}
                 onChange={(event) => setWithLibrary(event.target.checked)}
               />
               资料库
@@ -197,6 +212,7 @@ export default function ReaderPage() {
                 className="reader-scope-project"
                 aria-label="选择资料库项目"
                 value={projectId}
+                disabled={!canAsk || ask.isPending}
                 onChange={(event) => setProjectId(event.target.value)}
               >
                 <option value="">{projectList.length ? '选择项目' : '还没有资料库项目'}</option>
@@ -211,6 +227,7 @@ export default function ReaderPage() {
               <input
                 type="checkbox"
                 checked={withWeb}
+                disabled={!canAsk || ask.isPending}
                 onChange={(event) => setWithWeb(event.target.checked)}
               />
               联网检索
@@ -225,6 +242,7 @@ export default function ReaderPage() {
             rows={2}
             maxLength={2000}
             value={draft}
+            disabled={!canAsk || ask.isPending}
             placeholder="向这篇论文提问…"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -235,14 +253,22 @@ export default function ReaderPage() {
             }}
           />
           <div className="qa-composer-foot">
-            {!libraryReady ? (
+            {!canAsk ? (
+              <span className="hint">
+                {running
+                  ? '论文正在导入，完成后可提问'
+                  : reader.data?.status === 'done'
+                    ? '没有可用的论文原文材料，暂时不可提问'
+                    : '论文导入未完成，暂时不可提问'}
+              </span>
+            ) : !libraryReady ? (
               <span className="hint">勾选了资料库，请先选一个项目</span>
             ) : (
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
                 onClick={() => setChosen(null)}
-                disabled={!conversationId || ask.isPending}
+                disabled={!conversationId || ask.isPending || !canAsk}
               >
                 <AppIcon name="plus" size={14} aria-hidden="true" />
                 新对话
@@ -251,7 +277,7 @@ export default function ReaderPage() {
             <button
               type="submit"
               className="btn btn-primary btn-sm"
-              disabled={ask.isPending || !draft.trim() || !libraryReady}
+              disabled={ask.isPending || !draft.trim() || !libraryReady || !canAsk}
             >
               <AppIcon name="arrow-right" size={15} aria-hidden="true" />
               提问
