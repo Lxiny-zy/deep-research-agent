@@ -84,8 +84,8 @@ async def _run() -> None:
                 transport=httpx.ASGITransport(app=app), base_url="http://wheel.test"
             ) as client:
                 for resource, mime in (
-                    ("/deep-research-icon.svg", "image/svg+xml"),
-                    ("/research-field.png", "image/png"),
+                    ("/science-research-icon.svg", "image/svg+xml"),
+                    ("/favicon.svg", "image/svg+xml"),
                 ):
                     response = await client.get(resource)
                     assert response.status_code == 200

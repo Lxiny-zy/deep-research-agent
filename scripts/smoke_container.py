@@ -29,8 +29,8 @@ def main() -> None:
     for resource, mime in (
         ("/readyz", "application/json"),
         ("/", "text/html"),
-        ("/deep-research-icon.svg", "image/svg+xml"),
-        ("/research-field.png", "image/png"),
+        ("/science-research-icon.svg", "image/svg+xml"),
+        ("/favicon.svg", "image/svg+xml"),
     ):
         with urllib.request.urlopen("http://127.0.0.1:8000" + resource, timeout=5) as response:
             assert response.status == 200

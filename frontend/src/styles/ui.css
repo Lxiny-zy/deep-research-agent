@@ -777,6 +777,11 @@ div.badge.error {
   z-index: 60;
 }
 
+/* The guest welcome screen remains mounted behind the login dialog. */
+.auth-backdrop {
+  z-index: 100;
+}
+
 .modal,
 .editor-modal,
 .auth-modal {

@@ -51,4 +51,5 @@ design-review/
 apevon-full-package/
 apevon-full-package.zip
 .reasonix/
+.playwright-cli/
 deepseek_markdown_*.md

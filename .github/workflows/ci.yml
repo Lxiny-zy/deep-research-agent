@@ -198,6 +198,8 @@ jobs:
         run: |
           npm ci
           npm run build
+      - name: 欢迎页与未登录入口浏览器回归
+        run: python scripts/verify_welcome_login.py
       - run: python scripts/verify_search_resources_ui.py
       - run: python scripts/verify_workspace_ui.py --label ci
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

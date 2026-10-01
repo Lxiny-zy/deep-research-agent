@@ -60,7 +60,7 @@ export default function LoginGate({ onClose, onAuthenticated }: Props) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop auth-backdrop" onClick={onClose}>
       <div
         ref={dialogRef}
         className="modal auth-modal"
