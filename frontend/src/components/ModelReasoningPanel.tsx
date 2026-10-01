@@ -1,4 +1,47 @@
+import { useLayoutEffect, useRef } from 'react'
 import type { ResearchEvent } from '../types'
+
+function ReasoningCall({
+  model,
+  text,
+  index,
+  active,
+}: {
+  model: string
+  text: string
+  index: number
+  active: boolean
+}) {
+  const scroller = useRef<HTMLDivElement>(null)
+  const following = useRef(true)
+
+  const followLatest = () => {
+    const element = scroller.current
+    if (active && following.current && element && element.clientHeight > 0) {
+      element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
+    }
+  }
+
+  useLayoutEffect(followLatest, [text, active])
+
+  return (
+    <details open={active} onToggle={followLatest}>
+      <summary>
+        第 {index + 1} 次调用 · {model}
+      </summary>
+      <div
+        ref={scroller}
+        className="model-reasoning-text"
+        onScroll={(event) => {
+          const element = event.currentTarget
+          following.current = element.scrollHeight - element.clientHeight - element.scrollTop <= 24
+        }}
+      >
+        {text}
+      </div>
+    </details>
+  )
+}
 
 /** Display only reasoning explicitly supplied by the model API. */
 export default function ModelReasoningPanel({
@@ -18,15 +61,16 @@ export default function ModelReasoningPanel({
   }
   if (!calls.size) return null
   return (
-    <details className="model-usage-panel" open={live}>
+    <details className="model-reasoning-panel" open={live}>
       <summary>模型返回的思考内容</summary>
       {[...calls].map(([id, call], index) => (
-        <details key={id} open={live && index === calls.size - 1}>
-          <summary>
-            第 {index + 1} 次调用 · {call.model}
-          </summary>
-          <div className="model-reasoning-text">{call.text}</div>
-        </details>
+        <ReasoningCall
+          key={id}
+          index={index}
+          model={call.model}
+          text={call.text}
+          active={live && index === calls.size - 1}
+        />
       ))}
     </details>
   )

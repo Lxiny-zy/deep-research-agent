@@ -1055,27 +1055,20 @@
 }
 
 /* ---- 证据抽屉 ---- */
-.model-usage-panel {
-  background: var(--surface);
+.model-reasoning-panel {
+  background: var(--primary-soft);
   border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
   border-radius: var(--radius-md);
+  color: var(--primary-text);
   margin-bottom: var(--space-3);
   padding: var(--space-3);
 }
 
-.model-usage-panel dl {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-5);
-  margin: var(--space-3) 0;
-}
-
-.model-usage-panel dd {
-  margin: 0;
-  font-variant-numeric: tabular-nums;
-}
-
 .model-reasoning-text {
+  color: var(--primary-text);
+  font-size: 0.9em;
+  line-height: 1.7;
   max-height: 360px;
   overflow: auto;
   overflow-wrap: anywhere;
@@ -1084,7 +1077,7 @@
 }
 
 @media print {
-  .model-usage-panel {
+  .model-reasoning-panel {
     display: none !important;
   }
 }

@@ -205,7 +205,7 @@ export default function PdfViewer({
         controller.signal.throwIfAborted()
         setPhase('parse')
         parseTimer = setTimeout(() => {
-          setError('PDF 解析超时，文件已下载，请重试加载')
+          setError('PDF 解析超时，原文已读取，请重新加载')
           controller.abort()
           void task?.destroy().catch(() => {})
         }, PDF_PARSE_TIMEOUT_MS)
@@ -376,7 +376,7 @@ export default function PdfViewer({
         ) : !doc ? (
           <p className="pdf-loading" role="status">
             <AppIcon name="loader" size={15} className="spin" aria-hidden="true" />
-            {phase === 'parse' ? '正在解析原版 PDF…' : '正在下载原版 PDF…'}
+            {phase === 'parse' ? '正在解析原版 PDF…' : '正在读取原文…'}
             {phase === 'download' && download.loaded > 0 && (
               <span>
                 {(download.loaded / 1048576).toFixed(1)} MB
