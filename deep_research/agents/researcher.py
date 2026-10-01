@@ -76,6 +76,7 @@ class Researcher:
         self.system = SYSTEM  # 可被角色卡片覆盖
         # Paper conversations supply a deterministic context AFTER source policy.
         self.source_context: Callable[[list[Source]], str] | None = None
+        self.raise_extraction_errors = False
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         """工作流入口：对 bb.plan 中尚未研究的子问题做 DAG 分层并行检索，追加到 bb.results。
@@ -219,6 +220,8 @@ class Researcher:
             )
         except Exception as e:
             self.tracer.emit("RESEARCHER", "error", f"抽取失败「{sub_question}」：{e}")
+            if self.raise_extraction_errors:
+                raise
             return ResearchResult(sub_question=sub_question, findings=[])
 
         source_by_url = {source.url: source for source in sources}
@@ -235,7 +238,12 @@ class Researcher:
                     findings.append(check.finding)
                     continue
             rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
-        findings = await self.semantic_verifier.verify_batch(findings, self.verification_llm)
+        if self.raise_extraction_errors:
+            findings = await self.semantic_verifier.verify_batch(
+                findings, self.verification_llm, raise_errors=True
+            )
+        else:
+            findings = await self.semantic_verifier.verify_batch(findings, self.verification_llm)
         semantic_counts = _semantic_counts(findings)
         self.tracer.emit(
             "RESEARCHER",

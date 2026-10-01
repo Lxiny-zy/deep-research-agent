@@ -17,6 +17,7 @@ from .dto import (
     AgentCardCreate,
     AgentCardUpdate,
     AgentCardView,
+    ModelCapacity,
     ModelProfileFull,
     ModelProfileView,
     SearchKeyView,
@@ -68,6 +69,8 @@ def _profile_view(r: orm.ModelProfileRow, cipher: SecretCipher) -> ModelProfileV
         temperature=r.temperature,
         parameter_mode=r.parameter_mode,
         reasoning_effort=r.reasoning_effort,
+        context_window_tokens=r.context_window_tokens,
+        max_output_tokens=r.max_output_tokens,
         is_default=bool(r.is_default),
         api_key_set=bool(secret),
         api_key_hint=mask(secret),
@@ -84,6 +87,8 @@ def _profile_full(r: orm.ModelProfileRow, cipher: SecretCipher) -> ModelProfileF
         temperature=r.temperature,
         parameter_mode=r.parameter_mode,
         reasoning_effort=r.reasoning_effort,
+        context_window_tokens=r.context_window_tokens,
+        max_output_tokens=r.max_output_tokens,
         is_default=bool(r.is_default),
     )
 
@@ -260,6 +265,8 @@ class CatalogRepository:
         temperature: float,
         parameter_mode: str = "temperature",
         reasoning_effort: str = "medium",
+        context_window_tokens: int | None = None,
+        max_output_tokens: int | None = None,
         is_default: bool,
     ) -> ModelProfileView:
         async with self._sm() as s, s.begin():
@@ -274,6 +281,8 @@ class CatalogRepository:
                 temperature=temperature,
                 parameter_mode=parameter_mode,
                 reasoning_effort=reasoning_effort,
+                context_window_tokens=context_window_tokens,
+                max_output_tokens=max_output_tokens,
                 is_default=1 if is_default else 0,
             )
             s.add(row)
@@ -285,6 +294,12 @@ class CatalogRepository:
             row = await s.get(orm.ModelProfileRow, profile_id)
             if row is None:
                 return None
+            ModelCapacity(
+                context_window_tokens=fields.get(
+                    "context_window_tokens", row.context_window_tokens
+                ),
+                max_output_tokens=fields.get("max_output_tokens", row.max_output_tokens),
+            )
             if fields.get("is_default"):
                 await transaction_lock(s, "model-default")
                 await s.execute(update(orm.ModelProfileRow).values(is_default=0))

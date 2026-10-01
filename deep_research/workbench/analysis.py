@@ -74,8 +74,18 @@ class AnalysisResult:
         lines = [
             f"- 数据来源：{self.source_label()}",
             f"- 样本量：{self.rows} 行，{len(self.columns)} 列",
+            f"- 全部列名：{', '.join(self.columns)}",
             f"- 数值变量：{', '.join(self.numeric) or '无'}",
             f"- 分类变量：{', '.join(self.categorical) or '无'}",
+            "- 未纳入上述统计分组的列："
+            + (
+                ", ".join(
+                    column
+                    for column in self.columns
+                    if column not in self.numeric + self.categorical
+                )
+                or "无"
+            ),
         ]
         if self.synthetic:
             lines.append("- 注意：用户未提供数据，以下为演示用合成数据")
@@ -464,6 +474,8 @@ class DataAnalyst:
             + _skeleton(template)
             + "\n\n你只负责解释下面【统计台账】里的数字，不得计算、改写或编造任何数字；"
             "引用数字时原样照抄台账写法。用中文写作。"
+            "相关分析不能替代配对差异、显著性或一致性检验。"
+            "未执行的检验只能标注本轮未执行，不要将其说成用户没有提供原始数据。"
         )
         user = f"分析问题：{question or '对数据做探索性分析'}\n\n## 统计台账\n{facts}\n"
         from .gates import structure_gate

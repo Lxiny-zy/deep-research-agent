@@ -35,6 +35,11 @@ export default function ModelProfileCard({ profile: p, onEdit, onDelete }: Props
         · {p.api_key_set ? `key ${p.api_key_hint}` : '未设 key'}
       </p>
 
+      <p className="muted small">
+        上下文 {p.context_window_tokens?.toLocaleString() ?? '未指定'} · 输出{' '}
+        {p.max_output_tokens?.toLocaleString() ?? '渠道默认'}
+      </p>
+
       {(test.isPending || r || test.isError) && (
         <p
           className={

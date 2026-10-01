@@ -77,6 +77,7 @@ code{font-family:monospace;font-size:9.5pt}
 blockquote{margin:6pt 0 6pt 12pt;color:#5b6675}
 .meta{color:#5b6675;font-size:9pt}
 .caption{color:#5b6675;font-size:9pt;text-align:center}
+.figure{page-break-inside:avoid;margin:10pt 0}
 .math{font-style:italic}
 """
 
@@ -174,7 +175,8 @@ def blocks_html(
                 parts.append(f'<p class="caption">［图缺失：{caption}］</p>')
             elif pdf:
                 parts.append(
-                    f'<p><img src="{src}" width="440"></p><p class="caption">{caption}</p>'
+                    f'<div class="figure"><p><img src="{src}" width="440"></p>'
+                    f'<p class="caption">{caption}</p></div>'
                 )
             else:
                 parts.append(

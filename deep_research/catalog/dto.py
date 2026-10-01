@@ -59,7 +59,22 @@ class SearchProfileView(BaseModel):
     key_order_frozen: bool = False
 
 
-class ModelProfileView(BaseModel):
+class ModelCapacity(BaseModel):
+    context_window_tokens: int | None = Field(None, ge=1, le=2_147_483_647)
+    max_output_tokens: int | None = Field(None, ge=1, le=2_147_483_647)
+
+    @model_validator(mode="after")
+    def validate_capacity(self) -> ModelCapacity:
+        if (
+            self.context_window_tokens is not None
+            and self.max_output_tokens is not None
+            and self.max_output_tokens >= self.context_window_tokens
+        ):
+            raise ValueError("最大输出必须小于上下文容量，为输入保留空间")
+        return self
+
+
+class ModelProfileView(ModelCapacity):
     """对外视图：api_key 脱敏，只露是否已设置 + 尾部 hint。"""
 
     id: str
@@ -74,7 +89,7 @@ class ModelProfileView(BaseModel):
     api_key_hint: str
 
 
-class ModelProfileFull(BaseModel):
+class ModelProfileFull(ModelCapacity):
     """内部视图：含明文 api_key，供引擎构造 LLM。不下发前端。"""
 
     id: str
@@ -114,7 +129,7 @@ class AgentCardSnapshot(BaseModel):
     model_profile_id: str | None = None
 
 
-class ModelProfileSnapshot(BaseModel):
+class ModelProfileSnapshot(ModelCapacity):
     """Non-secret model execution parameters frozen for recovery and audit."""
 
     id: str

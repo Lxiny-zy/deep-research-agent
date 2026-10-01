@@ -9,7 +9,7 @@ import pytest
 from pydantic import BaseModel
 
 from deep_research import llm as llm_module
-from deep_research.llm import LLM
+from deep_research.llm import LLM, ModelOutputTruncated
 from deep_research.observability import Tracer
 
 
@@ -137,3 +137,55 @@ async def test_parse_reraises_network_error_when_budget_exhausted(make_llm):
     llm, _, _, _ = make_llm(TimeoutError())
     with pytest.raises(TimeoutError):
         await llm.parse("s", "u", _Answer, retries=0)
+
+
+def _truncated(content: str = "", reason: str | None = "length", limit: int = 8192):
+    async def chunks():
+        yield SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=content, reasoning_content="thinking"),
+                    finish_reason=reason,
+                )
+            ],
+            usage=SimpleNamespace(
+                total_tokens=limit + 10, prompt_tokens=10, completion_tokens=limit
+            ),
+        )
+
+    return chunks()
+
+
+async def test_provider_default_omits_output_cap_in_structured_requests(make_llm):
+    llm, completions, tracer, _ = make_llm(_response('{"value": 7}', 13))
+    answer = await llm.parse("system", "fixed paper\nquestion", _Answer)
+    assert answer.value == 7
+    assert "max_tokens" not in completions.requests[0]
+    assert "max_completion_tokens" not in completions.requests[0]
+    assert tracer.total_tokens == 13
+
+
+async def test_truncation_exhaustion_is_not_reported_as_invalid_json(make_llm):
+    llm, completions, _, _ = make_llm(
+        _truncated(), _truncated(limit=16384), _truncated(limit=32768)
+    )
+    with pytest.raises(ModelOutputTruncated, match="不表示论文缺少依据"):
+        await llm.parse("s", "u", _Answer)
+    assert len(completions.requests) == 1
+
+
+async def test_stream_never_appends_a_restarted_answer_after_visible_partial_text(make_llm):
+    llm, completions, _, _ = make_llm(_truncated("partial"))
+    pieces = []
+    with pytest.raises(ModelOutputTruncated):
+        async for piece in llm.stream("s", "u"):
+            pieces.append(piece)
+    assert pieces == ["partial"] and len(completions.requests) == 1
+
+
+async def test_explicit_output_capacity_is_respected_without_hidden_expansion(make_llm):
+    llm, completions, _, _ = make_llm(_truncated(reason=None, limit=32768))
+    llm.settings.llm_max_output_tokens = 32768
+    with pytest.raises(ModelOutputTruncated):
+        _ = [part async for part in llm.stream("s", "u")]
+    assert [request["max_tokens"] for request in completions.requests] == [32768]

@@ -19,6 +19,7 @@ from .catalog.dto import (
     AgentCardCreate,
     AgentCardUpdate,
     AgentCardView,
+    ModelCapacity,
     ModelProfileFull,
     ModelProfileView,
     SearchKeyView,
@@ -84,7 +85,7 @@ def _check_probe_limit(request: Request) -> None:
         )
 
 
-class ProfileCreate(BaseModel):
+class ProfileCreate(ModelCapacity):
     name: str = Field(min_length=1, max_length=64)
     base_url: str | None = Field(None, max_length=500)
     api_key: str = Field("", max_length=500)
@@ -95,7 +96,7 @@ class ProfileCreate(BaseModel):
     is_default: bool = False
 
 
-class ProfileUpdate(BaseModel):
+class ProfileUpdate(ModelCapacity):
     name: str | None = Field(None, min_length=1, max_length=64)
     base_url: str | None = Field(None, max_length=500)
     api_key: str | None = Field(None, max_length=500)  # 空/省略＝不改
@@ -152,7 +153,7 @@ class TestResult(BaseModel):
     detail: str = ""
 
 
-class ProfileProbe(BaseModel):
+class ProfileProbe(ModelCapacity):
     profile_id: str | None = None
     base_url: str | None = Field(None, max_length=500)
     api_key: str = Field("", max_length=500)
@@ -186,6 +187,8 @@ async def _probe_llm(profile: ModelProfileFull, settings: Settings) -> None:
         temperature=0.0,
         parameter_mode=profile.parameter_mode,
         reasoning_effort=profile.reasoning_effort,
+        context_window_tokens=profile.context_window_tokens,
+        max_output_tokens=profile.max_output_tokens,
         allow_private_provider_urls=settings.allow_private_provider_urls,
     )
     try:
@@ -269,6 +272,20 @@ async def _resolve_probe(req: ProfileProbe, catalog: CatalogRepository) -> Model
         temperature=stored.temperature if stored else 0.0,
         parameter_mode=req.parameter_mode or (stored.parameter_mode if stored else "temperature"),
         reasoning_effort=req.reasoning_effort or (stored.reasoning_effort if stored else "medium"),
+        context_window_tokens=(
+            req.context_window_tokens
+            if "context_window_tokens" in req.model_fields_set
+            else stored.context_window_tokens
+            if stored
+            else None
+        ),
+        max_output_tokens=(
+            req.max_output_tokens
+            if "max_output_tokens" in req.model_fields_set
+            else stored.max_output_tokens
+            if stored
+            else None
+        ),
     )
 
 
@@ -606,6 +623,8 @@ async def create_model(req: ProfileCreate, request: Request) -> ModelProfileView
             temperature=req.temperature,
             parameter_mode=req.parameter_mode,
             reasoning_effort=req.reasoning_effort,
+            context_window_tokens=req.context_window_tokens,
+            max_output_tokens=req.max_output_tokens,
             is_default=req.is_default,
         )
     except IntegrityError as exc:
@@ -620,6 +639,8 @@ async def update_model(profile_id: str, req: ProfileUpdate, request: Request) ->
         view = await _catalog(request).update_profile(
             profile_id, req.model_dump(exclude_unset=True)
         )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except IntegrityError as exc:
         _raise_for_integrity(exc, duplicate_detail=_PROFILE_DUPLICATE, fk_detail=_AGENT_BAD_PROFILE)
     if view is None:

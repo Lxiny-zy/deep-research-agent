@@ -17,6 +17,29 @@ from deep_research.config import Settings
 from deep_research.persistence.db import create_all
 
 
+async def test_model_capacities_can_be_set_cleared_and_validated(cat_app):
+    async with _client() as client:
+        response = await client.post(
+            "/api/models",
+            json={
+                "name": "large-context",
+                "model": "configured-model",
+                "context_window_tokens": 1000000,
+                "max_output_tokens": 65536,
+            },
+        )
+        assert response.status_code == 201
+        profile = response.json()
+        assert profile["context_window_tokens"] == 1000000
+        assert profile["max_output_tokens"] == 65536
+        path = "/api/models/" + profile["id"]
+        assert (await client.put(path, json={"context_window_tokens": 32000})).status_code == 422
+        assert (await client.put(path, json={"max_output_tokens": 0})).status_code == 422
+        cleared = await client.put(path, json={"max_output_tokens": None})
+        assert cleared.status_code == 200 and cleared.json()["max_output_tokens"] is None
+        assert cleared.json()["context_window_tokens"] == 1000000
+
+
 @pytest.mark.asyncio
 async def test_model_config_probe_and_discovery(cat_app, monkeypatch) -> None:
     async def ok_probe(profile, settings):  # type: ignore[no-untyped-def]

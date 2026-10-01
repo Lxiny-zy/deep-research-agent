@@ -31,6 +31,18 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
     initial?.reasoning_effort ?? 'medium',
   )
   const [isDefault, setIsDefault] = useState(initial?.is_default ?? false)
+  const [contextWindow, setContextWindow] = useState(String(initial?.context_window_tokens ?? ''))
+  const [maxOutput, setMaxOutput] = useState(String(initial?.max_output_tokens ?? ''))
+  const contextTokens = contextWindow.trim() ? Number(contextWindow) : null
+  const outputTokens = maxOutput.trim() ? Number(maxOutput) : null
+  const invalidCapacity = [contextTokens, outputTokens].some(
+    (value) => value !== null && (!Number.isSafeInteger(value) || value < 1 || value > 2147483647),
+  )
+  const capacityError = invalidCapacity
+    ? '容量请填写正整数，或留空使用默认设置。'
+    : contextTokens !== null && outputTokens !== null && outputTokens >= contextTokens
+      ? '最大输出必须小于上下文容量，为输入保留空间。'
+      : ''
   const [models, setModels] = useState<string[]>(initial?.model ? [initial.model] : [])
   const [modelQuery, setModelQuery] = useState('')
   const [manualModelEntry, setManualModelEntry] = useState(false)
@@ -42,6 +54,8 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
     model,
     parameter_mode: parameterMode,
     reasoning_effort: reasoningEffort,
+    context_window_tokens: contextTokens,
+    max_output_tokens: outputTokens,
   }
   const filteredModels = models.filter((item) =>
     item.toLowerCase().includes(modelQuery.trim().toLowerCase()),
@@ -65,6 +79,8 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
       temperature,
       parameter_mode: parameterMode,
       reasoning_effort: reasoningEffort,
+      context_window_tokens: contextTokens,
+      max_output_tokens: outputTokens,
       is_default: isDefault,
     }
     if (replacingApiKey && apiKey.trim()) body.api_key = apiKey.trim()
@@ -307,6 +323,45 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
             </label>
           </div>
 
+          <fieldset className="stack">
+            <legend>模型容量</legend>
+            <label className="field-label">
+              上下文容量（token）
+              <input
+                className="input"
+                type="number"
+                min="1"
+                step="1"
+                value={contextWindow}
+                onChange={(event) => setContextWindow(event.target.value)}
+                placeholder="按渠道说明填写，例如 1000000"
+              />
+            </label>
+            <p className="muted small">
+              输入与输出共用的上下文窗口，用于组装时估算容量；留空使用保守估算，实际限制以渠道为准。
+            </p>
+            <label className="field-label">
+              最大输出（token）
+              <input
+                className="input"
+                type="number"
+                min="1"
+                step="1"
+                value={maxOutput}
+                onChange={(event) => setMaxOutput(event.target.value)}
+                placeholder="留空：使用渠道默认"
+              />
+            </label>
+            <p className="muted small">
+              通常包含模型思考与回答正文。留空不发送输出上限；这不是任务累计 token 预算。
+            </p>
+            {capacityError && (
+              <p className="error-text" role="alert">
+                {capacityError}
+              </p>
+            )}
+          </fieldset>
+
           {error && (
             <p className="error-text">
               <AppIcon name="circle-x" size={14} aria-hidden="true" />
@@ -334,7 +389,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
               <button
                 className="btn btn-ghost"
                 onClick={() => probe.test.mutate(probeBody)}
-                disabled={probe.test.isPending || !model}
+                disabled={probe.test.isPending || !model || Boolean(capacityError)}
                 type="button"
               >
                 <AppIcon
@@ -349,7 +404,7 @@ export default function ModelProfileEditor({ initial, onSubmit, onCancel, pendin
             <button
               className="btn btn-primary"
               onClick={submit}
-              disabled={pending || !name.trim()}
+              disabled={pending || !name.trim() || Boolean(capacityError)}
               type="button"
             >
               <AppIcon

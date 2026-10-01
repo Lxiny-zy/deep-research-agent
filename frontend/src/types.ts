@@ -579,6 +579,8 @@ export type Behavior = 'plan' | 'research' | 'reflect' | 'synthesize' | 'critiqu
 
 // 模型档案（GET /api/models，api_key 脱敏）
 export interface ModelProfile {
+  context_window_tokens?: number | null
+  max_output_tokens?: number | null
   id: string
   name: string
   base_url: string | null
@@ -592,6 +594,8 @@ export interface ModelProfile {
 }
 
 export interface ModelProfileInput {
+  context_window_tokens?: number | null
+  max_output_tokens?: number | null
   name?: string
   base_url?: string | null
   api_key?: string
@@ -689,6 +693,8 @@ export interface TestResult {
 }
 
 export interface ModelProbeInput {
+  context_window_tokens?: number | null
+  max_output_tokens?: number | null
   profile_id?: string | null
   base_url?: string | null
   api_key?: string

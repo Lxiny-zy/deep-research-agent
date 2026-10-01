@@ -30,6 +30,15 @@ from .token_budget import TokenBudget, TokenReservation
 T = TypeVar("T", bound=BaseModel)  # 3.11 兼容写法（不用 3.12 的 def f[T]() 语法）
 
 
+class ModelOutputTruncated(RuntimeError):
+    def __init__(self, output_limit: int) -> None:
+        self.output_limit = output_limit
+        super().__init__(
+            "模型输出被渠道截断，尚未生成完整结果；这不表示论文缺少依据。"
+            "请在模型档案中设置该渠道支持的最大输出容量（包含思考与正文）"
+        )
+
+
 def extract_json(text: str) -> dict:
     """从模型输出稳健抽取 JSON：兼容 ```json 代码块与前后多余文本。"""
     text = (text or "").strip()
@@ -75,6 +84,8 @@ class LLM:
         temperature: float = 0.3,
         parameter_mode: str = "temperature",
         reasoning_effort: str = "medium",
+        context_window_tokens: int | None = None,
+        max_output_tokens: int | None = None,
         allow_private_provider_urls: bool = False,
     ) -> LLM:
         """按模型档案的显式参数构造（角色绑不同模型档案时用）。
@@ -91,12 +102,14 @@ class LLM:
             llm_model=model,
             llm_user_agent=user_agent,
             request_timeout=timeout,
+            llm_max_output_tokens=max_output_tokens or 0,
             allow_private_provider_urls=allow_private_provider_urls,
         )
         inst = cls(s, tracer)
         inst.default_temperature = temperature
         inst.parameter_mode = parameter_mode
         inst.reasoning_effort = reasoning_effort
+        inst.context_window_tokens = context_window_tokens
         return inst
 
     # ``None`` keeps each agent operation's built-in sampling hint. Catalog
@@ -104,6 +117,15 @@ class LLM:
     default_temperature: float | None = None
     parameter_mode: str = "temperature"
     reasoning_effort: str = "medium"
+    context_window_tokens: int | None = None
+
+    @property
+    def input_capacity_chars(self) -> int:
+        # Same approximate character/token ratio as runtime telemetry. This is
+        # planning guidance, not the provider's tokenizer or a billing claim.
+        if self.context_window_tokens is not None:
+            return max(1, self.context_window_tokens - self.settings.llm_max_output_tokens) * 2
+        return self.settings.llm_max_input_chars
 
     def _generation_options(self, temperature: float) -> dict[str, Any]:
         if self.parameter_mode == "reasoning":
@@ -126,16 +148,21 @@ class LLM:
         raise AssertionError("unreachable")
 
     def _reserve(self, system: str, user: str) -> TokenReservation:
-        if len(system) + len(user) > self.settings.llm_max_input_chars:
+        if len(system) + len(user) > self.input_capacity_chars:
             raise ValueError("模型输入超过 LLM_MAX_INPUT_CHARS 限制")
         assert self.tracer.budget is not None
         self.tracer.budget.update(self.tracer.total_tokens)
         # UTF-8 bytes plus framing are a conservative admission estimate, not a billing claim.
         return self.tracer.budget.reserve(
-            len(system.encode()) + len(user.encode()) + 128, self.settings.llm_max_output_tokens
+            # A reservation estimate is NOT sent as an output cap when the
+            # profile uses the provider default. Exact usage replaces estimates.
+            len(system.encode()) + len(user.encode()) + 128,
+            self.settings.llm_max_output_tokens or 8192,
         )
 
     def _output_options(self, reservation: TokenReservation) -> dict[str, Any]:
+        if not self.settings.llm_max_output_tokens:
+            return {}
         key = "max_completion_tokens" if self.parameter_mode == "reasoning" else "max_tokens"
         return {key: reservation.output_tokens}
 
@@ -234,6 +261,7 @@ class LLM:
         call_id = uuid4().hex
         reasoning_parts: list[str] = []
         last_reasoning_emit = 0.0
+        finish_reason: str | None = None
 
         def flush_reasoning() -> None:
             nonlocal last_reasoning_emit
@@ -276,6 +304,7 @@ class LLM:
                     }
                 if not chunk.choices:
                     continue
+                finish_reason = getattr(chunk.choices[0], "finish_reason", None) or finish_reason
                 fragment = chunk.choices[0].delta
                 delta = getattr(fragment, "content", None)
                 # Only explicit, displayable provider fields; never infer
@@ -316,11 +345,20 @@ class LLM:
                     data={
                         "llm_usage": {
                             "model": self.model,
+                            "call_id": call_id,
+                            "finish_reason": finish_reason,
                             "cache_affinity": affinity,
                             **usage_report,
                         }
                     },
                 )
+            if finish_reason == "length" or (
+                finish_reason is None
+                and self.settings.llm_max_output_tokens > 0
+                and usage_report is not None
+                and (usage_report.get("output_tokens") or 0) >= reservation.output_tokens
+            ):
+                raise ModelOutputTruncated(self.settings.llm_max_output_tokens)
         except BaseException as exc:
             if isinstance(exc, (asyncio.CancelledError, GeneratorExit)) or _uncertain_usage(exc):
                 self.tracer.add_tokens(max(0, reservation.total - estimated_added), estimated=True)

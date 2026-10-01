@@ -22,6 +22,8 @@ def evidence_cache_key(scope: str, query: str, sources: list[Source], researcher
             "temperature": getattr(llm, "default_temperature", None),
             "mode": getattr(llm, "parameter_mode", None),
             "effort": getattr(llm, "reasoning_effort", None),
+            "context_window_tokens": getattr(llm, "context_window_tokens", None),
+            "max_output_tokens": getattr(settings, "llm_max_output_tokens", None),
         }
 
     payload = {

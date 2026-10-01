@@ -119,20 +119,24 @@ class ModelSearch(SearchTool):
         budget = budget or TokenBudget()
         if self._tracer is not None:
             budget.update(self._tracer.total_tokens)
-        reservation = budget.reserve(len(query.encode("utf-8")) + 128, self._max_output_tokens)
+        reservation = budget.reserve(
+            len(query.encode("utf-8")) + 128, self._max_output_tokens or 8192
+        )
         if self.protocol == "chat_search":
-            body = {
+            body: dict = {
                 "model": self.model,
                 "messages": [{"role": "user", "content": query}],
-                "max_tokens": reservation.output_tokens,
             }
         else:
             body = {
                 "model": self.model,
                 "input": query,
                 "tools": [{"type": "web_search"}],
-                "max_output_tokens": reservation.output_tokens,
             }
+        if self._max_output_tokens:
+            body["max_tokens" if self.protocol == "chat_search" else "max_output_tokens"] = (
+                reservation.output_tokens
+            )
         sent = accounted = False
         try:
             async with (

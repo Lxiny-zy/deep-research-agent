@@ -261,6 +261,8 @@ class CatalogRuntime:
             temperature=profile.temperature,
             parameter_mode=profile.parameter_mode,
             reasoning_effort=profile.reasoning_effort,
+            context_window_tokens=profile.context_window_tokens,
+            max_output_tokens=profile.max_output_tokens,
             allow_private_provider_urls=self._settings.allow_private_provider_urls,
         )
         self._llm_cache[profile.id] = llm
@@ -404,5 +406,7 @@ def _profile_snapshot(profile: ModelProfileFull) -> ModelProfileSnapshot:
         temperature=profile.temperature,
         parameter_mode=profile.parameter_mode,
         reasoning_effort=profile.reasoning_effort,
+        context_window_tokens=profile.context_window_tokens,
+        max_output_tokens=profile.max_output_tokens,
         is_default=profile.is_default,
     )

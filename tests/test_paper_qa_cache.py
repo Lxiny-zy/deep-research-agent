@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from deep_research.agents.base import RunContext
 from deep_research.models import FindingList
 from deep_research.observability import Tracer
@@ -60,7 +62,7 @@ async def test_failed_extraction_is_not_cached(settings) -> None:
     cache = PaperEvidenceCache()
     ctx = RunContext(llm=llm, search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
     sources = await FakeSearch().search("paper")
-    for _ in range(2):
+    with pytest.raises(ValueError, match="temporary extraction failure"):
         await answer_question(
             "核心贡献是什么？",
             history=[],
@@ -69,7 +71,38 @@ async def test_failed_extraction_is_not_cached(settings) -> None:
             paper_cache=cache,
             cache_scope="alice/run",
         )
+    result = await answer_question(
+        "核心贡献是什么？",
+        history=[],
+        ctx=ctx,
+        paper_sources=sources,
+        paper_cache=cache,
+        cache_scope="alice/run",
+    )
+    assert result.findings and not result.fallback
     assert llm.extractions == 2
+
+
+async def test_paper_verifier_failure_is_not_misreported_as_missing_evidence(settings):
+    from deep_research.guardrails import SemanticEvidenceDecisionList
+    from deep_research.llm import ModelOutputTruncated
+
+    class VerifierFailure(CountingLLM):
+        async def parse(self, system, user, schema, **kwargs):
+            if schema is SemanticEvidenceDecisionList:
+                raise ModelOutputTruncated(8192)
+            return await super().parse(system, user, schema, **kwargs)
+
+    ctx = RunContext(
+        llm=VerifierFailure(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings
+    )
+    with pytest.raises(ModelOutputTruncated):
+        await answer_question(
+            "论文创新是什么？",
+            history=[],
+            ctx=ctx,
+            paper_sources=await FakeSearch().search("paper"),
+        )
 
 
 async def test_answer_repairs_missing_citations_before_falling_back(settings) -> None:

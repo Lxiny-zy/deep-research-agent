@@ -45,7 +45,7 @@ _BASE_SYSTEM = (
     "章节使用 Markdown 标题层级，不用加粗段落代替标题；避免连续堆砌逐项核验表，"
     "同类比较尽量合并为一张表，表前给出连续编号和明确表题，表下注明单位、缩写和缺失值含义。"
     "使用标准 Markdown 表格，由导出器排为三线表。引用紧随所支持的论断，"
-    "数据覆盖年限与公开日期、光谱矩阵与成像高光谱等不同概念必须分别表述。"
+    "比较结论须说明任务范围、指标口径与适用条件；不要补写与当前任务无关的领域术语或缺口。"
 )
 
 
@@ -81,8 +81,8 @@ def eligible_material(
 def _skeleton(template: TaskTemplate) -> str:
     if not template.sections:
         return ""
-    lines = ["必须按以下顺序使用这些二级标题（## 标题），不可省略："]
-    lines += [f"## {section.title} —— {section.guidance}" for section in template.sections]
+    lines = ["必须按以下顺序使用这些二级标题，不可省略；撰写要求只指导内容，不写进标题："]
+    lines += [f"## {section.title}\n撰写要求：{section.guidance}" for section in template.sections]
     return "\n".join(lines)
 
 

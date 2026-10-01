@@ -94,6 +94,8 @@ async def test_default_profile_applies_without_custom_cards(settings, catalog):
         api_key="profile-key",
         model="profile-model",
         temperature=0.55,
+        context_window_tokens=1000000,
+        max_output_tokens=65536,
         is_default=True,
     )
 
@@ -105,6 +107,13 @@ async def test_default_profile_applies_without_custom_cards(settings, catalog):
     assert llm is not None
     assert llm.model == profile.model
     assert llm.default_temperature == 0.55
+    assert llm.context_window_tokens == 1000000
+    assert llm.settings.llm_max_output_tokens == 65536
+    assert llm.input_capacity_chars == (1000000 - 65536) * 2
+    from deep_research.catalog.runtime import _profile_snapshot
+
+    frozen = _profile_snapshot(await catalog.get_default_profile())
+    assert frozen.context_window_tokens == 1000000 and frozen.max_output_tokens == 65536
     await runtime.aclose()
 
 

@@ -482,6 +482,8 @@ class ModelProfileRow(Base):
     temperature: Mapped[float] = mapped_column(Float, default=0.3)
     parameter_mode: Mapped[str] = mapped_column(String(16), default="temperature")
     reasoning_effort: Mapped[str] = mapped_column(String(16), default="medium")
+    context_window_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_default: Mapped[bool] = mapped_column(Integer, default=0)  # 1=全局兜底档案
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

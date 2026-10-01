@@ -32,6 +32,52 @@ async def test_upgrade_head_initializes_sqlite(tmp_path) -> None:
         await engine.dispose()
 
 
+async def test_model_capacity_migration_preserves_existing_profile_and_roundtrips(tmp_path):
+    from alembic import command
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'model-capacity.db'}"
+    config = AlembicConfig("alembic.ini")
+    config.attributes["database_url"] = url
+    await asyncio.to_thread(command.upgrade, config, "0031")
+    engine = make_engine(url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO model_profile (id, name, api_key, model, temperature, "
+                    "parameter_mode, reasoning_effort, is_default) VALUES "
+                    "('keep', 'old profile', 'test-secret', 'model', 0.3, "
+                    "'temperature', 'medium', 1)"
+                )
+            )
+    finally:
+        await engine.dispose()
+    for target in ("0032", "0031", "0032"):
+        method = command.downgrade if target == "0031" else command.upgrade
+        await asyncio.to_thread(method, config, target)
+        engine = make_engine(url)
+        try:
+            async with engine.connect() as connection:
+                row = (
+                    await connection.execute(
+                        text("SELECT api_key, is_default FROM model_profile WHERE id='keep'")
+                    )
+                ).one()
+                assert tuple(row) == ("test-secret", 1)
+                if target == "0032":
+                    capacities = (
+                        await connection.execute(
+                            text(
+                                "SELECT context_window_tokens, max_output_tokens "
+                                "FROM model_profile WHERE id='keep'"
+                            )
+                        )
+                    ).one()
+                    assert tuple(capacities) == (None, None)
+        finally:
+            await engine.dispose()
+
+
 async def test_migrated_search_indexes_match_orm(tmp_path) -> None:
     from sqlalchemy import inspect
 

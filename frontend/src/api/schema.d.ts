@@ -2804,10 +2804,14 @@ export interface components {
             api_key_set: boolean;
             /** Base Url */
             base_url?: string | null;
+            /** Context Window Tokens */
+            context_window_tokens?: number | null;
             /** Id */
             id: string;
             /** Is Default */
             is_default: boolean;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
             /** Model */
             model: string;
             /** Name */
@@ -2894,11 +2898,15 @@ export interface components {
             api_key?: string;
             /** Base Url */
             base_url?: string | null;
+            /** Context Window Tokens */
+            context_window_tokens?: number | null;
             /**
              * Is Default
              * @default false
              */
             is_default?: boolean;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
             /**
              * Model
              * @default gpt-4o-mini
@@ -2931,6 +2939,10 @@ export interface components {
             api_key?: string;
             /** Base Url */
             base_url?: string | null;
+            /** Context Window Tokens */
+            context_window_tokens?: number | null;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
             /**
              * Model
              * @default gpt-4o-mini
@@ -2949,8 +2961,12 @@ export interface components {
             api_key?: string | null;
             /** Base Url */
             base_url?: string | null;
+            /** Context Window Tokens */
+            context_window_tokens?: number | null;
             /** Is Default */
             is_default?: boolean | null;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
             /** Model */
             model?: string | null;
             /** Name */

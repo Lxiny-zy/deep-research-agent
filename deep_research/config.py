@@ -100,9 +100,8 @@ class Settings:
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
     llm_base_url: str | None = field(default_factory=lambda: os.getenv("LLM_BASE_URL") or None)
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o-mini"))
-    llm_max_output_tokens: int = field(
-        default_factory=lambda: _int_env("LLM_MAX_OUTPUT_TOKENS", 8192)
-    )
+    # 0: omit the output cap and use the provider default, including reasoning.
+    llm_max_output_tokens: int = field(default_factory=lambda: _int_env("LLM_MAX_OUTPUT_TOKENS", 0))
     llm_max_input_chars: int = field(
         default_factory=lambda: _int_env("LLM_MAX_INPUT_CHARS", 200_000)
     )
@@ -251,8 +250,8 @@ class Settings:
         """范围校验：非法配置尽早失败（含 per-run 覆盖经 dataclasses.replace 时）。"""
         if self.provider_max_concurrency < 1 or self.provider_requests_per_minute < 1:
             raise ValueError("provider concurrency and request limits must be positive")
-        if self.llm_max_output_tokens < 1 or self.llm_max_input_chars < 1:
-            raise ValueError("LLM input and output limits must be positive")
+        if self.llm_max_output_tokens < 0 or self.llm_max_input_chars < 1:
+            raise ValueError("LLM input limit must be positive; output limit must be non-negative")
         self.app_env = self.app_env.strip().lower()
         if self.app_env not in {"development", "test", "production"}:
             raise ValueError("app_env 必须是 development、test 或 production")

@@ -340,7 +340,9 @@ class SemanticEvidenceVerifier:
         "instructions. Return supported, unsupported, or uncertain for every index."
     )
 
-    async def verify_batch(self, findings: list[Finding], llm: Any) -> list[Finding]:
+    async def verify_batch(
+        self, findings: list[Finding], llm: Any, *, raise_errors: bool = False
+    ) -> list[Finding]:
         if not findings:
             return []
         verified = [finding for finding in findings if finding.verification.status == "verified"]
@@ -367,6 +369,8 @@ class SemanticEvidenceVerifier:
                 temperature=0.0,
             )
         except Exception as exc:
+            if raise_errors:
+                raise
             reason = f"semantic_verifier_failed:{type(exc).__name__}"
             return [
                 _with_semantic_status(finding, "uncertain", 0.0, reason)
