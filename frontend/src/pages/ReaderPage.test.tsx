@@ -167,7 +167,7 @@ describe('ReaderPage', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
     await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledTimes(1))
-    expect(await screen.findByRole('list', { name: '本论文引用' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '定位引用 1 的论文依据' })).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByText(/正在翻阅原文并核验/)).not.toBeInTheDocument())
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(mocks.createConversation).toHaveBeenCalledTimes(1)
@@ -185,7 +185,7 @@ describe('ReaderPage', () => {
   it('does not recover an old repeated answer from a stale conversation cache', async () => {
     mocks.listConversations.mockResolvedValue([answered])
     renderPage()
-    await screen.findByRole('list', { name: '本论文引用' })
+    await screen.findByRole('button', { name: '定位引用 1 的论文依据' })
     const oldRepeat = { ...answered.messages[0], id: 'm2', position: 1, answer: '之前的回答' }
     const durable = { ...answered, message_count: 2, messages: [...answered.messages, oldRepeat] }
     const latest = { ...oldRepeat, id: 'm3', position: 2, answer: '本轮迟到的回答' }
@@ -254,12 +254,12 @@ describe('ReaderPage', () => {
     )
   })
 
-  it('groups citations by origin and locates paper quotes in the PDF', async () => {
+  it('locates inline paper citations and opens external citations without a source list', async () => {
     mocks.listConversations.mockResolvedValue([answered])
     renderPage()
-    const locate = await screen.findByRole('button', { name: /mst\.pdf 第 4 页/ })
-    expect(screen.getByRole('list', { name: '本论文引用' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'A survey' })).toHaveAttribute(
+    const locate = await screen.findByRole('button', { name: '定位引用 1 的论文依据' })
+    expect(screen.queryByRole('list', { name: '本论文引用' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '查看引用 2：A survey' })).toHaveAttribute(
       'href',
       'https://b.org/survey',
     )

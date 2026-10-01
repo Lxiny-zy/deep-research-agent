@@ -1,5 +1,4 @@
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import QaAnswerBody from './QaAnswerBody'
 import { AppIcon } from './AppIcon'
 import type { QaActivity } from '../types'
 import QaActivityView from './QaActivityView'
@@ -24,10 +23,11 @@ export default function QaStreamingAnswer({
       </div>
       <QaActivityView items={activity} live />
       {text && (
-        <div className="markdown-body live-markdown" data-testid="qa-streaming-answer">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
-            {text}
-          </ReactMarkdown>
+        <div
+          className="markdown-body qa-answer-body live-markdown"
+          data-testid="qa-streaming-answer"
+        >
+          <QaAnswerBody text={text} streaming />
         </div>
       )}
     </div>

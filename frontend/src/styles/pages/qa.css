@@ -278,6 +278,75 @@
   line-height: 1.8;
 }
 
+.qa-answer .qa-answer-body {
+  color: var(--text-2);
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+
+.qa-answer .qa-answer-body :is(h1, h2, h3, h4) {
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: 650;
+  line-height: 1.5;
+  margin: 1.4em 0 0.55em;
+}
+
+.qa-answer .qa-answer-body > :first-child {
+  margin-top: 0;
+}
+
+.qa-answer .qa-answer-body :is(p, ul, ol, blockquote) {
+  margin: 0 0 0.85em;
+}
+
+.qa-answer .qa-answer-body strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.qa-answer .qa-answer-body li + li {
+  margin-top: 0.55em;
+}
+
+.qa-answer .qa-answer-body :is(pre, table) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.qa-inline-cite {
+  background: var(--primary-soft);
+  border: 0;
+  border-radius: 4px;
+  color: var(--primary-text);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.8em;
+  font-weight: 600;
+  line-height: 1.65;
+  margin-inline: 2px;
+  padding: 0 4px;
+  text-decoration: none;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.qa-inline-cite:hover {
+  background: var(--primary-soft-2);
+}
+
+.qa-inline-cite:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.qa-inline-cite.is-unavailable {
+  background: transparent;
+  color: var(--text-3);
+  cursor: default;
+}
+
 .qa-answer .markdown-body h1 {
   font-size: var(--text-lg);
 }

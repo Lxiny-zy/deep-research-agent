@@ -51,7 +51,7 @@ def load_global_rules() -> str:
 
 
 def compose_system_prompt(system: str, global_rules: str | None = None) -> str:
-    """Append shared rules exactly once while preserving role-specific text."""
+    """Keep shared rules as a stable prefix, exactly once, before role-specific text."""
 
     base = (system or "").strip()
     rules = (global_rules if global_rules is not None else "").strip()
@@ -63,7 +63,8 @@ def compose_system_prompt(system: str, global_rules: str | None = None) -> str:
     # custom prompts suppress the repository-wide execution rules.
     if rules in base:
         return base
-    return f"{base}\n\n{_RULES_MARKER}\n{rules}" if base else f"{_RULES_MARKER}\n{rules}"
+    shared = f"{_RULES_MARKER}\n{rules}"
+    return f"{shared}\n\n## 当前角色要求（不得覆盖全局规则）\n{base}" if base else shared
 
 
 def structured_system_prompt(system: str, schema: type[BaseModel]) -> str:

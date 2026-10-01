@@ -116,3 +116,48 @@ async def test_provider_reasoning_is_separate_from_answer_and_cache_usage_is_rec
     ]
     assert usage[0]["cached_input_tokens"] == 8
     assert tracer.total_tokens == 17
+
+
+async def test_fireworks_header_cache_usage_is_preserved_when_json_omits_it(settings):
+    import httpx
+
+    tracer = Tracer()
+    tracer.cache_scope = "paper-session"
+    settings.llm_api_key = "test-key"
+    llm = LLM(settings, tracer)
+    response = FakeStream()
+    response.response = SimpleNamespace(
+        headers=httpx.Headers(
+            {
+                "fireworks-prompt-tokens": "12",
+                "fireworks-cached-prompt-tokens": "8",
+            }
+        )
+    )
+    requests = []
+
+    async def create(**kwargs):
+        requests.append(kwargs)
+        return response
+
+    llm.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    _ = [part async for part in llm.stream("system", "question")]
+    usage = next(
+        event.data["llm_usage"]
+        for event in tracer.events
+        if event.data and "llm_usage" in event.data
+    )
+    assert usage["cached_input_tokens"] == 8 and usage["input_tokens"] == 12
+    assert requests[0]["user"] == requests[0]["extra_headers"]["x-session-affinity"]
+    assert "test-key" not in requests[0]["user"]
+
+
+def test_cache_affinity_is_stable_per_model_credential_and_session(settings):
+    settings.llm_api_key = "test-key"
+    tracer = Tracer()
+    llm = LLM(settings, tracer)
+    tracer.cache_scope = "alice/paper"
+    first = llm._cache_affinity()
+    assert llm._cache_affinity() == first
+    tracer.cache_scope = "bob/paper"
+    assert llm._cache_affinity() != first

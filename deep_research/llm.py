@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
@@ -213,6 +214,7 @@ class LLM:
         """
         reservation = self._reserve(system, user)
         assert self.tracer.budget is not None
+        affinity = self._cache_affinity()
         request = {
             "model": self.model,
             "messages": [
@@ -222,6 +224,10 @@ class LLM:
             **self._generation_options(temperature),
             **self._output_options(reservation),
             "stream": True,
+            # Fireworks routes matching prefixes most effectively to one
+            # replica. The standard user field also survives many gateways.
+            "user": affinity,
+            "extra_headers": {"x-session-affinity": affinity},
         }
         resp = None
         usage_report: dict[str, int | None] | None = None
@@ -255,6 +261,7 @@ class LLM:
                 if exc.status_code not in {400, 422} or "stream_options" not in str(exc):
                     raise
                 resp = await self.client.chat.completions.create(**request)
+            usage_report = _header_usage(resp)
             input_estimate = _estimate_tokens(system, user)
             self.tracer.add_tokens(input_estimate, estimated=True)
             estimated_added = input_estimate
@@ -263,7 +270,10 @@ class LLM:
                 exact_usage = _tokens(chunk) or exact_usage
                 reported = _usage_details(chunk)
                 if reported is not None:
-                    usage_report = reported
+                    usage_report = {
+                        **(usage_report or {}),
+                        **{key: value for key, value in reported.items() if value is not None},
+                    }
                 if not chunk.choices:
                     continue
                 fragment = chunk.choices[0].delta
@@ -295,11 +305,21 @@ class LLM:
             if exact_usage > 0:
                 self.tracer.reconcile_tokens(estimated_added, exact_usage)
             if usage_report is not None:
+                inputs = usage_report.get("input_tokens")
+                cached = usage_report.get("cached_input_tokens")
+                if inputs is not None and cached is not None and cached > inputs:
+                    usage_report["cached_input_tokens"] = None
                 self.tracer.emit(
                     "LLM",
                     "info",
                     "模型用量已返回",
-                    data={"llm_usage": {"model": self.model, **usage_report}},
+                    data={
+                        "llm_usage": {
+                            "model": self.model,
+                            "cache_affinity": affinity,
+                            **usage_report,
+                        }
+                    },
                 )
         except BaseException as exc:
             if isinstance(exc, (asyncio.CancelledError, GeneratorExit)) or _uncertain_usage(exc):
@@ -310,6 +330,18 @@ class LLM:
             self.tracer.budget.release(reservation)
             if resp is not None and hasattr(resp, "close"):
                 await resp.close()
+
+    def _cache_affinity(self) -> str:
+        identity = json.dumps(
+            [
+                self.settings.llm_base_url,
+                self.settings.llm_api_key,
+                self.model,
+                self.tracer.cache_scope,
+            ],
+            ensure_ascii=False,
+        )
+        return "dr-" + hashlib.sha256(identity.encode()).hexdigest()[:48]
 
 
 def _retryable(error: BaseException) -> bool:
@@ -356,6 +388,30 @@ def _usage_details(resp: object) -> dict[str, int | None] | None:
         "reasoning_tokens": count(
             value(value(usage, "completion_tokens_details"), "reasoning_tokens")
         ),
+    }
+
+
+def _header_usage(stream: object) -> dict[str, int | None] | None:
+    """Fireworks dedicated deployments can report cache hits in HTTP headers."""
+    headers = getattr(getattr(stream, "response", None), "headers", None)
+    if headers is None:
+        return None
+
+    def count(name: str) -> int | None:
+        raw = headers.get(name)
+        return int(raw) if isinstance(raw, str) and raw.isascii() and raw.isdigit() else None
+
+    inputs = count("fireworks-prompt-tokens")
+    cached = count("fireworks-cached-prompt-tokens")
+    if inputs is None and cached is None:
+        return None
+    if inputs is not None and cached is not None and cached > inputs:
+        cached = None
+    return {
+        "input_tokens": inputs,
+        "cached_input_tokens": cached,
+        "output_tokens": None,
+        "reasoning_tokens": None,
     }
 
 

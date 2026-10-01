@@ -74,6 +74,7 @@ class Tracer:
         self.total_tokens = 0
         self.estimated_tokens = 0
         self.budget: TokenBudget | None = None
+        self.cache_scope = ""
         self.events: list[Event] = []
         self._subscribers: list[Callable[[Event], None]] = []
         # 实时 sink：接收含 token 在内的全部事件，供 run_stream / EventHub(SSE) 消费

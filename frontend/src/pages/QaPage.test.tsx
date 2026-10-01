@@ -75,11 +75,10 @@ describe('QaPage', () => {
   it('renders answers with citations and the verification trail', async () => {
     renderAt('/qa/c1')
     expect(await screen.findByText('CASSI 是什么？')).toBeInTheDocument()
-    const answer = screen.getByRole('list', { name: '引用来源' })
-    expect(within(answer).getByRole('link', { name: 'Wagadarikar 2008' })).toHaveAttribute(
-      'href',
-      'https://a.com',
-    )
+    const answer = screen.getByRole('article', { name: '第 1 轮问答' })
+    expect(
+      within(answer).getByRole('link', { name: '查看引用 1：Wagadarikar 2008' }),
+    ).toHaveAttribute('href', 'https://a.com')
     // 右侧面板把本会话引用汇总一次（去重）
     const panel = screen.getByRole('complementary', { name: '问答说明与引用' })
     expect(within(panel).getAllByRole('link', { name: 'Wagadarikar 2008' })).toHaveLength(1)

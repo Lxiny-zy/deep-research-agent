@@ -38,3 +38,14 @@ def test_report_material_precedes_changing_task_and_revision() -> None:
     second = writer.user_prompt(Blackboard(query="聚焦局限"), template, None, material)
     assert first.split("# 任务", 1)[0] == second.split("# 任务", 1)[0]
     assert first.index(material) < first.index("聚焦方法")
+
+
+def test_global_rules_are_an_identical_prefix_across_roles() -> None:
+    from deep_research.prompting import compose_system_prompt
+
+    rules = "固定的研究规则"
+    first = compose_system_prompt("角色甲", rules)
+    second = compose_system_prompt("角色乙", rules)
+    assert first.split("角色甲")[0] == second.split("角色乙")[0]
+    assert first.index(rules) < first.index("角色甲")
+    assert compose_system_prompt(first, rules) == first

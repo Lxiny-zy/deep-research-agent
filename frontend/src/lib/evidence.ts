@@ -23,7 +23,7 @@ interface MdNode {
   children?: MdNode[]
 }
 
-const CITE_PATTERN = /\[(\d{1,3})\]/g
+const CITE_PATTERN = /\[(\d{1,3}(?:\s*[,，]\s*\d{1,3})*)\]/g
 
 /** remark 插件：把文本节点中的 [n] 转成 url 为 `#cite-n` 的 link 节点。 */
 export function remarkCitations() {
@@ -65,11 +65,13 @@ function splitCitationText(value: string): MdNode[] {
   for (const match of value.matchAll(CITE_PATTERN)) {
     const start = match.index ?? 0
     if (start > last) out.push({ type: 'text', value: value.slice(last, start) })
-    out.push({
-      type: 'link',
-      url: `${CITE_HREF_PREFIX}${match[1]}`,
-      children: [{ type: 'text', value: match[0] }],
-    })
+    for (const number of match[1].split(/\s*[,，]\s*/)) {
+      out.push({
+        type: 'link',
+        url: `${CITE_HREF_PREFIX}${number}`,
+        children: [{ type: 'text', value: `[${number}]` }],
+      })
+    }
     last = start + match[0].length
   }
   if (out.length === 0) return [{ type: 'text', value }]

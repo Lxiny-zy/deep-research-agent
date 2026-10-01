@@ -147,6 +147,7 @@ async def _answer(
             request.app.state.paper_evidence_cache = cache
         scope.update(paper_cache=cache, cache_scope=f"{principal.id}/{conversation.run_id}")
     agent, search_tool = await api_module._build_agent(request.app, settings)
+    agent.tracer.cache_scope = f"qa:{principal.id}:{conversation.run_id or conversation.id}"
     reasoning: dict[str, dict[str, Any]] = {}
     usages: list[dict[str, Any]] = []
 
