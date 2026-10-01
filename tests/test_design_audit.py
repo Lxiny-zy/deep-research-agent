@@ -283,7 +283,9 @@ async def test_delivery_generation_survives_first_waiter_disconnect(settings, mo
 
     monkeypatch.setattr(workbench_api, "run_blocking", render)
     request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(repo=SimpleNamespace(get_run=get_run)))
+        app=SimpleNamespace(
+            state=SimpleNamespace(repo=SimpleNamespace(get_run=get_run), settings=settings)
+        )
     )
     first = asyncio.create_task(workbench_api._bundle(request, "run"))
     await entered.wait()

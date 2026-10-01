@@ -74,6 +74,7 @@ import {
 import { QaStreamInterruptedError, RequestTimeoutError } from './transport'
 
 export class ApiError extends Error {
+  qaTerminal = false
   constructor(
     public readonly status: number,
     message: string,
@@ -187,7 +188,8 @@ export function clearWorkspaceState(): void {
   for (const storage of ['localStorage', 'sessionStorage'] as const) {
     try {
       for (const name of Object.keys(window[storage])) {
-        if (/^dr_.*(?:draft|thread|pending_run)/.test(name)) window[storage].removeItem(name)
+        if (/^dr_.*(?:draft|thread|pending_run|pending_qa)/.test(name))
+          window[storage].removeItem(name)
       }
     } catch {
       // Storage access can be disabled by browser policy.
@@ -895,11 +897,12 @@ export async function fetchDeliverable(
   id: string,
   name: string,
   signal?: AbortSignal,
+  version?: string,
 ): Promise<RunDocumentDownload> {
   const key = getApiKey()
   const path = name.split('/').map(encodeURIComponent).join('/')
   return withResponse(
-    `/api/runs/${encodeURIComponent(id)}/deliverables/${path}`,
+    `/api/runs/${encodeURIComponent(id)}/deliverables/${path}${version ? `?version=${encodeURIComponent(version)}` : ''}`,
     {
       headers: {
         Accept: 'application/octet-stream',
@@ -950,6 +953,17 @@ export function getConversation(id: string, signal?: AbortSignal): Promise<QaCon
   return request<QaConversation>(`/api/qa/conversations/${encodeURIComponent(id)}`, { signal })
 }
 
+export function getQaRequest(
+  id: string,
+  requestId: string,
+  signal?: AbortSignal,
+): Promise<QaMessage> {
+  return request<QaMessage>(
+    `/api/qa/conversations/${encodeURIComponent(id)}/requests/${encodeURIComponent(requestId)}`,
+    { signal },
+  )
+}
+
 export function deleteConversation(id: string): Promise<void> {
   return requestVoid(`/api/qa/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
@@ -959,19 +973,24 @@ export function askQuestion(
   id: string,
   query: string,
   signal?: AbortSignal,
-  scope?: { sources: QaSourceOption[]; projectId?: string },
+  scope?: { sources: QaSourceOption[]; projectId?: string; requestId?: string },
   onDelta?: (delta: string) => void,
   onActivity?: (activity: QaActivity) => void,
 ): Promise<QaMessage> {
   const body = scope
-    ? { query, sources: scope.sources, ...(scope.projectId ? { project_id: scope.projectId } : {}) }
+    ? {
+        query,
+        sources: scope.sources,
+        ...(scope.projectId ? { project_id: scope.projectId } : {}),
+        ...(scope.requestId ? { request_id: scope.requestId } : {}),
+      }
     : { query }
   return askQuestionStream(id, body, signal, onDelta, onActivity)
 }
 
 async function askQuestionStream(
   id: string,
-  body: { query: string; sources?: QaSourceOption[]; project_id?: string },
+  body: { query: string; sources?: QaSourceOption[]; project_id?: string; request_id?: string },
   signal?: AbortSignal,
   onDelta?: (delta: string) => void,
   onActivity?: (activity: QaActivity) => void,
@@ -1076,7 +1095,12 @@ async function askQuestionStream(
           }
           if (event === 'error' && data) {
             const payload = JSON.parse(data) as { status?: number; detail?: unknown }
-            throw new ApiError(payload.status ?? 502, formatDetail(payload.detail, '问答失败'))
+            const failure = new ApiError(
+              payload.status ?? 502,
+              formatDetail(payload.detail, '问答失败'),
+            )
+            failure.qaTerminal = true
+            throw failure
           }
           boundary = buffer.match(/\r?\n\r?\n/)
         }

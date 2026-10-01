@@ -864,6 +864,7 @@ export interface DeliverableItem {
 }
 
 export interface DeliverableRegistry {
+  content_version?: string
   version: number
   run_id: string
   template: TemplateKey
@@ -913,6 +914,7 @@ export interface QaActivity {
   model?: string
   reasoning_delta?: string
   llm_usage?: Record<string, unknown>
+  replay?: boolean
 }
 
 export interface QaEvidence {
@@ -936,9 +938,12 @@ export interface QaMessage {
   citations: string[]
   evidence: QaEvidence[]
   thoughts: QaThought[]
-  status: 'done' | 'fallback'
+  status: 'pending' | 'running' | 'done' | 'fallback' | 'error'
   created_at: string | null
-  tokens?: number
+  tokens?: number | null
+  request_id?: string | null
+  request_payload?: { query?: string; sources?: QaSourceOption[]; project_id?: string | null }
+  error?: string | null
 }
 
 export interface QaConversation {

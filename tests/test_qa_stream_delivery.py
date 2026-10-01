@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from starlette.requests import Request
 
+from deep_research.config import Settings
 from deep_research.workbench import qa_api
 
 
@@ -26,10 +28,23 @@ async def test_qa_deltas_arrive_before_final_answer(monkeypatch, disconnect) -> 
         return {"id": "m1", "answer": saved[0], "citations": []}
 
     monkeypatch.setattr(qa_api, "_answer", answer)
-    request = Request({"type": "http", "app": SimpleNamespace(state=SimpleNamespace())})
-    response = await qa_api.ask_stream("c1", qa_api.AskRequest(query="question"), request)
+    from deep_research import api
+
+    store = qa_api.InMemoryQaStore()
+    conversation = await store.create("local", "test")
+    monkeypatch.setattr(api, "_check_rate_limit", AsyncMock())
+    request = Request(
+        {
+            "type": "http",
+            "app": SimpleNamespace(state=SimpleNamespace(qa_store=store, settings=Settings())),
+        }
+    )
+    response = await qa_api.ask_stream(
+        conversation.id, qa_api.AskRequest(query="question"), request
+    )
     iterator = response.body_iterator
     assert "connected" in await anext(iterator)
+    assert "event: status" in await anext(iterator)
     thinking = await asyncio.wait_for(anext(iterator), 1)
     assert "event: reasoning" in thinking and "provider-visible text" in thinking
     first = await asyncio.wait_for(anext(iterator), 1)
@@ -46,3 +61,54 @@ async def test_qa_deltas_arrive_before_final_answer(monkeypatch, disconnect) -> 
         await iterator.aclose()
     await asyncio.wait_for(asyncio.gather(*tasks), 1)
     assert saved == ["validated answer"]
+
+
+async def test_reconnect_replays_snapshot_and_shares_the_original_model_task(monkeypatch):
+    from deep_research import api
+
+    release = asyncio.Event()
+    calls = 0
+
+    async def answer(cid, body, request, *, on_delta=None, on_event=None):
+        nonlocal calls
+        calls += 1
+        on_event({"type": "reasoning", "call_id": "one", "reasoning_delta": "thinking"})
+        on_delta("draft")
+        await release.wait()
+        on_delta(" tail")
+        return {"answer": "final", "status": "done", "tokens": 9}
+
+    store = qa_api.InMemoryQaStore()
+    cid = (await store.create("local", "test")).id
+    request = Request(
+        {
+            "type": "http",
+            "app": SimpleNamespace(state=SimpleNamespace(qa_store=store, settings=Settings())),
+        }
+    )
+    monkeypatch.setattr(api, "_check_rate_limit", AsyncMock())
+    monkeypatch.setattr(qa_api, "_answer", answer)
+    body = qa_api.AskRequest(query="q", request_id="request-one")
+    response = await qa_api.ask_stream(cid, body, request)
+    stream = response.body_iterator
+    assert "connected" in await anext(stream)
+    while "event: delta" not in await asyncio.wait_for(anext(stream), 1):
+        pass
+    runtime = request.app.state.qa_live_turns[(cid, body.request_id)]
+    await stream.aclose()
+    assert not runtime.listeners and not runtime.task.done()
+    reconnected = await qa_api.ask_stream(cid, body, request)
+    # Returning a response that is never consumed must not leak a subscriber.
+    assert not runtime.listeners
+    stream = reconnected.body_iterator
+    assert "connected" in await anext(stream)
+    assert '"replay": true' in await anext(stream)
+    assert '"reasoning_delta": "thinking"' in await anext(stream)
+    assert '"delta": "draft"' in await anext(stream)
+    assert "event: status" in await anext(stream)
+    release.set()
+    assert '"delta": " tail"' in await asyncio.wait_for(anext(stream), 1)
+    assert '"answer": "final"' in await asyncio.wait_for(anext(stream), 1)
+    await stream.aclose()
+    assert calls == 1 and not runtime.listeners
+    assert (await store.get(cid)).messages[0].answer == "final"

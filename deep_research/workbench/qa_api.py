@@ -8,20 +8,32 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict
 from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.responses import StreamingResponse
 
 from ..http.auth import principal_for
 from ..observability import Event
-from .qa import MAX_HISTORY_TURNS, answer_question
+from .qa import answer_question
 from .qa_cache import PaperEvidenceCache
-from .qa_store import ConversationFullError, InMemoryQaStore, QaConversation, QaMessage, QaStore
+from .qa_jobs import start_turn
+from .qa_requests import INTERRUPTED, MemoryQaRequests, RequestConflict, SqlQaRequests
+from .qa_store import (
+    ConversationFullError,
+    InMemoryQaStore,
+    QaConversation,
+    QaMessage,
+    QaStore,
+    SqlQaStore,
+    message_payload,
+)
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
 _SSE_HEARTBEAT_SECONDS = 15.0
@@ -38,6 +50,14 @@ class AskRequest(BaseModel):
     # 普通问答中来源全部可选；绑定任务的精读对话另有固定的本论文来源
     sources: list[Literal["web", "library"]] = Field(default_factory=list, max_length=2)
     project_id: str | None = Field(None, max_length=64)
+    request_id: str | None = Field(None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+
+    @field_validator("query")
+    @classmethod
+    def nonempty_query(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("问题不能为空")
+        return value.strip()
 
 
 def _store(request: Request) -> QaStore:
@@ -53,11 +73,24 @@ def _serialize(conversation: QaConversation) -> dict[str, Any]:
     for key in ("created_at", "updated_at"):
         if data.get(key) is not None:
             data[key] = data[key].isoformat()
-    for message in data.get("messages", []):
-        if message.get("created_at") is not None:
-            message["created_at"] = message["created_at"].isoformat()
+    data["messages"] = [message_payload(message) for message in conversation.messages]
     data.pop("owner_id", None)
     return data
+
+
+def _requests(request: Request) -> Any:
+    store = _store(request)
+    requests = getattr(request.app.state, "qa_requests", None)
+    if requests is None or getattr(request.app.state, "qa_requests_store", None) is not store:
+        if isinstance(store, SqlQaStore):
+            requests = SqlQaRequests(store._sm)
+        elif isinstance(store, InMemoryQaStore):
+            requests = MemoryQaRequests(store)
+        else:
+            raise TypeError("问答存储未实现请求生命周期")
+        request.app.state.qa_requests = requests
+        request.app.state.qa_requests_store = store
+    return requests
 
 
 async def _check_run(request: Request, run_id: str) -> None:
@@ -116,7 +149,65 @@ async def delete_conversation(conversation_id: str, request: Request) -> None:
 
 @router.post("/conversations/{conversation_id}/messages", status_code=201)
 async def ask(conversation_id: str, body: AskRequest, request: Request) -> dict[str, Any]:
-    return await _answer(conversation_id, body, request)
+    runtime = await _prepare_turn(conversation_id, body, request)
+    result = await asyncio.shield(runtime.task)
+    if result["status"] == "error":
+        raise HTTPException(
+            502,
+            {
+                "code": "qa_request_failed",
+                "message": result["error"],
+                "request_id": result["request_id"],
+            },
+        )
+    return result
+
+
+async def _prepare_turn(cid: str, body: AskRequest, request: Request) -> Any:
+    from .. import api as api_module
+
+    principal = principal_for(request)
+    if not principal.can_research:
+        raise HTTPException(403, "当前身份为只读，无法发起问答")
+    conversation = await _owned(request, cid)
+    request_id = body.request_id or str(uuid4())
+    body = body.model_copy(update={"request_id": request_id, "sources": sorted(set(body.sources))})
+    payload = body.model_dump(exclude={"request_id"}, mode="json")
+    digest = hashlib.sha256(
+        json.dumps({"actor": principal.id, **payload}, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+    requests = _requests(request)
+    existing = await requests.get(cid, request_id)
+    if existing is None:
+        await api_module._check_rate_limit(request)
+        await _paper_scope(request, conversation, body)
+    try:
+        await requests.reserve(cid, request_id, digest, {**payload, "_actor": principal.id})
+    except (RequestConflict, ConversationFullError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(404, "conversation not found") from exc
+
+    async def execute(**callbacks: Any) -> dict[str, Any]:
+        return await _answer(cid, body, request, **callbacks)
+
+    return start_turn(
+        request.app,
+        requests,
+        cid,
+        request_id,
+        execute,
+        request.app.state.settings.max_run_seconds,
+    )
+
+
+@router.get("/conversations/{conversation_id}/requests/{request_id}")
+async def request_status(conversation_id: str, request_id: str, request: Request) -> dict[str, Any]:
+    await _owned(request, conversation_id)
+    row = await _requests(request).get(conversation_id, request_id)
+    if row is None:
+        raise HTTPException(404, "request not found")
+    return message_payload(row)
 
 
 async def _answer(
@@ -133,10 +224,10 @@ async def _answer(
     if not principal.can_research:
         raise HTTPException(403, "当前身份为只读，无法发起问答")
     conversation = await _owned(request, conversation_id)
-    await api_module._check_rate_limit(request)
     history = [
         {"query": message.query, "answer": message.answer}
-        for message in conversation.messages[-MAX_HISTORY_TURNS:]
+        for message in conversation.messages
+        if message.status in {"done", "fallback"}
     ]
     settings = request.app.state.settings
     scope = await _paper_scope(request, conversation, body)
@@ -203,62 +294,28 @@ async def _answer(
         }
         for finding in result.findings[:30]
     ]
-    try:
-        stored = await _store(request).append(
-            conversation_id,
-            QaMessage(
-                id="",
-                position=0,
-                query=body.query,
-                answer=result.answer,
-                citations=result.citations,
-                evidence=evidence,
-                thoughts=[*result.thoughts, *reasoning.values(), *usages],
-                status="fallback" if result.fallback else "done",
-            ),
-        )
-    except ConversationFullError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    message = asdict(stored)
-    if message.get("created_at") is not None:
-        message["created_at"] = message["created_at"].isoformat()
-    message["tokens"] = agent.tracer.total_tokens
-    return message
+    stored = QaMessage(
+        id="",
+        position=0,
+        query=body.query,
+        answer=result.answer,
+        citations=result.citations,
+        evidence=evidence,
+        thoughts=[*result.thoughts, *reasoning.values(), *usages],
+        status="fallback" if result.fallback else "done",
+        tokens=agent.tracer.total_tokens,
+    )
+    return message_payload(stored)
 
 
 @router.post("/conversations/{conversation_id}/messages/stream")
 async def ask_stream(conversation_id: str, body: AskRequest, request: Request) -> StreamingResponse:
     """Run a normal persisted QA turn while keeping idle HTTP connections alive."""
-    tasks: set[asyncio.Task[dict[str, Any]]] = getattr(request.app.state, "qa_tasks", set())
-    request.app.state.qa_tasks = tasks
-    queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
-    connected = True
-
-    def on_delta(delta: str) -> None:
-        if connected:
-            queue.put_nowait(("delta", {"delta": delta}))
-
-    def on_event(event: dict[str, Any]) -> None:
-        kind = event.get("type")
-        if connected and kind in {"reasoning", "usage", "status", "cache", "reset"}:
-            queue.put_nowait((str(kind), event))
-
-    task = asyncio.create_task(
-        _answer(conversation_id, body, request, on_delta=on_delta, on_event=on_event)
-    )
-    tasks.add(task)
-
-    def discard_task(completed: asyncio.Task[dict[str, Any]]) -> None:
-        tasks.discard(completed)
-        if connected:
-            queue.put_nowait(None)
-        if not completed.cancelled():
-            completed.exception()  # Retrieve exceptions if the client disconnected.
-
-    task.add_done_callback(discard_task)
+    runtime = await _prepare_turn(conversation_id, body, request)
+    task = runtime.task
 
     async def events() -> AsyncIterator[str]:
-        nonlocal connected
+        queue = runtime.attach()
         try:
             yield ": connected\n\n"
             while True:
@@ -273,6 +330,12 @@ async def ask_stream(conversation_id: str, body: AskRequest, request: Request) -
                 yield (f"event: {kind}\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n")
             try:
                 message = task.result()
+            except asyncio.CancelledError:
+                payload = {
+                    "status": 503,
+                    "detail": {"code": "qa_interrupted", "message": INTERRUPTED},
+                }
+                yield "event: error\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
             except HTTPException as exc:
                 payload = {"status": exc.status_code, "detail": exc.detail}
                 yield "event: error\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
@@ -281,9 +344,18 @@ async def ask_stream(conversation_id: str, body: AskRequest, request: Request) -
                 yield "event: error\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
             else:
                 # The final, validated and persisted answer replaces provisional text.
-                yield "event: complete\ndata: " + json.dumps(message, ensure_ascii=False) + "\n\n"
+                if message["status"] == "error":
+                    payload = {
+                        "status": 502,
+                        "detail": {"code": "qa_request_failed", "message": message["error"]},
+                    }
+                    yield "event: error\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+                else:
+                    yield (
+                        "event: complete\ndata: " + json.dumps(message, ensure_ascii=False) + "\n\n"
+                    )
         finally:
-            connected = False
+            runtime.listeners.discard(queue)
 
     return StreamingResponse(
         events(),

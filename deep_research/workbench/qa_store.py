@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..persistence import orm
+from ..persistence.coordination import transaction_lock
 
 MAX_MESSAGES_PER_CONVERSATION = 200
 
@@ -26,6 +27,13 @@ class QaMessage:
     thoughts: list[dict[str, Any]] = field(default_factory=list)
     status: str = "done"
     created_at: datetime | None = None
+    request_id: str | None = None
+    request_hash: str | None = None
+    request_payload: dict[str, Any] = field(default_factory=dict)
+    execution_owner: str | None = None
+    lease_until: datetime | None = None
+    error: str | None = None
+    tokens: int | None = None
 
 
 @dataclass
@@ -43,6 +51,18 @@ class QaConversation:
 
 class ConversationFullError(ValueError):
     pass
+
+
+def message_payload(message: QaMessage) -> dict[str, Any]:
+    data = asdict(message)
+    for name in ("request_hash", "execution_owner", "lease_until"):
+        data.pop(name, None)
+    if message.created_at is not None:
+        data["created_at"] = message.created_at.isoformat()
+    data["request_payload"] = {
+        k: v for k, v in message.request_payload.items() if not k.startswith("_")
+    }
+    return data
 
 
 class QaStore(Protocol):
@@ -72,6 +92,13 @@ def _message(row: orm.QaMessageRow) -> QaMessage:
         thoughts=list(row.thoughts or []),
         status=row.status,
         created_at=row.created_at,
+        request_id=row.request_id,
+        request_hash=row.request_hash,
+        request_payload=dict(row.request_payload or {}),
+        execution_owner=row.execution_owner,
+        lease_until=row.lease_until,
+        error=row.error,
+        tokens=row.tokens,
     )
 
 
@@ -146,6 +173,7 @@ class SqlQaStore:
 
     async def append(self, conversation_id: str, message: QaMessage) -> QaMessage:
         async with self._sm() as s, s.begin():
+            await transaction_lock(s, f"qa:{conversation_id}")
             conversation = await s.get(orm.QaConversationRow, conversation_id, with_for_update=True)
             if conversation is None:
                 raise KeyError(conversation_id)
@@ -174,6 +202,7 @@ class SqlQaStore:
 
     async def delete(self, conversation_id: str) -> bool:
         async with self._sm() as s, s.begin():
+            await transaction_lock(s, f"qa:{conversation_id}")
             row = await s.get(orm.QaConversationRow, conversation_id)
             if row is None:
                 return False

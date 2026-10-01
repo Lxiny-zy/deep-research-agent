@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import logging
+import pickle
 import re
 import subprocess
 import sys
@@ -78,7 +79,6 @@ async def run_case(key: str, profile: dict, output: Path, paper: Path | None) ->
     from deep_research.workbench.attachments import ATTACHMENTS_SCRATCH_KEY, parse_attachment
     from deep_research.workbench.contract import CONTRACT_SCRATCH_KEY, build_contract
     from deep_research.workbench.intake import _FixedSources
-    from deep_research.workbench.publish import build_bundle
     from deep_research.workbench.templates import get_template
 
     target = output / key
@@ -189,33 +189,33 @@ async def run_case(key: str, profile: dict, output: Path, paper: Path | None) ->
         detail = await repo.get_run(run_id)
         if detail is None:
             raise RuntimeError("Missing persisted local result")
-        bundle = build_bundle(detail)
-        for file in bundle.files:
-            path = target / file.name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(file.data)
-        record = bundle.registry()
-        record["acceptance"] = {
+        # Freeze before rendering: a format/storage failure must not require
+        # another paid model run. Never load pickles from users or remote sources.
+        frozen = pickle.dumps(detail)
+        if profile["api_key"].encode() in frozen:
+            raise RuntimeError("Secret detected in local result; refusing to persist")
+        (target / "local-detail.pickle").write_bytes(frozen)
+        metadata = {
             "model": profile["model"],
             "input": str(paper.name) if attachment else "labelled synthetic paired data",
             "search": "frozen supplied paper sources; not a search recall test",
             "tokens": agent.tracer.total_tokens,
             "run_status": detail.status,
         }
+        (target / "model-run.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2).replace(
+                profile["api_key"], "[REDACTED]"
+            ),
+            encoding="utf-8",
+        )
+        record = render_case(detail, target, settings.artifact_total_bytes, metadata)
         safe = json.dumps(record, ensure_ascii=False, indent=2).replace(
             profile["api_key"], "[REDACTED]"
         )
         (target / "acceptance.json").write_text(safe, encoding="utf-8")
-        # Persist only non-secret runtime data for rerendering without repeat model charges.
-        import pickle
-
-        frozen = pickle.dumps(detail)
-        if profile["api_key"].encode() in frozen:
-            raise RuntimeError("Secret detected in local result; refusing to persist")
-        (target / "local-detail.pickle").write_bytes(frozen)
         print(
             f"{key}: status={record['status']}; tokens={agent.tracer.total_tokens}; "
-            f"files={len(bundle.files)}",
+            f"files={len(record['items'])}",
             flush=True,
         )
         return record
@@ -223,14 +223,59 @@ async def run_case(key: str, profile: dict, output: Path, paper: Path | None) ->
         await agent.aclose()
 
 
+def render_case(detail, target: Path, quota: int | None, metadata: dict) -> dict:
+    from deep_research.workbench.delivery_store import build_or_load, load_version
+    from deep_research.workbench.publish import build_bundle
+
+    target.mkdir(parents=True, exist_ok=True)
+    root = str(target / "work")
+    bundle = build_or_load(detail, root, quota, build_bundle)
+    restored = load_version(detail, root, bundle.content_version)
+    assert [file.data for file in bundle.files] == [file.data for file in restored.files]
+    for file in bundle.files:
+        path = target / file.name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(file.data)
+    record = bundle.registry()
+    record["acceptance"] = {**metadata, "persisted_version_verified": True}
+    return record
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--authorized-ssh", required=True, help="Explicitly authorized SSH alias")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--authorized-ssh", help="Explicitly authorized SSH alias")
+    mode.add_argument(
+        "--rerender-local",
+        type=Path,
+        help="Trusted local-detail.pickle created by this script; no SSH or model call",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--paper", type=Path)
     parser.add_argument("--templates", nargs="+", default=["dataAnalysis"])
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
+    if args.rerender_local:
+        from deep_research.persistence.repository import RunDetail
+
+        detail = pickle.loads(args.rerender_local.read_bytes())
+        if not isinstance(detail, RunDetail):
+            raise ValueError("Expected this script's trusted local RunDetail")
+        record = render_case(
+            detail,
+            args.output,
+            None,
+            {
+                "mode": "rerender saved model output; no model call",
+                "source": str(args.rerender_local),
+                "run_status": detail.status,
+            },
+        )
+        (args.output / "acceptance.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"Rerender: status={record['status']}; files={len(record['items'])}", flush=True)
+        return
     profile = remote_profile(args.authorized_ssh)
     print(
         f"Read-only configuration ready: model={profile['model']}; credential kept in memory",

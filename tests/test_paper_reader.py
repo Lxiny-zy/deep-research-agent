@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 from unittest.mock import AsyncMock
 
 import httpx
@@ -183,16 +182,8 @@ async def test_reader_blocks_unready_or_missing_paper_before_building_agent(
         headers=_headers(ALICE),
         json={"query": "原文的实验条件是什么？", "sources": ["web"]},
     )
-    if stream:
-        assert response.status_code == 200
-        assert "event: error" in response.text and "event: complete" not in response.text
-        payload = json.loads(
-            next(line[6:] for line in response.text.splitlines() if line.startswith("data: "))
-        )
-        assert payload["status"] == 409
-    else:
-        assert response.status_code == 409
-        payload = response.json()
+    assert response.status_code == 409
+    payload = response.json()
     expected = "paper_sources_unavailable" if status == "done" else "paper_not_ready"
     assert payload["detail"]["code"] == expected
     build_agent.assert_not_awaited()

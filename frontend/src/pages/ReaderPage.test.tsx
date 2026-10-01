@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ReaderPage from './ReaderPage'
@@ -15,8 +15,9 @@ const mocks = vi.hoisted(() => ({
   getConversation: vi.fn(),
   createConversation: vi.fn(),
   askQuestion: vi.fn(),
+  getQaRequest: vi.fn(),
 }))
-vi.mock('../api/client', () => mocks)
+vi.mock('../api/client', async () => ({ ...(await vi.importActual('../api/client')), ...mocks }))
 vi.mock('../components/PdfViewer', () => ({
   default: (props: { documentId: string; highlight?: { quote: string } | null }) => (
     <div data-testid="pdf" data-doc={props.documentId} data-quote={props.highlight?.quote ?? ''} />
@@ -47,6 +48,7 @@ const answered: QaConversation = {
   messages: [
     {
       id: 'm1',
+      request_id: null,
       position: 0,
       query: '用了什么数据集？',
       answer: '在 CAVE 上评测 [1]，另有综述提到 KAIST [2]。',
@@ -89,6 +91,8 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  sessionStorage.clear()
+  window.dispatchEvent(new Event('dr:credentials-cleared'))
   mocks.getReader.mockResolvedValue(reader)
   mocks.getRun.mockResolvedValue({
     id: 'r1',
@@ -102,9 +106,46 @@ beforeEach(() => {
   mocks.createConversation.mockResolvedValue({ ...answered, messages: [], message_count: 0 })
   mocks.askQuestion.mockResolvedValue(answered.messages[0])
   mocks.getConversation.mockResolvedValue(answered)
+  mocks.getQaRequest.mockResolvedValue(answered.messages[0])
 })
 
 describe('ReaderPage', () => {
+  it('reattaches a persisted pending question with its original id and source scope', async () => {
+    const pending = {
+      ...answered.messages[0],
+      status: 'pending',
+      answer: '',
+      request_id: 'existing-request',
+      request_payload: { sources: ['web'], project_id: null },
+    }
+    mocks.listConversations.mockResolvedValue([answered])
+    mocks.getConversation.mockResolvedValue({ ...answered, messages: [pending] })
+    let finish!: (value: unknown) => void
+    mocks.askQuestion.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    renderPage()
+    await waitFor(() =>
+      expect(mocks.askQuestion).toHaveBeenCalledWith(
+        'c1',
+        pending.query,
+        expect.any(AbortSignal),
+        { sources: ['web'], projectId: undefined, requestId: 'existing-request' },
+        expect.any(Function),
+        expect.any(Function),
+      ),
+    )
+    const final = { ...pending, status: 'done', answer: '恢复后的结果' }
+    mocks.getConversation.mockResolvedValue({ ...answered, messages: [final] })
+    finish(final)
+    expect(await screen.findByText('恢复后的结果')).toBeInTheDocument()
+    expect(mocks.createConversation).not.toHaveBeenCalled()
+    expect(mocks.askQuestion).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps the parsed PDF viewer and scroll state mounted across report tab switches', async () => {
     renderPage()
     const pdf = await screen.findByTestId('pdf')
@@ -202,10 +243,12 @@ describe('ReaderPage', () => {
     const oldRepeat = { ...answered.messages[0], id: 'm2', position: 1, answer: '之前的回答' }
     const durable = { ...answered, message_count: 2, messages: [...answered.messages, oldRepeat] }
     const latest = { ...oldRepeat, id: 'm3', position: 2, answer: '本轮迟到的回答' }
-    mocks.getConversation
-      .mockResolvedValueOnce(durable)
-      .mockResolvedValueOnce(durable)
-      .mockResolvedValue({ ...durable, message_count: 3, messages: [...durable.messages, latest] })
+    mocks.getConversation.mockResolvedValue({
+      ...durable,
+      message_count: 3,
+      messages: [...durable.messages, latest],
+    })
+    mocks.getQaRequest.mockResolvedValue(latest)
     mocks.askQuestion.mockRejectedValueOnce(new RequestTimeoutError())
     fireEvent.change(screen.getByLabelText('向这篇论文提问'), {
       target: { value: oldRepeat.query },
@@ -235,11 +278,34 @@ describe('ReaderPage', () => {
     expect(mocks.askQuestion).toHaveBeenCalledWith(
       'c1',
       '用了什么数据集？',
-      undefined,
-      { sources: [], projectId: undefined },
+      expect.any(AbortSignal),
+      { sources: [], projectId: undefined, requestId: expect.any(String) },
       expect.any(Function),
       expect.any(Function),
     )
+  })
+
+  it('aborts only the stream connection when leaving during a model response', async () => {
+    mocks.listConversations.mockResolvedValue([answered])
+    let signal!: AbortSignal
+    mocks.askQuestion.mockImplementationOnce((_cid, _query, connectionSignal) => {
+      signal = connectionSignal
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    })
+    const page = renderPage()
+    await screen.findByText(answered.messages[0].query)
+    fireEvent.change(screen.getByLabelText('向这篇论文提问'), { target: { value: '继续解释' } })
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledTimes(1))
+    expect(signal.aborted).toBe(false)
+    await act(async () => {
+      page.unmount()
+    })
+    expect(signal.aborted).toBe(true)
+    expect(mocks.getQaRequest).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem('dr_pending_qa_c1')).toBeTruthy()
   })
 
   it('requires a project before the library joins, then sends the chosen sources', async () => {
@@ -259,8 +325,8 @@ describe('ReaderPage', () => {
       expect(mocks.askQuestion).toHaveBeenCalledWith(
         'c1',
         '和综述比呢？',
-        undefined,
-        { sources: ['library', 'web'], projectId: 'p1' },
+        expect.any(AbortSignal),
+        { sources: ['library', 'web'], projectId: 'p1', requestId: expect.any(String) },
         expect.any(Function),
         expect.any(Function),
       ),

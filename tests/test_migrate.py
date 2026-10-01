@@ -32,6 +32,48 @@ async def test_upgrade_head_initializes_sqlite(tmp_path) -> None:
         await engine.dispose()
 
 
+async def test_qa_request_migration_preserves_legacy_messages(tmp_path):
+    from alembic import command
+    from deep_research.persistence.db import make_sessionmaker
+    from deep_research.workbench.qa_requests import SqlQaRequests
+    from deep_research.workbench.qa_store import SqlQaStore
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'qa-upgrade.db'}"
+    config = AlembicConfig("alembic.ini")
+    config.attributes["database_url"] = url
+    await asyncio.to_thread(command.upgrade, config, "0032")
+    engine = make_engine(url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO qa_conversation (id, owner_id, title) "
+                    "VALUES ('c', 'local', 'legacy')"
+                )
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO qa_message (id, conversation_id, position, query, answer, "
+                    "citations, evidence, thoughts, status) "
+                    "VALUES ('old', 'c', 0, 'old question', 'old answer', '[]', '[]', '[]', 'done')"
+                )
+            )
+    finally:
+        await engine.dispose()
+    await migrate.upgrade_head(url)
+    engine = make_engine(url)
+    try:
+        sessions = make_sessionmaker(engine)
+        old = (await SqlQaStore(sessions).get("c")).messages[0]
+        assert old.answer == "old answer" and old.request_id is None
+        new = await SqlQaRequests(sessions).reserve(
+            "c", "new-request", "digest", {"query": "new question"}
+        )
+        assert new.position == 1
+    finally:
+        await engine.dispose()
+
+
 async def test_model_capacity_migration_preserves_existing_profile_and_roundtrips(tmp_path):
     from alembic import command
 

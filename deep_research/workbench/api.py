@@ -13,12 +13,14 @@ import re
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from ..artifacts import ArtifactError
 from ..blocking import run_blocking
 from .contract import build_contract, pasted_paper_text
+from .delivery_store import build_or_load, load_version
 from .publish import DeliveryBundle, build_bundle, delivery_fingerprint, resolve_template
 from .templates import get_template, public_templates
 
@@ -103,11 +105,33 @@ async def preview_contract(req: ContractPreviewRequest, request: Request) -> dic
     return payload
 
 
-async def _bundle(request: Request, run_id: str) -> DeliveryBundle:
+async def _bundle(request: Request, run_id: str, version: str | None = None) -> DeliveryBundle:
+    try:
+        return await _stored_bundle(request, run_id, version)
+    except (ArtifactError, ValueError) as exc:
+        raise HTTPException(
+            409,
+            {"code": "delivery_integrity", "message": "交付文件或版本登记校验失败，未覆盖已有文件"},
+        ) from exc
+    except TimeoutError as exc:
+        raise HTTPException(503, "交付物仍在生成，请稍后重试") from exc
+    except OSError as exc:
+        raise HTTPException(503, "交付文件读写失败，请检查服务存储后重试") from exc
+
+
+async def _stored_bundle(
+    request: Request, run_id: str, version: str | None = None
+) -> DeliveryBundle:
     repo = request.app.state.repo
     detail = await repo.get_run(run_id)
     if detail is None:
         raise HTTPException(404, "run not found")
+    settings = request.app.state.settings
+    if version is not None:
+        try:
+            return await run_blocking(load_version, detail, settings.artifact_root, version)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "交付版本不存在") from exc
     if detail.status not in _TERMINAL:
         raise HTTPException(
             409, {"code": "run_not_finished", "message": "研究尚未结束，交付物还未生成"}
@@ -138,7 +162,13 @@ async def _bundle(request: Request, run_id: str) -> DeliveryBundle:
 
     async def generate() -> DeliveryBundle:
         try:
-            generated = await run_blocking(build_bundle, detail)
+            generated = await run_blocking(
+                build_or_load,
+                detail,
+                settings.artifact_root,
+                settings.artifact_total_bytes,
+                build_bundle,
+            )
             if len(cache) >= 32:
                 cache.pop(next(iter(cache)))
             cache[key] = generated
@@ -165,10 +195,15 @@ async def get_deliverables(run_id: str, request: Request) -> dict[str, Any]:
 
 
 @router.get("/runs/{run_id}/deliverables/{name:path}")
-async def download_deliverable(run_id: str, name: str, request: Request) -> Response:
+async def download_deliverable(
+    run_id: str,
+    name: str,
+    request: Request,
+    version: str | None = Query(None, pattern=r"^[0-9a-f]{64}$"),
+) -> Response:
     if not all(_NAME_RE.fullmatch(part) for part in name.split("/")) or name.count("/") > 1:
         raise HTTPException(400, "invalid deliverable name")
-    bundle = await _bundle(request, run_id)
+    bundle = await _bundle(request, run_id, version)
     file = next((item for item in bundle.files if item.name == name), None)
     if file is None:
         raise HTTPException(404, "deliverable not found")
@@ -185,6 +220,7 @@ async def download_deliverable(run_id: str, name: str, request: Request) -> Resp
         "Content-Disposition": disposition,
         "Cache-Control": "private, no-store",
         "X-Content-SHA256": record["sha256"],
+        "X-Content-Version": bundle.content_version,
         # 自包含 HTML 在浏览器里内联预览时也不允许执行脚本或加载外部资源
         "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'"
         + ("; script-src 'unsafe-inline'" if name.endswith("-mindmap.html") else ""),

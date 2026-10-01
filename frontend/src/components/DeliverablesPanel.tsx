@@ -191,7 +191,9 @@ export default function DeliverablesPanel({ runId, registry, loading, error }: P
     if (popup) popup.opener = null
     try {
       if (preview && !popup) throw new Error('浏览器拦截了预览窗口，请允许本站弹出窗口后重试')
-      const file = await fetchDeliverable(runId, item.name)
+      const file = registry?.content_version
+        ? await fetchDeliverable(runId, item.name, undefined, registry.content_version)
+        : await fetchDeliverable(runId, item.name)
       if (popup) {
         showPreview(popup, item, file.blob)
       } else {

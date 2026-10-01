@@ -71,6 +71,8 @@ async def _owned_run(repo, owner="alice"):
         ("GET", "/document.csv"),
         ("GET", "/document.xlsx"),
         ("GET", "/document.pdf"),
+        ("GET", "/deliverables"),
+        ("GET", "/deliverables/report.pdf?version=" + "a" * 64),
         ("DELETE", ""),
         ("POST", "/cancel"),
         ("POST", "/resume"),
@@ -102,6 +104,45 @@ async def test_lists_tags_batch_delete_and_admin_visibility(access_client):
     )
     assert response.json() == {"deleted": 1, "deleted_ids": [alice], "skipped": 1}
     assert await repo.get_run(bob) is not None
+
+
+async def test_versioned_delivery_survives_run_changes_and_reports_missing_files(access_client):
+    from deep_research.models import Report
+    from deep_research.workbench.delivery_store import (
+        build_or_load,
+        delivery_store,
+        workspace_files,
+    )
+    from deep_research.workbench.publish import DeliveryBundle, DeliveryFile
+
+    client, repo = access_client
+    rid = await _owned_run(repo)
+    await repo.save_report(rid, Report(query="q", markdown="saved report", citations=[]))
+    detail = await repo.get_run(rid)
+    root = api.app.state.settings.artifact_root
+
+    def render(_):
+        return DeliveryBundle(
+            "test",
+            "title",
+            [DeliveryFile("report.md", "md", "title", "source", b"saved report")],
+            [],
+            "pass",
+            "2026-10-02",
+        )
+
+    saved = build_or_load(detail, root, None, render)
+    path = f"/api/runs/{rid}/deliverables/report.md?version={saved.content_version}"
+    await repo.set_status(rid, "running")
+    response = await client.get(path, headers=_headers(ALICE))
+    assert response.status_code == 200 and response.content == b"saved report"
+    assert response.headers["x-content-sha256"] == saved.files[0].sha256
+    assert (await client.get(path, headers=_headers(BOB))).status_code == 404
+
+    store, _ = delivery_store(detail, root)
+    store.absolute_path(workspace_files(detail, root)[0]["path"]).unlink()
+    missing = await client.get(path, headers=_headers(ALICE))
+    assert missing.status_code == 409 and missing.json()["detail"]["code"] == "delivery_integrity"
 
 
 @pytest.mark.asyncio

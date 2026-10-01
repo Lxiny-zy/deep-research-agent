@@ -5,16 +5,20 @@ import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
 import QaStreamingAnswer from '../components/QaStreamingAnswer'
 import {
-  askQuestion,
   createConversation,
   deleteConversation,
   getConversation,
   listConversations,
 } from '../api/client'
 import { useProjects } from '../hooks/useLibrary'
-import { canRecoverQaAnswer, recoverTimedOutAnswer } from '../lib/qaRecovery'
+import {
+  pendingConversationId,
+  pendingQaId,
+  reconcileQaRequests,
+  runQaRequest,
+} from '../lib/qaRequest'
 import { appendQaActivity } from '../lib/qaActivity'
-import type { QaActivity } from '../types'
+import type { QaActivity, QaMessage } from '../types'
 
 const STARTERS = [
   { tag: '文献检索', text: '查找 DOE 光谱成像系统误差补偿的最新文献' },
@@ -40,6 +44,19 @@ export default function QaPage() {
   const [pending, setPending] = useState<string | null>(null)
   const [streamingAnswer, setStreamingAnswer] = useState('')
   const [activity, setActivity] = useState<QaActivity[]>([])
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null)
+  const resumeRef = useRef<QaMessage | null>(null)
+  const targetRef = useRef<string>()
+  const attemptedResume = useRef(new Set<string>())
+  const connection = useRef<AbortController | null>(null)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      connection.current?.abort()
+    }
+  }, [])
   const [withLibrary, setWithLibrary] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [withWeb, setWithWeb] = useState(false)
@@ -55,41 +72,51 @@ export default function QaPage() {
     queryKey: ['qa-conversation', id],
     queryFn: ({ signal }) => getConversation(id as string, signal),
     enabled: Boolean(id),
+    refetchInterval: (query) =>
+      query.state.data?.messages.some((m) => ['pending', 'running'].includes(m.status))
+        ? 5000
+        : false,
   })
 
   const ask = useMutation({
     mutationFn: async (text: string) => {
+      const controller = new AbortController()
+      connection.current = controller
       let target = id || createdId.current
-      let baselineCount = 0
+      const resume = resumeRef.current
+      resumeRef.current = null
       if (!target) {
         const created = await createConversation(text.slice(0, 60))
+        controller.signal.throwIfAborted()
         target = created.id
         createdId.current = created.id
-      } else {
-        // Read durable history before sending so stale cache entries cannot
-        // make an older answer look like the result of this question.
-        baselineCount = (await getConversation(target)).messages.length
       }
+      targetRef.current = target
       const sources: ('library' | 'web')[] = []
       if (withLibrary) sources.push('library')
       if (withWeb) sources.push('web')
-      try {
-        await askQuestion(
-          target,
-          text,
-          undefined,
-          { sources, projectId: withLibrary ? projectId : undefined },
-          (delta) => setStreamingAnswer((current) => current + delta),
-          (event) => {
-            if (event.type === 'reset') setStreamingAnswer('')
-            setActivity((current) => appendQaActivity(current, event))
-          },
-        )
-      } catch (error) {
-        if (!canRecoverQaAnswer(error)) throw error
-        const recovered = await recoverTimedOutAnswer(target, text, baselineCount)
-        if (!recovered) throw error
-      }
+      const scope = resume
+        ? {
+            sources: resume.request_payload?.sources ?? [],
+            projectId: resume.request_payload?.project_id ?? undefined,
+          }
+        : { sources, projectId: withLibrary ? projectId : undefined }
+      const requestId = pendingQaId(target, text, scope, resume?.request_id ?? undefined)
+      attemptedResume.current.add(requestId)
+      setActiveRequestId(requestId)
+      await runQaRequest(
+        target,
+        text,
+        scope,
+        requestId,
+        (delta) => setStreamingAnswer((current) => current + delta),
+        (event) => {
+          if (event.type === 'reset') setStreamingAnswer('')
+          if (event.type === 'reset' && event.replay) setActivity([])
+          setActivity((current) => appendQaActivity(current, event))
+        },
+        controller.signal,
+      )
       return target
     },
     onMutate: (text) => {
@@ -97,11 +124,18 @@ export default function QaPage() {
       setStreamingAnswer('')
       setActivity([])
     },
-    onError: (_error, text) => setDraft(text),
+    onError: (_error, text) => {
+      if (mounted.current) setDraft(text)
+    },
     onSettled: async (target) => {
       await queryClient.invalidateQueries({ queryKey: ['qa-conversations'] })
-      if (target) await queryClient.invalidateQueries({ queryKey: ['qa-conversation', target] })
+      if (target ?? targetRef.current)
+        await queryClient.invalidateQueries({
+          queryKey: ['qa-conversation', target ?? targetRef.current],
+        })
+      if (!mounted.current) return
       setPending(null)
+      setActiveRequestId(null)
       setStreamingAnswer('')
       // The app remounts page content when the pathname changes. Keep the
       // first request and its error state visible until the answer is saved.
@@ -117,7 +151,32 @@ export default function QaPage() {
     },
   })
 
-  const messages = conversation.data?.messages ?? []
+  useEffect(() => {
+    if (id || createdId.current || ask.isPending) return
+    const pendingId = pendingConversationId((conversations.data ?? []).map((item) => item.id))
+    if (pendingId) navigate(`/qa/${pendingId}`, { replace: true })
+  }, [id, conversations.data, ask.isPending, navigate])
+
+  const messages = (conversation.data?.messages ?? []).filter(
+    (m) => !activeRequestId || m.request_id !== activeRequestId,
+  )
+  const asking = ask.isPending
+  const mutateQuestion = ask.mutate
+  useEffect(() => {
+    if (id && conversation.data) reconcileQaRequests(id, conversation.data.messages)
+    if (asking) return
+    const unfinished = conversation.data?.messages.find(
+      (m) =>
+        m.request_id &&
+        ['pending', 'running'].includes(m.status) &&
+        !attemptedResume.current.has(m.request_id),
+    )
+    if (unfinished?.request_id) {
+      attemptedResume.current.add(unfinished.request_id)
+      resumeRef.current = unfinished
+      mutateQuestion(unfinished.query)
+    }
+  }, [id, conversation.data, asking, mutateQuestion])
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: 'end', behavior: 'smooth' })
   }, [messages.length, pending])
@@ -192,7 +251,16 @@ export default function QaPage() {
             </div>
           )}
           {messages.map((message) => (
-            <QaMessageView key={message.id} message={message} />
+            <QaMessageView
+              key={message.id}
+              message={message}
+              onReconnect={() => {
+                if (!ask.isPending) {
+                  resumeRef.current = message
+                  ask.mutate(message.query)
+                }
+              }}
+            />
           ))}
           {pending && (
             <article className="qa-turn is-pending">

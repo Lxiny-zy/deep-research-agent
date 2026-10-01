@@ -96,9 +96,12 @@ def _files(store: ArtifactStore, slug: str) -> list[dict[str, Any]]:
 
 
 def build_workspace(detail: RunDetail, artifact_root: str) -> dict[str, Any]:
+    from .delivery_store import workspace_files
+
     scratch = _scratch(detail)
     located = artifact_store_for(detail, artifact_root)
     files = _files(*located) if located is not None else []
+    files.extend(workspace_files(detail, artifact_root))
     replan = scratch.get(REPLAN_SCRATCH_KEY)
     return {
         "run_id": detail.id,
@@ -116,6 +119,13 @@ def read_workspace_file(
     detail: RunDetail, artifact_root: str, path: str
 ) -> tuple[bytes, str, bool]:
     """读取一个清单登记过的产物；返回 (字节, MIME, 是否截断)。"""
+    from .delivery_store import read_workspace_file as read_delivery
+
+    delivery = read_delivery(detail, artifact_root, path)
+    if delivery is not None:
+        data, mime = delivery
+        truncated = mime.startswith(_TEXT_MIMES) and len(data) > MAX_TEXT_PREVIEW
+        return data[:MAX_TEXT_PREVIEW] if truncated else data, mime, truncated
     located = artifact_store_for(detail, artifact_root)
     if located is None:
         raise FileNotFoundError(path)

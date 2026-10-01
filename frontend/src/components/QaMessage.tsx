@@ -20,9 +20,11 @@ const THOUGHT_LABEL: Record<string, string> = {
 export default function QaMessageView({
   message,
   onLocate,
+  onReconnect,
 }: {
   message: QaMessage
   onLocate?: (evidence: QaEvidence) => void
+  onReconnect?: () => void
 }) {
   const steps = message.thoughts.filter(
     (thought) => !['model_reasoning', 'model_usage', 'paper_cache'].includes(thought.tool),
@@ -37,6 +39,25 @@ export default function QaMessageView({
           <AppIcon name="network" size={14} strokeWidth={2} />
         </span>
         <div className={`qa-answer${message.status === 'fallback' ? ' is-fallback' : ''}`}>
+          {(message.status === 'pending' || message.status === 'running') && (
+            <div role="status">
+              <p>
+                {message.status === 'pending'
+                  ? '正在等待前一个问题完成…'
+                  : '本轮正在生成，结果会保存到当前会话。'}
+              </p>
+              {onReconnect && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={onReconnect}>
+                  恢复连接
+                </button>
+              )}
+            </div>
+          )}
+          {message.status === 'error' && (
+            <p className="error-text" role="alert">
+              {message.error || '本轮处理失败，可以重新提问。'}
+            </p>
+          )}
           <QaActivityView items={savedQaActivity(message.thoughts)} />
           <div className="markdown-body qa-answer-body">
             <QaAnswerBody

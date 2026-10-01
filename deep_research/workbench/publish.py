@@ -12,9 +12,8 @@
 唯一例外是 fail 级的引用越界：它意味着正文引用了不存在的来源，那份正文不应以
 任何格式对外，此时只发布 Markdown 并标 fail，供排查。
 
-当前 HTTP 入口按需生成并在进程内复用；publish() 提供显式落盘能力，但尚未接入
-该读取入口。库版本、压缩容器元数据等仍可能改变重新生成的字节，不能据此承诺
-跨重启或升级的下载哈希不变；这需要持久化交付版本及直接读取已登记文件。
+HTTP 入口通过 delivery_store 持久化不可变交付版本，后续下载核对登记并读取原文件，
+跨进程重启不重新渲染。publish() 保留为工作流显式发布的兼容入口。
 """
 
 from __future__ import annotations
@@ -107,6 +106,7 @@ class DeliveryBundle:
     gates: list[GateResult]
     status: str
     generated_at: str
+    content_version: str = ""
 
     def registry(self) -> dict[str, Any]:
         usable = [file for file in self.files if file.status != "fail"]
@@ -116,6 +116,7 @@ class DeliveryBundle:
         )
         return {
             "version": 1,
+            "content_version": self.content_version,
             "template": self.template,
             "title": self.title,
             "status": self.status,
@@ -159,7 +160,7 @@ def _file_stem(title: str) -> str:
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     payload = {
-        "format_version": 2,
+        "format_version": 3,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,

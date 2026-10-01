@@ -978,6 +978,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             raise
         app.state.tasks.add(recovery_task)
         recovery_task.add_done_callback(app.state.tasks.discard)
+        from .workbench.qa_jobs import pending_loop
+
+        qa_dispatcher = asyncio.create_task(pending_loop(app))
+        app.state.tasks.add(qa_dispatcher)
+        qa_dispatcher.add_done_callback(app.state.tasks.discard)
         yield
     finally:
         # Stop the producer of background work first. Otherwise a recovery
@@ -1003,6 +1008,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         pending_cleanup = [task for task in cleanup_tasks if not task.done()]
         if pending_cleanup:
             await asyncio.gather(*pending_cleanup, return_exceptions=True)
+        qa_tasks = list(getattr(app.state, "qa_tasks", set()))
+        for task in qa_tasks:
+            task.cancel()
+        if qa_tasks:
+            await asyncio.gather(*qa_tasks, return_exceptions=True)
         await engine.dispose()
 
 

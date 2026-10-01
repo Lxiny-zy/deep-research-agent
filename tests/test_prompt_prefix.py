@@ -142,3 +142,4 @@ async def test_paper_capacity_includes_schema_and_long_contextual_question(setti
         paper_sources=[Source(title="paper", url="https://a.com", content="原文证据 " * 20000)],
     )
     assert len(captured) == 1 and "未包含全部已读取原文" in captured[0]
+    assert "前次回答" in captured[0]

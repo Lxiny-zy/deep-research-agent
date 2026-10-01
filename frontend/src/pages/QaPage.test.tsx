@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import QaPage from './QaPage'
@@ -11,10 +11,11 @@ const mocks = vi.hoisted(() => ({
   getConversation: vi.fn(),
   createConversation: vi.fn(),
   askQuestion: vi.fn(),
+  getQaRequest: vi.fn(),
   deleteConversation: vi.fn(),
   listProjects: vi.fn(),
 }))
-vi.mock('../api/client', () => mocks)
+vi.mock('../api/client', async () => ({ ...(await vi.importActual('../api/client')), ...mocks }))
 
 const conversation: QaConversation = {
   id: 'c1',
@@ -25,6 +26,7 @@ const conversation: QaConversation = {
   messages: [
     {
       id: 'm1',
+      request_id: null,
       position: 0,
       query: 'CASSI 是什么？',
       answer: 'CASSI 是编码孔径快照光谱成像 [1]。',
@@ -67,8 +69,11 @@ function renderAt(path: string) {
 describe('QaPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    sessionStorage.clear()
+    window.dispatchEvent(new Event('dr:credentials-cleared'))
     mocks.listConversations.mockResolvedValue([{ ...conversation, messages: [] }])
     mocks.getConversation.mockResolvedValue(conversation)
+    mocks.getQaRequest.mockResolvedValue(conversation.messages[0])
     mocks.listProjects.mockResolvedValue([])
   })
 
@@ -95,13 +100,32 @@ describe('QaPage', () => {
       expect(mocks.askQuestion).toHaveBeenCalledWith(
         'c2',
         '新问题',
-        undefined,
-        { sources: [], projectId: undefined },
+        expect.any(AbortSignal),
+        { sources: [], projectId: undefined, requestId: expect.any(String) },
         expect.any(Function),
         expect.any(Function),
       ),
     )
     expect(mocks.createConversation).toHaveBeenCalledWith('新问题')
+  })
+
+  it('does not start model work when a conversation is created after leaving the page', async () => {
+    let finish!: (value: QaConversation) => void
+    mocks.createConversation.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const page = renderAt('/qa')
+    fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: '离开前的问题' } })
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    await waitFor(() => expect(mocks.createConversation).toHaveBeenCalledTimes(1))
+    page.unmount()
+    await act(async () => {
+      finish({ ...conversation, id: 'late-created', messages: [] })
+    })
+    expect(mocks.askQuestion).not.toHaveBeenCalled()
   })
 
   it('shows errors without losing the page', async () => {
@@ -145,10 +169,12 @@ describe('QaPage', () => {
       messages: [...conversation.messages, previous],
     }
     const latest = { ...previous, id: 'm3', position: 2, answer: '这次回答已恢复' }
-    mocks.getConversation
-      .mockResolvedValueOnce(durable)
-      .mockResolvedValueOnce(durable)
-      .mockResolvedValue({ ...durable, message_count: 3, messages: [...durable.messages, latest] })
+    mocks.getConversation.mockResolvedValue({
+      ...durable,
+      message_count: 3,
+      messages: [...durable.messages, latest],
+    })
+    mocks.getQaRequest.mockResolvedValue(latest)
     mocks.askQuestion.mockRejectedValueOnce(new RequestTimeoutError())
     fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: previous.query } })
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
@@ -175,8 +201,8 @@ describe('QaPage', () => {
       expect(mocks.askQuestion).toHaveBeenCalledWith(
         'c2',
         '首轮问题',
-        undefined,
-        { sources: [], projectId: undefined },
+        expect.any(AbortSignal),
+        { sources: [], projectId: undefined, requestId: expect.any(String) },
         expect.any(Function),
         expect.any(Function),
       ),

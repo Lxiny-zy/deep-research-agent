@@ -9,8 +9,8 @@
 
 会话状态存于轻量表 ``qa_conversation`` / ``qa_message``：会话 id、标题、每条消息的
 问句、答句、引用与「思考过程」（检索了什么、保留了几条证据），供前端还原对话。
-上下文只携带最近几轮的问答摘要，用于指代消解（「那第二篇呢」），不把整段历史
-塞回模型。
+上下文按当前模型容量保留完整对话轮次，用于指代消解（「那第二篇呢」）；
+超出容量时明确标注省略的早期轮次，不把历史答复作为新的原文证据。
 """
 
 from __future__ import annotations
@@ -28,8 +28,7 @@ from ..prompting import structured_system_prompt
 from ..report.validation import validate_body
 from ..tools.base import SearchTool
 from .qa_cache import PaperEvidenceCache, evidence_cache_key
-
-MAX_HISTORY_TURNS = 4
+from .qa_context import dialogue_context
 
 _SYSTEM = (
     "你是严谨的学术问答助手。只依据【已核验素材】回答用户问题：简洁、准确、用中文。"
@@ -87,17 +86,17 @@ class QaAnswer:
 
 
 def _contextual_query(question: str, history: list[dict[str, str]]) -> str:
-    """把最近几轮问句拼进检索式：追问里的「它」「第二篇」需要上文才有检索意义。"""
-    if not history:
+    """用最近的非空问句辅助检索；完整对话由 dialogue_context 另外提供。"""
+    previous = next((turn["query"] for turn in reversed(history) if turn.get("query")), None)
+    if previous is None:
         return question
-    recent = [turn["query"] for turn in history[-MAX_HISTORY_TURNS:] if turn.get("query")]
-    if not recent:
-        return question
-    pronoun = re.search(r"(它|这个|那个|上面|前面|第[一二三四五六七八九十\d]+[篇个项])", question)
-    if not pronoun and recent[-1].strip() == question.strip():
+    pronoun = re.search(
+        r"(它|这个|那个|上面|前面|上次|之前|第[一二三四五六七八九十\d]+[篇个项点条步种])", question
+    )
+    if not pronoun and previous.strip() == question.strip():
         return question
     if pronoun or len(question) < 12:
-        return f"{recent[-1]}；追问：{question}"
+        return f"{previous}；追问：{question}"
     return question
 
 
@@ -179,13 +178,30 @@ async def answer_question(
             "input_capacity_chars",
             ctx.settings.llm_max_input_chars,
         )
-        context_chars = max(
-            0,
-            input_limit
-            - len(structured_system_prompt(direct_system_prompt(researcher.system), FindingList))
-            - 8192,
+        system_chars = len(
+            structured_system_prompt(direct_system_prompt(researcher.system), FindingList)
         )
-        researcher.source_context = lambda sources: paper_context(sources, query, context_chars)
+        available = max(0, input_limit - system_chars)
+        # Schema can dominate a small context window. Reserve framing/repair
+        # and dialogue separately, scaling both to actual remaining capacity.
+        # These are character allocations, never a model output token cap.
+        framing_chars = min(8192, max(256, available // 8))
+        dialogue_chars = max(min(8192, available // 2), available // 4)
+        context_chars = max(0, available - framing_chars - dialogue_chars)
+
+        def context_for_paper(sources: list[Source]) -> str:
+            fixed = paper_context(sources, query, context_chars)
+            if history and query != question:
+                fixed += "\n\n" + dialogue_context(
+                    history,
+                    max(
+                        0,
+                        available - len(fixed) - len(query) - framing_chars,
+                    ),
+                )
+            return fixed
+
+        researcher.source_context = context_for_paper
         researcher.search = _FixedSources(paper_sources)
         cache_query = (
             query
@@ -258,12 +274,11 @@ async def answer_question(
             # chunks. No optional source means no additional retrieval.
             pass
         else:
-            context = ""
-            if history:
-                context = "【最近对话】\n" + "\n".join(
-                    f"问：{turn.get('query', '')}\n答：{turn.get('answer', '')[:300]}"
-                    for turn in history[-MAX_HISTORY_TURNS:]
-                )
+            model = ctx.llm_for("synthesizer")
+            capacity = getattr(model, "input_capacity_chars", ctx.settings.llm_max_input_chars)
+            context = dialogue_context(
+                history, capacity - len(ctx.system_prompt(_KNOWLEDGE_SYSTEM)) - len(question) - 8192
+            )
             user = f"{context}\n\n【用户问题】\n{question}"
             knowledge_chunks: list[str] = []
             async for delta in ctx.llm_for("synthesizer").stream(
@@ -306,12 +321,13 @@ async def answer_question(
             f"- [{index}]{tag} {finding.statement}\n  原文：{finding.evidence_quote}"
             + (f"\n  出处：{reference}" if reference else "")
         )
-    context = ""
-    if history:
-        context = "【最近对话】\n" + "\n".join(
-            f"问：{turn.get('query', '')}\n答：{turn.get('answer', '')[:300]}"
-            for turn in history[-MAX_HISTORY_TURNS:]
-        )
+    system = _SYSTEM + (_PAPER_SYSTEM if paper_sources is not None else "")
+    model = ctx.llm_for("synthesizer")
+    capacity = getattr(model, "input_capacity_chars", ctx.settings.llm_max_input_chars)
+    context = dialogue_context(
+        history,
+        capacity - len(ctx.system_prompt(system)) - sum(map(len, lines)) - len(question) - 8192,
+    )
     # Stable evidence precedes changing dialogue and the current question.
     user = "【已核验素材】\n" + "\n".join(lines) + f"\n\n{context}\n\n【用户问题】\n{question}"
     system = _SYSTEM + (_PAPER_SYSTEM if paper_sources is not None else "")
@@ -389,4 +405,4 @@ async def answer_question(
     )
 
 
-__all__ = ["MAX_HISTORY_TURNS", "QaAnswer", "answer_question"]
+__all__ = ["QaAnswer", "answer_question"]
