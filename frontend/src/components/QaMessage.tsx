@@ -1,4 +1,6 @@
 import ReactMarkdown from 'react-markdown'
+import QaActivityView from './QaActivityView'
+import { savedQaActivity } from '../lib/qaActivity'
 import remarkGfm from 'remark-gfm'
 import { AppIcon } from './AppIcon'
 import type { QaEvidence, QaMessage, QaOrigin } from '../types'
@@ -10,6 +12,7 @@ const THOUGHT_LABEL: Record<string, string> = {
   paper_read: '查阅本论文',
   search_and_verify: '检索与逐字核验',
   citation_check: '引用复核',
+  answer_revision: '回答修订',
 }
 
 const ORIGIN_ORDER: QaOrigin[] = ['paper', 'library', 'web']
@@ -80,6 +83,9 @@ export default function QaMessageView({
     evidence: message.evidence.find((item) => item.source_url === url),
   }))
   const grouped = items.some((item) => item.evidence?.origin)
+  const steps = message.thoughts.filter(
+    (thought) => !['model_reasoning', 'model_usage', 'paper_cache'].includes(thought.tool),
+  )
   return (
     <article className="qa-turn" aria-label={`第 ${message.position + 1} 轮问答`}>
       <div className="qa-question">
@@ -90,6 +96,7 @@ export default function QaMessageView({
           <AppIcon name="network" size={14} strokeWidth={2} />
         </span>
         <div className={`qa-answer${message.status === 'fallback' ? ' is-fallback' : ''}`}>
+          <QaActivityView items={savedQaActivity(message.thoughts)} />
           <div className="markdown-body">
             <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
               {message.answer}
@@ -116,14 +123,14 @@ export default function QaMessageView({
                 </div>
               )
             })}
-          {message.thoughts.length > 0 && (
+          {steps.length > 0 && (
             <details className="qa-thoughts">
               <summary>
                 <AppIcon name="chevron-right" size={13} aria-hidden="true" />
                 检索与核验过程
               </summary>
               <ol>
-                {message.thoughts.map((thought, index) => (
+                {steps.map((thought, index) => (
                   <li key={index}>
                     <strong>{THOUGHT_LABEL[thought.tool] ?? thought.tool}</strong>
                     <span>{thought.observation}</span>

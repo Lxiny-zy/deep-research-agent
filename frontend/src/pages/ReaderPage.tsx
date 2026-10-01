@@ -18,7 +18,8 @@ import { useRunDetail } from '../hooks/useRuns'
 import { flattenFindings } from '../lib/evidence'
 import { documentForEvidence } from '../lib/readerDocuments'
 import { canRecoverQaAnswer, recoverTimedOutAnswer } from '../lib/qaRecovery'
-import type { QaEvidence, QaSourceOption } from '../types'
+import type { QaActivity, QaEvidence, QaSourceOption } from '../types'
+import { appendQaActivity } from '../lib/qaActivity'
 
 // PDF.js 体积较大，只在打开原文时加载
 const PdfViewer = lazy(() => import('../components/PdfViewer'))
@@ -57,6 +58,7 @@ export default function ReaderPage() {
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<string | null>(null)
   const [streamingAnswer, setStreamingAnswer] = useState('')
+  const [activity, setActivity] = useState<QaActivity[]>([])
   const [withLibrary, setWithLibrary] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [withWeb, setWithWeb] = useState(false)
@@ -96,6 +98,10 @@ export default function ReaderPage() {
           undefined,
           { sources, projectId: withLibrary ? projectId : undefined },
           (delta) => setStreamingAnswer((current) => current + delta),
+          (event) => {
+            if (event.type === 'reset') setStreamingAnswer('')
+            setActivity((current) => appendQaActivity(current, event))
+          },
         )
       } catch (error) {
         if (!canRecoverQaAnswer(error)) throw error
@@ -107,6 +113,7 @@ export default function ReaderPage() {
     onMutate: (text) => {
       setPending(text)
       setStreamingAnswer('')
+      setActivity([])
     },
     onError: (_error, text) => setDraft(text),
     onSettled: async (target) => {
@@ -178,7 +185,11 @@ export default function ReaderPage() {
               <div className="qa-question">
                 <p>{pending}</p>
               </div>
-              <QaStreamingAnswer text={streamingAnswer} waiting="正在翻阅原文并核验…" />
+              <QaStreamingAnswer
+                text={streamingAnswer}
+                waiting="正在翻阅原文并核验…"
+                activity={activity}
+              />
             </article>
           )}
           {ask.isError && (

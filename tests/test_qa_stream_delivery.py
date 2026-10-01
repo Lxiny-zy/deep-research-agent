@@ -16,7 +16,10 @@ async def test_qa_deltas_arrive_before_final_answer(monkeypatch, disconnect) -> 
     release = asyncio.Event()
     saved: list[str] = []
 
-    async def answer(cid, body, request, *, on_delta=None):  # type: ignore[no-untyped-def]
+    async def answer(cid, body, request, *, on_delta=None, on_event=None):  # type: ignore[no-untyped-def]
+        on_event(
+            {"type": "reasoning", "call_id": "test", "reasoning_delta": "provider-visible text"}
+        )
         on_delta("provisional answer")
         await release.wait()
         saved.append("validated answer")
@@ -27,6 +30,8 @@ async def test_qa_deltas_arrive_before_final_answer(monkeypatch, disconnect) -> 
     response = await qa_api.ask_stream("c1", qa_api.AskRequest(query="question"), request)
     iterator = response.body_iterator
     assert "connected" in await anext(iterator)
+    thinking = await asyncio.wait_for(anext(iterator), 1)
+    assert "event: reasoning" in thinking and "provider-visible text" in thinking
     first = await asyncio.wait_for(anext(iterator), 1)
     assert "event: delta" in first and "provisional answer" in first
     assert saved == []

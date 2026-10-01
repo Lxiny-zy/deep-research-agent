@@ -13,6 +13,8 @@ import {
 } from '../api/client'
 import { useProjects } from '../hooks/useLibrary'
 import { canRecoverQaAnswer, recoverTimedOutAnswer } from '../lib/qaRecovery'
+import { appendQaActivity } from '../lib/qaActivity'
+import type { QaActivity } from '../types'
 
 const STARTERS = [
   { tag: '文献检索', text: '查找 DOE 光谱成像系统误差补偿的最新文献' },
@@ -37,6 +39,7 @@ export default function QaPage() {
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<string | null>(null)
   const [streamingAnswer, setStreamingAnswer] = useState('')
+  const [activity, setActivity] = useState<QaActivity[]>([])
   const [withLibrary, setWithLibrary] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [withWeb, setWithWeb] = useState(false)
@@ -77,6 +80,10 @@ export default function QaPage() {
           undefined,
           { sources, projectId: withLibrary ? projectId : undefined },
           (delta) => setStreamingAnswer((current) => current + delta),
+          (event) => {
+            if (event.type === 'reset') setStreamingAnswer('')
+            setActivity((current) => appendQaActivity(current, event))
+          },
         )
       } catch (error) {
         if (!canRecoverQaAnswer(error)) throw error
@@ -88,6 +95,7 @@ export default function QaPage() {
     onMutate: (text) => {
       setPending(text)
       setStreamingAnswer('')
+      setActivity([])
     },
     onError: (_error, text) => setDraft(text),
     onSettled: async (target) => {
@@ -197,6 +205,7 @@ export default function QaPage() {
                 </span>
                 <QaStreamingAnswer
                   text={streamingAnswer}
+                  activity={activity}
                   waiting={withLibrary || withWeb ? '正在检索并核验证据…' : '正在生成回答…'}
                 />
               </div>

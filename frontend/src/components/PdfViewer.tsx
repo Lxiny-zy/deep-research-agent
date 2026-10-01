@@ -265,14 +265,17 @@ export default function PdfViewer({
   useEffect(() => {
     if (!doc || !quote) return
     let cancelled = false
+    const textCache = texts.current
     void (async () => {
       const pages: string[][] = []
       for (let number = 1; number <= doc.numPages; number += 1) {
-        if (!texts.current.has(number)) {
+        if (cancelled) return
+        if (!textCache.has(number)) {
           const content = await (await doc.getPage(number)).getTextContent()
-          texts.current.set(number, textRuns(content.items))
+          if (cancelled) return
+          textCache.set(number, textRuns(content.items))
         }
-        pages.push((texts.current.get(number) ?? []).map((run) => run.str))
+        pages.push((textCache.get(number) ?? []).map((run) => run.str))
       }
       const match = findQuote(pages, quote)
       if (cancelled) return
@@ -282,7 +285,7 @@ export default function PdfViewer({
         return
       }
       const viewport = (await doc.getPage(match.page + 1)).getViewport({ scale: 1 })
-      const runs = texts.current.get(match.page + 1) ?? []
+      const runs = textCache.get(match.page + 1) ?? []
       const rects = match.items.map((index) => {
         const run = runs[index]
         const box = Util.transform(viewport.transform, run.transform)
@@ -293,10 +296,22 @@ export default function PdfViewer({
       setMissed(false)
       setMarks({ page: match.page, rects })
       const page = pageRefs.current[match.page]
-      scroller.current?.scrollTo?.({
-        top: (page?.offsetTop ?? 0) + (rects[0]?.y ?? 0) * scaleRef.current - 96,
-        behavior: 'smooth',
-      })
+      const container = scroller.current
+      if (page && container && rects.length) {
+        const top = Math.min(...rects.map((rect) => rect.y))
+        const bottom = Math.max(...rects.map((rect) => rect.y + rect.height))
+        const pageTop =
+          page.getBoundingClientRect().top -
+          container.getBoundingClientRect().top +
+          container.scrollTop
+        container.scrollTo?.({
+          top: Math.max(
+            0,
+            pageTop + ((top + bottom) / 2) * scaleRef.current - container.clientHeight / 2,
+          ),
+          behavior: 'smooth',
+        })
+      }
     })()
     return () => {
       cancelled = true

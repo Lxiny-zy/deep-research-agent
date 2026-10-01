@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({ fetchReaderPdf: vi.fn(), getDocument: vi.fn() 
 vi.mock('../api/client', () => ({ fetchReaderPdf: mocks.fetchReaderPdf }))
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: {},
-  Util: {},
+  Util: { transform: (_viewport: unknown, transform: number[]) => transform },
   getDocument: mocks.getDocument,
 }))
 
@@ -25,6 +25,32 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks()
   vi.useRealTimers()
+})
+
+it('places the cited text in the middle of the PDF scroll viewport', async () => {
+  const page = {
+    ...firstPage,
+    getTextContent: async () => ({
+      items: [{ str: 'target quote', transform: [1, 0, 0, 10, 10, 210], width: 60 }],
+    }),
+  }
+  mocks.getDocument.mockReturnValue({
+    promise: Promise.resolve({ numPages: 1, getPage: async () => page }),
+    destroy: vi.fn().mockResolvedValue(undefined),
+  })
+  const { container, rerender } = render(<PdfViewer runId="r" documentId="d" />)
+  await screen.findByText('共 1 页')
+  const scroller = container.querySelector('.pdf-scroller') as HTMLDivElement
+  const holder = container.querySelector('.pdf-page') as HTMLDivElement
+  Object.defineProperty(scroller, 'clientHeight', { value: 600 })
+  scroller.scrollTop = 400
+  vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 200 } as DOMRect)
+  vi.spyOn(holder, 'getBoundingClientRect').mockReturnValue({ top: 600 } as DOMRect)
+  scroller.scrollTo = vi.fn()
+  rerender(<PdfViewer runId="r" documentId="d" highlight={{ quote: 'target quote', token: 1 }} />)
+  await waitFor(() =>
+    expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 705.75, behavior: 'smooth' }),
+  )
 })
 
 it('shows the first page without waiting for every page to parse', async () => {

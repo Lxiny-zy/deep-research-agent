@@ -926,6 +926,47 @@ async def test_qa_stream_keeps_source_free_turn_on_model_knowledge_path(
 
 
 @pytest.mark.asyncio
+async def test_qa_reasoning_is_streamed_and_saved_with_the_message(api_repo, monkeypatch) -> None:
+    api, _ = api_repo
+    from deep_research.workbench.qa_store import InMemoryQaStore
+
+    api.app.state.qa_store = InMemoryQaStore()
+
+    async def fake_build_agent(app, settings, **kwargs):  # type: ignore[no-untyped-def]
+        agent = DeepResearchAgent(settings, llm=QaLLM(), search_tool=FakeSearch())
+
+        async def stream(*args, **kwargs):  # type: ignore[no-untyped-def]
+            agent.tracer.emit(
+                "LLM",
+                "info",
+                data={
+                    "call_id": "test-call",
+                    "model": "test",
+                    "reasoning_delta": "供应商返回的思考内容",
+                },
+            )
+            yield "本轮答案。"
+
+        monkeypatch.setattr(agent.llm, "stream", stream)
+        return agent, None
+
+    monkeypatch.setattr(api, "_build_agent", fake_build_agent)
+    async with _client(api.app) as client:
+        created = await client.post("/api/qa/conversations", json={"title": "流式活动"})
+        cid = created.json()["id"]
+        response = await client.post(
+            f"/api/qa/conversations/{cid}/messages/stream", json={"query": "解释这个概念"}
+        )
+        detail = (await client.get(f"/api/qa/conversations/{cid}")).json()
+    assert "event: reasoning" in response.text
+    assert "event: delta" in response.text and "event: complete" in response.text
+    thought = next(
+        item for item in detail["messages"][0]["thoughts"] if item["tool"] == "model_reasoning"
+    )
+    assert thought["observation"] == "供应商返回的思考内容"
+
+
+@pytest.mark.asyncio
 async def test_sql_qa_store_orders_messages(tmp_path) -> None:
     from deep_research.persistence.db import create_all, make_engine, make_sessionmaker
     from deep_research.workbench.qa_store import QaMessage, SqlQaStore

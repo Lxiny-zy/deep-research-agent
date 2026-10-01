@@ -44,6 +44,7 @@ import type {
   QaConversation,
   DatasetParseResult,
   QaMessage,
+  QaActivity,
   QaSourceOption,
   RunNarrative,
   RunReader,
@@ -62,6 +63,7 @@ export const getSearchResourceImpact = () =>
   request<SearchResourceImpact>('/api/search-resources/impact')
 import { normalizeReportDocument } from '../lib/reportDocument'
 import { withResponse } from './transport'
+import { cacheReaderPdf, cachedReaderPdf, clearReaderPdfCache } from '../lib/readerPdfCache'
 import { QaStreamInterruptedError, RequestTimeoutError } from './transport'
 
 export class ApiError extends Error {
@@ -167,6 +169,7 @@ export function clearApiKey(): void {
 }
 
 export function clearWorkspaceState(): void {
+  clearReaderPdfCache()
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('dr:credentials-cleared'))
   pendingSubmission = null
   try {
@@ -951,11 +954,12 @@ export function askQuestion(
   signal?: AbortSignal,
   scope?: { sources: QaSourceOption[]; projectId?: string },
   onDelta?: (delta: string) => void,
+  onActivity?: (activity: QaActivity) => void,
 ): Promise<QaMessage> {
   const body = scope
     ? { query, sources: scope.sources, ...(scope.projectId ? { project_id: scope.projectId } : {}) }
     : { query }
-  return askQuestionStream(id, body, signal, onDelta)
+  return askQuestionStream(id, body, signal, onDelta, onActivity)
 }
 
 async function askQuestionStream(
@@ -963,6 +967,7 @@ async function askQuestionStream(
   body: { query: string; sources?: QaSourceOption[]; project_id?: string },
   signal?: AbortSignal,
   onDelta?: (delta: string) => void,
+  onActivity?: (activity: QaActivity) => void,
 ): Promise<QaMessage> {
   const key = getApiKey()
   const controller = new AbortController()
@@ -1055,6 +1060,13 @@ async function askQuestionStream(
             flushDeltas()
             return JSON.parse(data) as QaMessage
           }
+          if (event && ['reasoning', 'usage', 'status', 'cache', 'reset'].includes(event) && data) {
+            const payload = JSON.parse(data) as Record<string, unknown>
+            if (payload && typeof payload === 'object') {
+              if (event === 'reset') flushDeltas()
+              onActivity?.({ ...payload, type: event as QaActivity['type'] })
+            }
+          }
           if (event === 'error' && data) {
             const payload = JSON.parse(data) as { status?: number; detail?: unknown }
             throw new ApiError(payload.status ?? 502, formatDetail(payload.detail, '问答失败'))
@@ -1090,7 +1102,13 @@ export async function fetchReaderPdf(
   onProgress?: (loaded: number, total: number | null) => void,
 ): Promise<ArrayBuffer> {
   const key = getApiKey()
-  return withResponse(
+  const cacheKey = JSON.stringify([key, runId, documentId])
+  const cached = cachedReaderPdf(cacheKey)
+  if (cached) {
+    signal?.throwIfAborted()
+    return cached
+  }
+  const bytes = await withResponse(
     `/api/runs/${encodeURIComponent(runId)}/reader/${encodeURIComponent(documentId)}/pdf`,
     { headers: key ? { Authorization: `Bearer ${key}` } : {}, signal },
     async (res) => {
@@ -1126,6 +1144,8 @@ export async function fetchReaderPdf(
     },
     120_000,
   )
+  if (!signal?.aborted && key === getApiKey()) cacheReaderPdf(cacheKey, bytes)
+  return bytes
 }
 
 export function getNarrative(id: string, signal?: AbortSignal): Promise<RunNarrative> {

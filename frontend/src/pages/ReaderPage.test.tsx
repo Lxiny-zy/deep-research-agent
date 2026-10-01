@@ -106,25 +106,47 @@ beforeEach(() => {
 
 describe('ReaderPage', () => {
   it('streams a draft while reading and replaces it with the saved answer', async () => {
-    const final = { ...answered.messages[0], answer: '已核验的精读结论' }
+    const final = {
+      ...answered.messages[0],
+      answer: '已核验的精读结论',
+      thoughts: [
+        {
+          tool: 'model_reasoning',
+          input: 'test-model',
+          observation: '接口返回的思考片段',
+          call_id: 'call-1',
+        },
+      ],
+    }
     mocks.getConversation.mockResolvedValue({ ...answered, messages: [], message_count: 0 })
     let finish!: (message: typeof final) => void
-    mocks.askQuestion.mockImplementationOnce((_id, _query, _signal, _scope, onDelta) => {
-      onDelta('精读结论正在生成')
-      return new Promise((resolve) => {
-        finish = resolve
-      })
-    })
+    mocks.askQuestion.mockImplementationOnce(
+      (_id, _query, _signal, _scope, onDelta, onActivity) => {
+        onActivity({
+          type: 'reasoning',
+          call_id: 'call-1',
+          model: 'test-model',
+          reasoning_delta: '接口返回的思考片段',
+        })
+        onDelta('精读结论正在生成')
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      },
+    )
     renderPage()
     await screen.findByTestId('pdf')
     fireEvent.change(screen.getByLabelText('向这篇论文提问'), { target: { value: final.query } })
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
     expect(await screen.findByTestId('qa-streaming-answer')).toHaveTextContent('精读结论正在生成')
+    expect(screen.getByText('接口返回的思考片段')).toBeVisible()
     expect(screen.queryByText('已核验的精读结论')).not.toBeInTheDocument()
     mocks.getConversation.mockResolvedValue({ ...answered, messages: [final] })
     finish(final)
     expect(await screen.findByText('已核验的精读结论')).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByTestId('qa-streaming-answer')).not.toBeInTheDocument())
+    expect(screen.getByText('接口返回的思考片段')).toBeInTheDocument()
+    expect(screen.getByText('模型返回的思考内容').closest('details')).not.toHaveAttribute('open')
   })
 
   it('does not allow questions until the paper intake run is done', async () => {
@@ -203,6 +225,7 @@ describe('ReaderPage', () => {
       undefined,
       { sources: [], projectId: undefined },
       expect.any(Function),
+      expect.any(Function),
     )
   })
 
@@ -225,6 +248,7 @@ describe('ReaderPage', () => {
         '和综述比呢？',
         undefined,
         { sources: ['library', 'web'], projectId: 'p1' },
+        expect.any(Function),
         expect.any(Function),
       ),
     )

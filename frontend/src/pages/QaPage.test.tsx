@@ -99,6 +99,7 @@ describe('QaPage', () => {
         undefined,
         { sources: [], projectId: undefined },
         expect.any(Function),
+        expect.any(Function),
       ),
     )
     expect(mocks.createConversation).toHaveBeenCalledWith('新问题')
@@ -177,6 +178,7 @@ describe('QaPage', () => {
         '首轮问题',
         undefined,
         { sources: [], projectId: undefined },
+        expect.any(Function),
         expect.any(Function),
       ),
     )

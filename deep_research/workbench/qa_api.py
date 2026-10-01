@@ -18,7 +18,9 @@ from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from ..http.auth import principal_for
+from ..observability import Event
 from .qa import MAX_HISTORY_TURNS, answer_question
+from .qa_cache import PaperEvidenceCache
 from .qa_store import ConversationFullError, InMemoryQaStore, QaConversation, QaMessage, QaStore
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
@@ -123,6 +125,7 @@ async def _answer(
     request: Request,
     *,
     on_delta: Callable[[str], None] | None = None,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     from .. import api as api_module
 
@@ -137,17 +140,54 @@ async def _answer(
     ]
     settings = request.app.state.settings
     scope = await _paper_scope(request, conversation, body)
+    if conversation.run_id is not None:
+        cache = getattr(request.app.state, "paper_evidence_cache", None)
+        if cache is None:
+            cache = PaperEvidenceCache()
+            request.app.state.paper_evidence_cache = cache
+        scope.update(paper_cache=cache, cache_scope=f"{principal.id}/{conversation.run_id}")
     agent, search_tool = await api_module._build_agent(request.app, settings)
+    reasoning: dict[str, dict[str, Any]] = {}
+    usages: list[dict[str, Any]] = []
+
+    def observe(event: Event) -> None:
+        data = event.data or {}
+        delta = data.get("reasoning_delta")
+        call_id = data.get("call_id")
+        if isinstance(delta, str) and isinstance(call_id, str):
+            thought = reasoning.setdefault(
+                call_id,
+                {
+                    "tool": "model_reasoning",
+                    "input": str(data.get("model", "")),
+                    "observation": "",
+                    "call_id": call_id,
+                },
+            )
+            thought["observation"] += delta
+            if on_event:
+                on_event({"type": "reasoning", **data})
+        elif isinstance(data.get("llm_usage"), dict):
+            usages.append(
+                {"tool": "model_usage", "input": "", "observation": "", "usage": data["llm_usage"]}
+            )
+            if on_event:
+                on_event({"type": "usage", "llm_usage": data["llm_usage"]})
+        elif event.type == "start" and on_event:
+            on_event({"type": "status", "message": event.message})
+
+    agent.tracer.add_sink(observe)
     try:
         ctx = await agent.one_shot_context()
         result = await answer_question(
-            body.query, history=history, ctx=ctx, on_delta=on_delta, **scope
+            body.query, history=history, ctx=ctx, on_delta=on_delta, on_event=on_event, **scope
         )
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(502, {"code": "qa_failed", "message": f"问答失败：{exc}"}) from exc
     finally:
+        agent.tracer.remove_sink(observe)
         await agent.aclose()
         if search_tool is not None:
             await search_tool.aclose()
@@ -172,7 +212,7 @@ async def _answer(
                 answer=result.answer,
                 citations=result.citations,
                 evidence=evidence,
-                thoughts=result.thoughts,
+                thoughts=[*result.thoughts, *reasoning.values(), *usages],
                 status="fallback" if result.fallback else "done",
             ),
         )
@@ -190,14 +230,21 @@ async def ask_stream(conversation_id: str, body: AskRequest, request: Request) -
     """Run a normal persisted QA turn while keeping idle HTTP connections alive."""
     tasks: set[asyncio.Task[dict[str, Any]]] = getattr(request.app.state, "qa_tasks", set())
     request.app.state.qa_tasks = tasks
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
     connected = True
 
     def on_delta(delta: str) -> None:
         if connected:
-            queue.put_nowait(delta)
+            queue.put_nowait(("delta", {"delta": delta}))
 
-    task = asyncio.create_task(_answer(conversation_id, body, request, on_delta=on_delta))
+    def on_event(event: dict[str, Any]) -> None:
+        kind = event.get("type")
+        if connected and kind in {"reasoning", "usage", "status", "cache", "reset"}:
+            queue.put_nowait((str(kind), event))
+
+    task = asyncio.create_task(
+        _answer(conversation_id, body, request, on_delta=on_delta, on_event=on_event)
+    )
     tasks.add(task)
 
     def discard_task(completed: asyncio.Task[dict[str, Any]]) -> None:
@@ -215,17 +262,14 @@ async def ask_stream(conversation_id: str, body: AskRequest, request: Request) -
             yield ": connected\n\n"
             while True:
                 try:
-                    delta = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                    item = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
                 except TimeoutError:
                     yield ": keep-alive\n\n"
                     continue
-                if delta is None:
+                if item is None:
                     break
-                yield (
-                    "event: delta\ndata: "
-                    + json.dumps({"delta": delta}, ensure_ascii=False)
-                    + "\n\n"
-                )
+                kind, payload = item
+                yield (f"event: {kind}\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n")
             try:
                 message = task.result()
             except HTTPException as exc:

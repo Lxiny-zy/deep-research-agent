@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from ..guardrails import report_eligible
 from ..models import Finding, ResearchResult, Source
 from ..report.validation import validate_body
 from ..tools.base import SearchTool
+from .qa_cache import PaperEvidenceCache, evidence_cache_key
 
 MAX_HISTORY_TURNS = 4
 
@@ -44,10 +46,17 @@ _PAPER_SYSTEM = (
     "这是针对一篇论文的精读对话。标注【本论文】的素材来自这篇论文，是回答的主体；"
     "标注【其他文献】的素材只用于补充或对比，必须明确写出「其他研究指出……」，"
     "不得把其他文献的内容说成这篇论文的结论。论文中找不到依据时如实说明。"
+    "回答创新或贡献时，区分作者明确提出的新贡献与采用的已有方法、常规预处理；"
+    "不把使用某个已有算法说成作者发明了该算法。先直接回答问题，再解释原文依据。"
+)
+_PAPER_EXTRACTION = (
+    "这是论文问答的证据抽取。发现必须直接回应当前问题，保留作者归属和适用条件。"
+    "问题涉及创新或贡献时，优先定位作者的 contribution、we propose、主要贡献等明确表述；"
+    "背景知识、常规预处理和采用已有算法不能自动当作原创贡献。"
 )
 _ORIGIN_TAG = {"paper": "【本论文】", "library": "【其他文献·资料库】", "web": "【其他文献】"}
 _PAPER_FALLBACK = (
-    "这篇论文中没有找到能回答该问题的原文。可以换个问法，或勾选资料库、联网检索后再问。"
+    "当前可用的原文片段不足以回答这个问题。可以补充章节或页码，或勾选资料库、联网检索后再问。"
 )
 _SEARCH_FALLBACK = (
     "现有检索结果不足以回答这个问题。可以尝试补充更具体的方法名、数据集或年份后再问。"
@@ -79,6 +88,8 @@ def _contextual_query(question: str, history: list[dict[str, str]]) -> str:
     if not recent:
         return question
     pronoun = re.search(r"(它|这个|那个|上面|前面|第[一二三四五六七八九十\d]+[篇个项])", question)
+    if not pronoun and recent[-1].strip() == question.strip():
+        return question
     if pronoun or len(question) < 12:
         return f"{recent[-1]}；追问：{question}"
     return question
@@ -111,6 +122,9 @@ async def answer_question(
     include_web: bool = False,
     extra_search: SearchTool | None = None,
     on_delta: Callable[[str], None] | None = None,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+    paper_cache: PaperEvidenceCache | None = None,
+    cache_scope: str = "",
 ) -> QaAnswer:
     """一次学术问答：检索 → 核验 → 作答 → 复核。``ctx`` 为 ``RunContext``。
 
@@ -147,8 +161,33 @@ async def answer_question(
         from .reader import rank_paper_sources
 
         chosen = rank_paper_sources(query, paper_sources)
+        researcher.system += "\n\n" + _PAPER_EXTRACTION
         researcher.search = _FixedSources(chosen)
-        paper_findings, raw = (await _verified(researcher, query)) if chosen else ([], 0)
+        cache_query = (
+            query
+            if query == question
+            else query + json.dumps(history, ensure_ascii=False, sort_keys=True)
+        )
+        cache_key = (
+            evidence_cache_key(cache_scope, cache_query, chosen, researcher) if paper_cache else ""
+        )
+        cached = paper_cache.get(cache_key) if paper_cache is not None else None
+        if cached is not None:
+            paper_findings, raw = cached
+        else:
+            paper_findings, raw = (await _verified(researcher, query)) if chosen else ([], 0)
+            if paper_cache is not None:
+                paper_cache.put(cache_key, paper_findings, raw)
+        cache_event = {
+            "type": "cache",
+            "hit": cached is not None,
+            "message": "复用已核验的论文证据"
+            if cached is not None
+            else ("本轮已读取并核验论文证据" if paper_findings else "当前原文片段未得到可用证据"),
+        }
+        if on_event is not None:
+            on_event(cache_event)
+        thoughts.append({"tool": "paper_cache", "input": "", "observation": cache_event["message"]})
         for finding in paper_findings:
             origins.setdefault(finding.source_url, "paper")
         findings.extend(paper_findings)
@@ -244,6 +283,8 @@ async def answer_question(
     # Stable evidence precedes changing dialogue and the current question.
     user = "【已核验素材】\n" + "\n".join(lines) + f"\n\n{context}\n\n【用户问题】\n{question}"
     system = _SYSTEM + (_PAPER_SYSTEM if paper_sources is not None else "")
+    if on_event is not None:
+        on_event({"type": "status", "message": "正在组织回答…"})
     chunks: list[str] = []
     async for delta in ctx.llm_for("synthesizer").stream(
         ctx.system_prompt(system), user, temperature=0.3
@@ -252,7 +293,46 @@ async def answer_question(
         if on_delta is not None:
             on_delta(delta)
     body = "".join(chunks).strip()
-    check = validate_body(body, [ResearchResult(sub_question=query, findings=findings)], url_to_idx)
+    results = [ResearchResult(sub_question=query, findings=findings)]
+    check = validate_body(body, results, url_to_idx, fallback=False)
+    if check.issues:
+        # Repair citation/number problems against the same frozen evidence
+        # before falling back to a generic extractive summary.
+        thoughts.append(
+            {
+                "tool": "answer_revision",
+                "input": "",
+                "observation": "按核验问题修订回答：" + "、".join(check.issues),
+            }
+        )
+        if on_event is not None:
+            on_event({"type": "reset", "message": "正在核对引用并修订回答…"})
+        repair = (
+            user
+            + "\n\n【需要修订的回答】\n"
+            + body
+            + "\n\n【核验问题】\n"
+            + "\n".join(f"- {reason}: {excerpt}" for _code, excerpt, reason in check.problems)
+            + "\n请直接给出修订后的完整回答，仅使用已有素材编号，不添加新事实或数值。"
+        )
+        repaired: list[str] = []
+        try:
+            async for delta in ctx.llm_for("synthesizer").stream(
+                ctx.system_prompt(system), repair, temperature=0.2
+            ):
+                repaired.append(delta)
+                if on_delta is not None:
+                    on_delta(delta)
+            body = "".join(repaired).strip()
+        except Exception:
+            thoughts.append(
+                {
+                    "tool": "answer_revision",
+                    "input": "",
+                    "observation": "修订未完成，保留可核验的素材摘要",
+                }
+            )
+    check = validate_body(body, results, url_to_idx)
     thoughts.append(
         {
             "tool": "citation_check",

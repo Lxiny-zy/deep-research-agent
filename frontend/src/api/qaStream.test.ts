@@ -8,6 +8,37 @@ afterEach(() => {
 })
 
 describe('QA stream deadline', () => {
+  it('forwards reasoning and revision resets separately from answer text', async () => {
+    const encoder = new TextEncoder()
+    const frames = [
+      'event: reasoning\ndata: {"call_id":"one","reasoning_delta":"模型返回的内容"}\n\n',
+      'event: delta\ndata: {"delta":"第一版"}\n\n',
+      'event: reset\ndata: {"message":"正在修订"}\n\n',
+      'event: delta\ndata: {"delta":"第二版"}\n\n',
+      'event: complete\ndata: {"answer":"第二版"}\n\n',
+    ]
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            frames.forEach((frame) => controller.enqueue(encoder.encode(frame)))
+            controller.close()
+          },
+        }),
+      ),
+    )
+    const observed: string[] = []
+    await askQuestion(
+      'c',
+      'q',
+      undefined,
+      undefined,
+      (text) => observed.push(text),
+      (event) => observed.push(event.type),
+    )
+    expect(observed).toEqual(['reasoning', '第一版', 'reset', '第二版'])
+  })
+
   it('classifies a premature EOF as recoverable and flushes received text', async () => {
     const encoder = new TextEncoder()
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(

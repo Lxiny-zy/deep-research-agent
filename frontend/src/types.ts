@@ -895,6 +895,18 @@ export interface QaThought {
   tool: string
   input: string
   observation: string
+  call_id?: string
+  usage?: Record<string, unknown>
+}
+
+export interface QaActivity {
+  type: 'reasoning' | 'usage' | 'status' | 'cache' | 'reset'
+  message?: string
+  hit?: boolean
+  call_id?: string
+  model?: string
+  reasoning_delta?: string
+  llm_usage?: Record<string, unknown>
 }
 
 export interface QaEvidence {
