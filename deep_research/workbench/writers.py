@@ -118,7 +118,7 @@ class TemplateWriter:
         material: str,
     ) -> str:
         header = contract.render() if contract is not None else f"# 任务\n{bb.query}\n"
-        return f"{header}\n## 已核验素材（角标即引用编号）\n{material or '（无）'}\n"
+        return f"## 已核验素材（角标即引用编号）\n{material or '（无）'}\n\n{header}\n"
 
     def postprocess(self, bb: Blackboard, report: Report, template: TaskTemplate) -> dict[str, Any]:
         """返回写入 scratch 的附加结构；默认无。"""

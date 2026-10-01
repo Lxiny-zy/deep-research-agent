@@ -241,7 +241,8 @@ async def answer_question(
             f"问：{turn.get('query', '')}\n答：{turn.get('answer', '')[:300]}"
             for turn in history[-MAX_HISTORY_TURNS:]
         )
-    user = f"{context}\n\n【用户问题】\n{question}\n\n【已核验素材】\n" + "\n".join(lines)
+    # Stable evidence precedes changing dialogue and the current question.
+    user = "【已核验素材】\n" + "\n".join(lines) + f"\n\n{context}\n\n【用户问题】\n{question}"
     system = _SYSTEM + (_PAPER_SYSTEM if paper_sources is not None else "")
     chunks: list[str] = []
     async for delta in ctx.llm_for("synthesizer").stream(

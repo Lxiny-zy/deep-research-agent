@@ -10,9 +10,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import aclosing
 from typing import Any, TypeVar
+from uuid import uuid4
 
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel
@@ -222,6 +224,27 @@ class LLM:
             "stream": True,
         }
         resp = None
+        usage_report: dict[str, int | None] | None = None
+        call_id = uuid4().hex
+        reasoning_parts: list[str] = []
+        last_reasoning_emit = 0.0
+
+        def flush_reasoning() -> None:
+            nonlocal last_reasoning_emit
+            if reasoning_parts:
+                self.tracer.emit(
+                    "LLM",
+                    "info",
+                    "模型返回的思考内容",
+                    data={
+                        "reasoning_delta": "".join(reasoning_parts),
+                        "call_id": call_id,
+                        "model": self.model,
+                    },
+                )
+                reasoning_parts.clear()
+                last_reasoning_emit = time.monotonic()
+
         estimated_added = 0
         try:
             try:
@@ -238,29 +261,52 @@ class LLM:
             out_chars = accounted_output = exact_usage = 0
             async for chunk in resp:
                 exact_usage = _tokens(chunk) or exact_usage
+                reported = _usage_details(chunk)
+                if reported is not None:
+                    usage_report = reported
                 if not chunk.choices:
                     continue
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    out_chars += len(delta)
+                fragment = chunk.choices[0].delta
+                delta = getattr(fragment, "content", None)
+                # Only explicit, displayable provider fields; never infer
+                # reasoning from answer text or decode opaque reasoning data.
+                reasoning = getattr(fragment, "reasoning_summary", None) or getattr(
+                    fragment, "reasoning_content", None
+                )
+                reasoning = reasoning if isinstance(reasoning, str) else ""
+                if reasoning:
+                    reasoning_parts.append(reasoning)
+                    if time.monotonic() - last_reasoning_emit >= 0.15:
+                        flush_reasoning()
+                if delta or reasoning:
+                    out_chars += len(delta or "") + len(reasoning)
                     output_estimate = out_chars // 2
                     increment = output_estimate - accounted_output
                     if increment > 0:
                         self.tracer.add_tokens(increment, estimated=True)
                         estimated_added += increment
                         accounted_output = output_estimate
-                    yield delta
+                    if delta:
+                        yield delta
             tail = (out_chars + 1) // 2 - accounted_output
             if tail > 0:
                 self.tracer.add_tokens(tail, estimated=True)
                 estimated_added += tail
             if exact_usage > 0:
                 self.tracer.reconcile_tokens(estimated_added, exact_usage)
+            if usage_report is not None:
+                self.tracer.emit(
+                    "LLM",
+                    "info",
+                    "模型用量已返回",
+                    data={"llm_usage": {"model": self.model, **usage_report}},
+                )
         except BaseException as exc:
             if isinstance(exc, (asyncio.CancelledError, GeneratorExit)) or _uncertain_usage(exc):
                 self.tracer.add_tokens(max(0, reservation.total - estimated_added), estimated=True)
             raise
         finally:
+            flush_reasoning()
             self.tracer.budget.release(reservation)
             if resp is not None and hasattr(resp, "close"):
                 await resp.close()
@@ -282,6 +328,35 @@ def _uncertain_usage(error: BaseException) -> bool:
 def _tokens(resp: object) -> int:
     usage = getattr(resp, "usage", None)
     return int(getattr(usage, "total_tokens", 0) or 0) if usage else 0
+
+
+def _usage_details(resp: object) -> dict[str, int | None] | None:
+    """Keep provider-reported cache usage distinct from missing statistics."""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return None
+
+    def value(obj: object, name: str) -> object:
+        return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+
+    def count(raw: object) -> int | None:
+        return raw if type(raw) is int and raw >= 0 else None
+
+    inputs = count(value(usage, "prompt_tokens"))
+    outputs = count(value(usage, "completion_tokens"))
+    cached = count(value(value(usage, "prompt_tokens_details"), "cached_tokens"))
+    if cached is None:
+        cached = count(value(usage, "prompt_cache_hit_tokens"))
+    if inputs is not None and cached is not None and cached > inputs:
+        cached = None
+    return {
+        "input_tokens": inputs,
+        "output_tokens": outputs,
+        "cached_input_tokens": cached,
+        "reasoning_tokens": count(
+            value(value(usage, "completion_tokens_details"), "reasoning_tokens")
+        ),
+    }
 
 
 def _estimate_tokens(*parts: str) -> int:

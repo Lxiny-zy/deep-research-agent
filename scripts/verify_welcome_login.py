@@ -28,6 +28,8 @@ def preview() -> Iterator[str]:
         raise RuntimeError("Build the frontend before running the browser regression")
 
     class Handler(SimpleHTTPRequestHandler):
+        extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".mjs": "text/javascript"}
+
         def do_GET(self) -> None:
             if not Path(urlsplit(self.path).path).suffix:
                 self.path = "/index.html"

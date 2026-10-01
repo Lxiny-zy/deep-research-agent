@@ -8,7 +8,6 @@ import {
   getReader,
   listConversations,
 } from '../api/client'
-import { RequestTimeoutError } from '../api/transport'
 import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
 import QaStreamingAnswer from '../components/QaStreamingAnswer'
@@ -18,7 +17,7 @@ import { useProjects } from '../hooks/useLibrary'
 import { useRunDetail } from '../hooks/useRuns'
 import { flattenFindings } from '../lib/evidence'
 import { documentForEvidence } from '../lib/readerDocuments'
-import { recoverTimedOutAnswer } from '../lib/qaRecovery'
+import { canRecoverQaAnswer, recoverTimedOutAnswer } from '../lib/qaRecovery'
 import type { QaEvidence, QaSourceOption } from '../types'
 
 // PDF.js 体积较大，只在打开原文时加载
@@ -99,7 +98,7 @@ export default function ReaderPage() {
           (delta) => setStreamingAnswer((current) => current + delta),
         )
       } catch (error) {
-        if (!(error instanceof RequestTimeoutError)) throw error
+        if (!canRecoverQaAnswer(error)) throw error
         const recovered = await recoverTimedOutAnswer(target, text, baselineCount)
         if (!recovered) throw error
       }

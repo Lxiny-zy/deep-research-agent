@@ -271,6 +271,7 @@ async def get_reader_pdf(run_id: str, document_id: str, request: Request) -> Res
         media_type="application/pdf",
         headers={
             "Cache-Control": "private, max-age=3600",
+            "Vary": "Authorization",
             "Content-Disposition": f'inline; filename="{document_id}.pdf"',
             "Content-Security-Policy": "default-src 'none'",
             "X-Content-Type-Options": "nosniff",

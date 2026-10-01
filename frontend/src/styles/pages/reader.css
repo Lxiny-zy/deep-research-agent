@@ -247,6 +247,14 @@
   position: absolute;
 }
 
+.pdf-page-error {
+  background: var(--surface);
+  color: var(--text);
+  inset: 0;
+  padding: var(--space-5);
+  position: absolute;
+}
+
 .pdf-loading {
   align-items: center;
   color: var(--text-3);

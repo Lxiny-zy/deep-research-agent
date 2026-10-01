@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { askQuestion } from './client'
-import { RequestTimeoutError } from './transport'
+import { QaStreamInterruptedError, RequestTimeoutError } from './transport'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -8,6 +8,25 @@ afterEach(() => {
 })
 
 describe('QA stream deadline', () => {
+  it('classifies a premature EOF as recoverable and flushes received text', async () => {
+    const encoder = new TextEncoder()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: delta\ndata: {"delta":"部分正文"}\n\n'))
+            controller.close()
+          },
+        }),
+      ),
+    )
+    const onDelta = vi.fn()
+    await expect(askQuestion('c1', '问题', undefined, undefined, onDelta)).rejects.toBeInstanceOf(
+      QaStreamInterruptedError,
+    )
+    expect(onDelta).toHaveBeenCalledWith('部分正文')
+  })
+
   it('delivers draft chunks before completion and returns the validated replacement', async () => {
     const encoder = new TextEncoder()
     let stream!: ReadableStreamDefaultController<Uint8Array>

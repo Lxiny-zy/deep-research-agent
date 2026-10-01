@@ -1,8 +1,13 @@
 import { getConversation } from '../api/client'
+import { QaStreamInterruptedError, RequestTimeoutError } from '../api/transport'
 import type { QaMessage } from '../types'
 
 export const QA_RECOVERY_INTERVAL_MS = 1500
 export const QA_RECOVERY_ATTEMPTS = 40
+
+export function canRecoverQaAnswer(error: unknown): boolean {
+  return error instanceof RequestTimeoutError || error instanceof QaStreamInterruptedError
+}
 
 /**
  * A browser or proxy timeout does not prove that the server stopped working.

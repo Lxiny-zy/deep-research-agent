@@ -1055,6 +1055,40 @@
 }
 
 /* ---- 证据抽屉 ---- */
+.model-usage-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+}
+
+.model-usage-panel dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  margin: var(--space-3) 0;
+}
+
+.model-usage-panel dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-reasoning-text {
+  max-height: 360px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: var(--space-3) 0;
+  white-space: pre-wrap;
+}
+
+@media print {
+  .model-usage-panel {
+    display: none !important;
+  }
+}
+
 .evidence-overlay {
   inset: 0;
   isolation: isolate;

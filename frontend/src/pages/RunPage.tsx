@@ -9,6 +9,8 @@ import PrintableReport from '../components/PrintableReport'
 import ReportActions from '../components/ReportActions'
 import ReportView from '../components/ReportView'
 import StatsBar from '../components/StatsBar'
+import ModelUsagePanel from '../components/ModelUsagePanel'
+import ModelReasoningPanel from '../components/ModelReasoningPanel'
 import StatusBadge from '../components/StatusBadge'
 import StructuredDocumentPreview from '../components/StructuredDocumentPreview'
 import TagEditor from '../components/TagEditor'
@@ -387,6 +389,8 @@ export default function RunPage() {
       />
 
       <RunTaskSummary info={runTemplate.data} />
+      <ModelUsagePanel events={stream.events} />
+      <ModelReasoningPanel events={stream.events} />
 
       {/* 打印预览独占阅读区域，屏幕中的运行活动由打印样式隐藏。 */}
       <div className={`run-columns run-workbench-grid${printPreview ? ' is-print-preview' : ''}`}>

@@ -62,7 +62,7 @@ export const getSearchResourceImpact = () =>
   request<SearchResourceImpact>('/api/search-resources/impact')
 import { normalizeReportDocument } from '../lib/reportDocument'
 import { withResponse } from './transport'
-import { RequestTimeoutError } from './transport'
+import { QaStreamInterruptedError, RequestTimeoutError } from './transport'
 
 export class ApiError extends Error {
   constructor(
@@ -193,11 +193,7 @@ function signalUnauthorized(rejectedKey: string | null): void {
   }
 }
 
-async function request<T>(
-  url: string,
-  init?: RequestInit,
-  timeoutMs = 30_000,
-): Promise<T> {
+async function request<T>(url: string, init?: RequestInit, timeoutMs = 30_000): Promise<T> {
   const key = getApiKey()
   const headers = new Headers(init?.headers)
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
@@ -972,6 +968,17 @@ async function askQuestionStream(
   const controller = new AbortController()
   const cancel = () => controller.abort(signal?.reason)
   let timedOut = false
+  let deltaTimer: ReturnType<typeof setTimeout> | undefined
+  let deltaParts: string[] = []
+  let deltaSize = 0
+  const flushDeltas = () => {
+    if (deltaTimer !== undefined) clearTimeout(deltaTimer)
+    deltaTimer = undefined
+    const text = deltaParts.join('')
+    deltaParts = []
+    deltaSize = 0
+    if (text && !signal?.aborted) onDelta?.(text)
+  }
   let idleTimer: ReturnType<typeof setTimeout> | undefined
   const refreshIdleTimer = () => {
     if (idleTimer !== undefined) clearTimeout(idleTimer)
@@ -1037,15 +1044,20 @@ async function askQuestionStream(
             .join('\n')
           if (event === 'delta' && data) {
             const payload = JSON.parse(data) as { delta?: unknown }
-            if (typeof payload.delta === 'string') onDelta?.(payload.delta)
+            if (typeof payload.delta === 'string') {
+              deltaParts.push(payload.delta)
+              deltaSize += payload.delta.length
+              if (deltaSize >= 2048) flushDeltas()
+              else deltaTimer ??= setTimeout(flushDeltas, 60)
+            }
           }
-          if (event === 'complete' && data) return JSON.parse(data) as QaMessage
+          if (event === 'complete' && data) {
+            flushDeltas()
+            return JSON.parse(data) as QaMessage
+          }
           if (event === 'error' && data) {
             const payload = JSON.parse(data) as { status?: number; detail?: unknown }
-            throw new ApiError(
-              payload.status ?? 502,
-              formatDetail(payload.detail, '问答失败'),
-            )
+            throw new ApiError(payload.status ?? 502, formatDetail(payload.detail, '问答失败'))
           }
           boundary = buffer.match(/\r?\n\r?\n/)
         }
@@ -1054,11 +1066,13 @@ async function askQuestionStream(
       await reader.cancel().catch(() => {})
       reader.releaseLock()
     }
-    throw new ApiError(0, '问答流提前结束')
+    throw new QaStreamInterruptedError()
   } catch (error) {
     if (timedOut) throw new RequestTimeoutError()
+    if (error instanceof TypeError && !signal?.aborted) throw new QaStreamInterruptedError()
     throw error
   } finally {
+    flushDeltas()
     if (idleTimer !== undefined) clearTimeout(idleTimer)
     signal?.removeEventListener('abort', cancel)
   }
@@ -1073,6 +1087,7 @@ export async function fetchReaderPdf(
   runId: string,
   documentId: string,
   signal?: AbortSignal,
+  onProgress?: (loaded: number, total: number | null) => void,
 ): Promise<ArrayBuffer> {
   const key = getApiKey()
   return withResponse(
@@ -1083,7 +1098,31 @@ export async function fetchReaderPdf(
         if (res.status === 401) signalUnauthorized(key)
         throw new ApiError(res.status, res.status === 404 ? '原版 PDF 暂不可用' : res.statusText)
       }
-      return res.arrayBuffer()
+      if (!res.body || !onProgress) return res.arrayBuffer()
+      const length = Number(res.headers.get('Content-Length'))
+      const total = Number.isFinite(length) && length > 0 ? length : null
+      const reader = res.body.getReader()
+      const chunks: Uint8Array[] = []
+      let loaded = 0
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          chunks.push(value)
+          loaded += value.byteLength
+          onProgress(loaded, total)
+        }
+      } finally {
+        await reader.cancel().catch(() => {})
+        reader.releaseLock()
+      }
+      const result = new Uint8Array(loaded)
+      let offset = 0
+      for (const chunk of chunks) {
+        result.set(chunk, offset)
+        offset += chunk.byteLength
+      }
+      return result.buffer
     },
     120_000,
   )

@@ -352,8 +352,8 @@ class SemanticEvidenceVerifier:
                 [
                     f"Index: {index}",
                     f"Source URL: {finding.source_url}",
-                    f"Statement: {finding.statement}",
                     f"Evidence quote: {finding.evidence_quote}",
+                    f"Statement: {finding.statement}",
                 ]
             )
             for index, finding in enumerate(findings)

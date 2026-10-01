@@ -6,6 +6,13 @@ export class RequestTimeoutError extends Error {
   }
 }
 
+export class QaStreamInterruptedError extends Error {
+  constructor() {
+    super('回答连接中断，正在尝试找回已保存的结果。')
+    this.name = 'QaStreamInterruptedError'
+  }
+}
+
 export async function withResponse<T>(
   url: string,
   init: RequestInit | undefined,

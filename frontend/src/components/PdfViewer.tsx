@@ -11,6 +11,7 @@ GlobalWorkerOptions.workerSrc = workerUrl
 // 中文论文常用 CID 字体，需要 cMap；构建时由 vite 插件复制到 /assets/pdfjs/
 const ASSET_BASE = import.meta.env.DEV ? '/node_modules/pdfjs-dist/' : '/assets/pdfjs/'
 const ZOOM_STEPS = [0.6, 0.8, 1, 1.25, 1.5, 2]
+export const PDF_PARSE_TIMEOUT_MS = 45_000
 
 interface PageSize {
   width: number
@@ -60,6 +61,9 @@ function PdfPage({
   const holder = useRef<HTMLDivElement | null>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const [visible, setVisible] = useState(typeof IntersectionObserver === 'undefined')
+  const [actualSize, setActualSize] = useState<PageSize | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     const element = holder.current
@@ -82,31 +86,44 @@ function PdfPage({
       return
     }
     let cancelled = false
+    setError(null)
     let task: { cancel: () => void; promise: Promise<void> } | null = null
-    void doc.getPage(number).then((page: PDFPageProxy) => {
-      if (cancelled) return
-      const ratio = window.devicePixelRatio || 1
-      const viewport = page.getViewport({ scale })
-      target.width = Math.floor(viewport.width * ratio)
-      target.height = Math.floor(viewport.height * ratio)
-      const context = target.getContext('2d')
-      if (!context) return
-      const rendering = page.render({
-        canvas: target,
-        canvasContext: context,
-        viewport,
-        transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
-      })
-      task = rendering
-      rendering.promise.catch(() => {
-        // 缩放或翻页时取消渲染属于正常情况
-      })
-    })
-    return () => {
+    const timer = window.setTimeout(() => {
       cancelled = true
       task?.cancel()
+      setError('这一页渲染超时，请重试')
+    }, PDF_PARSE_TIMEOUT_MS)
+    void doc
+      .getPage(number)
+      .then(async (page: PDFPageProxy) => {
+        if (cancelled) return
+        const original = page.getViewport({ scale: 1 })
+        setActualSize({ width: original.width, height: original.height })
+        const ratio = window.devicePixelRatio || 1
+        const viewport = page.getViewport({ scale })
+        target.width = Math.floor(viewport.width * ratio)
+        target.height = Math.floor(viewport.height * ratio)
+        const context = target.getContext('2d')
+        if (!context) throw new Error('浏览器无法创建 PDF 画布')
+        const rendering = page.render({
+          canvas: target,
+          canvasContext: context,
+          viewport,
+          transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
+        })
+        task = rendering
+        await rendering.promise
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : '这一页渲染失败')
+      })
+      .finally(() => window.clearTimeout(timer))
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+      task?.cancel()
     }
-  }, [doc, number, scale, visible])
+  }, [doc, number, scale, visible, attempt])
 
   return (
     <div
@@ -115,10 +132,21 @@ function PdfPage({
         pageRef(element)
       }}
       className="pdf-page"
-      style={{ width: size.width * scale, height: size.height * scale }}
+      style={{
+        width: (actualSize ?? size).width * scale,
+        height: (actualSize ?? size).height * scale,
+      }}
       aria-label={`第 ${number} 页`}
     >
       <canvas ref={canvas} style={{ width: '100%', height: '100%' }} aria-hidden="true" />
+      {error && (
+        <div className="pdf-page-error" role="alert">
+          <p>{error}</p>
+          <button className="btn btn-secondary" onClick={() => setAttempt((value) => value + 1)}>
+            重试这一页
+          </button>
+        </div>
+      )}
       {rects.map((rect, index) => (
         <span
           key={index}
@@ -154,46 +182,67 @@ export default function PdfViewer({
   const [width, setWidth] = useState(0)
   const [marks, setMarks] = useState<{ page: number; rects: Rect[] } | null>(null)
   const [missed, setMissed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  const [phase, setPhase] = useState<'download' | 'parse'>('download')
+  const [download, setDownload] = useState({ loaded: 0, total: null as number | null })
 
   useEffect(() => {
     const controller = new AbortController()
     let task: ReturnType<typeof getDocument> | null = null
+    let parseTimer: ReturnType<typeof setTimeout> | undefined
     setDoc(null)
     setSizes([])
     setError(null)
     setMarks(null)
     setMissed(false)
+    setPhase('download')
+    setDownload({ loaded: 0, total: null })
     texts.current = new Map()
-    fetchReaderPdf(runId, documentId, controller.signal)
+    fetchReaderPdf(runId, documentId, controller.signal, (loaded, total) => {
+      if (!controller.signal.aborted) setDownload({ loaded, total })
+    })
       .then((buffer) => {
+        controller.signal.throwIfAborted()
+        setPhase('parse')
+        parseTimer = setTimeout(() => {
+          setError('PDF 解析超时，文件已下载，请重试加载')
+          controller.abort()
+          void task?.destroy().catch(() => {})
+        }, PDF_PARSE_TIMEOUT_MS)
         task = getDocument({
           // 6.x 已移除 eval 编译路径；不传 wasmUrl，CSP 也未放开 wasm，图像解码走 JS 回退
           data: new Uint8Array(buffer),
           cMapUrl: `${ASSET_BASE}cmaps/`,
           cMapPacked: true,
           standardFontDataUrl: `${ASSET_BASE}standard_fonts/`,
+          useWasm: false,
         })
         return task.promise
       })
       .then(async (pdf) => {
-        const list: PageSize[] = []
-        for (let number = 1; number <= pdf.numPages; number += 1) {
-          const viewport = (await pdf.getPage(number)).getViewport({ scale: 1 })
-          list.push({ width: viewport.width, height: viewport.height })
-        }
+        // Show the first page immediately; remaining pages load in PdfPage
+        // when approaching the viewport and then use their own dimensions.
+        const viewport = (await pdf.getPage(1)).getViewport({ scale: 1 })
+        const list = Array.from({ length: pdf.numPages }, () => ({
+          width: viewport.width,
+          height: viewport.height,
+        }))
         if (controller.signal.aborted) return
+        clearTimeout(parseTimer)
         setSizes(list)
         setDoc(pdf)
       })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) return
+        clearTimeout(parseTimer)
         setError(reason instanceof Error ? reason.message : '原版 PDF 加载失败')
       })
     return () => {
       controller.abort()
-      void task?.destroy()
+      clearTimeout(parseTimer)
+      void task?.destroy().catch(() => {})
     }
-  }, [runId, documentId])
+  }, [runId, documentId, attempt])
 
   useEffect(() => {
     const element = scroller.current
@@ -305,11 +354,20 @@ export default function PdfViewer({
           <div className="alert error" role="alert">
             <AppIcon name="circle-x" size={14} aria-hidden="true" />
             {error}
+            <button className="btn btn-secondary" onClick={() => setAttempt((value) => value + 1)}>
+              重新加载
+            </button>
           </div>
         ) : !doc ? (
           <p className="pdf-loading" role="status">
             <AppIcon name="loader" size={15} className="spin" aria-hidden="true" />
-            正在载入原版 PDF…
+            {phase === 'parse' ? '正在解析原版 PDF…' : '正在下载原版 PDF…'}
+            {phase === 'download' && download.loaded > 0 && (
+              <span>
+                {(download.loaded / 1048576).toFixed(1)} MB
+                {download.total ? ` / ${(download.total / 1048576).toFixed(1)} MB` : ''}
+              </span>
+            )}
           </p>
         ) : (
           pages.map(({ size, number }) => (

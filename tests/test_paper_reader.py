@@ -147,6 +147,7 @@ async def test_uploaded_pdf_is_stored_and_served_only_to_the_run_owner(reader_cl
     )
     assert pdf.status_code == 200 and pdf.content == raw
     assert pdf.headers["content-type"] == "application/pdf"
+    assert pdf.headers["vary"] == "Authorization"
     # 别人的任务、未登记的文档、伪造的标识都读不到
     other = await client.get(
         f"/api/runs/{run_id}/reader/{document['id']}/pdf", headers=_headers(BOB)

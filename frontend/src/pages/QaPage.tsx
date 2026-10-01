@@ -11,9 +11,8 @@ import {
   getConversation,
   listConversations,
 } from '../api/client'
-import { RequestTimeoutError } from '../api/transport'
 import { useProjects } from '../hooks/useLibrary'
-import { recoverTimedOutAnswer } from '../lib/qaRecovery'
+import { canRecoverQaAnswer, recoverTimedOutAnswer } from '../lib/qaRecovery'
 
 const STARTERS = [
   { tag: '文献检索', text: '查找 DOE 光谱成像系统误差补偿的最新文献' },
@@ -80,7 +79,7 @@ export default function QaPage() {
           (delta) => setStreamingAnswer((current) => current + delta),
         )
       } catch (error) {
-        if (!(error instanceof RequestTimeoutError)) throw error
+        if (!canRecoverQaAnswer(error)) throw error
         const recovered = await recoverTimedOutAnswer(target, text, baselineCount)
         if (!recovered) throw error
       }
