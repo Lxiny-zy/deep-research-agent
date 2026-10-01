@@ -141,7 +141,7 @@ def revision_prompt(previous: str, assessment: Assessment) -> str:
         "上一版未通过交付质量检查。请输出修订后的**完整全文**（不是修改说明），"
         "保持所有引用角标与数字忠实于上面的已核验素材；素材无法支持的内容删除或写明"
         "「素材未覆盖」，不得为凑数引入素材外的文献或事实。需要解决的问题：\n"
-        f"{items}\n" + (f"{advice}\n" if advice else "") + "\n## 上一版全文\n" + previous[:12000]
+        f"{items}\n" + (f"{advice}\n" if advice else "") + "\n## 上一版全文\n" + previous
     )
 
 

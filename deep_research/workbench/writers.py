@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -102,6 +103,7 @@ class TemplateWriter:
 
     name: str
     template_key: str = "autoResearch"
+    output_keys: tuple[str, ...] = ()
 
     def brief(self, template: TaskTemplate, contract: TaskContract | None) -> str:
         return template.writer_brief
@@ -164,8 +166,7 @@ class TemplateWriter:
             chunks.append(delta)
         return "".join(chunks)
 
-    # 结构化输出的写作者（幻灯片）自带格式约束，正文不是连续论述，
-    # 不跑引用逐段复核；它按自己的结构门验收。
+    # 报告及幻灯片的文字投影都核对引用和数值；概念导图有独立的结构流程。
     check_citations: bool = True
 
     async def _write_checked(
@@ -182,11 +183,16 @@ class TemplateWriter:
         require_corroboration: bool,
     ) -> tuple[str, RevisionLog]:
         """写作 + 确定性检查 + 按问题清单返工（见 ``revision.py``）。"""
+        versions: dict[str, dict[str, Any]] = {}
 
         async def write(revision: str | None) -> str:
             if revision is not None:
                 ctx.tracer.emit("SYNTHESIZER", "info", "按质量检查结果修订正文…")
-            return await self.write(bb, ctx, template, contract, material, revision)
+            body = await self.write(bb, ctx, template, contract, material, revision)
+            versions[body] = {
+                key: deepcopy(bb.scratch[key]) for key in self.output_keys if key in bb.scratch
+            }
+            return body
 
         def assess(body: str) -> Assessment:
             return assess_draft(
@@ -211,9 +217,15 @@ class TemplateWriter:
             )
             ctx.tracer.emit("SYNTHESIZER", "info", message, data={"event_name": name, **data})
 
-        return await write_with_revisions(
+        body, log = await write_with_revisions(
             write, assess, max_revisions=policy.max_revisions, on_event=on_event
         )
+        # A later revision can be worse. Its deck/map must not survive when the
+        # revision loop selects an earlier Markdown draft as the best result.
+        for key in self.output_keys:
+            bb.scratch.pop(key, None)
+        bb.scratch.update(versions.get(body, {}))
+        return body, log
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         template = get_template(self.template_key)
@@ -377,15 +389,18 @@ class SlideDeck(BaseModel):
 def deck_to_markdown(deck: SlideDeck) -> str:
     lines = [f"# {deck.title}", ""]
     if deck.subtitle:
-        lines += [deck.subtitle, ""]
+        cover_cites = "".join(
+            f"[{i}]" for i in sorted({i for s in deck.slides for i in s.citations})
+        )
+        lines += [f"{deck.subtitle} {cover_cites}".strip(), ""]
     for number, slide in enumerate(deck.slides, 1):
         cite = "".join(f"[{index}]" for index in slide.citations)
         lines.append(f"## {number}. {slide.title}")
-        lines += [f"- {bullet}" for bullet in slide.bullets]
+        lines += [f"- {bullet} {cite}".rstrip() for bullet in slide.bullets]
         if cite:
             lines.append(f"\n来源：{cite}")
         if slide.notes:
-            lines += ["", f"> 演讲备注：{slide.notes}"]
+            lines += ["", f"> 演讲备注：{slide.notes} {cite}".rstrip()]
         lines.append("")
     return "\n".join(lines).strip() + "\n"
 
@@ -393,7 +408,8 @@ def deck_to_markdown(deck: SlideDeck) -> str:
 @register("slide_writer")
 class SlideWriter(TemplateWriter):
     template_key = "slides"
-    check_citations = False
+    output_keys = ("_slide_deck",)
+    check_citations = True
 
     async def write(
         self,
@@ -413,15 +429,23 @@ class SlideWriter(TemplateWriter):
         )
         user = self.user_prompt(bb, template, contract, material) + (revision or "")
         deck = await ctx.llm_for(self.name).parse(system, user, SlideDeck, temperature=0.3)
-        allowed = set(range(1, material.count("\n- [") + 2)) if material else set()
         for slide in deck.slides:
-            slide.bullets = [bullet.strip() for bullet in slide.bullets if bullet.strip()][:5]
-            slide.citations = [index for index in slide.citations if index in allowed]
+            slide.bullets = [bullet.strip() for bullet in slide.bullets if bullet.strip()]
+            # Invalid references must be repaired by the quality loop, not
+            # silently removed while the corresponding claims remain.
         bb.scratch["_slide_deck"] = deck.model_dump(mode="json")
         return deck_to_markdown(deck)
 
     def postprocess(self, bb: Blackboard, report: Report, template: TaskTemplate) -> dict[str, Any]:
         deck = bb.scratch.pop("_slide_deck", None)
+        if deck:
+            from .gates import _body_without_references
+
+            if (
+                _body_without_references(report.markdown).strip()
+                != deck_to_markdown(SlideDeck.model_validate(deck)).strip()
+            ):
+                return {"structured_output_issue": "原幻灯片与审核后正文不一致，按审核正文重新生成"}
         return {"deck": deck} if deck else {}
 
 
@@ -466,6 +490,7 @@ def mindmap_stats(mindmap: Mindmap) -> dict[str, int]:
 @register("mindmap_writer")
 class MindmapWriter(TemplateWriter):
     template_key = "mindmap"
+    output_keys = ("_mindmap",)
 
     async def write(
         self,
@@ -508,9 +533,12 @@ class MindmapWriter(TemplateWriter):
         material, url_to_idx = eligible_material(bb.results, require_corroboration=corroboration)
         ctx.tracer.emit("SYNTHESIZER", "start", "整理思维导图…")
         policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
+        versions: dict[str, Any] = {}
 
         async def write(revision: str | None) -> str:
-            return await self.write(bb, ctx, template, contract, material, revision)
+            body = await self.write(bb, ctx, template, contract, material, revision)
+            versions[body] = deepcopy(bb.scratch.get("_mindmap"))
+            return body
 
         def assess(_body: str) -> Assessment:
             # 导图的硬性要求是结构：至少 6 个一级分支、每个分支至少 5 个节点
@@ -528,6 +556,7 @@ class MindmapWriter(TemplateWriter):
         body, revision_log = await write_with_revisions(
             write, assess, max_revisions=policy.max_revisions
         )
+        bb.scratch["_mindmap"] = versions[body]
         citations = [url for url, _ in sorted(url_to_idx.items(), key=lambda item: item[1])]
         report = Report(query=bb.query, markdown=body, citations=citations)
         bb.report = report

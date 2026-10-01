@@ -50,8 +50,10 @@ def _band(slide, top: int, height: int, color: RGBColor) -> None:  # type: ignor
 
 
 def _estimated_lines(text: str) -> int:
-    width = sum(2 if ord(ch) > 0x2E80 else 1 for ch in text)
-    return max(1, -(-width // (_CHARS_PER_LINE * 2)))
+    return sum(
+        max(1, -(-sum(2 if ord(ch) > 0x2E80 else 1 for ch in line) // (_CHARS_PER_LINE * 2)))
+        for line in text.split("\n")
+    )
 
 
 def fit_report(deck: dict[str, Any]) -> list[dict[str, Any]]:
@@ -67,7 +69,63 @@ def fit_report(deck: dict[str, Any]) -> list[dict[str, Any]]:
     return problems
 
 
+def _split_bullet(text: str) -> list[str]:
+    """Bound individual paragraphs without throwing away their remaining text."""
+    pieces: list[str] = []
+    while text:
+        width = 0
+        lines = 1
+        end = 0
+        for char in text:
+            weight = 2 if ord(char) > 0x2E80 else 1
+            if char == "\n" or width + weight > _CHARS_PER_LINE * 2:
+                if lines == 4:
+                    break
+                lines += 1
+                width = 0
+            if char != "\n":
+                width += weight
+            end += 1
+        if end < len(text):
+            # Prefer a sentence/word boundary, while keeping every character.
+            boundary = max(text.rfind(mark, 0, end) for mark in (" ", "。", "；", ";"))
+            if boundary >= end // 2:
+                end = boundary + 1
+            opening = text.rfind("[", 0, end)
+            if opening > text.rfind("]", 0, end) and opening > 0:
+                end = opening
+        pieces.append(text[:end])
+        text = text[end:]
+    return pieces
+
+
+def paginate_deck(deck: dict[str, Any]) -> dict[str, Any]:
+    """Continue overflowing content on another slide, preserving notes/citations."""
+    slides: list[dict[str, Any]] = []
+    for spec in deck.get("slides", []):
+        pages: list[list[str]] = [[]]
+        lines = 0
+        for bullet in spec.get("bullets", []):
+            for piece in _split_bullet(str(bullet)):
+                needed = _estimated_lines(piece)
+                if pages[-1] and (len(pages[-1]) >= 5 or lines + needed > _MAX_LINES):
+                    pages.append([])
+                    lines = 0
+                pages[-1].append(piece)
+                lines += needed
+        for index, bullets in enumerate(pages):
+            slides.append(
+                {
+                    **spec,
+                    "bullets": bullets,
+                    "title": str(spec.get("title", "")) + (f"（续 {index + 1}）" if index else ""),
+                }
+            )
+    return {**deck, "slides": slides}
+
+
 def render_pptx(deck: dict[str, Any], *, citations: list[str] | None = None) -> bytes:
+    deck = paginate_deck(deck)
     presentation = Presentation()
     presentation.slide_width, presentation.slide_height = _W, _H
     blank = presentation.slide_layouts[6]
@@ -99,7 +157,7 @@ def render_pptx(deck: dict[str, Any], *, citations: list[str] | None = None) -> 
         frame = body.text_frame
         frame.word_wrap = True
         frame.clear()
-        for index, bullet in enumerate(spec.get("bullets", [])[:5]):
+        for index, bullet in enumerate(spec.get("bullets", [])):
             paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
             run = paragraph.add_run()
             run.text = f"•  {bullet}"

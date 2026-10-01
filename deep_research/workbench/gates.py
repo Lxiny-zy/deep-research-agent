@@ -292,7 +292,9 @@ def revision_gate(extras: dict[str, Any]) -> GateResult | None:
     return GateResult("revision", "pass", [], metrics)
 
 
-HARD_GATES = frozenset({"citation", "structure", "scholarly", "review", "revision"})
+HARD_GATES = frozenset(
+    {"citation", "structure", "scholarly", "review", "revision", "analysis", "structured_content"}
+)
 
 
 def overall(results: list[GateResult]) -> Status:

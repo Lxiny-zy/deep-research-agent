@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from ..blocking import run_blocking
 from .contract import build_contract, pasted_paper_text
-from .publish import DeliveryBundle, build_bundle, resolve_template
+from .publish import DeliveryBundle, build_bundle, delivery_fingerprint, resolve_template
 from .templates import get_template, public_templates
 
 logger = logging.getLogger(__name__)
@@ -114,48 +114,45 @@ async def _bundle(request: Request, run_id: str) -> DeliveryBundle:
         )
     if detail.report is None:
         raise HTTPException(404, {"code": "no_report", "message": "本次运行没有生成正文"})
-    # 交付包按需生成且结果确定；同一进程内按 (run, 报告哈希) 缓存，避免每次下载重排 PDF。
-    cache: dict[tuple[str, int], DeliveryBundle] = (
-        getattr(request.app.state, "delivery_cache", None) or {}
+    cache: dict[tuple[str, str], DeliveryBundle] | None = getattr(
+        request.app.state, "delivery_cache", None
     )
-    request.app.state.delivery_cache = cache
-    key = (run_id, hash((detail.report.markdown, tuple(detail.report.citations))))
+    if cache is None:
+        cache = {}
+        request.app.state.delivery_cache = cache
+    key = (run_id, delivery_fingerprint(detail))
     bundle = cache.get(key)
     if bundle is not None:
         return bundle
     # 交付面板会同时请求登记表和预览文件；冷缓存时让并发请求共用同一次生成，
     # 而不是各自把 PDF / DOCX / PPTX 全部重排一遍。
-    pending: dict[tuple[str, int], asyncio.Future[DeliveryBundle]] = (
-        getattr(request.app.state, "delivery_pending", None) or {}
+    pending: dict[tuple[str, str], asyncio.Future[DeliveryBundle]] | None = getattr(
+        request.app.state, "delivery_pending", None
     )
-    request.app.state.delivery_pending = pending
+    if pending is None:
+        pending = {}
+        request.app.state.delivery_pending = pending
     inflight = pending.get(key)
     if inflight is not None:
+        return await asyncio.shield(inflight)
+
+    async def generate() -> DeliveryBundle:
         try:
-            return await asyncio.shield(inflight)
-        except asyncio.CancelledError:
-            if not inflight.cancelled():
-                raise  # 是本请求自己被取消
-            # 负责生成的那个请求断开了：由本请求接手重新生成
-    future: asyncio.Future[DeliveryBundle] = asyncio.get_running_loop().create_future()
-    pending[key] = future
-    try:
-        bundle = await run_blocking(build_bundle, detail)
-    except asyncio.CancelledError:
-        future.cancel()
-        raise
-    except Exception as exc:
-        future.set_exception(exc)
-        future.exception()  # 已由本请求抛出；标记为已取回，避免无人等待时的告警
-        raise
-    finally:
-        if pending.get(key) is future:
-            pending.pop(key)
-    future.set_result(bundle)
-    if len(cache) > 32:
-        cache.pop(next(iter(cache)))
-    cache[key] = bundle
-    return bundle
+            generated = await run_blocking(build_bundle, detail)
+            if len(cache) >= 32:
+                cache.pop(next(iter(cache)))
+            cache[key] = generated
+            return generated
+        finally:
+            pending.pop(key, None)
+
+    # The build belongs to the shared cache, not the first HTTP waiter. A
+    # disconnected tab must not abandon the still-running render thread and
+    # cause another request to start a duplicate build.
+    task = asyncio.create_task(generate())
+    pending[key] = task
+    task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+    return await asyncio.shield(task)
 
 
 @router.get("/runs/{run_id}/deliverables")

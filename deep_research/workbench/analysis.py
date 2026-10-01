@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import math
 import re
@@ -60,6 +61,34 @@ class AnalysisResult:
     synthetic: bool = False
     # 数据来源（文件名 / 工作表），由任务契约提供；粘贴的表格为空
     source: dict[str, Any] = field(default_factory=dict)
+    issues: list[str] = field(default_factory=list)
+    input_sha256: str = ""
+
+    def snapshot(self) -> dict[str, Any]:
+        """Freeze computed values; plots can be redrawn from these and the same input."""
+        return {
+            "version": 2,
+            **{
+                name: getattr(self, name)
+                for name in (
+                    "rows",
+                    "columns",
+                    "numeric",
+                    "categorical",
+                    "missing",
+                    "describe",
+                    "tests",
+                    "correlations",
+                    "synthetic",
+                    "source",
+                    "issues",
+                    "input_sha256",
+                )
+            },
+            "figures": [
+                {"name": f.name, "title": f.title, "caption": f.caption} for f in self.figures
+            ],
+        }
 
     def source_label(self) -> str:
         if self.synthetic:
@@ -100,16 +129,35 @@ class AnalysisResult:
         if self.tests:
             lines.append("\n### 显著性检验")
             for test in self.tests:
+                verdict = (
+                    ("显著" if test["significant"] else "不显著")
+                    if test["significant"] is not None
+                    else "无法检验"
+                )
                 lines.append(
                     f"- {test['variable']} ~ {test['group']}（{test['method']}）："
                     f"统计量={test['statistic']}, p={test['p_value']}, "
-                    f"{'显著' if test['significant'] else '不显著'}（α=0.05）"
+                    f"{verdict}（α=0.05）"
                     + (
                         f"；稳健性复核 {test['robust_method']} p={test['robust_p']}"
                         if test.get("robust_method")
                         else ""
                     )
                 )
+                if test.get("paired"):
+                    lines.append(
+                        f"  差值方向：{test['right']} − {test['left']}；"
+                        f"完整配对数={test['n_pairs']}，"
+                        f"排除不完整配对={test['excluded_pairs']}，平均差={test['mean_difference']}，"
+                        f"差值标准差={test['difference_std']}，自由度={test['df']}，"
+                        f"95% 均值差置信区间=[{test['ci_low']}, {test['ci_high']}]"
+                    )
+                    lines.append(
+                        "  推断前提：各配对对象独立，差值满足配对 t 检验的分布假设；"
+                        "本轮未自动验证这些前提。"
+                    )
+                if test.get("reason"):
+                    lines.append(f"  检验限制：{test['reason']}")
         if self.correlations:
             lines.append("\n### 相关性（Pearson）")
             for item in self.correlations:
@@ -117,6 +165,9 @@ class AnalysisResult:
         if self.figures:
             lines.append("\n### 图表")
             lines += [f"- {fig.title}：{fig.caption}" for fig in self.figures]
+        if self.issues:
+            lines.append("\n### 分析尚未完成的项目")
+            lines.extend(f"- {issue}" for issue in self.issues)
         return "\n".join(lines)
 
     def summary_table(self) -> list[dict[str, Any]]:
@@ -160,6 +211,11 @@ def parse_dataset(csv_text: str) -> Any:
         raise DatasetError(f"数据超过 {MAX_COLUMNS} 列上限")
     if frame.empty or frame.shape[1] < 1:
         raise DatasetError("数据为空")
+    nonfinite = frame.select_dtypes(include="number").isin([float("inf"), float("-inf")]).any()
+    if nonfinite.any():
+        raise DatasetError(
+            "数值列含无穷值，请先清理：" + ", ".join(str(c) for c in nonfinite.index[nonfinite])
+        )
     frame.columns = [str(column).strip() or f"col{i}" for i, column in enumerate(frame.columns)]
     return frame
 
@@ -199,6 +255,7 @@ def analyse(
     *,
     allow_synthetic: bool = False,
     source: dict[str, Any] | None = None,
+    frozen: dict[str, Any] | None = None,
 ) -> AnalysisResult:
     """对一张表做确定性分析。
 
@@ -212,7 +269,12 @@ def analyse(
     synthetic = not csv_text.strip()
     if synthetic and not allow_synthetic:
         raise DatasetError("没有可分析的数据：请上传 CSV / TSV / XLSX 表格或粘贴数据")
-    frame = parse_dataset(_synthetic_csv() if synthetic else csv_text)
+    input_text = _synthetic_csv() if synthetic else csv_text
+    input_sha256 = hashlib.sha256(input_text.strip().encode()).hexdigest()
+    if frozen and frozen.get("input_sha256") and frozen["input_sha256"] != input_sha256:
+        raise DatasetError("输入数据与任务统计快照不一致，需要重新执行分析，不能与旧报告混用")
+    frame = parse_dataset(input_text)
+    issues: list[str] = []
     numeric = [
         c
         for c in frame.columns
@@ -242,24 +304,53 @@ def analyse(
             }
         )
 
+    paired_requested = bool(
+        re.search(r"配对|成对|\bpaired\b|同一[组批].*(?:场景|样本|对象)", question, re.I)
+        and not re.search(r"非配对|不配对|不要配对|无需配对|不做配对|\bunpaired\b", question, re.I)
+    )
     tests: list[dict[str, Any]] = []
-    for group in categorical:
+    for group in [] if paired_requested else categorical:
         for variable in numeric:
             samples = [
                 values.dropna().to_numpy()
                 for _, values in frame.groupby(group, dropna=True)[variable]
             ]
-            samples = [s for s in samples if len(s) >= 2]
-            if len(samples) < 2:
+            if len(samples) < 2 or any(len(sample) < 2 for sample in samples):
+                issues.append(
+                    f"{variable} 按 {group} 的检验未执行：至少两组，且每组至少两条有效观测"
+                )
                 continue
-            if len(samples) == 2:
-                result = stats.ttest_ind(samples[0], samples[1], equal_var=False)
-                method, robust = "Welch t 检验", stats.mannwhitneyu(samples[0], samples[1])
-                robust_name = "Mann–Whitney U"
-            else:
-                result = stats.f_oneway(*samples)
-                method, robust = "单因素方差分析", stats.kruskal(*samples)
-                robust_name = "Kruskal–Wallis"
+            method = "Welch t 检验" if len(samples) == 2 else "单因素方差分析"
+            try:
+                if len(samples) == 2:
+                    result = stats.ttest_ind(samples[0], samples[1], equal_var=False)
+                    robust = stats.mannwhitneyu(samples[0], samples[1])
+                    robust_name = "Mann–Whitney U"
+                else:
+                    result = stats.f_oneway(*samples)
+                    robust = stats.kruskal(*samples)
+                    robust_name = "Kruskal–Wallis"
+                if not all(
+                    math.isfinite(float(value))
+                    for value in (result.statistic, result.pvalue, robust.pvalue)
+                ):
+                    raise ValueError("退化样本导致非有限检验结果")
+            except ValueError:
+                reason = f"{variable} 按 {group} 的检验无法估计：样本无有效变异或不满足检验条件"
+                issues.append(reason)
+                tests.append(
+                    {
+                        "variable": variable,
+                        "group": group,
+                        "method": method,
+                        "statistic": "NA",
+                        "p_value": "NA",
+                        "significant": None,
+                        "groups": len(samples),
+                        "reason": reason,
+                    }
+                )
+                continue
             p_value = float(result.pvalue)
             tests.append(
                 {
@@ -275,6 +366,56 @@ def analyse(
                 }
             )
 
+    if paired_requested:
+        if len(numeric) != 2:
+            issues.append(
+                "配对分析目前支持两列宽表，每行一对；当前配对列不明确，"
+                "需先选择测量列或转换长表，未改用独立样本检验"
+            )
+        else:
+            left, right = numeric
+            pairs = frame[[left, right]].dropna()
+            difference = pairs[right] - pairs[left]
+            n = len(pairs)
+            mean = float(difference.mean())
+            std = float(difference.std(ddof=1)) if n >= 2 else math.nan
+            statistic = pvalue = lower = upper = math.nan
+            reason = ""
+            if n < 2 or not math.isfinite(std) or std <= 0:
+                reason = "完整配对不足或差值无有效变异，无法估计配对 t 检验及置信区间"
+                issues.append(reason)
+            else:
+                result = stats.ttest_rel(pairs[right], pairs[left])
+                statistic, pvalue = float(result.statistic), float(result.pvalue)
+                margin = float(stats.t.ppf(0.975, n - 1)) * std / math.sqrt(n)
+                lower, upper = mean - margin, mean + margin
+                if not all(math.isfinite(value) for value in (statistic, pvalue, lower, upper)):
+                    statistic = pvalue = lower = upper = math.nan
+                    reason = "数值不稳定，无法可靠估计配对 t 检验及置信区间"
+                    issues.append(reason)
+            tests.append(
+                {
+                    "paired": True,
+                    "left": left,
+                    "right": right,
+                    "variable": f"{right} − {left}",
+                    "group": "同一行配对",
+                    "method": "配对 t 检验",
+                    "statistic": _fmt(statistic),
+                    "p_value": _fmt(pvalue),
+                    "significant": bool(pvalue < 0.05) if math.isfinite(pvalue) else None,
+                    "n_pairs": n,
+                    "excluded_pairs": len(frame) - n,
+                    "groups": 2,
+                    "mean_difference": _fmt(mean),
+                    "difference_std": _fmt(std),
+                    "df": n - 1 if n else "NA",
+                    "ci_low": _fmt(lower),
+                    "ci_high": _fmt(upper),
+                    "reason": reason,
+                }
+            )
+
     correlations: list[dict[str, Any]] = []
     for i, left in enumerate(numeric):
         for right in numeric[i + 1 :]:
@@ -286,11 +427,24 @@ def analyse(
                 {"a": left, "b": right, "r": _fmt(float(r)), "p_value": _fmt(float(p))}
             )
 
+    # Downloads must use the ledger that produced the report. In particular,
+    # upgrading the analysis code must not add new tests to an old narrative.
+    if frozen and all(
+        isinstance(frozen.get(key), list)
+        for key in ("describe", "tests", "correlations", "columns")
+    ):
+        if list(frozen["columns"]) != list(frame.columns) or frozen.get("rows") != len(frame):
+            raise DatasetError("数据表结构与统计快照不一致，不能与旧报告混用")
+        describe, tests, correlations = frozen["describe"], frozen["tests"], frozen["correlations"]
+        numeric = frozen.get("numeric", [row["variable"] for row in describe])
+        categorical = frozen.get("categorical", categorical)
+        issues = list(frozen.get("issues", []))
+
     _chart_font()
     import matplotlib.pyplot as plt
 
     figures: list[Figure] = []
-    for test in tests[:3]:
+    for test in [item for item in tests if not item.get("paired")][:3]:
         fig, ax = plt.subplots(figsize=(6.4, 3.8))
         grouped = frame.groupby(test["group"])[test["variable"]]
         labels = [str(label) for label, _ in grouped]
@@ -307,6 +461,38 @@ def analyse(
                 ),
                 title=f"{test['variable']} 按 {test['group']} 分组箱线图",
                 caption=f"统计口径：每组有效样本；{test['method']} p={test['p_value']}",
+                png=_png(fig),
+            )
+        )
+    for test in [item for item in tests if item.get("paired")]:
+        pairs = frame[[test["left"], test["right"]]].dropna()
+        if pairs.empty:
+            continue
+        fig, ax = plt.subplots(figsize=(6.4, 3.8))
+        ax.boxplot(
+            [pairs[test["left"]], pairs[test["right"]]], tick_labels=[test["left"], test["right"]]
+        )
+        shown = min(len(pairs), 100)
+        for _, row in pairs.iloc[np.linspace(0, len(pairs) - 1, shown, dtype=int)].iterrows():
+            ax.plot(
+                [1, 2],
+                [row[test["left"]], row[test["right"]]],
+                color="#547c95",
+                alpha=0.3,
+                linewidth=0.6,
+            )
+        ax.set_title("测量分布与逐对连线")
+        ax.set_ylabel("测量值（单位同输入）")
+        ax.grid(axis="y", alpha=0.3)
+        figures.append(
+            Figure(
+                name=f"fig_{len(figures) + 1:02d}_paired.png",
+                title="测量分布与逐对连线",
+                caption=(
+                    f"同一行配对；n={test['n_pairs']}；差值方向 {test['right']} − {test['left']}；"
+                    f"配对 t 检验 p={test['p_value']}。箱线图用全部完整配对，连线展示 {shown} 对；"
+                    "纵轴单位同输入测量值，不表示差值分布"
+                ),
                 png=_png(fig),
             )
         )
@@ -339,7 +525,7 @@ def analyse(
             Figure(
                 name=f"fig_{len(figures) + 1:02d}_correlation.png",
                 title="数值变量相关矩阵",
-                caption="统计口径：两两成对删除缺失值后的 Pearson r",
+                caption="两两成对删除缺失值后的 Pearson r；色标与格内数值均无量纲，不是测量单位",
                 png=_png(fig),
             )
         )
@@ -357,6 +543,8 @@ def analyse(
         figures=figures,
         synthetic=synthetic,
         source={} if synthetic else dict(source or {}),
+        issues=issues,
+        input_sha256=input_sha256,
     )
 
 
@@ -366,13 +554,13 @@ def allows_synthetic(contract: TaskContract | None) -> bool:
 
 
 def _looks_like_identifier(series: Any) -> bool:
-    """编号列（1..k 的连续整数、每个值重复出现）不是测量值：对它求均值或做检验没有意义。"""
-    values = series.dropna()
-    if values.empty or not (values == values.round()).all():
-        return False
-    unique = sorted(set(int(v) for v in values))
-    contiguous = unique == list(range(unique[0], unique[0] + len(unique)))
-    return contiguous and len(unique) < len(values) and len(unique) <= 50
+    """Use explicit identifier names; integer-valued measurements remain measurements."""
+    name = str(getattr(series, "name", "")).strip().casefold()
+    return (
+        name in {"id", "index", "idx", "scene", "subject", "participant", "sample", "trial"}
+        or name.endswith("_id")
+        or any(word in name for word in ("编号", "序号"))
+    )
 
 
 def _safe(text: str) -> str:
@@ -542,18 +730,7 @@ class DataAnalyst:
         if result.synthetic:
             body = "> 注意：未提供数据，本报告基于可复现的合成示例数据演示分析流程。\n\n" + body
         bb.report = Report(query=bb.query, markdown=body + "\n", citations=[])
-        bb.scratch[ANALYSIS_SCRATCH_KEY] = {
-            "rows": result.rows,
-            "columns": result.columns,
-            "describe": result.describe,
-            "tests": result.tests,
-            "correlations": result.correlations,
-            "synthetic": result.synthetic,
-            "source": result.source,
-            "figures": [
-                {"name": f.name, "title": f.title, "caption": f.caption} for f in result.figures
-            ],
-        }
+        bb.scratch[ANALYSIS_SCRATCH_KEY] = result.snapshot()
         # 图片不进 checkpoint：分析是确定性的（合成数据也用固定种子），交付层按
         # 同一份数据重算即可得到逐字节相同的图，checkpoint 不必背几百 KB 的 PNG。
         extras: dict[str, Any] = {"figures": len(result.figures)}

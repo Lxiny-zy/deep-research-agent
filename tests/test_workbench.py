@@ -141,7 +141,7 @@ def test_pptx_has_notes_on_every_slide_and_fit_check_flags_walls() -> None:
     }
     data = render_pptx(deck, citations=["https://a.com"])
     stats = pptx_stats(data)
-    assert stats["slides"] == 4  # 封面 + 2 页 + 参考来源
+    assert stats["slides"] == 6  # 内容溢出自动续页，保留全部要点
     assert stats["with_notes"] == stats["slides"]
     assert [p["slide"] for p in fit_report(deck)] == [3]
 
@@ -766,6 +766,8 @@ async def test_concurrent_cold_deliverable_requests_build_once(api_repo, monkeyp
         responses = await asyncio.gather(
             *(client.get(f"/api/runs/{run_id}/deliverables") for _ in range(3))
         )
+        warm = await client.get(f"/api/runs/{run_id}/deliverables")
+        assert warm.status_code == 200
     assert all(response.status_code == 200 for response in responses)
     assert len(calls) == 1
 

@@ -10,7 +10,7 @@ from ..guardrails import report_eligible
 from ..models import Report, ResearchResult
 
 _CITATION = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
-_NUMBER = re.compile(r"(?<![A-Za-z0-9_.])[-+]?\d+(?:,\d{3})*(?:\.\d+)?")
+_NUMBER = re.compile(r"(?<![A-Za-z0-9_.])[-+]?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][-+]?\d+)?")
 _REFERENCES = re.compile(r"\n#{1,3}\s*(?:参考来源|参考文献|References)\s*\n.*\Z", re.S | re.I)
 
 
@@ -31,6 +31,7 @@ def _excerpt(text: str) -> str:
 
 
 def _numbers(text: str) -> set[Decimal]:
+    text = text.replace("−", "-")
     text = _CITATION.sub("", text)
     text = re.sub(r"(?m)^\s*\d+[.)、]\s+", "", text)
     values = set()

@@ -2,7 +2,7 @@
 
 流程固定为「生成候选 → 验收 → 发布」：
 
-1. 以定稿 Markdown 为唯一真源生成模板承诺的每种格式（候选全部在内存中完成）；
+1. 报告格式由定稿 Markdown 生成，幻灯片结构须与定稿一致，统计沿用任务计算记录；
 2. 对候选跑验收门，得到每道门的结论与总体结论；
 3. 把成品写入 ``output/<slug>/deliverables/``，把门结论写入
    ``output/<slug>/deliverables/qa.json``，并更新交付登记 ``deliverables.json``。
@@ -12,8 +12,9 @@
 唯一例外是 fail 级的引用越界：它意味着正文引用了不存在的来源，那份正文不应以
 任何格式对外，此时只发布 Markdown 并标 fail，供排查。
 
-生成是确定性的：同一次运行重复发布得到字节级相同的产物（PDF 除外的元数据时间戳
-已固定），所以发布可以安全地在读取时按需触发，也可以在运行结束时预先生成。
+当前 HTTP 入口按需生成并在进程内复用；publish() 提供显式落盘能力，但尚未接入
+该读取入口。库版本、压缩容器元数据等仍可能改变重新生成的字节，不能据此承诺
+跨重启或升级的下载哈希不变；这需要持久化交付版本及直接读取已登记文件。
 """
 
 from __future__ import annotations
@@ -108,15 +109,10 @@ class DeliveryBundle:
     generated_at: str
 
     def registry(self) -> dict[str, Any]:
+        usable = [file for file in self.files if file.status != "fail"]
         primary = next(
-            (
-                f
-                for f in self.files
-                if f.role in {"report", "slides"} and f.format in {"pdf", "pptx"}
-            ),
-            next(
-                (f for f in self.files if f.format == "html"), self.files[0] if self.files else None
-            ),
+            (f for f in usable if f.role in {"report", "slides"} and f.format in {"pdf", "pptx"}),
+            next((f for f in usable if f.format == "html"), usable[0] if usable else None),
         )
         return {
             "version": 1,
@@ -160,6 +156,22 @@ def _file_stem(title: str) -> str:
     return f"{ascii_part or 'report'}-{digest}"
 
 
+def delivery_fingerprint(detail: RunDetail) -> str:
+    """Every persisted input consumed by build_bundle, not just report Markdown."""
+    payload = {
+        "format_version": 2,
+        "query": detail.query,
+        "created_at": detail.created_at.isoformat() if detail.created_at else None,
+        "report": detail.report.model_dump(mode="json") if detail.report else None,
+        "results": [result.model_dump(mode="json") for result in detail.results],
+        "workflow": detail.orchestration.workflow_name if detail.orchestration else None,
+        "scratch": _scratch(detail),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+
+
 def build_bundle(detail: RunDetail) -> DeliveryBundle:
     """纯函数：从一次运行的持久化数据生成交付包（不写盘）。"""
     # 各格式的第三方依赖（python-docx 等）在各自的 build_* 里延迟导入：
@@ -191,6 +203,22 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     stem = _file_stem(title)
     images: dict[str, bytes] = {}
     files: list[DeliveryFile] = []
+    input_gates: list[GateResult] = []
+    if template.key == "slides" and extras.get("deck"):
+        from .gates import _body_without_references
+        from .writers import SlideDeck, deck_to_markdown
+
+        projected = deck_to_markdown(SlideDeck.model_validate(extras["deck"])).strip()
+        if projected != _body_without_references(markdown).strip():
+            extras = {**extras}
+            extras.pop("deck", None)
+            extras["structured_output_issue"] = (
+                "幻灯片结构与审核正文不一致，已改用审核后的正文重新生成"
+            )
+    if extras.get("structured_output_issue"):
+        input_gates.append(
+            GateResult("structured_content", "warn", [str(extras["structured_output_issue"])])
+        )
 
     # 概念图：写作者整理的结构描述 → 确定性示意图，插在正文第一个二级标题之后
     raw_figure = extras.get("concept_figure") if isinstance(extras, dict) else None
@@ -217,7 +245,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
 
     # 数据分析：确定性地重算图表（与运行时同一函数、同一数据），把图挂进正文
     if template.key == "dataAnalysis":
-        from .analysis import DatasetError, allows_synthetic, analyse
+        from .analysis import ANALYSIS_SCRATCH_KEY, DatasetError, allows_synthetic, analyse
 
         try:
             result = analyse(
@@ -225,10 +253,23 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 contract.focus if contract else "",
                 allow_synthetic=allows_synthetic(contract),
                 source=contract.dataset_source if contract else None,
+                frozen=scratch.get(ANALYSIS_SCRATCH_KEY),
             )
-        except DatasetError:
+        except DatasetError as exc:
             result = None
+            input_gates.append(GateResult("analysis", "fail", [str(exc)]))
         if result is not None:
+            input_gates.append(
+                GateResult(
+                    "analysis",
+                    "warn" if result.issues else "pass",
+                    result.issues,
+                    {
+                        "tests": len(result.tests),
+                        "unavailable": sum(t.get("significant") is None for t in result.tests),
+                    },
+                )
+            )
             for figure in result.figures:
                 images[figure.name] = figure.png
                 files.append(
@@ -262,7 +303,11 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         if contract is not None and contract.min_citations
         else policy.min_citations_for(template.key, template.min_citations)
     )
-    gates: list[GateResult] = [markdown_gate(markdown), length_gate(markdown, template)]
+    gates: list[GateResult] = [
+        *input_gates,
+        markdown_gate(markdown),
+        length_gate(markdown, template),
+    ]
     gates.append(structure_gate(markdown, template, extras))
     if min_citations or citations:
         gates.append(citation_gate(markdown, citations, template, min_citations))
@@ -334,9 +379,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             files.append(DeliveryFile(f"{stem}.pdf", "pdf", f"{title}（PDF）", "report", pdf))
 
         def build_pptx() -> None:
-            from .delivery.pptx import render_pptx
+            from .delivery.pptx import paginate_deck, render_pptx
 
-            deck = extras.get("deck") or _deck_from_markdown(markdown, title)
+            deck = paginate_deck(extras.get("deck") or _deck_from_markdown(markdown, title))
             pptx = render_pptx(deck, citations=citations)
             files.append(
                 DeliveryFile(f"{stem}.pptx", "pptx", f"{title}（演示文稿）", "slides", pptx)
@@ -376,10 +421,23 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         if gate.status == "pass":
             continue
         for file in files:
-            if gate.name == "consistency" and file.format in {"docx", "html", "pdf"}:
-                file.status, file.issues = gate.status, file.issues + gate.issues
-            elif gate.name == "pdf" and file.format == "pdf":
-                file.status, file.issues = gate.status, gate.issues
+            applies = (
+                (gate.name == "consistency" and file.format in {"docx", "html", "pdf"})
+                or (gate.name == "pdf" and file.format == "pdf")
+                or (
+                    gate.name in HARD_GATES | {"length", "markdown", "territory"}
+                    and file.role in {"source", "report", "reading", "slides"}
+                )
+                or (gate.name == "analysis" and file.format == "xlsx")
+            )
+            if applies:
+                if {"pass": 0, "warn": 1, "fail": 2}[gate.status] > {
+                    "pass": 0,
+                    "warn": 1,
+                    "fail": 2,
+                }[file.status]:
+                    file.status = gate.status
+                file.issues = list(dict.fromkeys([*file.issues, *gate.issues]))
     status = overall(gates)
     if policy.fail_on_quality and status == "warn":
         # 用户要求「质量不合格即判失败」：硬性质量门的 warn 升级为 fail
@@ -446,13 +504,11 @@ def _deck_from_markdown(markdown: str, title: str) -> dict[str, Any]:
             current = {"title": text, "bullets": [], "notes": "", "citations": []}
             slides.append(current)
         elif current is not None and block.kind == "list":
-            current["bullets"] += [plain(item.inlines) for item in block.items if item.depth == 0][
-                :5
-            ]
-        elif current is not None and block.kind == "paragraph" and len(current["bullets"]) < 5:
+            current["bullets"] += [plain(item.inlines) for item in block.items]
+        elif current is not None and block.kind == "paragraph":
             text = plain(block.inlines)
-            current["bullets"].append(text[:90])
-    return {"title": title, "subtitle": "", "slides": slides[:20]}
+            current["bullets"].append(text)
+    return {"title": title, "subtitle": "", "slides": slides}
 
 
 def plain(inlines):  # type: ignore[no-untyped-def]
@@ -483,6 +539,17 @@ def _stats_xlsx(result: Any) -> bytes:
         "significant",
         "robust_method",
         "robust_p",
+        "paired",
+        "left",
+        "right",
+        "n_pairs",
+        "excluded_pairs",
+        "mean_difference",
+        "difference_std",
+        "df",
+        "ci_low",
+        "ci_high",
+        "reason",
     ]
     tests.append(test_headers)
     for row in result.tests:
@@ -491,6 +558,11 @@ def _stats_xlsx(result: Any) -> bytes:
     corr.append(["a", "b", "r", "p_value"])
     for row in result.correlations:
         corr.append([row.get(key) for key in ("a", "b", "r", "p_value")])
+    if result.issues:
+        notices = workbook.create_sheet("未完成分析")
+        notices.append(["说明"])
+        for issue in result.issues:
+            notices.append([issue])
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()

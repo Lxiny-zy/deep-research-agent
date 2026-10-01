@@ -19,6 +19,8 @@ const GATE_LABEL: Record<string, string> = {
   pdf: 'PDF 生成',
   render: '格式生成',
   territory: '地名规范',
+  analysis: '统计分析',
+  structured_content: '定稿一致性',
 }
 
 const GATE_HELP: Record<string, string> = {
@@ -35,6 +37,8 @@ const GATE_HELP: Record<string, string> = {
   pdf: 'PDF 能成功生成并通过字形与末段完整性自检。',
   territory: '所有交付物中的地名称谓符合规范。',
   render: '每种承诺的交付格式都成功生成；个别格式失败时其余格式照常交付。',
+  analysis: '统计结果沿用本次任务的计算记录；无法检验、配对不明确或输入已变更时明确标注。',
+  structured_content: '幻灯片内容与审核后的正文一致，避免修订后仍导出旧稿。',
 }
 
 const STATUS_META: Record<GateStatus, { label: string; icon: AppIconName }> = {
@@ -45,7 +49,7 @@ const STATUS_META: Record<GateStatus, { label: string; icon: AppIconName }> = {
 
 /** 交付整体结论的措辞：需关注 = 已交付但未完全达到质量要求（部分完成） */
 const OVERALL_LABEL: Record<GateStatus, string> = {
-  pass: '质量验收通过',
+  pass: '自动检查通过',
   warn: '部分完成 · 有待改进项',
   fail: '质量验收未通过',
 }
