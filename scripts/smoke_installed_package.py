@@ -125,6 +125,22 @@ async def _run() -> None:
         assert "Result" in render_latex(document) and "Result" in render_pdf_html(document)
         masked = citation_text("$x=[2]$ citation [1]")
         assert "[1]" in masked and "[2]" not in masked
+        from deep_research.models import Report
+        from deep_research.persistence.repository import RunDetail
+        from deep_research.workbench.publish import build_bundle
+
+        bundle = build_bundle(
+            RunDetail(
+                id="wheel-bundle",
+                query="Plain report",
+                status="done",
+                report=Report(
+                    query="Plain report", markdown="## Conclusion\n\nPlain export.", citations=[]
+                ),
+            )
+        )
+        assert {"md", "html"}.issubset({file.format for file in bundle.files})
+        assert all(failure["format"] in {"docx", "pdf"} for failure in bundle.failures)
 
 
 def main() -> None:

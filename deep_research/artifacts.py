@@ -787,9 +787,7 @@ class ArtifactStore:
         digest = hashlib.sha256()
         size = 0
         try:
-            fd, temp_name = tempfile.mkstemp(
-                prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
-            )
+            fd, temp_name = tempfile.mkstemp(prefix=".dra-", suffix=".tmp", dir=str(path.parent))
             with os.fdopen(fd, "wb") as handle:
                 fd = None
                 for chunk in chunks:
@@ -839,9 +837,7 @@ class ArtifactStore:
         fd: int | None = None
         temp_name: str | None = None
         try:
-            fd, temp_name = tempfile.mkstemp(
-                prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
-            )
+            fd, temp_name = tempfile.mkstemp(prefix=".dra-", suffix=".tmp", dir=str(path.parent))
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
                 fd = None
                 handle.write(payload)

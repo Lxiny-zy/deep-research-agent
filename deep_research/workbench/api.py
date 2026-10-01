@@ -20,7 +20,8 @@ from pydantic import BaseModel, Field
 from ..artifacts import ArtifactError
 from ..blocking import run_blocking
 from .contract import build_contract, pasted_paper_text
-from .delivery_store import build_or_load, load_version
+from .delivery_store import DeliveryConflict, build_or_load, current_version, load_version
+from .delivery_store import retry_format as retry_delivery_format
 from .publish import DeliveryBundle, build_bundle, delivery_fingerprint, resolve_template
 from .templates import get_template, public_templates
 
@@ -36,6 +37,12 @@ class ContractPreviewRequest(BaseModel):
     template: str = Field(min_length=1, max_length=40)
     query: str = Field(min_length=1, max_length=200_000)
     strategy: Literal["none", "quick", "deep"] | None = None
+
+
+class DeliveryRetryRequest(BaseModel):
+    version: str = Field(pattern=r"^[0-9a-f]{64}$")
+    format: Literal["html", "pdf", "docx", "pptx", "png", "xlsx"]
+    request_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 @router.get("/templates")
@@ -144,7 +151,10 @@ async def _stored_bundle(
     if cache is None:
         cache = {}
         request.app.state.delivery_cache = cache
-    key = (run_id, delivery_fingerprint(detail))
+    # Read the atomically published pointer: another API process may have
+    # completed a retry since this process populated its immutable cache.
+    active_version = await run_blocking(current_version, detail, settings.artifact_root)
+    key = (run_id, active_version or delivery_fingerprint(detail))
     bundle = cache.get(key)
     if bundle is not None:
         return bundle
@@ -191,6 +201,66 @@ async def get_deliverables(run_id: str, request: Request) -> dict[str, Any]:
     bundle = await _bundle(request, run_id)
     registry = bundle.registry()
     registry["run_id"] = run_id
+    from ..http.auth import principal_for
+
+    registry["can_retry"] = principal_for(request).can_research
+    return registry
+
+
+@router.post("/runs/{run_id}/deliverables/retry")
+async def retry_deliverable(
+    run_id: str, body: DeliveryRetryRequest, request: Request
+) -> dict[str, Any]:
+    from ..http.auth import principal_for
+
+    if not principal_for(request).can_research:
+        raise HTTPException(403, "当前身份为只读，无法重新生成交付物")
+    detail = await request.app.state.repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(404, "run not found")
+    if detail.status not in _TERMINAL or detail.report is None:
+        raise HTTPException(409, "研究尚未定稿，不能重试交付格式")
+    pending = getattr(request.app.state, "delivery_pending", None)
+    if pending is None:
+        pending = {}
+        request.app.state.delivery_pending = pending
+    key = (run_id, f"retry:{body.version}:{body.format}:{body.request_id}")
+
+    async def generate() -> DeliveryBundle:
+        try:
+            settings = request.app.state.settings
+            return await run_blocking(
+                retry_delivery_format,
+                detail,
+                settings.artifact_root,
+                settings.artifact_total_bytes,
+                body.version,
+                body.format,
+                body.request_id,
+            )
+        finally:
+            pending.pop(key, None)
+
+    task = pending.get(key)
+    if task is None:
+        task = asyncio.create_task(generate())
+        pending[key] = task
+        task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+    try:
+        bundle = await asyncio.shield(task)
+    except DeliveryConflict as exc:
+        raise HTTPException(409, {"code": exc.code, "message": str(exc)}) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "交付版本不存在") from exc
+    except (ArtifactError, ValueError) as exc:
+        raise HTTPException(
+            409, {"code": "delivery_integrity", "message": "交付快照或文件校验失败"}
+        ) from exc
+    except (OSError, TimeoutError) as exc:
+        raise HTTPException(503, "交付重试尚未完成，请检查存储或稍后重试") from exc
+    registry = bundle.registry()
+    registry["run_id"] = run_id
+    registry["can_retry"] = True
     return registry
 
 

@@ -29,20 +29,15 @@ from typing import Any
 from ..persistence.repository import RunDetail
 from .contract import contract_from_scratch
 from .gates import (
-    HARD_GATES,
     GateResult,
     Status,
     citation_gate,
-    consistency_gate,
     length_gate,
     markdown_gate,
-    overall,
     review_gate,
     revision_gate,
     scholarly_gate,
-    slides_gate,
     structure_gate,
-    territory_gate,
 )
 from .templates import DEFAULT_TEMPLATE, TaskTemplate, get_template, template_for_workflow
 from .writers import WORKBENCH_SCRATCH_KEY
@@ -108,6 +103,11 @@ class DeliveryBundle:
     status: str
     generated_at: str
     content_version: str = ""
+    input_version: str = ""
+    parent_version: str = ""
+    attempt: int = 1
+    failures: list[dict[str, Any]] = field(default_factory=list)
+    render_context: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def registry(self) -> dict[str, Any]:
         usable = [file for file in self.files if file.status != "fail"]
@@ -118,6 +118,10 @@ class DeliveryBundle:
         return {
             "version": 1,
             "content_version": self.content_version,
+            "input_version": self.input_version or self.content_version,
+            "parent_version": self.parent_version,
+            "attempt": self.attempt,
+            "failures": self.failures,
             "template": self.template,
             "title": self.title,
             "status": self.status,
@@ -161,7 +165,7 @@ def _file_stem(title: str) -> str:
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     payload = {
-        "format_version": 10,
+        "format_version": 11,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,
@@ -210,6 +214,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     stem = _file_stem(title)
     images: dict[str, bytes] = {}
     files: list[DeliveryFile] = []
+    statistics: dict[str, Any] | None = None
     input_gates: list[GateResult] = []
     if template.key == "slides" and extras.get("deck"):
         from .gates import _body_without_references
@@ -296,11 +301,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 )
                 if "![" not in markdown:
                     markdown += "\n\n## 图表\n\n" + figure_md + "\n"
-            files.append(
-                DeliveryFile(
-                    f"{stem}-statistics.xlsx", "xlsx", "统计结果表", "data", _stats_xlsx(result)
-                )
-            )
+            statistics = {
+                key: getattr(result, key) for key in ("describe", "tests", "correlations", "issues")
+            }
 
     from .quality import coerce_policy
 
@@ -380,164 +383,30 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         for g in gates
     )
 
-    files.insert(
-        0,
-        DeliveryFile(
-            f"{stem}.md",
-            "md",
-            f"{title}（Markdown 源）",
-            "source",
-            (
-                ("# " + title + "\n\n" + markdown)
-                if template.key == "dataAnalysis" and not markdown.lstrip().startswith("# ")
-                else markdown
-            ).encode("utf-8"),
-        ),
-    )
-    wants = set(template.deliverables)
-    render_failures: list[str] = []
+    from .delivery_render import render_bundle
+    from .support import evidence_records
 
-    def render(label: str, build: Any) -> None:
-        """单个格式渲染失败只让该格式缺席并记入验收门，不拖垮整个交付包。"""
-        try:
-            build()
-        except Exception as exc:  # noqa: BLE001 - 任何渲染异常都要转成可读的验收结论
-            logger.exception("delivery format %s failed", label)
-            render_failures.append(f"{label} 生成失败：{type(exc).__name__}: {exc}"[:300])
-
-    if not citation_failed:
-        from .titles import without_repeated_title
-
-        render_body = without_repeated_title(markdown, title)
-
-        def build_html() -> None:
-            from .delivery.html import render_html
-
-            html = render_html(
-                render_body, title=title, kicker=template.title, meta=meta, images=images
-            )
-            files.append(
-                DeliveryFile(
-                    f"{stem}.html", "html", f"{title}（阅读版）", "reading", html.encode("utf-8")
-                )
-            )
-
-        def build_docx() -> None:
-            from .delivery.docx import render_docx
-
-            data = render_docx(render_body, title=title, meta=meta, images=images)
-            files.append(DeliveryFile(f"{stem}.docx", "docx", f"{title}（Word）", "report", data))
-
-        def build_pdf() -> None:
-            from .delivery.pdf import PdfRenderError, render_pdf
-
-            try:
-                pdf = render_pdf(render_body, title=title, meta=meta, images=images)
-            except PdfRenderError as exc:
-                gates.append(GateResult("pdf", "fail", [f"PDF 生成失败：{exc}"]))
-                return
-            files.append(DeliveryFile(f"{stem}.pdf", "pdf", f"{title}（PDF）", "report", pdf))
-
-        def build_pptx() -> None:
-            from .delivery.pptx import paginate_deck, render_pptx
-
-            deck = paginate_deck(extras.get("deck") or _deck_from_markdown(markdown, title))
-            pptx = render_pptx(deck, citations=citations)
-            files.append(
-                DeliveryFile(f"{stem}.pptx", "pptx", f"{title}（演示文稿）", "slides", pptx)
-            )
-            gates.append(slides_gate(pptx, deck))
-
-        def build_mindmap() -> None:
-            from .delivery.mindmap import render_mindmap_html, render_mindmap_png
-            from .support import evidence_records
-
-            used_evidence = {
-                key
-                for decision in (extras.get("node_review") or {}).get("decisions", [])
-                for key in decision.get("evidence_ids", [])
-            }
-            records = evidence_records(
-                detail.results, {url: i for i, url in enumerate(citations, 1)}
-            )
-            mindmap = {
-                **extras["mindmap"],
-                "sources": [
-                    {
-                        "index": i,
-                        "url": url,
-                        "title": _references(detail).get(url, url),
-                        "quotes": list(
-                            dict.fromkeys(
-                                e["quote"]
-                                for e in records
-                                if e["citation"] == i and e["id"] in used_evidence
-                            )
-                        ),
-                    }
-                    for i, url in enumerate(citations, 1)
-                ],
-            }
-            html = render_mindmap_html(mindmap, title=title).encode("utf-8")
-            files.append(
-                DeliveryFile(
-                    f"{stem}-mindmap.html", "html", f"{title}（交互导图）", "reading", html
-                )
-            )
-            png = render_mindmap_png(mindmap)
-            files.append(
-                DeliveryFile(f"{stem}-mindmap.png", "png", f"{title}（导图图片）", "figure", png)
-            )
-
-        if "html" in wants:
-            render("HTML", build_html)
-        if "docx" in wants:
-            render("Word", build_docx)
-        if "pdf" in wants:
-            render("PDF", build_pdf)
-        if "pptx" in wants:
-            render("PPT", build_pptx)
-        if "mindmap" in wants and extras.get("mindmap"):
-            render("思维导图", build_mindmap)
-        gates.append(consistency_gate(markdown, {f.name: f.data for f in files}))
-    if render_failures:
-        gates.append(GateResult("render", "fail", render_failures))
-    gates.append(territory_gate({f.name: f.data for f in files if f.format not in {"png", "xlsx"}}))
-    for gate in gates:
-        if gate.status == "pass":
-            continue
-        for file in files:
-            applies = (
-                (gate.name == "consistency" and file.format in {"docx", "html", "pdf"})
-                or (gate.name == "pdf" and file.format == "pdf")
-                or (
-                    gate.name in HARD_GATES | {"length", "markdown", "territory"}
-                    and file.role in {"source", "report", "reading", "slides"}
-                )
-                or (gate.name == "analysis" and file.format == "xlsx")
-            )
-            if applies:
-                if {"pass": 0, "warn": 1, "fail": 2}[gate.status] > {
-                    "pass": 0,
-                    "warn": 1,
-                    "fail": 2,
-                }[file.status]:
-                    file.status = gate.status
-                file.issues = list(dict.fromkeys([*file.issues, *gate.issues]))
-    status = overall(gates)
-    if policy.fail_on_quality and status == "warn":
-        # 用户要求「质量不合格即判失败」：硬性质量门的 warn 升级为 fail
-        if any(g.status == "warn" and g.name in HARD_GATES for g in gates):
-            status = "fail"
-    return DeliveryBundle(
-        template=template.key,
-        title=title,
-        files=files,
-        gates=gates,
-        status=status,
-        # 固定为运行创建时刻：同一运行重复发布，登记内容逐字节一致
-        generated_at=(created_at or datetime.now(UTC)).astimezone(UTC).isoformat(),
-    )
+    context = {
+        "markdown": markdown,
+        "title": title,
+        "meta": meta,
+        "stem": stem,
+        "template": template.key,
+        "kicker": template.title,
+        "wants": list(template.deliverables),
+        "extras": extras,
+        "citations": citations,
+        "references": _references(detail),
+        "evidence": evidence_records(detail.results, {url: i for i, url in enumerate(citations, 1)})
+        if template.key == "mindmap"
+        else [],
+        "statistics": statistics,
+        "base_gates": [gate.to_dict() for gate in gates],
+        "blocked": citation_failed,
+        "fail_on_quality": policy.fail_on_quality,
+        "generated_at": (created_at or datetime.now(UTC)).astimezone(UTC).isoformat(),
+    }
+    return render_bundle(context, files)
 
 
 def _source_texts(detail: RunDetail, citations: list[str]) -> list[str]:

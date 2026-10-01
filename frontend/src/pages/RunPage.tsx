@@ -469,10 +469,12 @@ export default function RunPage() {
             <>
               {id && dbFinished && detail.data?.report && (
                 <DeliverablesPanel
+                  key={id}
                   runId={id}
                   registry={deliverables.data}
                   loading={deliverables.isLoading}
                   error={deliverables.error}
+                  onUpdated={deliverables.setRegistry}
                 />
               )}
               {structuredDocument.data && (

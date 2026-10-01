@@ -888,6 +888,22 @@ export function getDeliverables(id: string, signal?: AbortSignal): Promise<Deliv
   })
 }
 
+export function retryDeliverable(
+  id: string,
+  version: string,
+  format: string,
+  requestId: string,
+): Promise<DeliverableRegistry> {
+  return request<DeliverableRegistry>(
+    `/api/runs/${encodeURIComponent(id)}/deliverables/retry`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ version, format, request_id: requestId }),
+    },
+    300_000,
+  )
+}
+
 export function getRunTemplate(id: string, signal?: AbortSignal): Promise<RunTemplateInfo> {
   return request<RunTemplateInfo>(`/api/runs/${encodeURIComponent(id)}/template`, { signal })
 }

@@ -172,11 +172,9 @@ def review_gate(extras: dict[str, Any]) -> GateResult:
 
 def consistency_gate(markdown: str, files: dict[str, bytes]) -> GateResult:
     """同源多格式交叉计数。只比对实际生成了的格式。"""
-    from .delivery.docx import docx_stats
-    from .delivery.pdf import PdfRenderError, verify_pdf
-
     issues: list[str] = []
     metrics: dict[str, Any] = {}
+    failed: set[str] = set()
     md_images = sum(1 for block in parse_blocks(markdown) if block.kind == "image")
     metrics["markdown_images"] = md_images
     docx = next((data for name, data in files.items() if name.endswith(".docx")), None)
@@ -186,23 +184,36 @@ def consistency_gate(markdown: str, files: dict[str, bytes]) -> GateResult:
     )
     pdf = next((data for name, data in files.items() if name.endswith(".pdf")), None)
     if docx is not None:
-        stats = docx_stats(docx)
-        metrics["docx_images"] = stats["images"]
-        if stats["images"] != md_images:
-            issues.append(f"DOCX 内嵌图 {stats['images']} 张 ≠ Markdown 图 {md_images} 张")
+        try:
+            from .delivery.docx import docx_stats
+
+            stats = docx_stats(docx)
+            metrics["docx_images"] = stats["images"]
+            if stats["images"] != md_images:
+                issues.append(f"DOCX 内嵌图 {stats['images']} 张 ≠ Markdown 图 {md_images} 张")
+                failed.add("docx")
+        except Exception as exc:
+            issues.append(f"DOCX 自检失败：{type(exc).__name__}")
+            failed.add("docx")
     if html is not None:
         inline = html.count(b'src="data:image')
         metrics["html_images"] = inline
         if inline != md_images:
             issues.append(f"HTML 内联图 {inline} 张 ≠ Markdown 图 {md_images} 张")
+            failed.add("html")
         if b"<script" in html.lower():
             issues.append("自包含 HTML 含脚本")
+            failed.add("html")
     if pdf is not None:
         try:
+            from .delivery.pdf import verify_pdf
+
             verify_pdf(pdf, markdown)
             metrics["pdf"] = "ok"
-        except PdfRenderError as exc:
+        except Exception as exc:
             issues.append(f"PDF 自检失败：{exc}")
+            failed.add("pdf")
+    metrics["failed_formats"] = sorted(failed)
     return GateResult("consistency", "fail" if issues else "pass", issues, metrics)
 
 
@@ -231,17 +242,29 @@ def territory_gate(files: dict[str, bytes]) -> GateResult:
     """地名规范：所有可见交付物（各格式的可见文本）逐一检查。"""
     from .territory import check_files
 
-    report = check_files(files)
+    report = {}
+    unreadable = []
+    for name, data in files.items():
+        try:
+            report.update(check_files({name: data}))
+        except Exception as exc:
+            unreadable.append((name, type(exc).__name__))
     issues = [
         f"{name}:{hit.line} {hit.code}：{hit.excerpt}"
         for name, hits in report.items()
         for hit in hits[:5]
     ]
+    issues.extend(f"{name}: 无法检查文件内容（{kind}）" for name, kind in unreadable)
+    failed_files = [*report, *(name for name, _ in unreadable)]
     return GateResult(
         "territory",
-        "fail" if report else "pass",
+        "fail" if failed_files else "pass",
         issues[:20],
-        {"files_checked": len(files), "files_failed": len(report)},
+        {
+            "files_checked": len(files),
+            "files_failed": len(failed_files),
+            "failed_files": failed_files,
+        },
     )
 
 
@@ -259,7 +282,7 @@ def scholarly_gate(
     """学术写作质量：文体、摘要引用、引用堆砌、重复来源、引用下限、时效、局限说明。"""
     from .scholarly import evaluate
 
-    body = _body_without_references(markdown)
+    body = citation_text(_body_without_references(markdown))
     used = {
         int(number) for match in _CITE.findall(body) for number in re.split(r"\s*[,，]\s*", match)
     }

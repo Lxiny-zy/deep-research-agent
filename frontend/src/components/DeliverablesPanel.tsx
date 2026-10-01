@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { AppIcon, type AppIconName } from './AppIcon'
 import InfoTip from './InfoTip'
 import { formatLabel, humanSize } from '../lib/workbench'
-import { fetchDeliverable } from '../api/client'
+import { fetchDeliverable, getDeliverables, retryDeliverable } from '../api/client'
 import { downloadBlob } from '../lib/download'
 import type { DeliverableItem, DeliverableRegistry, GateResult, GateStatus } from '../types'
 
@@ -175,6 +175,7 @@ interface Props {
   registry: DeliverableRegistry | undefined
   loading: boolean
   error: unknown
+  onUpdated?: (registry: DeliverableRegistry) => void
 }
 
 /**
@@ -182,9 +183,34 @@ interface Props {
  * 只对浏览器能原生打开的格式（自包含 HTML / PDF / PNG）提供预览，其余只提供下载。
  * 自包含 HTML 本身不含脚本（思维导图的折叠脚本除外，且不访问网络）。
  */
-export default function DeliverablesPanel({ runId, registry, loading, error }: Props) {
+export default function DeliverablesPanel({ runId, registry, loading, error, onUpdated }: Props) {
   const [busy, setBusy] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const requests = useRef(new Map<string, string>())
+
+  async function retry(format: string) {
+    if (!registry?.content_version || busy !== null) return
+    const key = `${runId}/${registry.content_version}/${format}`
+    const requestId = requests.current.get(key) ?? crypto.randomUUID()
+    requests.current.set(key, requestId)
+    setBusy(`retry:${format}`)
+    setActionError(null)
+    try {
+      const next = await retryDeliverable(runId, registry.content_version, format, requestId)
+      onUpdated?.(next)
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : '重新生成失败')
+      if (cause instanceof Error && 'status' in cause && cause.status === 409) {
+        try {
+          onUpdated?.(await getDeliverables(runId))
+        } catch {
+          // Keep the original conflict/integrity error if refreshing also fails.
+        }
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
 
   async function open(item: DeliverableItem, preview: boolean) {
     setBusy(item.name)
@@ -251,6 +277,33 @@ export default function DeliverablesPanel({ runId, registry, loading, error }: P
         </span>
       </div>
       <QualitySummary gates={registry.gates} />
+      {Boolean(registry.failures?.length) && (
+        <ul className="run-file-list" aria-label="未完成的交付格式">
+          {registry.failures?.map((failure) => (
+            <li className="run-file is-fail" key={failure.format}>
+              <span className="run-file-meta">
+                <strong>{formatLabel(failure.format)} 未完成</strong>
+                <span className="hint">{failure.issues.join('；')}</span>
+              </span>
+              {failure.retryable &&
+                registry.can_retry !== false &&
+                registry.content_version &&
+                onUpdated && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={busy !== null}
+                    onClick={() => retry(failure.format)}
+                  >
+                    {busy === `retry:${failure.format}`
+                      ? '正在重新生成…'
+                      : `重新生成 ${formatLabel(failure.format)}`}
+                  </button>
+                )}
+            </li>
+          ))}
+        </ul>
+      )}
       {primary && (
         <div className="run-primary-file">
           <span className="run-file-icon is-large" aria-hidden="true">

@@ -865,6 +865,11 @@ export interface DeliverableItem {
 
 export interface DeliverableRegistry {
   content_version?: string
+  input_version?: string
+  parent_version?: string
+  attempt?: number
+  can_retry?: boolean
+  failures?: { format: string; title: string; issues: string[]; retryable: boolean }[]
   version: number
   run_id: string
   template: TemplateKey

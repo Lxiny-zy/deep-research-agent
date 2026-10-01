@@ -284,6 +284,8 @@ async def test_delivery_generation_survives_first_waiter_disconnect(settings, mo
 
     async def render(*args):
         nonlocal calls
+        if args[0] is workbench_api.current_version:
+            return None
         calls += 1
         entered.set()
         await release.wait()

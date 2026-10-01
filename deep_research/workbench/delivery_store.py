@@ -15,6 +15,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,18 @@ from .gates import GateResult
 from .publish import DeliveryBundle, DeliveryFile, delivery_fingerprint
 
 INDEX = "deliveries/index.json"
+
+
+class DeliveryConflict(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
 
 
 def delivery_store(
@@ -119,6 +132,9 @@ def _read_file(store: ArtifactStore, path: str, record: dict) -> bytes:
 def _load(store: ArtifactStore, slug: str, version: str, registry: dict) -> DeliveryBundle:
     if registry.get("content_version") != version:
         raise ValueError("交付版本与登记不一致")
+    context = registry.get("_render_context", {})
+    if context and _digest(context) != registry.get("render_context_sha256"):
+        raise ValueError("交付定稿快照校验失败")
     files = [
         DeliveryFile(
             name=item["name"],
@@ -139,6 +155,11 @@ def _load(store: ArtifactStore, slug: str, version: str, registry: dict) -> Deli
         status=registry["status"],
         generated_at=registry["generated_at"],
         content_version=version,
+        input_version=registry.get("input_version", version),
+        parent_version=registry.get("parent_version", ""),
+        attempt=registry.get("attempt", 1),
+        failures=registry.get("failures", []),
+        render_context=context,
     )
 
 
@@ -160,35 +181,112 @@ def build_or_load(
     version = delivery_fingerprint(detail)
     with _lock(store):
         index = _index(store)
-        previous = index["versions"].get(version)
+        current = index.get("current", {}).get(version, version)
+        previous = index["versions"].get(current)
         if previous is not None:
-            return _load(store, slug, version, previous)
+            return _load(store, slug, current, previous)
+        if current != version:
+            raise ValueError("当前交付版本不存在")
         bundle = build(detail)
-        bundle.content_version = version
-        registry = bundle.registry()
-        # Keep the public full digest, but avoid MAX_PATH failures in nested
-        # Windows workspaces. Older committed versions retain their original path.
-        used = {_stage(v, entry) for v, entry in index["versions"].items()}
-        stage = f"d-{version[:16]}"
-        suffix = 0
-        while stage in used:
-            suffix += 1
-            stage = f"d-{version[:16]}-{suffix}"
-        registry["storage_stage"] = stage
-        for file, item in zip(bundle.files, registry["items"], strict=True):
-            store.write(
-                slug,
-                stage,
-                file.name,
-                file.data,
-                area="output",
-                mime_type=item["mime_type"],
-                update_manifest=False,
+        bundle.content_version = bundle.input_version = version
+        _commit(store, slug, index, bundle)
+        return bundle
+
+
+def _commit(store: ArtifactStore, slug: str, index: dict, bundle: DeliveryBundle) -> None:
+    version = bundle.content_version
+    if version in index["versions"]:
+        raise ValueError("不得覆盖已有交付版本")
+    registry = bundle.registry()
+    if bundle.render_context:
+        registry["_render_context"] = bundle.render_context
+        registry["render_context_sha256"] = _digest(bundle.render_context)
+    used = {_stage(v, entry) for v, entry in index["versions"].items()}
+    stage = f"d-{version[:16]}"
+    suffix = 0
+    while stage in used:
+        suffix += 1
+        stage = f"d-{version[:16]}-{suffix}"
+    registry["storage_stage"] = stage
+    for file, item in zip(bundle.files, registry["items"], strict=True):
+        store.write(
+            slug,
+            stage,
+            file.name,
+            file.data,
+            area="output",
+            mime_type=item["mime_type"],
+            update_manifest=False,
+        )
+    index["versions"][version] = registry
+    index.setdefault("current", {})[bundle.input_version] = version
+    store.write_control_json(INDEX, index)
+
+
+def current_version(detail: RunDetail, artifact_root: str) -> str | None:
+    store, _ = delivery_store(detail, artifact_root)
+    index = _index(store)
+    source = delivery_fingerprint(detail)
+    version = index.get("current", {}).get(source, source)
+    if version not in index["versions"]:
+        if version != source:
+            raise ValueError("当前交付版本不存在")
+        return None
+    return str(version)
+
+
+def retry_format(
+    detail: RunDetail,
+    artifact_root: str,
+    quota: int | None,
+    version: str,
+    target: str,
+    request_id: str,
+) -> DeliveryBundle:
+    from .delivery_render import render_bundle
+
+    store, slug = delivery_store(detail, artifact_root, quota)
+    with _lock(store):
+        index = _index(store)
+        requests = index.setdefault("retry_requests", {})
+        duplicate = requests.get(request_id)
+        if duplicate is not None:
+            if duplicate["base"] != version or duplicate["format"] != target:
+                raise DeliveryConflict(
+                    "delivery_request_conflict", "同一重试请求不能用于其他版本或格式"
+                )
+            saved = duplicate["result"]
+            return _load(store, slug, saved, index["versions"][saved])
+        registry = index["versions"].get(version)
+        if registry is None:
+            raise FileNotFoundError("交付版本不存在")
+        previous = _load(store, slug, version, registry)
+        source = delivery_fingerprint(detail)
+        if previous.input_version != source:
+            raise DeliveryConflict(
+                "delivery_source_changed", "研究定稿或渲染版本已变化，请刷新最新交付物"
             )
-        # No published version is overwritten. Failed writes before this point
-        # leave only hidden candidates, and a retry can finish the same version.
-        index["versions"][version] = registry
-        store.write_control_json(INDEX, index)
+        if index.get("current", {}).get(source, source) != version:
+            raise DeliveryConflict("delivery_version_changed", "交付物已有新版本，请刷新后再重试")
+        if not previous.render_context:
+            raise DeliveryConflict("delivery_legacy_version", "此历史版本没有可复用的定稿快照")
+        if not any(f["format"] == target and f.get("retryable") for f in previous.failures):
+            raise DeliveryConflict(
+                "delivery_not_retryable", "该格式未生成失败，或需要先修订研究内容"
+            )
+        bundle = render_bundle(
+            previous.render_context,
+            previous.files,
+            retry_format=target,
+            previous_failures=previous.failures,
+        )
+        bundle.input_version = source
+        bundle.parent_version = version
+        bundle.content_version = _digest([source, version, target, request_id])
+        bundle.attempt = previous.attempt + 1
+        bundle.generated_at = datetime.now(UTC).isoformat()
+        requests[request_id] = {"base": version, "format": target, "result": bundle.content_version}
+        _commit(store, slug, index, bundle)
         return bundle
 
 

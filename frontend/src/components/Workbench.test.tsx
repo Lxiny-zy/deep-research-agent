@@ -6,8 +6,15 @@ import RunTaskSummary from './RunTaskSummary'
 import TaskTemplatePicker from './TaskTemplatePicker'
 import type { DeliverableRegistry, TaskContract, TaskTemplate } from '../types'
 
-const mocks = vi.hoisted(() => ({ fetchDeliverable: vi.fn(), downloadBlob: vi.fn() }))
-vi.mock('../api/client', () => ({ fetchDeliverable: mocks.fetchDeliverable }))
+const mocks = vi.hoisted(() => ({
+  fetchDeliverable: vi.fn(),
+  retryDeliverable: vi.fn(),
+  downloadBlob: vi.fn(),
+}))
+vi.mock('../api/client', () => ({
+  fetchDeliverable: mocks.fetchDeliverable,
+  retryDeliverable: mocks.retryDeliverable,
+}))
 vi.mock('../lib/download', () => ({ downloadBlob: mocks.downloadBlob }))
 
 function template(overrides: Partial<TaskTemplate> = {}): TaskTemplate {
@@ -138,6 +145,59 @@ const registry: DeliverableRegistry = {
 }
 
 describe('DeliverablesPanel', () => {
+  it('retries the failed format and reuses its request ID after a connection failure', async () => {
+    const failed = {
+      ...registry,
+      content_version: 'a'.repeat(64),
+      failures: [{ format: 'pdf', title: 'PDF', issues: ['temporary failure'], retryable: true }],
+    }
+    const updated = { ...failed, content_version: 'b'.repeat(64), failures: [] }
+    const onUpdated = vi.fn()
+    mocks.retryDeliverable
+      .mockRejectedValueOnce(new Error('connection lost'))
+      .mockResolvedValueOnce(updated)
+    render(
+      <DeliverablesPanel
+        runId="r1"
+        registry={failed}
+        loading={false}
+        error={null}
+        onUpdated={onUpdated}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '重新生成 PDF' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('connection lost')
+    fireEvent.click(screen.getByRole('button', { name: '重新生成 PDF' }))
+    await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
+    expect(mocks.retryDeliverable.mock.calls[0]).toEqual(mocks.retryDeliverable.mock.calls[1])
+    expect(mocks.retryDeliverable.mock.calls[0].slice(0, 3)).toEqual([
+      'r1',
+      failed.content_version,
+      'pdf',
+    ])
+  })
+
+  it('does not offer export retries for blocked content or read-only access', () => {
+    render(
+      <DeliverablesPanel
+        runId="r1"
+        registry={{
+          ...registry,
+          content_version: 'a'.repeat(64),
+          can_retry: false,
+          failures: [
+            { format: 'pdf', title: 'PDF', issues: ['content review failed'], retryable: false },
+          ],
+        }}
+        loading={false}
+        error={null}
+        onUpdated={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('content review failed')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重新生成 PDF' })).not.toBeInTheDocument()
+  })
+
   it('shows the primary deliverable, gate verdicts and downloads with auth', async () => {
     mocks.fetchDeliverable.mockResolvedValue({ blob: new Blob(['x']), filename: 'r.docx' })
     render(<DeliverablesPanel runId="r1" registry={registry} loading={false} error={null} />)

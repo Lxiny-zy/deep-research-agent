@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type { DeliverableRegistry } from '../types'
 import {
   getDeliverables,
   getNarrative,
@@ -46,13 +47,21 @@ export function useContractPreview(
 }
 
 export function useDeliverables(runId: string | undefined, finished: boolean) {
-  return useQuery({
+  const client = useQueryClient()
+  const query = useQuery({
     queryKey: ['deliverables', runId],
     queryFn: ({ signal }) => getDeliverables(runId as string, signal),
     enabled: Boolean(runId) && finished,
     staleTime: 5 * 60_000,
     retry: false,
   })
+  return {
+    ...query,
+    setRegistry: (registry: DeliverableRegistry) => {
+      client.setQueryData(['deliverables', runId], registry)
+      void client.invalidateQueries({ queryKey: ['workspace', runId] })
+    },
+  }
 }
 
 export function useRunTemplate(runId: string | undefined) {
