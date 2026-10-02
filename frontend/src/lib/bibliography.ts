@@ -1,4 +1,4 @@
-import type { ReportBibliography } from '../types'
+import type { CitationOccurrence, Finding, ReportBibliography } from '../types'
 import { stripTrailingReferences } from './evidence'
 
 /** Do not apply a separately fetched catalog to stale or streaming report text. */
@@ -40,4 +40,42 @@ export function citationLocations(href: string): number[] {
 
 export function documentNumber(catalog: ReportBibliography | undefined, location: number): number {
   return catalog?.locations.find((item) => item.index === location)?.document ?? location
+}
+
+export function citationOccurrence(
+  href: string,
+  catalog?: ReportBibliography,
+): CitationOccurrence | undefined {
+  const match = /^#cite-o-([0-9a-f]{24})$/.exec(href)
+  if (!match || catalog?.binding_status !== 'bound') return
+  const item = catalog.occurrences?.find((occurrence) => occurrence.id === match[1])
+  if (
+    !item ||
+    !item.locations.length ||
+    !item.locations.every((index) =>
+      catalog.locations.some(
+        (location) => location.index === index && location.document === item.document,
+      ),
+    )
+  )
+    return
+  return item
+}
+
+export function reviewedFindings(
+  findings: Finding[],
+  occurrence: CitationOccurrence,
+  targets: (string | undefined)[],
+): Finding[] {
+  const ids = new Set(occurrence.evidence_ids)
+  const urls = new Set(occurrence.locations.map((index) => targets[index - 1]))
+  const seen = new Set<string>()
+  return findings.filter((finding) => {
+    if (!finding.support_id || !ids.has(finding.support_id) || !urls.has(finding.source_url))
+      return false
+    const key = `${finding.support_id}:${finding.verification.source_content_hash}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }

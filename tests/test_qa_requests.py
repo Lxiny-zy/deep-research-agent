@@ -69,6 +69,37 @@ async def test_requests_are_claimed_in_order_and_old_owners_cannot_save(stores):
     assert messages[0].answer == "saved" and messages[0].tokens == 42
 
 
+async def test_completed_question_keeps_citation_binding_and_support_ids(stores):
+    store, jobs, other, cid = stores
+    rid = "bound-citation-request"
+    binding = {
+        "source_body": "answer [1]",
+        "binding_status": "bound",
+        "occurrences": [{"id": "a" * 24, "evidence_ids": ["evidence-one"]}],
+    }
+    evidence = [
+        {
+            "source_url": "https://example.org/paper",
+            "support_id": "evidence-one",
+            "evidence_quote": "original",
+        }
+    ]
+    thoughts = [{"tool": "citation_binding", "input": "", "observation": "", "binding": binding}]
+    await jobs.reserve(cid, rid, "payload", {"query": "question"})
+    assert await jobs.claim(cid, rid, "owner", 90)
+    assert await jobs.update(
+        cid,
+        rid,
+        "owner",
+        result={"answer": "answer [1]", "evidence": evidence, "thoughts": thoughts},
+    )
+    reloaded = await other.get(cid, rid)
+    payload = message_payload(reloaded)
+    assert payload["answer"] == "answer [1]"
+    assert payload["thoughts"] == thoughts and payload["evidence"] == evidence
+    assert (await store.get(cid)).messages[0].thoughts == thoughts
+
+
 async def test_expired_model_work_is_not_silently_reexecuted(stores):
     _, jobs, other, cid = stores
     now = datetime.now(UTC)

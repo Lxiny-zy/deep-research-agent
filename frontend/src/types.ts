@@ -53,6 +53,7 @@ export type SubQuestion = Required<Wire<'SubQuestion'>>
 export type QuantityStatus = 'not_applicable' | 'verified' | 'unsupported'
 
 export interface Finding {
+  support_id?: string
   statement: string
   source_url: string
   evidence_quote: string
@@ -116,6 +117,8 @@ export interface ReportDocument {
 export interface ReportBibliography {
   source_body: string
   body: string
+  binding_status?: 'unavailable' | 'bound' | 'invalid'
+  occurrences?: CitationOccurrence[]
   documents: {
     index: number
     identity: string
@@ -131,6 +134,16 @@ export interface ReportBibliography {
     label: string
     content_hashes: string[]
   }[]
+}
+
+export interface CitationOccurrence {
+  id: string
+  run: number
+  document: number
+  locations: number[]
+  unit_id: string
+  scope: 'reviewed_unit' | 'source_location' | 'unused_location'
+  evidence_ids: string[]
 }
 
 export type ReportBlock = ProseBlock | TableBlock | ChartBlock
@@ -216,6 +229,7 @@ export interface ReportReference {
 }
 
 export interface ReportEvidence {
+  support_id?: string
   citation: number
   claim_id: string
   statement: string
@@ -930,6 +944,7 @@ export interface QaThought {
   observation: string
   call_id?: string
   usage?: Record<string, unknown>
+  binding?: ReportBibliography
 }
 
 export interface QaActivity {
@@ -944,6 +959,7 @@ export interface QaActivity {
 }
 
 export interface QaEvidence {
+  support_id?: string
   statement: string
   source_url: string
   evidence_quote: string

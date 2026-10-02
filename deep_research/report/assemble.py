@@ -125,7 +125,7 @@ def assemble_document(
         sections=sections,
         references=references,
         bibliography=build_bibliography(body, citations, findings),
-        evidence=_evidence(findings, index_by_url),
+        evidence=_evidence(findings, index_by_url, corroboration=require_corroboration),
         overview=_overview(findings, events),
     )
 
@@ -286,13 +286,18 @@ def _references(citations: list[str], findings: list[Finding]) -> list[Reference
     ]
 
 
-def _evidence(findings: list[Finding], index_by_url: dict[str, int]) -> list[EvidenceRecord]:
+def _evidence(
+    findings: list[Finding], index_by_url: dict[str, int], *, corroboration: bool = False
+) -> list[EvidenceRecord]:
     """证据附录记录，按引用号升序。
 
     只收录**进了报告引用列表**的来源：没有被引用的 finding 在正文里没有对应角标，
     放进附录会给读者一堆无处可去的记录。它们仍然计入概览统计——概览说的是"这次
     研究验证了多少条"，与"报告引用了哪些"是两个不同的量。
     """
+    from ..guardrails import report_eligible
+    from ..workbench.support import evidence_id
+
     records: list[EvidenceRecord] = []
     for finding in findings:
         index = index_by_url.get(finding.source_url)
@@ -302,6 +307,9 @@ def _evidence(findings: list[Finding], index_by_url: dict[str, int]) -> list[Evi
         records.append(
             EvidenceRecord(
                 citation=index,
+                support_id=evidence_id(finding)
+                if report_eligible(finding, require_corroboration=corroboration)
+                else "",
                 claim_id=verification.claim_id,
                 statement=finding.statement,
                 quote=finding.evidence_quote,

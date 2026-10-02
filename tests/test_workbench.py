@@ -812,6 +812,7 @@ async def test_answer_question_verifies_and_cites(settings) -> None:
         "search_and_verify",
         "claim_check",
         "citation_check",
+        "citation_binding",
     ]
 
 
@@ -937,6 +938,7 @@ async def test_qa_preserves_evidence_beyond_thirtieth_finding(api_repo, monkeypa
     data = response.json()
     assert len(data["evidence"]) == 44
     assert data["evidence"][-1]["source_url"] == data["citations"][-1]
+    assert all(item["support_id"] for item in data["evidence"])
 
 
 @pytest.mark.asyncio

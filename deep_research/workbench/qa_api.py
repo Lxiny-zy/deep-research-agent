@@ -283,8 +283,11 @@ async def _answer(
         await agent.aclose()
         if search_tool is not None:
             await search_tool.aclose()
+    from .support import evidence_id
+
     evidence = [
         {
+            "support_id": evidence_id(finding),
             "statement": finding.statement,
             "source_url": finding.source_url,
             "evidence_quote": finding.evidence_quote,

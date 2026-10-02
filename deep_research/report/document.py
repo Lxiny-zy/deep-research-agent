@@ -217,6 +217,7 @@ class EvidenceRecord(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     citation: int = Field(..., ge=1)
+    support_id: str = Field("", description="可供终稿核验使用的证据标识；不合格素材留空")
     claim_id: str = ""
     statement: str = ""
     quote: str = ""

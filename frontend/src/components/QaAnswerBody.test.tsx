@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import QaAnswerBody from './QaAnswerBody'
-import type { QaEvidence } from '../types'
+import type { QaEvidence, ReportBibliography } from '../types'
 
 const first: QaEvidence = {
   source_url: 'https://workspace.invalid/attachments/paper',
@@ -13,6 +13,98 @@ const second: QaEvidence = {
   statement: '几何校正与匹配',
   evidence_quote: 'geometric matching',
 }
+
+it('uses reviewed evidence instead of lexical similarity and lets the reader choose multiple matches', () => {
+  const id = 'a'.repeat(24)
+  const text = '选择参考波段 [1]。'
+  const binding: ReportBibliography = {
+    source_body: text,
+    body: `选择参考波段 [[1]](#cite-o-${id})。`,
+    binding_status: 'bound',
+    documents: [{ index: 1, identity: 'p', title: '', reference: '', url: '', locations: [1] }],
+    locations: [{ index: 1, document: 1, url: first.source_url, label: '', content_hashes: [] }],
+    occurrences: [
+      {
+        id,
+        run: 0,
+        document: 1,
+        locations: [1],
+        unit_id: 'unit',
+        scope: 'reviewed_unit',
+        evidence_ids: ['second'],
+      },
+    ],
+  }
+  const evidence = [
+    { ...first, support_id: 'first' },
+    { ...second, support_id: 'second' },
+  ]
+  const locate = vi.fn()
+  const { rerender } = render(
+    <QaAnswerBody
+      text={text}
+      citations={[first.source_url]}
+      evidence={evidence}
+      binding={binding}
+      onLocate={locate}
+    />,
+  )
+  fireEvent.click(screen.getByRole('button', { name: '定位引用 1 的论文依据' }))
+  expect(locate).toHaveBeenLastCalledWith(evidence[1])
+  locate.mockClear()
+  rerender(
+    <QaAnswerBody
+      text={text}
+      citations={[first.source_url]}
+      evidence={evidence}
+      binding={{
+        ...binding,
+        occurrences: [{ ...binding.occurrences![0], evidence_ids: ['first', 'second'] }],
+      }}
+      onLocate={locate}
+    />,
+  )
+  fireEvent.click(screen.getByRole('button', { name: '定位引用 1 的论文依据' }))
+  expect(locate).not.toHaveBeenCalled()
+  expect(screen.getByRole('dialog', { name: '选择论文依据' })).toBeVisible()
+  fireEvent.click(screen.getAllByRole('button', { name: '定位这条依据' })[1])
+  expect(locate).toHaveBeenCalledWith(evidence[1])
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+it('does not use an unrelated quote when a reviewed selection is unavailable', () => {
+  const id = 'b'.repeat(24)
+  const text = '回答 [1]。'
+  const binding: ReportBibliography = {
+    source_body: text,
+    body: `回答 [[1]](#cite-o-${id})。`,
+    binding_status: 'bound',
+    documents: [{ index: 1, identity: 'p', title: '', reference: '', url: '', locations: [1] }],
+    locations: [{ index: 1, document: 1, url: first.source_url, label: '', content_hashes: [] }],
+    occurrences: [
+      {
+        id,
+        run: 0,
+        document: 1,
+        locations: [1],
+        unit_id: 'unit',
+        scope: 'reviewed_unit',
+        evidence_ids: ['missing'],
+      },
+    ],
+  }
+  render(
+    <QaAnswerBody
+      text={text}
+      citations={[first.source_url]}
+      evidence={[first]}
+      binding={binding}
+      onLocate={vi.fn()}
+    />,
+  )
+  expect(screen.queryByRole('button')).toBeNull()
+  expect(screen.getByText('[1]')).toHaveAttribute('title', '本次核验选用的摘录暂未加载')
+})
 
 it('uses clickable inline citations and selects evidence matching the current paragraph', () => {
   const locate = vi.fn()

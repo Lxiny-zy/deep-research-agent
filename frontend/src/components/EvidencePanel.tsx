@@ -365,6 +365,9 @@ export default function EvidencePanel({
   displayCitation,
   referenceUrl,
   selectedLocationCount,
+  selectionScope,
+  missingEvidence = 0,
+  onShowAll,
   url,
   findings,
   allFindings,
@@ -377,6 +380,9 @@ export default function EvidencePanel({
   displayCitation?: number
   referenceUrl?: string
   selectedLocationCount?: number
+  selectionScope?: 'reviewed_unit' | 'source_location' | 'unused_location'
+  missingEvidence?: number
+  onShowAll?: () => void
   url: string
   findings: Finding[]
   allFindings: Finding[]
@@ -476,6 +482,17 @@ export default function EvidencePanel({
             </span>
           </div>
           <div className="evidence-drawer-body" ref={bodyRef}>
+            {selectionScope === 'reviewed_unit' && (
+              <p className="muted small">已按这段内容的核验记录筛选摘录。</p>
+            )}
+            {missingEvidence > 0 && (
+              <p className="muted small">部分核验摘录尚未加载，未用其他记录替代。</p>
+            )}
+            {onShowAll && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={onShowAll}>
+                查看这些位置的全部记录
+              </button>
+            )}
             {selectedLocationCount != null && selectedLocationCount > 1 && (
               <p className="muted small">本处引用关联 {selectedLocationCount} 处原文位置。</p>
             )}
@@ -483,10 +500,17 @@ export default function EvidencePanel({
             <p className="evidence-snapshot-note">
               展示的是检索服务返回的快照上下文，不等同于完整网页正文或事实已获证实。
               {findings.length > 1 &&
+                (!selectionScope || selectionScope === 'source_location') &&
                 ` 当前引用按来源关联，共 ${findings.length} 条证据记录，尚非正文句子级一一映射。`}
             </p>
             {findings.length === 0 ? (
-              <p className="muted small">该来源暂无结构化证据记录。</p>
+              <p className="muted small">
+                {selectionScope === 'unused_location'
+                  ? '这个位置未被本次内容核验选用。'
+                  : selectionScope === 'reviewed_unit'
+                    ? '该段核验选用的摘录暂未加载。'
+                    : '该来源暂无结构化证据记录。'}
+              </p>
             ) : (
               findings.map((f, i) => (
                 <EvidenceCard

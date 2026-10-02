@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { mathRemarkPlugins, mathRehypePlugins, normalizeMathMarkdown } from '../lib/scientificMath'
@@ -13,7 +13,13 @@ import {
   summarizeEvidence,
 } from '../lib/evidence'
 import type { Finding, ReportBibliography } from '../types'
-import { catalogForReport, citationLocations, documentNumber } from '../lib/bibliography'
+import {
+  catalogForReport,
+  citationLocations,
+  citationOccurrence,
+  documentNumber,
+  reviewedFindings,
+} from '../lib/bibliography'
 import { AppIcon } from './AppIcon'
 import EvidencePanel from './EvidencePanel'
 
@@ -42,13 +48,16 @@ export default function ReportView({
   bibliography?: ReportBibliography | null
 }) {
   const [activeLocations, setActiveLocations] = useState<number[]>([])
+  const [activeTarget, setActiveTarget] = useState<string | null>(null)
+  const [selectedOccurrenceId, setSelectedOccurrenceId] = useState<string | null>(null)
   const activeCitation = activeLocations[0] ?? null
-  const setActiveCitation = useCallback(
-    (value: number | null) => setActiveLocations(value == null ? [] : [value]),
-    [],
-  )
-  const activeCitationRef = useRef(activeCitation)
-  activeCitationRef.current = activeCitation
+  const setActiveCitation = useCallback((value: number | null) => {
+    setActiveLocations(value == null ? [] : [value])
+    setActiveTarget(value == null ? null : `#cite-${value}`)
+    setSelectedOccurrenceId(null)
+  }, [])
+  const activeTargetRef = useRef(activeTarget)
+  activeTargetRef.current = activeTarget
   const citationTriggerRef = useRef<HTMLButtonElement | null>(null)
   const targets = useMemo(
     () => (streaming ? [] : resolveCitationTargets(markdown, citations)),
@@ -74,6 +83,12 @@ export default function ReportView({
     setActiveCitation(null)
     citationTriggerRef.current?.focus()
   }, [setActiveCitation])
+  const selectedOccurrence = selectedOccurrenceId
+    ? citationOccurrence(`#cite-o-${selectedOccurrenceId}`, catalog)
+    : undefined
+  useEffect(() => {
+    if (selectedOccurrenceId && !selectedOccurrence) closeEvidence()
+  }, [selectedOccurrenceId, selectedOccurrence, closeEvidence])
 
   const components = useMemo<Components>(
     () => ({
@@ -91,7 +106,8 @@ export default function ReportView({
             </a>
           )
         }
-        const indices = citationLocations(link)
+        const occurrence = citationOccurrence(link, catalog)
+        const indices = occurrence?.locations ?? citationLocations(link)
         const n = indices[0]
         const display = documentNumber(catalog, n)
         const url = targets[n - 1]
@@ -103,15 +119,17 @@ export default function ReportView({
         return (
           <button
             type="button"
-            className={`cite-ref${activeCitationRef.current === n ? ' active' : ''}`}
+            className={`cite-ref${activeTargetRef.current === link ? ' active' : ''}`}
             title={url}
             aria-label={`查看引用 ${display} 的证据`}
             aria-controls="evidence-panel"
-            aria-expanded={activeCitationRef.current === n}
-            aria-pressed={activeCitationRef.current === n}
+            aria-expanded={activeTargetRef.current === link}
+            aria-pressed={activeTargetRef.current === link}
             onClick={(event) => {
               citationTriggerRef.current = event.currentTarget
               setActiveLocations(indices)
+              setActiveTarget(link)
+              setSelectedOccurrenceId(occurrence?.id ?? null)
             }}
           >
             {children}
@@ -131,9 +149,10 @@ export default function ReportView({
   }
 
   const activeUrl = activeCitation != null ? targets[activeCitation - 1] : undefined
-  const activeFindings = [
-    ...new Set(activeLocations.flatMap((index) => findingsForUrl(findings, targets[index - 1]))),
-  ]
+  const scoped = selectedOccurrence && selectedOccurrence.scope !== 'source_location'
+  const activeFindings = scoped
+    ? reviewedFindings(findings, selectedOccurrence, targets)
+    : [...new Set(activeLocations.flatMap((index) => findingsForUrl(findings, targets[index - 1])))]
   const reportIsLive = isLive ?? streaming
 
   return (
@@ -254,6 +273,8 @@ export default function ReportView({
                           onClick={(event) => {
                             citationTriggerRef.current = event.currentTarget
                             setActiveLocations(document.locations)
+                            setSelectedOccurrenceId(null)
+                            setActiveTarget(null)
                           }}
                         >
                           <AppIcon name="file-search" size={15} aria-hidden="true" />
@@ -288,6 +309,14 @@ export default function ReportView({
             id="evidence-panel"
             citation={activeCitation}
             selectedLocationCount={catalog ? activeLocations.length : undefined}
+            selectionScope={selectedOccurrence?.scope}
+            missingEvidence={
+              scoped
+                ? new Set(selectedOccurrence.evidence_ids).size -
+                  new Set(activeFindings.map((finding) => finding.support_id)).size
+                : 0
+            }
+            onShowAll={scoped ? () => setSelectedOccurrenceId(null) : undefined}
             displayCitation={catalog ? documentNumber(catalog, activeCitation) : undefined}
             referenceUrl={
               catalog?.documents.find(

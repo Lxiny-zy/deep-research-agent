@@ -162,10 +162,30 @@ def _file_stem(title: str) -> str:
     return f"{ascii_part or 'report'}-{digest}"
 
 
+def _insert_concept(markdown: str, block: str) -> str:
+    method = re.search(
+        r"(?im)^##\s+(?:方法[^\n]*|研究方法[^\n]*|Methods?[^\n]*|Approach[^\n]*)\n", markdown
+    )
+    if method:
+        return markdown[: method.end()] + block + markdown[method.end() :]
+    parts = re.split(r"(?m)(^##\s[^\n]*\n(?:(?!^##\s)[^\n]*\n)*)", markdown, maxsplit=1)
+    return parts[0] + parts[1] + block + parts[2] if len(parts) == 3 else markdown + block
+
+
+def _insert_analysis_figures(markdown: str, figure_md: str) -> str:
+    markdown = re.sub(
+        r"(\n##\s*图表[^\n]*\n)",
+        lambda m: m.group(1) + "\n" + figure_md + "\n\n",
+        markdown,
+        count=1,
+    )
+    return markdown if "![" in markdown else markdown + "\n\n## 图表\n\n" + figure_md + "\n"
+
+
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     payload = {
-        "format_version": 21,
+        "format_version": 23,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,
@@ -218,6 +238,22 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         [f for result in detail.results for f in result.findings],
         [*detail.sources, *paper_sources(detail)],
     )
+    if report is not None:
+        from ..report.service import requires_corroboration
+        from .citation_binding import bind_review
+        from .prose_review import reviewer_for_report, stored_review
+
+        citation_reviewer = reviewer_for_report(
+            None,
+            detail.query,
+            detail.results,
+            citations,
+            scratch,
+            0,
+            corroboration=requires_corroboration(detail),
+        )
+        bind_review(catalog, citation_reviewer, report.markdown, stored_review(scratch))
+    display_markdown = present_markdown(markdown, catalog) if citations else markdown
     document_keys = work_keys(catalog)
     distinct_sources = source_counts(citations, document_keys=document_keys)[0]
     meta = f"{template.title} · {distinct_sources} 个已核验来源"
@@ -290,17 +326,8 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             )
             caption = concept.caption or concept.title
             block = f"\n\n![{concept.title}（{caption}）]({name})\n\n"
-            method = re.search(
-                r"(?im)^##\s+(?:方法[^\n]*|研究方法[^\n]*|Methods?[^\n]*|Approach[^\n]*)\n",
-                markdown,
-            )
-            if method:
-                markdown = markdown[: method.end()] + block + markdown[method.end() :]
-            else:
-                parts = re.split(r"(?m)(^##\s[^\n]*\n(?:(?!^##\s)[^\n]*\n)*)", markdown, maxsplit=1)
-                markdown = (
-                    parts[0] + parts[1] + block + parts[2] if len(parts) == 3 else markdown + block
-                )
+            markdown = _insert_concept(markdown, block)
+            display_markdown = _insert_concept(display_markdown, block)
 
     # 数据分析：确定性地重算图表（与运行时同一函数、同一数据），把图挂进正文
     if template.key == "dataAnalysis":
@@ -340,14 +367,8 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 figure_md = "\n\n".join(
                     f"![{f.title}（{f.caption}）]({f.name})" for f in result.figures
                 )
-                markdown = re.sub(
-                    r"(\n##\s*图表[^\n]*\n)",
-                    lambda m: m.group(1) + "\n" + figure_md + "\n\n",
-                    markdown,
-                    count=1,
-                )
-                if "![" not in markdown:
-                    markdown += "\n\n## 图表\n\n" + figure_md + "\n"
+                markdown = _insert_analysis_figures(markdown, figure_md)
+                display_markdown = _insert_analysis_figures(display_markdown, figure_md)
             statistics = {
                 key: getattr(result, key) for key in ("describe", "tests", "correlations", "issues")
             }
@@ -433,6 +454,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         for g in gates
     )
 
+    from ..report.service import requires_corroboration
     from .delivery_render import render_bundle
     from .support import evidence_records
 
@@ -440,7 +462,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     canonical_markdown = markdown
     if citations:
         bibliography = catalog
-        markdown = present_markdown(markdown, bibliography)
+        markdown = display_markdown
 
     context = {
         "markdown": markdown,
@@ -456,7 +478,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         "citations": citations,
         "references": _references(detail),
         "evidence": evidence_records(
-            detail.results, {url: i for i, url in enumerate(citations, 1)}
+            detail.results,
+            {url: i for i, url in enumerate(citations, 1)},
+            corroboration=requires_corroboration(detail),
         ),
         "statistics": statistics,
         "base_gates": [gate.to_dict() for gate in gates],

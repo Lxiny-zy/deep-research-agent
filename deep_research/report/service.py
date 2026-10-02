@@ -84,6 +84,10 @@ class ReportService:
                 corroboration=requires_corroboration(detail),
             )
             record = stored_review(scratch)
+            if document.bibliography is not None:
+                from ..workbench.citation_binding import bind_review
+
+                bind_review(document.bibliography, checker, detail.report.markdown, record)
             if checker is not None and record is not None:
                 bound, issues = checker.check(detail.report.markdown, record)
                 document.final_validation = FinalReportValidation(

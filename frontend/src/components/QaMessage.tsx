@@ -28,7 +28,8 @@ export default function QaMessageView({
   onReconnect?: () => void
 }) {
   const steps = message.thoughts.filter(
-    (thought) => !['model_reasoning', 'model_usage', 'paper_cache'].includes(thought.tool),
+    (thought) =>
+      !['model_reasoning', 'model_usage', 'paper_cache', 'citation_binding'].includes(thought.tool),
   )
   return (
     <article className="qa-turn" aria-label={`第 ${message.position + 1} 轮问答`}>
@@ -65,6 +66,9 @@ export default function QaMessageView({
               text={message.answer}
               citations={message.citations}
               evidence={message.evidence}
+              binding={
+                message.thoughts.find((thought) => thought.tool === 'citation_binding')?.binding
+              }
               onLocate={onLocate}
             />
           </div>

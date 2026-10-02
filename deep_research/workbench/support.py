@@ -15,7 +15,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from ..guardrails import report_eligible
-from ..models import ResearchResult
+from ..models import Finding, ResearchResult
 from ..persistence.repository import LeaseLostError
 from ..prompting import structured_system_prompt
 
@@ -70,6 +70,10 @@ _SYSTEM = (
 )
 
 
+def evidence_id(finding: Finding) -> str:
+    return digest([finding.source_url, finding.statement, finding.evidence_quote])
+
+
 def evidence_records(
     results: list[ResearchResult], mapping: dict[str, int], *, corroboration: bool = False
 ) -> list[dict[str, Any]]:
@@ -83,7 +87,7 @@ def evidence_records(
                 continue
             records.append(
                 {
-                    "id": digest([finding.source_url, finding.statement, finding.evidence_quote]),
+                    "id": evidence_id(finding),
                     "citation": citation,
                     "statement": finding.statement,
                     "quote": finding.evidence_quote,

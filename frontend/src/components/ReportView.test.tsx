@@ -146,6 +146,141 @@ const MARKDOWN = [
 
 const CITATIONS = ['https://a.example.com/report', 'https://b.example.com/power']
 
+it('uses the selected evidence for each occurrence, allows explicit browsing and closes stale selection', async () => {
+  const url = 'https://example.org/paper'
+  const markdown = 'CLAIM-A [1].\n\nCLAIM-B [1].'
+  const ids = ['a'.repeat(24), 'b'.repeat(24)]
+  const catalog: ReportBibliography = {
+    source_body: markdown,
+    body: `CLAIM-A [[1]](#cite-o-${ids[0]}).\n\nCLAIM-B [[1]](#cite-o-${ids[1]}).`,
+    documents: [
+      { index: 1, identity: 'paper', title: 'Paper', reference: 'Paper', url, locations: [1] },
+    ],
+    locations: [{ index: 1, document: 1, url, label: '第 2 页', content_hashes: [] }],
+    binding_status: 'bound',
+    occurrences: ids.map((id, run) => ({
+      id,
+      run,
+      document: 1,
+      locations: [1],
+      unit_id: `unit-${run}`,
+      scope: 'reviewed_unit',
+      evidence_ids: [`e-${run}`],
+    })),
+  }
+  const findings = [0, 1, 2].map((index) => ({
+    ...makeFinding({
+      source_url: url,
+      statement: `Record ${index}`,
+      evidence_quote: `Quote ${index}`,
+      claim_id: `c-${index}`,
+    }),
+    support_id: `e-${index}`,
+  }))
+  const { rerender } = render(
+    <ReportView
+      markdown={markdown}
+      citations={[url]}
+      findings={findings}
+      bibliography={catalog}
+      streaming={false}
+    />,
+  )
+  const buttons = screen.getAllByRole('button', { name: '查看引用 1 的证据' })
+  await userEvent.click(buttons[0])
+  let panel = screen.getByRole('dialog')
+  expect(within(panel).getByText('Record 0')).toBeVisible()
+  expect(within(panel).queryByText('Record 1')).toBeNull()
+  expect(within(panel).queryByText('Record 2')).toBeNull()
+  expect(buttons[0]).toHaveAttribute('aria-pressed', 'true')
+  expect(buttons[1]).toHaveAttribute('aria-pressed', 'false')
+  await userEvent.click(within(panel).getByRole('button', { name: '查看这些位置的全部记录' }))
+  expect(within(panel).getByText('Record 2')).toBeVisible()
+  await userEvent.click(within(panel).getByRole('button', { name: '关闭证据侧栏' }))
+  await userEvent.click(buttons[1])
+  panel = screen.getByRole('dialog')
+  expect(within(panel).getByText('Record 1')).toBeVisible()
+  expect(within(panel).queryByText('Record 0')).toBeNull()
+  rerender(
+    <ReportView
+      markdown={markdown}
+      citations={[url]}
+      findings={findings}
+      bibliography={{
+        ...catalog,
+        binding_status: 'invalid',
+        occurrences: [],
+        body: 'CLAIM-A [1].\n\nCLAIM-B [1].',
+      }}
+      streaming={false}
+    />,
+  )
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+it('does not replace a missing selected quote or an unused location with other records', async () => {
+  const url = 'https://example.org/paper'
+  const id = 'c'.repeat(24)
+  const markdown = 'Claim [1].'
+  const catalog: ReportBibliography = {
+    source_body: markdown,
+    body: `Claim [[1]](#cite-o-${id}).`,
+    binding_status: 'bound',
+    documents: [{ index: 1, identity: 'p', title: 'p', reference: 'p', url, locations: [1] }],
+    locations: [{ index: 1, document: 1, url, label: '第 1 页', content_hashes: [] }],
+    occurrences: [
+      {
+        id,
+        run: 0,
+        document: 1,
+        locations: [1],
+        unit_id: 'p',
+        scope: 'reviewed_unit',
+        evidence_ids: ['missing'],
+      },
+    ],
+  }
+  const findings = [
+    {
+      ...makeFinding({
+        source_url: url,
+        statement: 'Unselected record',
+        evidence_quote: 'quote',
+        claim_id: 'x',
+      }),
+      support_id: 'other',
+    },
+  ]
+  const { rerender } = render(
+    <ReportView
+      markdown={markdown}
+      citations={[url]}
+      findings={findings}
+      bibliography={catalog}
+      streaming={false}
+    />,
+  )
+  await userEvent.click(screen.getByRole('button', { name: '查看引用 1 的证据' }))
+  expect(screen.getByText('该段核验选用的摘录暂未加载。')).toBeVisible()
+  expect(screen.queryByText('Unselected record')).toBeNull()
+  await userEvent.click(screen.getByRole('button', { name: '关闭证据侧栏' }))
+  rerender(
+    <ReportView
+      markdown={markdown}
+      citations={[url]}
+      findings={findings}
+      bibliography={{
+        ...catalog,
+        occurrences: [{ ...catalog.occurrences![0], scope: 'unused_location', evidence_ids: [] }],
+      }}
+      streaming={false}
+    />,
+  )
+  await userEvent.click(screen.getByRole('button', { name: '查看引用 1 的证据' }))
+  expect(screen.getByText('这个位置未被本次内容核验选用。')).toBeVisible()
+  expect(screen.queryByText('Unselected record')).toBeNull()
+})
+
 const FINDINGS: Finding[] = [
   makeFinding({
     statement: 'GPU 出货量创下历史新高',

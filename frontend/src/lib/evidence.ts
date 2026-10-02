@@ -158,6 +158,7 @@ export function reportEvidenceToFinding(record: ReportEvidence): Finding {
     : 0
   const sourceReference = record.reference.trim()
   return {
+    support_id: record.support_id || undefined,
     statement: record.statement,
     source_url: record.source_url,
     evidence_quote: record.quote,

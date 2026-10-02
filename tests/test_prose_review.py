@@ -186,6 +186,9 @@ async def test_qa_repairs_semantically_unsupported_answer_before_delivery(settin
     ctx = RunContext(llm=model, search_tool=CorrelationSearch(), tracer=Tracer(), settings=settings)
     result = await answer_question("解释这些变量之间的关系", history=[], ctx=ctx, include_web=True)
     assert model.stream_calls == 2 and not result.fallback
+    binding = next(t["binding"] for t in result.thoughts if t["tool"] == "citation_binding")
+    assert binding["binding_status"] == "bound" and binding["occurrences"]
+    assert "#cite-o-" in binding["body"] and "#cite-o-" not in result.answer
     assert "已经证明因果" not in result.answer
     assert (
         next(t for t in result.thoughts if t["tool"] == "claim_check")["review"]["status"] == "pass"

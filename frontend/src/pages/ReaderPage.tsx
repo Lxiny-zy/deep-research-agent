@@ -9,7 +9,7 @@ import ReportView from '../components/ReportView'
 import type { PdfHighlight } from '../components/PdfViewer'
 import { useProjects } from '../hooks/useLibrary'
 import { useRunDetail, useRunDocument } from '../hooks/useRuns'
-import { flattenFindings } from '../lib/evidence'
+import { flattenFindings, reportEvidenceToFindings } from '../lib/evidence'
 import { documentForEvidence } from '../lib/readerDocuments'
 import { pendingQaId, reconcileQaRequests, runQaRequest } from '../lib/qaRequest'
 import type { QaActivity, QaEvidence, QaSourceOption, QaMessage } from '../types'
@@ -450,7 +450,11 @@ export default function ReaderPage() {
                   bibliography={reportDocument.data?.bibliography}
                   markdown={report.markdown}
                   streaming={false}
-                  findings={flattenFindings(detail.data?.results)}
+                  findings={
+                    reportDocument.data?.evidence?.length
+                      ? reportEvidenceToFindings(reportDocument.data.evidence)
+                      : flattenFindings(detail.data?.results)
+                  }
                   citations={report.citations ?? []}
                   finalReview={finalProseReview(detail.data)}
                 />

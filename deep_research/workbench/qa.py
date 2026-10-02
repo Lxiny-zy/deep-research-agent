@@ -461,6 +461,32 @@ async def answer_question(
         }
     )
     citations = [url for url, _ in sorted(url_to_idx.items(), key=lambda item: item[1])]
+    if audit and not check.issues and not semantic_failed:
+        from ..bibliography import Bibliography, ReferenceDocument, ReferenceLocation, source_body
+        from .citation_binding import bind_review
+
+        # QA keeps its existing location numbers; only the selected evidence
+        # changes. The raw answer remains unchanged for subsequent dialogue.
+        binding = Bibliography(
+            source_body=source_body(answer),
+            documents=[
+                ReferenceDocument(index=i, identity=url, locations=[i])
+                for i, url in enumerate(citations, 1)
+            ],
+            locations=[
+                ReferenceLocation(index=i, document=i, url=url)
+                for i, url in enumerate(citations, 1)
+            ],
+        )
+        if bind_review(binding, reviewer, answer, audit):
+            thoughts.append(
+                {
+                    "tool": "citation_binding",
+                    "input": "",
+                    "observation": "",
+                    "binding": binding.model_dump(mode="json"),
+                }
+            )
     return QaAnswer(
         answer=answer,
         citations=citations,

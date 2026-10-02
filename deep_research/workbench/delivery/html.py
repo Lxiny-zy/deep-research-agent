@@ -112,7 +112,7 @@ def _inline_html(
             text = f"<strong>{text}</strong>"
         if item.italic:
             text = f"<em>{text}</em>"
-        if not pdf and re.fullmatch(r"#cite-\d+(?:-\d+)*", item.href):
+        if not pdf and re.fullmatch(r"#cite-(?:\d+(?:-\d+)*|o-[0-9a-f]{24})", item.href):
             text = f'<a class="cite-ref" href="{item.href}">{text}</a>'
         elif item.href and item.href.startswith(("http://", "https://")):
             text = f'<a href="{escape(item.href, quote=True)}">{text}</a>'
@@ -260,7 +260,10 @@ def render_html(
     body = blocks_html(blocks, images=images)
     if bibliography is None:
         body = re.sub(
-            r'<a class="cite-ref" href="#cite-\d+(?:-\d+)*">(.*?)</a>', r"\1", body, flags=re.S
+            r'<a class="cite-ref" href="#cite-(?:\d+(?:-\d+)*|o-[0-9a-f]{24})">(.*?)</a>',
+            r"\1",
+            body,
+            flags=re.S,
         )
     source_details = _citation_evidence_html(body, bibliography, evidence or [])
     return (
@@ -282,24 +285,45 @@ def _citation_evidence_html(
         return ""
     locations = {item.index: item for item in bibliography.locations}
     documents = {item.index: item for item in bibliography.documents}
-    targets = dict.fromkeys(re.findall(r'href="#cite-(\d+(?:-\d+)*)"', body))
+    occurrences = {f"o-{item.id}": item for item in bibliography.occurrences}
+    targets = dict.fromkeys(re.findall(r'href="#cite-(\d+(?:-\d+)*|o-[0-9a-f]{24})"', body))
+    for target in list(targets):
+        occurrence = occurrences.get(target)
+        if occurrence and occurrence.scope != "source_location":
+            targets["-".join(map(str, occurrence.locations))] = None
     entries = []
     for target in targets:
-        indices = [int(index) for index in target.split("-")]
+        occurrence = occurrences.get(target)
+        if target.startswith("o-") and occurrence is None:
+            continue
+        indices = (
+            occurrence.locations if occurrence else [int(index) for index in target.split("-")]
+        )
+        selected = (
+            set(occurrence.evidence_ids)
+            if occurrence and occurrence.scope != "source_location"
+            else None
+        )
         if any(index not in locations for index in indices):
             continue
         sections = []
         for index in indices:
             location = locations[index]
             document = documents[location.document]
-            records = [item for item in evidence if item.get("citation") == index]
-            quotes = (
-                "".join(
-                    f"<p>{escape(str(record['statement']))}</p>"
-                    f"<blockquote>{escape(str(record['quote']))}</blockquote>"
-                    for record in records
-                )
-                or "<p>该历史记录没有保存可展示的核验摘录。</p>"
+            records = [
+                item
+                for item in evidence
+                if item.get("citation") == index
+                and (selected is None or item.get("id") in selected)
+            ]
+            quotes = "".join(
+                f"<p>{escape(str(record['statement']))}</p>"
+                f"<blockquote>{escape(str(record['quote']))}</blockquote>"
+                for record in records
+            ) or (
+                "<p>这个位置没有被本段核验选用的摘录。</p>"
+                if selected is not None
+                else "<p>该历史记录没有保存可展示的核验摘录。</p>"
             )
             link = (
                 f'<a href="{escape(document.url, quote=True)}" rel="noreferrer">打开文献</a>'
@@ -312,9 +336,16 @@ def _citation_evidence_html(
                 f"<h3>[{document.index}] {escape(location.label or document.title)}</h3>"
                 f"{link}{quotes}</section>"
             )
+        note = ""
+        if selected is not None:
+            broad = "-".join(map(str, indices))
+            note = (
+                f"<p>按本段或表格行的核验结果展示。"
+                f'<a href="#cite-{broad}">查看这些位置的全部摘录</a></p>'
+            )
         entries.append(
             f'<aside class="citation-location" id="cite-{target}">'
-            f"<h2>引用依据</h2>{''.join(sections)}</aside>"
+            f"<h2>引用依据</h2>{note}{''.join(sections)}</aside>"
         )
     if not entries:
         return ""

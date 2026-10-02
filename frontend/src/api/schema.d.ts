@@ -1668,6 +1668,12 @@ export interface components {
         /** Bibliography */
         Bibliography: {
             /**
+             * Binding Status
+             * @default unavailable
+             * @enum {string}
+             */
+            binding_status?: "unavailable" | "bound" | "invalid";
+            /**
              * Body
              * @default
              */
@@ -1676,6 +1682,8 @@ export interface components {
             documents?: components["schemas"]["ReferenceDocument"][];
             /** Locations */
             locations?: components["schemas"]["ReferenceLocation"][];
+            /** Occurrences */
+            occurrences?: components["schemas"]["CitationOccurrence"][];
             /**
              * Source Body
              * @default
@@ -1753,6 +1761,30 @@ export interface components {
              * @default
              */
             y_label?: string;
+        };
+        /** CitationOccurrence */
+        CitationOccurrence: {
+            /** Document */
+            document: number;
+            /** Evidence Ids */
+            evidence_ids?: string[];
+            /** Id */
+            id: string;
+            /** Locations */
+            locations: number[];
+            /** Run */
+            run: number;
+            /**
+             * Scope
+             * @default source_location
+             * @enum {string}
+             */
+            scope?: "reviewed_unit" | "source_location" | "unused_location";
+            /**
+             * Unit Id
+             * @default
+             */
+            unit_id?: string;
         };
         /**
          * ClarificationRequest
@@ -2248,6 +2280,12 @@ export interface components {
              * @default
              */
             statement?: string;
+            /**
+             * Support Id
+             * @description 可供终稿核验使用的证据标识；不合格素材留空
+             * @default
+             */
+            support_id?: string;
             /**
              * Verbatim Verified
              * @default false

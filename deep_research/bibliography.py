@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import defaultdict
+from collections.abc import Iterator
+from typing import Literal
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field
@@ -34,11 +36,23 @@ class ReferenceLocation(BaseModel):
     content_hashes: list[str] = Field(default_factory=list)
 
 
+class CitationOccurrence(BaseModel):
+    id: str
+    run: int
+    document: int
+    locations: list[int]
+    unit_id: str = ""
+    scope: Literal["reviewed_unit", "source_location", "unused_location"] = "source_location"
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
 class Bibliography(BaseModel):
     source_body: str = ""
     body: str = ""
     documents: list[ReferenceDocument] = Field(default_factory=list)
     locations: list[ReferenceLocation] = Field(default_factory=list)
+    occurrences: list[CitationOccurrence] = Field(default_factory=list)
+    binding_status: Literal["unavailable", "bound", "invalid"] = "unavailable"
 
 
 _DOI = re.compile(r"10\.\d{4,9}/\S+", re.I)
@@ -272,11 +286,19 @@ def build_bibliography(
 
 
 def project_citations(markdown: str, catalog: Bibliography, *, links: bool = True) -> str:
-    from .workbench.delivery.math_markdown import citation_text
-
     by_index = {location.index: location.document for location in catalog.locations}
+    # Occurrences belong to the complete checked body, not arbitrary captions
+    # or snippets rendered with the same bibliography.
+    scoped = (
+        {(item.run, item.document): item for item in catalog.occurrences}
+        if (
+            markdown.replace("\r\n", "\n").strip()
+            == catalog.source_body.replace("\r\n", "\n").strip()
+        )
+        else {}
+    )
 
-    def replace(match: re.Match[str]) -> str:
+    def replace(match: re.Match[str], run: int) -> str:
         indices = [int(n) for n in re.findall(r"\d+", match[0])]
         if any(index not in by_index for index in indices):
             return match[0]  # Unknown citations remain visible and fail the original gate.
@@ -285,19 +307,31 @@ def project_citations(markdown: str, catalog: Bibliography, *, links: bool = Tru
             group = groups.setdefault(by_index[index], [])
             if index not in group:
                 group.append(index)
-        return ", ".join(
-            f"[[{document}]](#cite-{'-'.join(map(str, locations))})" if links else f"[{document}]"
-            for document, locations in groups.items()
-        )
+        rendered = []
+        for document, locations in groups.items():
+            occurrence = scoped.get((run, document))
+            target = (
+                f"o-{occurrence.id}"
+                if occurrence and occurrence.locations == locations
+                else "-".join(map(str, locations))
+            )
+            rendered.append(f"[[{document}]](#cite-{target})" if links else f"[{document}]")
+        return ", ".join(rendered)
+
+    parts: list[str] = []
+    start = 0
+    for run, match in enumerate(citation_runs(markdown)):
+        parts.extend((markdown[start : match.start()], replace(match, run)))
+        start = match.end()
+    return "".join(parts) + markdown[start:]
+
+
+def citation_runs(markdown: str) -> Iterator[re.Match[str]]:
+    from .workbench.delivery.math_markdown import citation_text
 
     marker = r"\[\d+(?:\s*[,，]\s*\d+)*\]"
     pattern = rf"{marker}(?:[ \t]*(?:[,，][ \t]*)?{marker})*"
-    parts: list[str] = []
-    start = 0
-    for match in re.finditer(pattern, citation_text(markdown)):
-        parts.extend((markdown[start : match.start()], replace(match)))
-        start = match.end()
-    return "".join(parts) + markdown[start:]
+    return re.finditer(pattern, citation_text(markdown))
 
 
 def bibliography_markdown(catalog: Bibliography) -> str:
