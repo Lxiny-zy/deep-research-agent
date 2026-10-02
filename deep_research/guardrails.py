@@ -34,7 +34,7 @@ from .prompting import (
     load_global_rules,
     structured_system_prompt,
 )
-from .quantities import comparison_supported, measurement_supported
+from .quantities import comparison_supported, has_scientific_notation, measurement_supported
 
 PolicyVerdict = Literal["allow", "quarantine", "deny"]
 # Use the bundled PSL snapshot without touching a shared cache or the network.
@@ -729,9 +729,23 @@ def report_eligible(finding: Finding, *, require_corroboration: bool = False) ->
     # 声明了数值却在原文里找不到 = 编造的数字。一张带假数字的对照表比一句假话
     # 危险得多，因为它看起来是"数据"。旧数据可能缺少 quantity_status，因此只有
     # 当 finding 明确带数值时，默认的 ``not_applicable`` 也必须拒绝。
-    if finding.quantity is not None and finding.quantity.value is not None:
+    quantity = finding.quantity
+    if quantity is not None and quantity.value is not None:
         if verification.quantity_status != "verified":
             return False
+        # Old persisted/cache records may have admitted only a mantissa after
+        # PDF superscripts were flattened. A stored "verified" is insufficient.
+        if has_scientific_notation(quantity.rendered) or has_scientific_notation(
+            finding.evidence_quote
+        ):
+            if not measurement_supported(
+                value=quantity.value,
+                unit=quantity.unit,
+                rendered=quantity.rendered,
+                evidence=finding.evidence_quote,
+                metric=quantity.metric,
+            )[0]:
+                return False
     elif verification.quantity_status == "unsupported":
         return False
     if not require_corroboration:

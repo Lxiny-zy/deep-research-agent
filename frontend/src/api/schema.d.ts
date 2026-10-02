@@ -1697,6 +1697,17 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** CandidateCheck */
+        CandidateCheck: {
+            finding: components["schemas"]["Finding"];
+            /** Problems */
+            problems?: string[];
+            /**
+             * Reused
+             * @default false
+             */
+            reused?: boolean;
+        };
         /**
          * ChartBlock
          * @description 一张图。**不含数据**——只指向源表与取哪几列（见模块 docstring 的不变量）。
@@ -2562,6 +2573,58 @@ export interface components {
              */
             train_data?: string;
         };
+        /** ExtractionAttempt */
+        ExtractionAttempt: {
+            /**
+             * Action
+             * @default initial
+             * @enum {string}
+             */
+            action?: "initial" | "repair" | "drop" | "error";
+            /** Checks */
+            checks?: components["schemas"]["CandidateCheck"][];
+            /** Proposals */
+            proposals?: components["schemas"]["FindingContent"][];
+            /**
+             * Reason
+             * @default
+             */
+            reason?: string;
+            /**
+             * Round
+             * @default 0
+             */
+            round?: number;
+        };
+        /** ExtractionAudit */
+        ExtractionAudit: {
+            /** Candidates */
+            candidates?: components["schemas"]["ExtractionCandidate"][];
+            /** Issues */
+            issues?: string[];
+            /** Question */
+            question: string;
+            /** Sources */
+            sources?: components["schemas"]["Source"][];
+            /**
+             * Version
+             * @default 1
+             */
+            version?: number;
+        };
+        /** ExtractionCandidate */
+        ExtractionCandidate: {
+            /**
+             * Accepted
+             * @default false
+             */
+            accepted?: boolean;
+            /** Attempts */
+            attempts?: components["schemas"]["ExtractionAttempt"][];
+            /** Id */
+            id: string;
+            original: components["schemas"]["FindingContent"];
+        };
         /** FinalReportValidation */
         FinalReportValidation: {
             /**
@@ -2618,6 +2681,42 @@ export interface components {
              */
             statement: string;
             verification?: components["schemas"]["EvidenceVerification"];
+        };
+        /**
+         * FindingContent
+         * @description Model-authored content only; verification and provenance belong to the program.
+         */
+        FindingContent: {
+            conditions?: components["schemas"]["ExperimentConditions"] | null;
+            /**
+             * Confidence
+             * @description 置信度 0~1
+             * @default 0.7
+             */
+            confidence?: number;
+            /**
+             * Entity
+             * @description 论断描述的对象，如 MST-L / SD-CASSI
+             * @default
+             */
+            entity?: string;
+            /**
+             * Evidence Quote
+             * @description 支持该发现的必要连续原文；必须逐字来自 source_url 对应内容。保留归属、条件及表格标题/表头/相关行，不限于单句，不得拼接或省略
+             * @default
+             */
+            evidence_quote?: string;
+            quantity?: components["schemas"]["Quantity"] | null;
+            /**
+             * Source Url
+             * @description 该发现的出处 URL（必须来自给定来源）
+             */
+            source_url: string;
+            /**
+             * Statement
+             * @description 一条具体、自洽的事实/发现
+             */
+            statement: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -3462,6 +3561,7 @@ export interface components {
         };
         /** ResearchResult */
         ResearchResult: {
+            extraction_audit?: components["schemas"]["ExtractionAudit"] | null;
             /** Findings */
             findings?: components["schemas"]["Finding"][];
             /** Sub Question */

@@ -69,7 +69,7 @@ async def research_dag(
                 tracer.emit("RESEARCHER", "error", f"子问题执行出现未预期异常：{item}")
                 continue
             idx, res = item
-            if isinstance(res, ResearchResult) and res.findings:
+            if isinstance(res, ResearchResult) and (res.findings or res.extraction_audit):
                 collected[idx] = res
 
     return [collected[i] for i in sorted(collected)]

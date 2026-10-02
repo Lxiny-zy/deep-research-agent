@@ -42,4 +42,13 @@ describe('findQuote', () => {
   it('normalizes full-width characters', () => {
     expect(normalizeForMatch('ＰＳＮＲ 38.4 dB')).toBe('psnr38.4db')
   })
+
+  it.each(['3.742 × 10^6', '3.742 × 10^{6}', '3.742 × 10⁶'])(
+    'locates a preserved scientific exponent across PDF text spans: %s', (quote) => {
+      expect(findQuote([['Table 1', '3.742', ' ×', ' 10', '6', 'next row']], quote)).toEqual({
+        page: 0, items: [1, 2, 3, 4],
+      })
+      expect(normalizeForMatch('x^2 + 10^6')).toBe('x^2+10^6')
+    },
+  )
 })

@@ -29,7 +29,13 @@ export default function QaMessageView({
 }) {
   const steps = message.thoughts.filter(
     (thought) =>
-      !['model_reasoning', 'model_usage', 'paper_cache', 'citation_binding'].includes(thought.tool),
+      ![
+        'model_reasoning',
+        'model_usage',
+        'paper_cache',
+        'citation_binding',
+        'extraction_audit',
+      ].includes(thought.tool),
   )
   return (
     <article className="qa-turn" aria-label={`第 ${message.position + 1} 轮问答`}>

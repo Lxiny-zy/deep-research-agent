@@ -273,6 +273,7 @@ class ResearchResultRow(Base):
         ForeignKey("research_run.id", ondelete="CASCADE"), index=True
     )
     sub_question: Mapped[str] = mapped_column(Text)
+    extraction_audit: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     run: Mapped[ResearchRun] = relationship(back_populates="results")
     findings: Mapped[list[FindingRow]] = relationship(

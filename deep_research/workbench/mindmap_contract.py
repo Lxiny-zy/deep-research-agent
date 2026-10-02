@@ -74,7 +74,7 @@ def input_hash(raw: dict, citations: list[str], results: list[ResearchResult]) -
             "version": 1,
             "mindmap": Mindmap.model_validate(raw).model_dump(mode="json"),
             "citations": citations,
-            "results": [r.model_dump(mode="json") for r in results],
+            "results": [r.material_data() for r in results],
         }
     )
 

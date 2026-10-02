@@ -22,6 +22,7 @@ from sqlalchemy.orm import selectinload
 from ..models import (
     EvidenceVerification,
     ExperimentConditions,
+    ExtractionAudit,
     Finding,
     Quantity,
     Report,
@@ -72,7 +73,13 @@ def _sub_question_row(
 
 
 def _research_result_row(run_id: str, result: ResearchResult) -> orm.ResearchResultRow:
-    row = orm.ResearchResultRow(run_id=run_id, sub_question=result.sub_question)
+    row = orm.ResearchResultRow(
+        run_id=run_id,
+        sub_question=result.sub_question,
+        extraction_audit=result.extraction_audit.model_dump(mode="json")
+        if result.extraction_audit
+        else None,
+    )
     row.findings = [
         orm.FindingRow(
             statement=finding.statement,
@@ -494,7 +501,13 @@ class SqlRepository:
     ) -> None:
         async with self._sm() as s, s.begin():
             await self._owned_workflow_row(s, run_id, lease_owner)
-            row = orm.ResearchResultRow(run_id=run_id, sub_question=result.sub_question)
+            row = orm.ResearchResultRow(
+                run_id=run_id,
+                sub_question=result.sub_question,
+                extraction_audit=result.extraction_audit.model_dump(mode="json")
+                if result.extraction_audit
+                else None,
+            )
             s.add(row)
             await s.flush()
             for f in result.findings:
@@ -1171,6 +1184,9 @@ class SqlRepository:
             results = [
                 ResearchResult(
                     sub_question=rr.sub_question,
+                    extraction_audit=ExtractionAudit.model_validate(rr.extraction_audit)
+                    if rr.extraction_audit
+                    else None,
                     findings=[
                         Finding(
                             statement=f.statement,

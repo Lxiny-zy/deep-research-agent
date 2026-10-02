@@ -15,6 +15,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from types import ModuleType
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -304,6 +305,46 @@ def _sections_from_pages(pages: list[str]) -> tuple[PdfSection, ...]:
     return tuple(sections)
 
 
+def _page_text(page: Any, fitz: ModuleType, max_chars: int) -> str:
+    """Keep numeric exponents that the plain text extractor flattens.
+
+    Use the same text flags and reading order as plain extraction, without
+    materializing embedded images. Only a superscript after a scientific
+    mantissa × 10 is rewritten; author footnotes and other math stay intact.
+    """
+    flags = fitz.TEXTFLAGS_TEXT & ~fitz.TEXT_PRESERVE_IMAGES
+    data = page.get_text("dict", flags=flags)
+    lines: list[str] = []
+    size = 0
+    for block in data.get("blocks", []):
+        for line in block.get("lines", []):
+            spans = line.get("spans", [])
+            text = ""
+            index = 0
+            while index < len(spans):
+                span = spans[index]
+                if span.get("flags", 0) & 1 and re.search(
+                    r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*[×xX*·]\s*10\s*$", text
+                ):
+                    end = index
+                    superscript = ""
+                    while end < len(spans) and spans[end].get("flags", 0) & 1:
+                        superscript += spans[end].get("text", "")
+                        end += 1
+                    exponent = superscript.strip().replace("−", "-")
+                    if re.fullmatch(r"[-+]?\d+", exponent):
+                        text = text.rstrip() + "^" + exponent
+                        index = end
+                        continue
+                text += span.get("text", "")
+                index += 1
+            size += len(text) + 1
+            if size > max_chars:
+                raise OaPdfParseError("PDF page exceeds text limit")
+            lines.append(text + "\n")
+    return "".join(lines)
+
+
 def parse_oa_pdf(raw: bytes, limits: OaPdfLimits | None = None) -> PdfDocument:
     """Extract bounded text from a PDF byte string."""
     lim = limits or OaPdfLimits()
@@ -328,7 +369,7 @@ def parse_oa_pdf(raw: bytes, limits: OaPdfLimits | None = None) -> PdfDocument:
         total = 0
         for page in document:
             try:
-                text = str(page.get_text("text"))
+                text = _page_text(page, fitz, lim.max_page_chars)
             except Exception as exc:  # fitz raises backend-specific exceptions
                 raise OaPdfParseError(f"PDF text extraction failed: {exc}") from exc
             if len(text) > lim.max_page_chars:

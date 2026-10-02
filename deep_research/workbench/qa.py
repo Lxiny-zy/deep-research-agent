@@ -100,9 +100,20 @@ def _contextual_query(question: str, history: list[dict[str, str]]) -> str:
     return question
 
 
-async def _verified(researcher: Researcher, query: str) -> tuple[list[Finding], int]:
+async def _verified(
+    researcher: Researcher, query: str, thoughts: list[dict[str, Any]] | None = None
+) -> tuple[list[Finding], int]:
     result = await researcher.run(query)
     raw = result.findings if result else []
+    if result and result.extraction_audit is not None and thoughts is not None:
+        thoughts.append(
+            {
+                "tool": "extraction_audit",
+                "input": query,
+                "observation": "抽取候选与定向修复记录",
+                "audit": result.extraction_audit.model_dump(mode="json"),
+            }
+        )
     return [f for f in raw if report_eligible(f)], len(raw)
 
 
@@ -235,7 +246,7 @@ async def answer_question(
                 paper_findings, raw, reused = selected, len(selected), True
             else:
                 paper_findings, raw = (
-                    (await _verified(researcher, query)) if paper_sources else ([], 0)
+                    (await _verified(researcher, query, thoughts)) if paper_sources else ([], 0)
                 )
             if paper_cache is not None:
                 paper_cache.put(cache_key, paper_findings, raw)
@@ -277,7 +288,7 @@ async def answer_question(
         researcher.source_context = None
         researcher.raise_extraction_errors = False
         researcher.search = backends[0] if len(backends) == 1 else MultiBackendSearch(backends)
-        other, raw = await _verified(researcher, query)
+        other, raw = await _verified(researcher, query, thoughts)
         other = [f for f in other if f.source_url not in origins]
         for finding in other:
             origins.setdefault(finding.source_url, _origin(finding.source_url))

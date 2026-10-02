@@ -50,6 +50,37 @@ def test_parse_pdf_preserves_numbers_and_classifies_sections() -> None:
     assert "Table 1" in document.text
 
 
+def test_pdf_preserves_scientific_superscripts_without_rewriting_footnotes():
+    fitz = pytest.importorskip("fitz")
+    from deep_research.quantities import parse_measurements
+
+    with fitz.open() as document:
+        page = document.new_page()
+        for row, (prefix, exponent) in enumerate(
+            [
+                ("3.742 × 10", "6"),
+                ("2.996 × 10", "8"),
+                ("4.754 × 10", "8"),
+                ("Author", "1"),
+                ("2.5 × 10", "-3"),
+            ]
+        ):
+            y = 60 + row * 25
+            page.insert_text((50, y), prefix, fontsize=10)
+            x = 50 + fitz.get_text_length(prefix, fontsize=10)
+            page.insert_text((x, y - 3), exponent, fontsize=7.5)
+        raw = document.tobytes()
+    parsed = parse_oa_pdf(raw)
+    for expected in ("3.742 × 10^6", "2.996 × 10^8", "4.754 × 10^8", "2.5 × 10^-3"):
+        assert expected in parsed.text
+    assert "Author1" in parsed.text and "Author^1" not in parsed.text
+    assert [m.value for m in parse_measurements(parsed.text)][:3] == pytest.approx(
+        [3742000, 299600000, 475400000]
+    )
+    with pytest.raises(OaPdfParseError, match="page exceeds text limit"):
+        parse_oa_pdf(raw, OaPdfLimits(max_page_chars=10))
+
+
 def test_abstract_continuation_is_not_misclassified_as_a_method_heading() -> None:
     from deep_research.models import Source
     from deep_research.tools.oa_pdf_fulltext import _sections_from_pages

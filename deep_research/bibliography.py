@@ -91,6 +91,15 @@ def document_identity(url: str, doi: str = "") -> tuple[str, str]:
     for key, value in parse_qsl(parts.query, keep_blank_values=True):
         if local and key in {"chunk", "abstract-reparse"} and value.isdigit():
             continue
+        if (
+            local
+            and re.fullmatch(r"/attachments/[0-9a-f]{24}/?", parts.path)
+            and key == "text_revision"
+            and re.fullmatch(r"[0-9a-f]{16}", value)
+        ):
+            # A parser snapshot does not change the immutable PDF bytes.
+            # Its full URL/hash remains distinct in ReferenceLocation.
+            continue
         if key == "dr_section" and re.fullmatch(r"pdf-\d+", value):
             continue
         if key.casefold().startswith("utm_"):

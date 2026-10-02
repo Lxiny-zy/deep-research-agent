@@ -85,11 +85,21 @@ _UNIT_SCALE: dict[str, tuple[str, float]] = {
 _UNIT_PATTERN = "|".join(re.escape(unit) for unit in sorted(_UNIT_SCALE, key=len, reverse=True))
 
 # 数值：可带千分位逗号、小数、科学计数法与符号。
-_NUMBER = r"[-+]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
+_DECIMAL = r"[-+]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.?\d*|\.\d+)"
+_NUMBER = rf"{_DECIMAL}(?:[eE][-+]?\d+)?"
+_TIMES = r"(?:×|[xX*·]|\\times)"
+_SUPERSCRIPTS = "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻"
+_SUPER_TRANSLATION = str.maketrans(_SUPERSCRIPTS, "0123456789+-")
+_EXPONENT = rf"(?:\^\s*(?:\{{\s*[-+−]?\d+\s*\}}|[-+−]?\d+)|[{_SUPERSCRIPTS}]+)"
+_SCIENTIFIC = rf"(?P<mantissa>{_DECIMAL})\s*{_TIMES}\s*10\s*(?P<exponent>{_EXPONENT})"
+# Flattened PDF superscripts are ambiguous. Consume the whole expression but
+# do not admit either its mantissa or its apparent exponent as a measurement.
+_AMBIGUOUS = rf"{_DECIMAL}\s*{_TIMES}\s*10(?:\d+|[ \t]+[-+]?\d+)?"
 
 # 数值 + 可选单位。单位后要求非字母，避免 "35 mask" 里的 m 被当成兆。
 _MEASUREMENT_RE = re.compile(
-    rf"(?P<number>{_NUMBER})\s*(?P<unit>{_UNIT_PATTERN})?(?![A-Za-z])",
+    rf"(?P<number>{_SCIENTIFIC}|(?P<ambiguous>{_AMBIGUOUS})|{_NUMBER})"
+    rf"\s*(?P<unit>{_UNIT_PATTERN})?(?![A-Za-z])",
     re.IGNORECASE,
 )
 
@@ -137,6 +147,8 @@ class Measurement:
     value: float
     unit: str  # 归一化后的单位（"" 表示无单位）
     raw: str  # 原文片段，便于把失败讲清楚
+    start: int = 0
+    end: int = 0
 
     def __str__(self) -> str:  # pragma: no cover - 仅用于错误信息
         return self.raw
@@ -157,16 +169,48 @@ def parse_measurements(text: str) -> list[Measurement]:
     """
     out: list[Measurement] = []
     for match in _MEASUREMENT_RE.finditer(text or ""):
-        raw_number = match.group("number")
-        try:
-            value = float(raw_number.replace(",", ""))
-        except ValueError:  # pragma: no cover - 正则已保证可转换
-            continue
-        if not math.isfinite(value):
+        value = _number_value(match)
+        if value is None:
             continue
         unit, scale = normalize_unit(match.group("unit") or "")
-        out.append(Measurement(value=value * scale, unit=unit, raw=match.group(0).strip()))
+        if math.isfinite(value * scale):
+            out.append(
+                Measurement(
+                    value=value * scale,
+                    unit=unit,
+                    raw=match.group(0).strip(),
+                    start=match.start(),
+                    end=match.end(),
+                )
+            )
     return out
+
+
+def _number_value(match: re.Match[str]) -> float | None:
+    if match.group("ambiguous"):
+        return None
+    number = match.group("number").replace(",", "")
+    if match.group("mantissa"):
+        exponent = match.group("exponent").translate(_SUPER_TRANSLATION)
+        exponent = re.sub(r"[\s^{}]", "", exponent).replace("−", "-")
+        number = match.group("mantissa").replace(",", "") + "e" + exponent
+    try:
+        value = float(number)
+    except ValueError:
+        return None
+    if value == 0 and any(c in "123456789" for c in number.casefold().split("e")[0]):
+        return None  # A nonzero exponent must not silently underflow into zero.
+    return value if math.isfinite(value) else None
+
+
+def has_scientific_notation(text: str) -> bool:
+    """Also flag ambiguous flattened forms so legacy checked data is rechecked."""
+    return any(
+        match.group("mantissa")
+        or match.group("ambiguous")
+        or "e" in match.group("number").casefold()
+        for match in _MEASUREMENT_RE.finditer(text or "")
+    )
 
 
 def _metric_aliases(metric: str) -> tuple[str, ...]:
@@ -234,15 +278,11 @@ def _metric_context_supported(
         return True
     canonical_unit, scale = normalize_unit(unit)
     target = value * scale
-    tolerance = tolerance_for(rendered or repr(value), target)
+    tolerance = tolerance_for(rendered or repr(value), value) * scale
     candidates: list[int] = []
-    for match in _MEASUREMENT_RE.finditer(evidence):
-        parsed = parse_measurements(match.group(0))
-        if not parsed:
-            continue
-        item = parsed[0]
+    for item in parse_measurements(evidence):
         if item.unit == canonical_unit and abs(item.value - target) <= tolerance:
-            candidates.append(match.start())
+            candidates.append(item.start)
     if not candidates:
         return True
     boundaries = [
@@ -345,15 +385,13 @@ def _relation_for_quantity(
 ) -> str:
     canonical_unit, scale = normalize_unit(unit)
     target = value * scale
-    tolerance = tolerance_for(rendered or repr(value), target)
+    if not math.isfinite(target):
+        return ""
+    tolerance = tolerance_for(rendered or repr(value), value) * scale
     candidates: list[tuple[int, int]] = []
-    for match in _MEASUREMENT_RE.finditer(evidence or ""):
-        parsed = parse_measurements(match.group(0))
-        if not parsed:
-            continue
-        measurement = parsed[0]
+    for measurement in parse_measurements(evidence):
         if measurement.unit == canonical_unit and abs(measurement.value - target) <= tolerance:
-            candidates.append((match.start(), match.end()))
+            candidates.append((measurement.start, measurement.end))
     if not candidates:
         return ""
     if metric:
@@ -397,11 +435,12 @@ def tolerance_for(rendered: str, value: float) -> float:
     ``38.36`` → 0.005，``38`` → 0.5。这样不同精度的两个断言不会被当成同一个。
     对科学计数法与极大数额外叠加一个相对项，吸收浮点表示误差。
     """
-    text = (rendered or "").strip().replace(",", "")
+    match = _MEASUREMENT_RE.search(rendered or "")
+    text = match.group("number").replace(",", "") if match else repr(value)
     decimals = 0
-    if "e" in text.casefold():
+    if has_scientific_notation(text):
         # 科学计数法没有直观的"末位"，退回相对容差
-        return max(abs(value) * 1e-9, 1e-12)
+        return max(abs(value) * 1e-9, math.ulp(value))
     if "." in text:
         decimals = len(text.split(".", 1)[1])
     absolute = 0.5 * (10.0**-decimals)
@@ -425,7 +464,25 @@ def measurement_supported(
 
     canonical_unit, scale = normalize_unit(unit)
     target = value * scale
-    tolerance = tolerance_for(rendered or repr(value), target)
+    if not math.isfinite(target):
+        return (False, "quantity_value_not_finite")
+    tolerance = tolerance_for(rendered or repr(value), value) * scale
+    # The display cannot claim millions while the structured table contains
+    # just the mantissa, even if that mantissa occurs elsewhere in the quote.
+    if has_scientific_notation(rendered):
+        display = next(
+            m
+            for m in _MEASUREMENT_RE.finditer(rendered)
+            if m.group("mantissa") or m.group("ambiguous") or "e" in m.group("number").casefold()
+        )
+        display_value = _number_value(display)
+        if display_value is None:
+            return (False, "quantity_rendered_ambiguous_scientific_notation")
+        display_unit, display_scale = normalize_unit(display.group("unit") or unit)
+        if display_unit != canonical_unit or not math.isclose(
+            display_value * display_scale, target, rel_tol=1e-9, abs_tol=0.0
+        ):
+            return (False, "quantity_rendered_value_mismatch")
 
     found = parse_measurements(evidence)
     if not found:

@@ -18,6 +18,10 @@ export function normalizeForMatch(text: string): string {
     .normalize('NFKC')
     .toLowerCase()
     .replace(/[\s­]+/g, '')
+    // The server preserves PDF superscript geometry as ×10^6. PDF.js exposes
+    // the exponent as a separate text item; this is only a visual-location
+    // normalization, never a numeric/evidence verification rule.
+    .replace(/([+-]?(?:\d+(?:\.\d*)?|\.\d+)[×x*·]10)\^(?:\{([+-]?\d+)\}|([+-]?\d+))/g, '$1$2$3')
 }
 
 interface IndexedPage {

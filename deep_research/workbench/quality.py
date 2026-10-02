@@ -47,6 +47,7 @@ class QualityPolicy(BaseModel):
     require_limitations: bool = True
     # ---- 返工与收敛 ----
     max_revisions: int = Field(2, ge=0, le=4)
+    extraction_max_revisions: int = Field(1, ge=0, le=4)
     fail_on_quality: bool = False
     min_evidence_findings: int = Field(3, ge=0, le=50)
 
@@ -157,6 +158,18 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "bool",
         "开启后，返工用尽仍有硬性问题（引用越界、缺章节、引用不足等）的运行判为失败，"
         "不交付正式格式；关闭时照常交付，但运行标为「部分完成」并在交付页列出问题。",
+    ),
+    QualityField(
+        "extraction_max_revisions",
+        "抽取候选修复轮数",
+        "返工与收敛",
+        "int",
+        "仅针对未通过原文、数值或语义检查的候选进行定向修复，保留已通过的发现。"
+        "0 表示只保存失败记录。修复仍须重新核验；遇到服务错误或没有实质修改时停止，"
+        "不重新抽取全文。",
+        0,
+        4,
+        "次",
     ),
     QualityField(
         "min_evidence_findings",

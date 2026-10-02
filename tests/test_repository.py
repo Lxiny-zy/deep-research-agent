@@ -76,6 +76,34 @@ async def repo(request):
 
 
 @pytest.mark.asyncio
+async def test_extraction_audit_survives_storage_with_no_admitted_findings(repo):
+    from deep_research.agents.base import Blackboard
+    from deep_research.models import ExtractionAudit, ExtractionCandidate, FindingContent
+
+    audit = ExtractionAudit(
+        question="q",
+        sources=[Source(url="https://example.org/paper", content="Frozen original")],
+        candidates=[
+            ExtractionCandidate(
+                id="c1",
+                original=FindingContent(
+                    statement="Rejected",
+                    source_url="https://example.org/paper",
+                    evidence_quote="not present",
+                ),
+            )
+        ],
+    )
+    result = ResearchResult(sub_question="q", extraction_audit=audit)
+    run_id = await repo.create_run("q")
+    await repo.save_result(run_id, result)
+    restored = (await repo.get_run(run_id)).results[0]
+    assert restored.extraction_audit == audit and restored.findings == []
+    state = Blackboard(query="q", results=[result]).model_dump(mode="json")
+    assert Blackboard.model_validate(state).results[0].extraction_audit == audit
+
+
+@pytest.mark.asyncio
 async def test_crud_roundtrip(repo):
     run_id = await repo.create_run("Q")
     await repo.set_status(run_id, "running")

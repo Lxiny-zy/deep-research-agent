@@ -13,7 +13,7 @@ from __future__ import annotations
 from ..agents.base import Blackboard, RunContext, direct_system_prompt
 from ..agents.researcher import Researcher, source_context
 from ..guardrails import verify_claim_consistency
-from ..models import ExtractedFindingList, ResearchResult, Source
+from ..models import ExtractedFindingList, Source
 from ..persistence.repository import LeaseLostError
 from ..prompting import structured_system_prompt
 from ..registry import register
@@ -103,11 +103,14 @@ class AttachmentReader:
                         f"阅读「{attachment.filename}」第 {index} 批失败：{exc}",
                     )
                     continue
-                if result is not None and result.findings:
+                if result is not None and (result.findings or result.extraction_audit):
                     bb.results.append(
-                        ResearchResult(
-                            sub_question=f"上传文件「{attachment.filename}」（第 {index} 组片段）",
-                            findings=result.findings,
+                        result.model_copy(
+                            update={
+                                "sub_question": (
+                                    f"上传文件「{attachment.filename}」（第 {index} 组片段）"
+                                )
+                            }
                         )
                     )
         if len(bb.results) > before:

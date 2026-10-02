@@ -50,6 +50,29 @@ def test_same_filename_is_not_document_identity_and_versions_are_preserved():
     )
 
 
+def test_reparsed_immutable_pdf_shares_bibliography_but_keeps_both_evidence_snapshots():
+    base = "https://workspace.invalid/attachments/fe8aaa9708c6562af5647757"
+    old = base + "?chunk=16"
+    new = old + "&text_revision=0123456789abcdef"
+    findings = [verified_finding(source_url=url) for url in (old, new)]
+    findings[0].verification.source_content_hash = "old-text"
+    findings[1].verification.source_content_hash = "superscript-text"
+    catalog = build_bibliography("Earlier finding [1]. Correct number [2].", [old, new], findings)
+    assert len(catalog.documents) == 1
+    assert [(p.url, p.content_hashes) for p in catalog.locations] == [
+        (old, ["old-text"]),
+        (new, ["superscript-text"]),
+    ]
+    assert "Correct number [[1]](#cite-2)" in catalog.body
+    for variant in (
+        old + "&version=2",
+        old + "&text_revision=unknown",
+        new.replace("workspace.invalid", "example.org"),
+        new.replace("/attachments/", "/sources/"),
+    ):
+        assert document_identity(variant)[0] != document_identity(base)[0]
+
+
 def test_article_selectors_and_unknown_fragments_are_not_dropped():
     a = "https://example.org/article?id=1&dr_section=pdf-1"
     b = "https://example.org/article?id=1&dr_section=pdf-8"

@@ -361,19 +361,61 @@ class Finding(FindingContent):
     verification: EvidenceVerification = Field(default_factory=EvidenceVerification)
 
 
+class CandidateRepair(BaseModel):
+    candidate_id: str
+    action: Literal["repair", "drop"]
+    findings: list[FindingContent] = Field(default_factory=list)
+    reason: str
+
+
 class ExtractedFindingList(BaseModel):
     """Compact extraction response. Keep the persisted FindingList contract separate."""
 
     findings: list[FindingContent] = Field(default_factory=list)
+    repairs: list[CandidateRepair] = Field(default_factory=list)
 
 
 class FindingList(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
 
 
+class CandidateCheck(BaseModel):
+    finding: Finding
+    problems: list[str] = Field(default_factory=list)
+    reused: bool = False
+
+
+class ExtractionAttempt(BaseModel):
+    round: int = 0
+    action: Literal["initial", "repair", "drop", "error"] = "initial"
+    proposals: list[FindingContent] = Field(default_factory=list)
+    checks: list[CandidateCheck] = Field(default_factory=list)
+    reason: str = ""
+
+
+class ExtractionCandidate(BaseModel):
+    id: str
+    original: FindingContent
+    attempts: list[ExtractionAttempt] = Field(default_factory=list)
+    accepted: bool = False
+
+
+class ExtractionAudit(BaseModel):
+    version: int = 1
+    question: str
+    sources: list[Source] = Field(default_factory=list)
+    candidates: list[ExtractionCandidate] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
+
+
 class ResearchResult(BaseModel):
     sub_question: str
     findings: list[Finding] = Field(default_factory=list)
+    extraction_audit: ExtractionAudit | None = None
+
+    def material_data(self) -> dict:
+        """Diagnostics are not new evidence and must not invalidate old prose reviews."""
+        return self.model_dump(mode="json", exclude={"extraction_audit"})
 
 
 class Reflection(BaseModel):

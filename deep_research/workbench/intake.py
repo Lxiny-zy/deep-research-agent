@@ -23,7 +23,7 @@ from typing import Any
 from ..agents.base import Blackboard, RunContext
 from ..agents.researcher import Researcher
 from ..guardrails import verify_claim_consistency
-from ..models import ResearchResult, Source, SubQuestion
+from ..models import Source, SubQuestion
 from ..registry import register
 from ..tools.base import SearchTool
 from .attachments import attachments_from_scratch
@@ -227,18 +227,15 @@ class PaperIntake:
         researcher.tracer = ctx.tracer
         researcher.settings = ctx.settings
         researcher.system = ctx.system_prompt(researcher.system)
-        # 每个章节单独一次抽取：整篇塞进一次调用会超出上下文，也会让模型只盯住开头。
+        from .attachment_reader import source_batches
+
         question = _question_for(contract.template, focus)
-        for index in range(0, len(collected), 3):
-            batch = collected[index : index + 3]
+        for index, batch in enumerate(source_batches(collected, researcher, question), 1):
             researcher.search = _FixedSources(batch)
             result = await researcher.run(question)
             if result is not None:
                 bb.results.append(
-                    ResearchResult(
-                        sub_question=f"{question}（第 {index // 3 + 1} 组章节）",
-                        findings=result.findings,
-                    )
+                    result.model_copy(update={"sub_question": f"{question}（第 {index} 组章节）"})
                 )
         await verify_claim_consistency(
             bb.results,

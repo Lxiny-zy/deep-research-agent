@@ -132,6 +132,81 @@ def test_unrelated_known_metric_does_not_reject_optimizer_parameter():
 # ── 容差 ────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize("raw", ["3.742 × 10^6", "3.742 × 10⁶", "3.742e6", r"3.742 \times 10^{6}"])
+def test_scientific_measurement_is_atomic_and_retains_source_offsets(raw):
+    quote = f"Runtime > {raw} ms; PSNR = 35 dB."
+    values = parse_measurements(quote)
+    assert len(values) == 2
+    assert values[0].value == pytest.approx(3742)
+    assert quote[values[0].start : values[0].end].strip() == raw + " ms"
+    assert measurement_supported(
+        value=3742000, unit="ms", rendered=raw, metric="runtime", evidence=quote
+    )[0]
+    assert comparison_supported(
+        ">", quote, value=3742000, unit="ms", rendered=raw, metric="runtime"
+    )[0]
+    assert not measurement_supported(
+        value=3742000, unit="ms", rendered=raw, metric="PSNR", evidence=quote
+    )[0]
+    assert not comparison_supported(
+        "=", quote, value=3742000, unit="ms", rendered=raw, metric="runtime"
+    )[0]
+
+
+@pytest.mark.parametrize("raw", ["2.5 × 10^-8", "2.5 × 10⁻⁸", "2.5 x 10^{-8}"])
+def test_negative_scientific_exponents_do_not_become_separate_measurements(raw):
+    values = parse_measurements(raw)
+    assert len(values) == 1 and values[0].value == pytest.approx(2.5e-8)
+    assert not measurement_supported(value=2.5, unit="", rendered=raw, evidence=raw)[0]
+
+
+@pytest.mark.parametrize("raw", ["3.742 × 106", "2.996 x 108", "4.754 × 10 8"])
+def test_flattened_ambiguous_exponents_admit_neither_mantissa_nor_exponent(raw):
+    assert parse_measurements(raw) == []
+    mantissa = float(raw.split()[0])
+    assert not measurement_supported(value=mantissa, unit="", rendered=raw, evidence=raw)[0]
+    assert not measurement_supported(value=mantissa, unit="", rendered=str(mantissa), evidence=raw)[
+        0
+    ]
+    # The ambiguous display remains invalid even if a matching value occurs elsewhere.
+    assert not measurement_supported(
+        value=mantissa, unit="", rendered=raw, evidence=raw + f"; other {mantissa}"
+    )[0]
+
+
+def test_scientific_display_cannot_disagree_with_structured_value():
+    raw = "3.742 × 10^6"
+    supported, reason = measurement_supported(
+        value=3.742, unit="", rendered=raw, evidence=raw + "; other value 3.742"
+    )
+    assert not supported and reason == "quantity_rendered_value_mismatch"
+
+
+def test_scientific_notation_preserves_unit_conversion_and_small_value_precision():
+    assert measurement_supported(
+        value=3742, unit="s", rendered="3.742e6 ms", evidence="Runtime 3.742 × 10^6 ms"
+    )[0]
+    assert not measurement_supported(value=1e-20, unit="", rendered="1e-20", evidence="2e-20")[0]
+    assert parse_measurements("1e999, 1 × 10^999, 1e-999") == []
+
+
+def test_unit_scaling_cannot_overflow_into_a_match_for_every_value():
+    args = dict(value=1e308, unit="TFLOPs", rendered="1e308", evidence="FLOPs > 1 TFLOPs")
+    assert not measurement_supported(**args)[0]
+    assert not comparison_supported(
+        ">", args["evidence"], value=args["value"], unit=args["unit"], rendered=args["rendered"]
+    )[0]
+
+
+@pytest.mark.parametrize("raw", ["3.742 × 106", "3.742 × 10^6", "3.742e6"])
+def test_legacy_verified_record_cannot_bypass_scientific_value_recheck(raw):
+    finding = _finding(quote=raw, quantity=Quantity(value=3.742, rendered=raw))
+    finding.verification.status = "verified"
+    finding.verification.semantic_status = "supported"
+    finding.verification.quantity_status = "verified"
+    assert not report_eligible(finding)
+
+
 def test_tolerance_follows_the_significant_figures_of_the_claim() -> None:
     """声明两位小数就按 ±0.005 判；不同精度的断言有各自的容差。"""
     assert tolerance_for("38.36", 38.36) == pytest.approx(0.005)

@@ -264,7 +264,7 @@ class ProseReviewer:
             llm,
             evidence,
             capacity,
-            source_version=digest([r.model_dump(mode="json") for r in results]),
+            source_version=digest([r.material_data() for r in results]),
             query=query,
             uncited_sections=uncited_sections,
             corroboration=corroboration,
