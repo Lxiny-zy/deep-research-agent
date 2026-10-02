@@ -60,10 +60,18 @@ _UNIT_SCALE: dict[str, tuple[str, float]] = {
     "tflops": ("flops", 1e12),
     # 时间
     "ms": ("s", 0.001),
+    "millisecond": ("s", 0.001),
+    "milliseconds": ("s", 0.001),
     "s": ("s", 1.0),
     "sec": ("s", 1.0),
+    "second": ("s", 1.0),
+    "seconds": ("s", 1.0),
     "min": ("s", 60.0),
+    "minute": ("s", 60.0),
+    "minutes": ("s", 60.0),
     "h": ("s", 3600.0),
+    "hour": ("s", 3600.0),
+    "hours": ("s", 3600.0),
     # 无需换算但需要归一化写法的
     "db": ("db", 1.0),
     "%": ("%", 1.0),
@@ -171,7 +179,18 @@ def _metric_aliases(metric: str) -> tuple[str, ...]:
         "model parameters": ("parameters", "parameter", "params"),
         "inference time": ("inference time", "latency", "runtime"),
     }
-    return aliases.get(normalized, (normalized,)) if normalized else ()
+    if not normalized:
+        return ()
+    if normalized in aliases:
+        return aliases[normalized]
+    # Qualifiers such as 'PSNR gain' and 'runtime reduction factor' retain
+    # their metric identity; the semantic verifier checks the qualified meaning.
+    known = [
+        alias
+        for alias in _KNOWN_METRIC_ALIASES
+        if re.search(rf"\b{re.escape(alias)}\b", normalized)
+    ]
+    return (normalized, known[0]) if len(known) == 1 else (normalized,)
 
 
 _KNOWN_METRIC_ALIASES = (
@@ -197,7 +216,10 @@ def _metric_context_supported(
     """Bind a matching number to the nearest metric label when labels exist."""
 
     aliases = _metric_aliases(metric)
-    if not aliases:
+    if not aliases or not any(alias in _KNOWN_METRIC_ALIASES for alias in aliases):
+        # This heuristic only knows the labels below. A nearby known metric
+        # cannot disprove an unrelated parameter (e.g. Adam beta1). Its value
+        # and unit are still checked here, and all fields go to semantic review.
         return True
     labels: list[tuple[int, str]] = []
     lowered = evidence.casefold()
@@ -223,17 +245,27 @@ def _metric_context_supported(
             candidates.append(match.start())
     if not candidates:
         return True
-    number_start = min(
-        candidates, key=lambda position: min(abs(position - label) for label, _ in labels)
-    )
-    nearest_label = min(
-        labels,
-        key=lambda pair: (abs(pair[0] - number_start), pair[0] < number_start),
-    )[1]
-    return any(
-        re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", nearest_label)
-        for alias in aliases
-    )
+    boundaries = [
+        match.start() for match in re.finditer(r"[;；\n。！？!?]|(?<!\d)\.|\.(?!\d)", evidence)
+    ]
+    for number_start in candidates:
+        left = max((p for p in boundaries if p < number_start), default=-1)
+        right = min((p for p in boundaries if p > number_start), default=len(evidence))
+        local_labels = [(position, label) for position, label in labels if left < position < right]
+        if not local_labels:
+            # Line-broken PDF/table text can separate a header from its value.
+            # It needs semantic row/column review, not a nearest unrelated label.
+            return True
+        nearest_label = min(
+            local_labels,
+            key=lambda pair: (abs(pair[0] - number_start), pair[0] < number_start),
+        )[1]
+        if any(
+            re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", nearest_label)
+            for alias in aliases
+        ):
+            return True
+    return False
 
 
 def detect_comparator(text: str) -> str:

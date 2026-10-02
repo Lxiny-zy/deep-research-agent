@@ -96,6 +96,39 @@ def test_unknown_units_are_kept_verbatim_without_conversion() -> None:
     assert normalize_unit("furlong") == ("furlong", 1.0)
 
 
+@pytest.mark.parametrize(
+    ("raw", "value"),
+    [("45 seconds", 45), ("1 minute", 60), ("500 milliseconds", 0.5), ("2 hours", 7200)],
+)
+def test_spelled_time_units_match_their_abbreviations(raw, value):
+    assert measurement_supported(
+        value=value, unit="s", rendered=str(value), metric="runtime", evidence=f"Runtime: {raw}."
+    )[0]
+    assert not measurement_supported(
+        value=value, unit="nm", rendered=str(value), evidence=f"Runtime: {raw}."
+    )[0]
+
+
+def test_metric_qualifiers_keep_metric_binding_without_accepting_the_wrong_metric():
+    evidence = "The PSNR gain is about 0.2 dB; SSIM is 0.948."
+    assert measurement_supported(
+        value=0.2, unit="dB", rendered="0.2", metric="PSNR gain", evidence=evidence
+    )[0]
+    assert not measurement_supported(
+        value=0.948, unit="", rendered="0.948", metric="PSNR gain", evidence=evidence
+    )[0]
+
+
+def test_unrelated_known_metric_does_not_reject_optimizer_parameter():
+    evidence = "PSNR was evaluated. Adam uses beta1 = 0.5 and beta2 = 0.999."
+    assert measurement_supported(
+        value=0.5, unit="", rendered="0.5", metric="beta1", evidence=evidence
+    )[0]
+    assert not measurement_supported(
+        value=0.7, unit="", rendered="0.7", metric="beta1", evidence=evidence
+    )[0]
+
+
 # ── 容差 ────────────────────────────────────────────────────────────────────
 
 
