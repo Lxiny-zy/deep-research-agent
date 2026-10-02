@@ -93,6 +93,38 @@ def test_faithful_translation_cannot_add_a_derived_result():
 
 
 @pytest.mark.parametrize(
+    "text",
+    [
+        "RGB 图像被线性缩放到 [0,1]",
+        "RGB images are linearly rescaled to [0, 1]",
+        "取值范围为 [1,2]",
+        "the interval [1, 2]",
+        "RGB 缩放到 **[0,1]**",
+    ],
+)
+def test_explicit_numeric_intervals_remain_data_during_validation_and_fallback(text):
+    from deep_research.report.validation import validate_body
+
+    results = [
+        ResearchResult(sub_question="q", findings=[verified_finding(text, evidence_quote=text)])
+    ]
+    assert not validate_body(text + " [1]。", results, {"https://a.com": 1}, fallback=False).issues
+    fallback = validate_body("错误结果 999 [1]。", results, {"https://a.com": 1})
+    assert text in fallback.body
+
+
+def test_interval_handling_does_not_hide_invalid_or_regular_citation_clusters():
+    from deep_research.report.validation import validate_body
+    from deep_research.workbench.delivery.math_markdown import citation_text
+
+    assert "[1,2]" in citation_text("归一化方法参见 [1,2]。")
+    assert "[1,2]" in citation_text("Normalization methods [1,2].")
+    assert "[0]" in citation_text("见 [0]。")
+    results = [ResearchResult(sub_question="q", findings=[verified_finding()])]
+    assert "invalid_citation" in validate_body("见 [0,1]。", results, {"https://a.com": 1}).issues
+
+
+@pytest.mark.parametrize(
     "body,issue",
     [
         ("准确率99% [1]。", "unsupported_number"),

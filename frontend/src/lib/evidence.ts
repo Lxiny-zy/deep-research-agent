@@ -25,13 +25,50 @@ interface MdNode {
 
 const CITE_MARKER = String.raw`\[\d{1,3}(?:\s*[,，]\s*\d{1,3})*\]`
 const CITE_PATTERN = new RegExp(`${CITE_MARKER}(?:[ \\t]*(?:[,，][ \\t]*)?${CITE_MARKER})*`, 'g')
+const INTERVAL =
+  /\[\s*[-+−]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s*[,，]\s*[-+−]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s*\]/g
+const INTERVAL_PREFIX =
+  /(?:\b(?:range|interval)\s*(?:of|is|[:=])?|\b(?:rescaled|scaled|normalized|normalised|mapped|clipped)\s+(?:linearly\s+)?(?:to|into|within)|(?:范围|区间)(?:设为|为|是|[:：=])?|(?:归一化|缩放|映射|限制)(?:到|至|为|在))\s*$/i
+const INLINE_CONTEXT = new Set([
+  'paragraph',
+  'heading',
+  'strong',
+  'emphasis',
+  'delete',
+  'tableCell',
+])
+
+function textContent(node: MdNode): string {
+  return node.value ?? node.children?.map(textContent).join('') ?? ''
+}
+
+function maskIntervals(value: string, preceding: string): string {
+  const chars = value.split('')
+  for (const match of value.matchAll(INTERVAL)) {
+    const start = match.index ?? 0
+    const prefix = (preceding + value.slice(0, start))
+      .slice(-120)
+      .trimEnd()
+      .replace(/[*_]+$/, '')
+      .trimEnd()
+    if (!INTERVAL_PREFIX.test(prefix)) continue
+    for (let index = start; index < start + match[0].length; index += 1) {
+      if (chars[index] !== '\n' && chars[index] !== '\r') chars[index] = ' '
+    }
+  }
+  return chars.join('')
+}
 
 /** remark 插件：把文本节点中的 [n] 转成 url 为 `#cite-n` 的 link 节点。 */
 export function remarkCitations(options: { documents?: Record<number, number> } = {}) {
   return (tree: unknown) => transformCitations(tree as MdNode, options.documents)
 }
 
-function transformCitations(node: MdNode, documents?: Record<number, number>): void {
+function transformCitations(
+  node: MdNode,
+  documents?: Record<number, number>,
+  preceding = '',
+): void {
   const children = node.children
   if (!children) return
   // 未解析成功的 [n] 引用标记可能被 micromark 拆成相邻的多个 text 节点，
@@ -46,24 +83,34 @@ function transformCitations(node: MdNode, documents?: Record<number, number>): v
     merged.push(child)
   }
   const next: MdNode[] = []
+  const inlineContext = INLINE_CONTEXT.has(node.type)
+  let prefix = preceding
   for (const child of merged) {
+    const raw = inlineContext ? textContent(child) : ''
+    const context = inlineContext ? prefix : ''
     if (child.type === 'text' && child.value) {
-      next.push(...splitCitationText(child.value, documents))
+      next.push(...splitCitationText(child.value, documents, context))
+      prefix += raw
       continue
     }
     // 链接内部不再转换，避免产生非法的嵌套链接。
     if (child.type !== 'link' && child.type !== 'linkReference') {
-      transformCitations(child, documents)
+      transformCitations(child, documents, context)
     }
     next.push(child)
+    prefix += raw
   }
   node.children = next
 }
 
-function splitCitationText(value: string, documents?: Record<number, number>): MdNode[] {
+function splitCitationText(
+  value: string,
+  documents?: Record<number, number>,
+  preceding = '',
+): MdNode[] {
   const out: MdNode[] = []
   let last = 0
-  for (const match of value.matchAll(CITE_PATTERN)) {
+  for (const match of maskIntervals(value, preceding).matchAll(CITE_PATTERN)) {
     const start = match.index ?? 0
     if (start > last) out.push({ type: 'text', value: value.slice(last, start) })
     const groups = new Map<number, number[]>()

@@ -9,6 +9,27 @@ from markdown_it import MarkdownIt
 from markdown_it.rules_block import StateBlock
 from markdown_it.rules_inline import StateInline
 
+_INTERVAL_NUMBER = r"[-+−]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+_INTERVAL = re.compile(rf"\[\s*{_INTERVAL_NUMBER}\s*[,，]\s*{_INTERVAL_NUMBER}\s*\]")
+_INTERVAL_PREFIX = re.compile(
+    r"(?:\b(?:range|interval)\s*(?:of|is|[:=])?"
+    r"|\b(?:rescaled|scaled|normalized|normalised|mapped|clipped)\s+(?:linearly\s+)?(?:to|into|within)"
+    r"|(?:范围|区间)(?:设为|为|是|[:：=])?"
+    r"|(?:归一化|缩放|映射|限制)(?:到|至|为|在))\s*$",
+    re.I,
+)
+
+
+def interval_spans(text: str) -> list[tuple[int, int]]:
+    """Explicitly introduced numeric intervals are data, not reference clusters."""
+    spans = []
+    for match in _INTERVAL.finditer(text):
+        prefix = text[max(0, match.start() - 120) : match.start()].rstrip()
+        prefix = re.sub(r"[*_]+$", "", prefix).rstrip()
+        if _INTERVAL_PREFIX.search(prefix):
+            spans.append(match.span())
+    return spans
+
 
 def _closing(source: str, marker: str, start: int) -> int:
     index = source.find(marker, start)
@@ -144,6 +165,8 @@ def citation_text(text: str) -> str:
     # parseInline runs core normalization (CRLF -> LF), which would invalidate
     # source coordinates. The inline parser itself keeps the original offsets.
     md.inline.parse("".join(chars), md, environment, [])
+    for start, end in interval_spans("".join(chars)):
+        mask(start, end)
     return "".join(chars)
 
 

@@ -31,6 +31,19 @@ def test_documents_are_grouped_but_every_location_and_hash_survives():
     assert present_markdown(projected, catalog) == projected
 
 
+def test_numeric_interval_is_not_counted_or_rewritten_as_a_bibliographic_location():
+    from deep_research.workbench.delivery.math_markdown import citation_text
+    from deep_research.workbench.prose_review import _CITE, prose_units
+
+    text = "RGB images are rescaled to [0,1] [2]. 方法参见 [1,2]。"
+    urls = ["https://paper.test/a", "https://paper.test/b"]
+    catalog = build_bibliography(text, urls, [])
+    assert "[0,1]" in catalog.body and "#cite-0" not in catalog.body
+    assert _CITE.findall(citation_text(text)) == ["2", "1,2"]
+    units, _ = prose_units(text, [1, 2])
+    assert units[0].citations == [1, 2]
+
+
 def test_same_filename_is_not_document_identity_and_versions_are_preserved():
     urls = [
         "https://workspace.invalid/attachments/first?chunk=1",

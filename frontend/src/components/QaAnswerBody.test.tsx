@@ -139,6 +139,30 @@ it('expands grouped markers while leaving code markers and unknown references in
   expect(screen.getByText('[9]')).toHaveClass('is-unavailable')
 })
 
+it.each([
+  'RGB 缩放到 [0,1] [1,2]。',
+  'RGB images are rescaled to [0,1] [1,2].',
+  'RGB 缩放到 **[0,1]** [1,2]。',
+  '**RGB 缩放到** [0,1] [1,2]。',
+])(
+  'keeps numeric intervals as data while genuine adjacent citations remain clickable: %s',
+  (text) => {
+    const { container } = render(
+      <QaAnswerBody
+        text={text}
+        citations={[first.source_url, 'https://example.org/second']}
+        evidence={[first]}
+        onLocate={vi.fn()}
+      />,
+    )
+    expect(container).toHaveTextContent('[0,1]')
+    expect(screen.getAllByRole('button')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: '定位引用 1 的论文依据' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /查看引用 2/ })).toBeInTheDocument()
+    expect(screen.queryByText('[0]')).not.toBeInTheDocument()
+  },
+)
+
 it('does not make provisional streaming citations clickable', () => {
   render(
     <QaAnswerBody

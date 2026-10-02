@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -75,6 +76,9 @@ _SYSTEM = (
     "特别检查新增因果/机制、比较、作者归属、条件和数字对应；证据只说明相关不能写成因果，"
     "采用既有方法不能写成发明。只要单元内有一个未支持的事实，就不能判 supported。"
     "supported 必须列出实际支持的 evidence_ids，只能选本单元引用范围内的证据。"
+    "证据条目若有 quote_from，其原文与该批中对应 id 条目的 quote 完全相同；"
+    "请解引用完整原文后核对。quote_from 只复用原文，不借用另一条的论断、方法或实验条件；"
+    "evidence_ids 仍填写实际支持当前论断的证据条目 id。"
     "没有引用的 claim 判 unsupported。concept/question 可以是组织标题、普通学科名词或"
     "待研究问题；只有确实不含事实断言、且与父节点/主题关系合理时才判 non_factual。"
     "不能仅因 kind=concept 或问号就免检，伪装成概念的实验结果、因果和优劣断言仍须证据。"
@@ -142,6 +146,40 @@ def digest(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
+
+
+def compact_evidence(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Losslessly reference repeated quotes within one source and citation.
+
+    Full evidence remains the persisted and cache-bound representation. Only
+    model transport uses aliases, each pointing to an earlier unique ID with
+    a complete quote. Short quotes stay inline when an alias would be larger.
+    """
+    counts = Counter(record["id"] for record in records if isinstance(record.get("id"), str))
+    quotes: dict[tuple[Any, Any, str], str] = {}
+    result = []
+    for record in records:
+        item = dict(record)
+        identifier, quote = item.get("id"), item.get("quote")
+        citation, source = item.get("citation"), item.get("source", "")
+        if (
+            isinstance(identifier, str)
+            and counts[identifier] == 1
+            and isinstance(quote, str)
+            and isinstance(citation, (int, str))
+            and isinstance(source, str)
+        ):
+            key = (citation, source, quote)
+            previous = quotes.get(key)
+            if previous is None:
+                quotes[key] = identifier
+            elif len(json.dumps({"quote_from": previous}, ensure_ascii=False)) < len(
+                json.dumps({"quote": quote}, ensure_ascii=False)
+            ):
+                del item["quote"]
+                item["quote_from"] = previous
+        result.append(item)
+    return result
 
 
 class SupportReviewer:
@@ -234,7 +272,7 @@ class SupportReviewer:
 
     def _prompt(self, units: list[SupportUnit], repair_issues: dict[str, str] | None = None) -> str:
         cited = {index for unit in units for index in unit.citations}
-        evidence = [e for e in self.evidence if e["citation"] in cited]
+        evidence = compact_evidence([e for e in self.evidence if e["citation"] in cited])
         # Evidence stays first and unchanged for a batch's revision follow-up.
         return json.dumps(
             {
