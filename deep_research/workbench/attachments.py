@@ -57,6 +57,9 @@ class AttachmentChunk(BaseModel):
     ordinal: int
     locator: str = Field(default="", max_length=300)
     content: str = Field(max_length=8000)
+    section_title: str = Field(default="", max_length=300)
+    section_start: bool = False
+    section_end: bool = False
     # PDF 片段的起始页（从 1 开始）；精读工作区据此把引用跳到原文对应页
     page: int | None = Field(default=None, ge=1)
 
@@ -105,6 +108,9 @@ class Attachment(BaseModel):
                 url=attachment_url(self.id, chunk.ordinal),
                 content=chunk.content,
                 locator=chunk.locator,
+                section_title=chunk.section_title,
+                section_start=chunk.section_start,
+                section_end=chunk.section_end,
                 document_authors=self.authors,
             )
             for chunk in self.chunks
@@ -162,6 +168,13 @@ async def parse_attachment(raw: bytes, filename: str, mime_type: str = "") -> At
             ordinal=int(str(chunk.get("ordinal", index))),
             locator=str(chunk.get("locator", ""))[:300],
             content=str(chunk.get("content", "")),
+            section_title=str(chunk.get("section", ""))[:300],
+            section_start=bool(chunk.get("section")) and chunk.get("start_char") == 0,
+            section_end=bool(chunk.get("section"))
+            and (
+                index + 1 == len(prepared.chunks)
+                or prepared.chunks[index + 1].get("start_char") == 0
+            ),
             page=_page_of(chunk.get("page_start")),
         )
         for index, chunk in enumerate(prepared.chunks)

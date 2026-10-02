@@ -40,6 +40,11 @@ def analysis_title(ledger: dict[str, Any]) -> str:
     return title + "分析报告"
 
 
+def mindmap_title(mindmap: dict[str, Any]) -> str:
+    root = mindmap.get("root")
+    return root.strip() if isinstance(root, str) and root.strip() else "思维导图"
+
+
 def analysis_meta(ledger: dict[str, Any]) -> str:
     source = ledger.get("source") or {}
     label = "合成示例数据" if ledger.get("synthetic") else source.get("filename", "用户提供的数据")

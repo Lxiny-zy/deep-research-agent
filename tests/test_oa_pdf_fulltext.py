@@ -120,6 +120,22 @@ def test_no_heading_pdf_has_an_other_fallback() -> None:
     assert "42.5 dB" in parsed.sections[0].text
 
 
+def test_number_on_a_different_baseline_is_not_absorbed_into_the_next_heading():
+    import pymupdf
+
+    with pymupdf.open() as document:
+        page = document.new_page()
+        page.insert_text((72, 60), "Abstract", fontname="hebo", fontsize=12)
+        page.insert_text((72, 90), "The normalized score is")
+        page.insert_text((72, 120), "1", fontname="hebo", fontsize=12)
+        page.insert_text((90, 155), "Introduction", fontname="hebo", fontsize=12)
+        page.insert_text((72, 185), "Body text.")
+        parsed = parse_oa_pdf(document.tobytes())
+    abstract = next(section for section in parsed.sections if section.canonical == "abstract")
+    assert abstract.text.endswith("\n1")
+    assert next(s for s in parsed.sections if s.canonical == "introduction").title == "Introduction"
+
+
 def test_selector_is_deterministic_and_respects_required_sections() -> None:
     document = PdfDocument(
         text="",

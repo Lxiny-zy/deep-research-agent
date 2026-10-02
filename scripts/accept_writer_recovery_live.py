@@ -55,10 +55,16 @@ async def main() -> None:
     )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--storage-root", required=True, type=Path)
-    parser.add_argument(
+    repair_mode = parser.add_mutually_exclusive_group()
+    repair_mode.add_argument(
         "--patch-mindmap",
         action="store_true",
         help="Only repair rejected nodes of a bound saved mindmap",
+    )
+    repair_mode.add_argument(
+        "--patch-prose",
+        action="store_true",
+        help="Only repair rejected paragraphs of a bound saved report",
     )
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
@@ -84,6 +90,8 @@ async def main() -> None:
         raise ValueError("Unsupported writer recovery")
     if args.patch_mindmap and old.template != "mindmap":
         raise ValueError("--patch-mindmap requires a saved mindmap task")
+    if args.patch_prose and old.template in {"mindmap", "dataAnalysis"}:
+        raise ValueError("--patch-prose requires a research report with cited evidence")
     contract = build_contract(
         template,
         old.original_request,
@@ -203,7 +211,81 @@ async def main() -> None:
 
     beat = asyncio.create_task(heartbeat())
     try:
-        if args.patch_mindmap:
+        if args.patch_prose:
+            from deep_research.report.validation import validate_body
+            from deep_research.workbench.paper_abstract import abstract_section_support
+            from deep_research.workbench.prose_edit import repair_paragraphs
+            from deep_research.workbench.prose_review import (
+                PROSE_REVIEW_KEY,
+                reviewer_for_report,
+                stored_review,
+            )
+            from deep_research.workbench.scholarly import uncited_sections_for
+
+            original_report = detail.report
+            if original_report is None:
+                raise ValueError("Missing saved report")
+            checker = reviewer_for_report(
+                llm,
+                detail.query,
+                bb.results,
+                original_report.citations,
+                bb.scratch,
+                settings.llm_max_input_chars,
+                corroboration=requires_corroboration(detail),
+            )
+            previous = stored_review(bb.scratch)
+            if checker is None or not checker.prime(original_report.markdown, previous):
+                raise ValueError("Saved review is not bound to the current report and evidence")
+            unchanged_before = len(checker.reviewer.cache)
+            body = await repair_paragraphs(llm, checker, original_report.markdown, previous)
+            if body is None:
+                raise ValueError("Saved failures cannot be repaired as isolated paragraphs")
+            mechanical = validate_body(
+                body,
+                bb.results,
+                {u: i for i, u in enumerate(original_report.citations, 1)},
+                fallback=False,
+                require_corroboration=requires_corroboration(detail),
+                uncited_sections=uncited_sections_for(bb.scratch),
+                section_support=abstract_section_support(bb.scratch),
+            )
+            save(
+                "paragraph-repair.json",
+                {
+                    "before": original_report.markdown,
+                    "after": body,
+                    "mechanical_issues": mechanical.issues,
+                },
+            )
+            if mechanical.issues:
+                raise ValueError("Paragraph edits failed citation or numeric validation")
+            bb.report = original_report.model_copy(update={"markdown": body})
+            review = await checker.review(body)
+            review.update(mechanically_finalized=True, body_replaced=False)
+            extras = bb.scratch["workbench"]["extras"]
+            metadata["previous_revision"] = extras.get("revision")
+            extras[PROSE_REVIEW_KEY] = review
+            bb.scratch[PROSE_REVIEW_KEY] = review
+            bb.scratch["_report_validation"] = {
+                "scope": "model_assessed_final_prose_support",
+                "issues": review["issues"],
+                "fallback": False,
+                "semantic_verification": True,
+                "support_status": review["status"],
+            }
+            extras["revision"] = {
+                "attempts": 1,
+                "chosen": 1,
+                "history": [{"attempt": 1, "hard": len(review["issues"])}],
+                "remaining": review["issues"],
+                "advisories": [],
+            }
+            metadata.update(
+                mode="bound paragraph repair; no retrieval or full rewrite",
+                primed_units=unchanged_before,
+            )
+        elif args.patch_mindmap:
             from dataclasses import asdict
 
             from deep_research.models import Report

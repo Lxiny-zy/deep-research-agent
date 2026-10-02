@@ -145,6 +145,10 @@ class TemplateWriter:
 
     def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
         parts = [_BASE_SYSTEM, _skeleton(template), self.brief(template, contract)]
+        if template.key in {"autoResearch", "litReview"}:
+            parts.append(
+                "正文以概括研究主题的简短一级标题（# ）开头，不复述任务指令；章节仍用二级标题。"
+            )
         return "\n\n".join(part for part in parts if part)
 
     def user_prompt(

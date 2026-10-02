@@ -10,6 +10,7 @@ HTML 里唯一的脚本是「点击分支折叠/展开」，不访问网络、�
 from __future__ import annotations
 
 import io
+import re
 import unicodedata
 from html import escape
 from typing import Any
@@ -30,13 +31,16 @@ def _label(node: dict[str, Any]) -> str:
 
 def _wrap(text: str, columns: int = 32) -> list[str]:
     lines, line, width = [], "", 0
-    for char in text:
-        size = 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
-        if char == "\n" or (line and width + size > columns):
+    # Keep method names, decimal/scientific values, ranges and citation marks
+    # intact. An unusually long token widens its node instead of losing text.
+    tokens = re.findall(r"\r?\n|(?:\[\d+\])+|[A-Za-z0-9][A-Za-z0-9_+./%−–-]*|.", text)
+    for token in tokens:
+        size = sum(2 if unicodedata.east_asian_width(c) in {"F", "W"} else 1 for c in token)
+        if token in {"\n", "\r\n"} or (line and width + size > columns):
             lines.append(line)
             line, width = "", 0
-        if char != "\n":
-            line += char
+        if token not in {"\n", "\r\n"}:
+            line += token
             width += size
     if line or not lines:
         lines.append(line)
@@ -162,29 +166,95 @@ def render_svg(mindmap: dict[str, Any]) -> str:
 
 
 _SCRIPT = """
+var canvas=document.querySelector('.canvas');
+var svg=canvas.querySelector('svg');
+var box=svg.viewBox.baseVal;
+var zoom=1;
+function center(x,y){
+  canvas.scrollLeft=(x-box.x)*zoom-canvas.clientWidth/2+16;
+  canvas.scrollTop=(y-box.y)*zoom-canvas.clientHeight/2+16;
+}
+function scale(value,x,y){
+  zoom=Math.max(0.01,Math.min(2,value));
+  svg.style.width=(box.width*zoom)+'px';
+  svg.style.height=(box.height*zoom)+'px';
+  document.querySelector('[data-zoom-value]').textContent=Math.round(zoom*100)+'%';
+  center(x,y);
+}
+function overview(){
+  scale(Math.min((canvas.clientWidth-32)/box.width,(canvas.clientHeight-32)/box.height),
+    box.x+box.width/2,box.y+box.height/2);
+}
+function currentCenter(){
+  return [box.x+(canvas.scrollLeft+canvas.clientWidth/2-16)/zoom,
+    box.y+(canvas.scrollTop+canvas.clientHeight/2-16)/zoom];
+}
+document.querySelectorAll('[data-zoom]').forEach(function(button){
+  button.addEventListener('click',function(){
+    var action=button.getAttribute('data-zoom');var c=currentCenter();
+    if(action==='fit'){overview();return;}
+    scale(action==='actual'?1:zoom*(action==='in'?1.25:0.8),c[0],c[1]);
+  });
+});
+document.querySelectorAll('[data-focus-branch]').forEach(function(button){
+  button.addEventListener('click',function(){
+    var bounds=[];var b=button.getAttribute('data-focus-branch');
+    svg.querySelectorAll('g.b'+b).forEach(function(g){
+      if(g.style.display==='none')return;
+      var r=g.getBBox();bounds.push(r);
+    });
+    if(!bounds.length)return;
+    var x=Math.min.apply(null,bounds.map(function(r){return r.x;}));
+    var y=Math.min.apply(null,bounds.map(function(r){return r.y;}));
+    var right=Math.max.apply(null,bounds.map(function(r){return r.x+r.width;}));
+    var bottom=Math.max.apply(null,bounds.map(function(r){return r.y+r.height;}));
+    scale(Math.min(1,(canvas.clientWidth-48)/(right-x),(canvas.clientHeight-48)/(bottom-y)),
+      (x+right)/2,(y+bottom)/2);
+  });
+});
 document.querySelectorAll('g.node.d1').forEach(function(g){
   g.style.cursor='pointer';
-  g.addEventListener('click',function(){
+  g.setAttribute('role','button');g.setAttribute('tabindex','0');
+  g.setAttribute('aria-expanded','true');
+  function toggle(){
     var b=g.getAttribute('data-branch');var hide=!g.classList.contains('collapsed');
     g.classList.toggle('collapsed');
+    g.setAttribute('aria-expanded',hide?'false':'true');
     document.querySelectorAll('.b'+b).forEach(function(el){
       if(el===g)return; if(el.getAttribute('data-depth')==='1')return;
       el.style.display=hide?'none':'';});
+  }
+  g.addEventListener('click',toggle);
+  g.addEventListener('keydown',function(event){
+    if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle();}
   });
 });
+overview();
 """
 
 
 def render_mindmap_html(mindmap: dict[str, Any], *, title: str) -> str:
     svg = render_svg(mindmap)
     outline = _outline_html(mindmap)
+    branches = "".join(
+        f'<button type="button" data-focus-branch="{i}">'
+        f"{escape(str(branch.get('label', '')))}</button>"
+        for i, branch in enumerate(mindmap.get("branches", []))
+    )
     return (
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{escape(title)}</title><style>{_CSS}</style></head><body>"
         f"<header><h1>{escape(title)}</h1>"
-        '<div class="hint">点击一级分支可折叠或展开；图中可滚动查看。'
+        '<div class="hint">选择分支定位，缩放查看完整标签；点击一级分支可折叠或展开。'
         "结论带引用，待研究问题不代表已证实。</div></header>"
+        '<nav class="map-controls" aria-label="导图视图">'
+        '<button type="button" data-zoom="fit">总览</button>'
+        '<button type="button" data-zoom="actual">原始大小</button>'
+        '<button type="button" data-zoom="out" aria-label="缩小导图">−</button>'
+        '<output data-zoom-value aria-label="当前缩放">100%</output>'
+        '<button type="button" data-zoom="in" aria-label="放大导图">+</button></nav>'
+        f'<nav class="map-branches" aria-label="导图分支">{branches}</nav>'
         f'<div class="canvas">{svg}</div>'
         f"<details><summary>完整大纲与引用</summary>{outline}</details>"
         f"<script>{_SCRIPT}</script></body></html>\n"
@@ -197,7 +267,12 @@ body{margin:0;background:#f6f8fb;color:#14222f;
 header{padding:20px 28px;border-bottom:1px solid #dfe4ea;background:#fff}
 h1{margin:0;font-size:22px}
 .hint{color:#5b6675;font-size:13px}
-.canvas{padding:16px;overflow:auto}
+.map-controls,.map-branches{display:flex;flex-wrap:wrap;gap:8px;padding:10px 28px}
+.map-controls{align-items:center}
+button{border:1px solid #b9c9d6;border-radius:6px;padding:6px 10px;
+  background:#fff;color:#18354a;font:inherit;cursor:pointer}
+button:focus-visible,g[role=button]:focus-visible{outline:3px solid #3478a5;outline-offset:2px}
+.canvas{padding:16px;overflow:auto;height:72vh;min-height:360px;box-sizing:border-box}
 svg{max-width:none;background:#fff;border:1px solid #dfe4ea;
   border-radius:12px}
 g.collapsed rect{stroke-dasharray:4 3}

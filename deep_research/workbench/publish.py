@@ -187,7 +187,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 41,
+        "format_version": 43,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -225,10 +225,10 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     citations = list(report.citations) if report is not None else []
     contract = contract_from_scratch(scratch)
     title = (contract.title if contract else "") or f"{template.title}：{detail.query[:40]}"
-    if template.key == "paperRead":
+    if template.key in {"paperRead", "autoResearch", "litReview"}:
         from .titles import paper_report_title
 
-        title = paper_report_title(markdown, title, detail.query)
+        title = paper_report_title(markdown, title, detail.query, label=template.title)
     created_at = detail.created_at
     created = created_at.isoformat() if created_at is not None else ""
     from ..bibliography import build_bibliography, present_markdown, work_keys
@@ -278,6 +278,10 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
 
         title = analysis_title(scratch["analysis"])
         meta = analysis_meta(scratch["analysis"]) + (f" · {created[:10]}" if created else "")
+    if template.key == "mindmap" and isinstance(extras.get("mindmap"), dict):
+        from .titles import mindmap_title
+
+        title = mindmap_title(extras["mindmap"])
     stem = _file_stem(title)
     images: dict[str, bytes] = {}
     files: list[DeliveryFile] = []

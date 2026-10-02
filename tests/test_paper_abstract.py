@@ -78,6 +78,77 @@ async def test_unclosed_chunk_is_not_claimed_to_be_a_complete_abstract():
     ) == (0, len(ABSTRACT))
 
 
+async def test_parser_section_boundaries_preserve_a_complete_pdf_abstract():
+    import pymupdf
+
+    from deep_research.workbench.attachments import parse_attachment
+
+    with pymupdf.open() as pdf:
+        page = pdf.new_page()
+        page.insert_text((72, 60), "Abstract", fontname="hebo", fontsize=12)
+        page.insert_text((72, 85), "A complete abstract about spectral reconstruction.")
+        page.insert_text((72, 110), "Code is available at https://example.org/code.")
+        page.insert_text((72, 145), "1", fontname="hebo", fontsize=12)
+        page.insert_text((90, 145), "Introduction", fontname="hebo", fontsize=12)
+        page.insert_text((72, 170), "Body text belongs to the introduction.")
+        attachment = await parse_attachment(pdf.tobytes(), "paper.pdf")
+    state = {"attachments": [attachment.model_dump(mode="json")]}
+    records = await prepare_abstracts(state, screen_intent=False)
+    assert len(records) == 1
+    assert records[0]["text"] == (
+        "A complete abstract about spectral reconstruction.\n"
+        "Code is available at https://example.org/code."
+    )
+    assert checked_abstracts(state) == records
+    intro = next(s for s in attachment.sources() if "Introduction" in s.section_title)
+    assert intro.section_title == "1 Introduction"
+
+
+async def test_multichunk_abstract_requires_the_last_parser_section_boundary(monkeypatch):
+    from deep_research.library import ingestion
+    from deep_research.workbench.attachments import parse_attachment
+
+    text = "Abstract\n" + "A method retains this full experimental condition. " * 160
+    text = text.strip()
+    chunks = ingestion._chunks_for_text(text, section="Abstract")
+
+    async def prepared(**kwargs):
+        return ingestion.PreparedSource(
+            title="paper",
+            kind="pdf",
+            origin_url="",
+            mime_type="application/pdf",
+            content_hash="",
+            char_count=len(text),
+            metadata={},
+            chunks=chunks,
+        )
+
+    monkeypatch.setattr(ingestion, "prepare_source", prepared)
+    attachment = await parse_attachment(b"%PDF locally stubbed parser result", "paper.pdf")
+    assert len(attachment.chunks) > 1
+    assert attachment.chunks[0].section_start and not attachment.chunks[0].section_end
+    assert attachment.chunks[-1].section_end and not attachment.chunks[-1].section_start
+    state = {"attachments": [attachment.model_dump(mode="json")]}
+    records = await prepare_abstracts(state, screen_intent=False)
+    assert len(records) == 1 and records[0]["text"] == text.split("\n", 1)[1]
+    assert checked_abstracts(state) == records
+    state["attachments"][0]["chunks"][-1]["section_end"] = False
+    assert checked_abstracts(state) == []
+    assert (
+        abstract_span(
+            Source(
+                url="https://example.org",
+                content="Abstract\nOnly part of an abstract.",
+                locator="Abstract",
+                section_title="Abstract",
+                section_start=True,
+            )
+        )
+        is None
+    )
+
+
 async def test_long_abstract_is_restored_only_from_matching_consecutive_file_chunks():
     from deep_research.library.ingestion import _chunks_for_text
     from deep_research.workbench.attachments import Attachment, AttachmentChunk

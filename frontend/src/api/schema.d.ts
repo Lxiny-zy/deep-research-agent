@@ -3924,6 +3924,21 @@ export interface components {
             locator?: string;
             scholarly?: components["schemas"]["ScholarlyMetadata"] | null;
             /**
+             * Section End
+             * @default false
+             */
+            section_end?: boolean;
+            /**
+             * Section Start
+             * @default false
+             */
+            section_start?: boolean;
+            /**
+             * Section Title
+             * @default
+             */
+            section_title?: string;
+            /**
              * Title
              * @default
              */

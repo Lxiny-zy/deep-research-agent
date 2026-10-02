@@ -41,6 +41,11 @@ def abstract_span(source: Source) -> tuple[int, int] | None:
     declared = bool(
         source.scholarly
         and source.scholarly.section.strip().casefold() in {"abstract", "摘要", "summary"}
+    ) or bool(
+        getattr(source, "section_start", False)
+        and getattr(source, "section_end", False)
+        and getattr(source, "section_title", "").strip().casefold()
+        in {"abstract", "摘要", "summary"}
     )
     if start is None and not declared:
         return None
@@ -126,7 +131,15 @@ def _candidates(sources: list[Source]) -> list[tuple[Source, list[Source]]]:
                 break
             text += "\n" + following.content if pasted else following.content[overlap:]
             members.append(following)
-            joined = source.model_copy(update={"content": text})
+            whole_section = (
+                getattr(source, "section_start", False)
+                and getattr(following, "section_end", False)
+                and all(
+                    getattr(part, "section_title", "") == getattr(source, "section_title", "")
+                    for part in members
+                )
+            )
+            joined = source.model_copy(update={"content": text, "section_end": whole_section})
             if abstract_span(joined) is not None:
                 candidates.append((joined, members))
                 break

@@ -46,10 +46,10 @@ def _quota_lock(root: Path) -> Iterator[None]:
     lock_path = root / _QUOTA_LOCK
     if lock_path.is_symlink():
         raise ValueError("artifact quota lock must not be a symlink")
-    with lock_path.open("a+b") as lock:
-        if lock.tell() == 0:
-            lock.write(b"0")
-            lock.flush()
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(descriptor, "r+b") as lock:
+        # Byte-range locks work beyond EOF. A sentinel written before locking
+        # can race with another opener whose Windows lock denies our flush.
         lock.seek(0)
         if sys.platform == "win32":
             import msvcrt

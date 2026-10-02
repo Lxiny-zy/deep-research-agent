@@ -100,7 +100,12 @@ class ReportService:
                     support_status="fail" if issues or not bound else "pass",
                 )
             workbench = scratch.get("workbench", {})
-            if workbench.get("template") in {"paperRead", "peerReview"}:
+            if workbench.get("template") in {
+                "paperRead",
+                "peerReview",
+                "autoResearch",
+                "litReview",
+            }:
                 from ..workbench.contract import contract_from_scratch
                 from ..workbench.templates import get_template
                 from ..workbench.titles import paper_report_title
@@ -127,8 +132,11 @@ class ReportService:
                 document.title = analysis_title(scratch["analysis"])
             if workbench.get("template") == "mindmap":
                 from ..workbench.mindmap_contract import checked_review
+                from ..workbench.titles import mindmap_title
 
                 extras = workbench.get("extras", {})
+                if isinstance(extras.get("mindmap"), dict):
+                    document.title = mindmap_title(extras["mindmap"])
                 if extras.get("node_review") is not None and extras.get("mindmap"):
                     bound, issues = checked_review(
                         extras["mindmap"],

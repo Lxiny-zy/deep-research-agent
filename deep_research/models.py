@@ -77,6 +77,11 @@ class Source(BaseModel):
     # Generic page/section/paragraph locator. Unlike ``scholarly.section`` it
     # also applies to uploaded reports, internal notes and ordinary web pages.
     locator: str = ""
+    # Structured section boundaries, unlike a display locator, establish
+    # whether uploaded chunks cover a whole parser-delimited section.
+    section_title: str = ""
+    section_start: bool = False
+    section_end: bool = False
     # Explicit document metadata does not by itself establish academic publication status.
     document_authors: list[str] = Field(default_factory=list, max_length=32)
     # 非空即表示「这是一条学术来源」。通用网页后端保持 None，因此既有部署的

@@ -1,12 +1,48 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
 from deep_research import artifact_lifecycle
 from deep_research.artifacts import ArtifactStore, ArtifactValidationError
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows mandatory byte-range locking")
+def test_first_quota_opener_waits_for_an_empty_locked_file_without_writing(tmp_path, monkeypatch):
+    import msvcrt
+
+    path = tmp_path / ".artifact-quota.lock"
+    owner = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    original = msvcrt.locking
+    entered = Event()
+
+    def observe(descriptor, mode, count):
+        if descriptor != owner and mode == msvcrt.LK_LOCK:
+            entered.set()
+        return original(descriptor, mode, count)
+
+    def acquire():
+        with artifact_lifecycle._quota_lock(tmp_path):
+            return True
+
+    try:
+        original(owner, msvcrt.LK_LOCK, 1)
+        monkeypatch.setattr(msvcrt, "locking", observe)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(acquire)
+            try:
+                assert entered.wait(2), "The opener failed before reaching the lock"
+            finally:
+                original(owner, msvcrt.LK_UNLCK, 1)
+            assert pending.result(timeout=3)
+        assert path.stat().st_size == 0
+    finally:
+        os.close(owner)
 
 
 def test_shared_quota_prevents_concurrent_overcommit_and_reclaims_removal(tmp_path):

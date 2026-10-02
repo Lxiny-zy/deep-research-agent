@@ -319,6 +319,7 @@ def _page_text(page: Any, fitz: ModuleType, max_chars: int) -> str:
     data = page.get_text("dict", flags=flags)
     lines: list[str] = []
     size = 0
+    previous_spans: list[dict[str, Any]] = []
     for block in data.get("blocks", []):
         for line in block.get("lines", []):
             spans = line.get("spans", [])
@@ -344,7 +345,32 @@ def _page_text(page: Any, fitz: ModuleType, max_chars: int) -> str:
             size += len(text) + 1
             if size > max_chars:
                 raise OaPdfParseError("PDF page exceeds text limit")
-            lines.append(text + "\n")
+            # PDF extraction may place a heading number and its title in
+            # separate text lines even though they share the same baseline.
+            # Join only that geometric case, so the number does not become
+            # the last sentence of the preceding abstract or other section.
+            same_heading_line = False
+            if (
+                lines
+                and previous_spans
+                and spans
+                and re.fullmatch(r"(?:\d+(?:\.\d+)*|[IVXLC]+)\.?", lines[-1].strip())
+                and _line_heading_kind(text.strip()) is not None
+            ):
+                previous, current = previous_spans[-1], spans[0]
+                a, b = previous.get("origin"), current.get("origin")
+                box = previous.get("bbox")
+                if a and b and box:
+                    same_heading_line = (
+                        abs(a[1] - b[1]) <= 0.5
+                        and 0 <= b[0] - box[2] <= 80
+                        and abs(previous.get("size", 0) - current.get("size", 0)) <= 0.5
+                    )
+            if same_heading_line:
+                lines[-1] = lines[-1].rstrip("\n") + " " + text + "\n"
+            else:
+                lines.append(text + "\n")
+            previous_spans = spans
     return "".join(lines)
 
 
