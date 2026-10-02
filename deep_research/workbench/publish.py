@@ -187,7 +187,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 33,
+        "format_version": 37,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -258,6 +258,16 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         bind_review(catalog, citation_reviewer, report.markdown, stored_review(scratch))
     display_markdown = present_markdown(markdown, catalog) if citations else markdown
     document_keys = work_keys(catalog)
+    if template.key == "peerReview":
+        from .titles import paper_report_title
+
+        title = paper_report_title(
+            markdown,
+            title,
+            detail.query,
+            label=template.title,
+            reference_title=catalog.documents[0].title if len(catalog.documents) == 1 else "",
+        )
     distinct_sources = source_counts(citations, document_keys=document_keys)[0]
     meta = f"{template.title} · {distinct_sources} 个已核验来源"
     if len(citations) > distinct_sources:

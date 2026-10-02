@@ -100,6 +100,25 @@ class ReportService:
                     support_status="fail" if issues or not bound else "pass",
                 )
             workbench = scratch.get("workbench", {})
+            if workbench.get("template") in {"paperRead", "peerReview"}:
+                from ..workbench.contract import contract_from_scratch
+                from ..workbench.templates import get_template
+                from ..workbench.titles import paper_report_title
+
+                contract = contract_from_scratch(scratch)
+                template = get_template(workbench["template"])
+                assert template is not None
+                documents = document.bibliography.documents if document.bibliography else []
+                document.title = paper_report_title(
+                    detail.report.markdown,
+                    (contract.title if contract else "")
+                    or f"{template.title}：{detail.query[:40]}",
+                    detail.query,
+                    label=template.title,
+                    reference_title=documents[0].title
+                    if template.key == "peerReview" and len(documents) == 1
+                    else "",
+                )
             if workbench.get("template") == "dataAnalysis" and isinstance(
                 scratch.get("analysis"), dict
             ):

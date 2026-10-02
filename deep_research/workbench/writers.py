@@ -657,8 +657,11 @@ class SlideWriter(TemplateWriter):
         system = ctx.system_prompt(
             _BASE_SYSTEM
             + "\n\n输出一份演示文稿的结构化 JSON。页面顺序："
-            + "、".join(template.section_titles())
+            + "、".join(section.title for section in template.sections if section.key != "title")
+            + "。title/subtitle 用于自动封面，不要在 slides 中重复生成标题页"
             + "。每页 3–5 条要点、2–4 句演讲备注；citations 填该页用到的素材编号。"
+            + "一条要点只承载一个主要信息，次要数值、条件细节和解释放入演讲备注，"
+            "正文不复制整段综述或所有实验数据。遵守用户指定的听众、时长与页数。"
             + ("\n" + template.writer_brief if template.writer_brief else "")
         )
         user = self.user_prompt(bb, template, contract, material) + (revision or "")
