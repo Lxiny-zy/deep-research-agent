@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import pickle
@@ -13,6 +14,43 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.accept_delivery_live import remote_profile, render_case
+
+
+async def restore_abstract_from_pdf(detail, path: Path) -> None:
+    """Add reparsed translation material without invalidating paid evidence snapshots."""
+    from deep_research.workbench.attachments import attachments_from_scratch, parse_attachment
+    from deep_research.workbench.intake import PAPER_SOURCES_KEY
+    from deep_research.workbench.paper_abstract import _candidates, abstract_span
+
+    scratch = detail.orchestration.checkpoint["scratch"]
+    raw = await asyncio.to_thread(path.read_bytes)
+    content_id = hashlib.sha256(raw).hexdigest()[:24]
+    original = next(
+        (a for a in attachments_from_scratch(scratch) if a.id == content_id and a.kind == "pdf"),
+        None,
+    )
+    if original is None or original.size != len(raw):
+        raise ValueError("PDF bytes do not match this task's frozen attachment")
+    parsed = await parse_attachment(raw, original.filename)
+    if parsed.truncated:
+        raise ValueError("Reparsed PDF is incomplete")
+    sources = []
+    for source, _parts in _candidates(parsed.sources()):
+        if abstract_span(source) is not None:
+            sources.append(
+                source.model_copy(
+                    update={
+                        "url": f"https://workspace.invalid/attachments/{content_id}"
+                        f"?abstract-reparse={len(sources) + 1}"
+                    }
+                ).model_dump(mode="json")
+            )
+    if not sources:
+        raise ValueError("Reparsed PDF does not contain a complete abstract")
+    scratch[PAPER_SOURCES_KEY] = [*scratch.get(PAPER_SOURCES_KEY, []), *sources]
+    print(
+        f"Recovered {len(sources)} complete abstract source(s) from matching PDF bytes", flush=True
+    )
 
 
 async def main() -> None:
@@ -37,6 +75,11 @@ async def main() -> None:
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
+        "--abstract-pdf",
+        type=Path,
+        help="Recover abstract from the same PDF after a parser fix; retain old evidence sources",
+    )
+    parser.add_argument(
         "--patch-final",
         action="store_true",
         help="Repair only rejected paragraphs in the saved final report",
@@ -47,6 +90,10 @@ async def main() -> None:
     detail = pickle.loads(args.detail.read_bytes())
     if not isinstance(detail, RunDetail) or detail.orchestration is None:
         raise ValueError("A trusted completed local run snapshot is required")
+    if args.abstract_pdf:
+        if args.patch_final:
+            raise ValueError("Changing abstract inputs requires a fresh report review")
+        await restore_abstract_from_pdf(detail, args.abstract_pdf)
     profile = remote_profile(args.authorized_ssh)
     settings = Settings(
         llm_api_key=profile["api_key"],

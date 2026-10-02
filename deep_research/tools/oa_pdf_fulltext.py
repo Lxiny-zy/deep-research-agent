@@ -224,6 +224,33 @@ def _heading_kind(value: str) -> str | None:
     return None
 
 
+def _line_heading_kind(value: str) -> str | None:
+    """Recognize boundaries more conservatively than classifying known titles.
+
+    PDF line breaks are layout, not paragraphs. A continuation such as
+    'method using covariance ...' must remain in its surrounding abstract.
+    """
+    kind = _heading_kind(value)
+    if kind is None:
+        return None
+    if _normalise_heading(value) in _ALIASES or _NUMBERING_RE.match(value):
+        return kind
+    # Abstract labels commonly share their first line with prose.
+    if re.match(r"^(?:abstract|summary)\s*[:—–-]", value, re.I):
+        return kind
+    # Unnumbered expanded headings are accepted in title case. Sentence-case
+    # prose containing a leading alias is kept intact rather than guessed apart.
+    words = re.findall(r"[A-Za-z][A-Za-z0-9-]*", value)
+    joiners = {"and", "or", "of", "on", "for", "in", "the", "a", "an", "to", "with"}
+    if (
+        words
+        and words[0][0].isupper()
+        and all(word[0].isupper() or word in joiners for word in words[1:])
+    ):
+        return kind
+    return None
+
+
 def _sections_from_pages(pages: list[str]) -> tuple[PdfSection, ...]:
     lines: list[str] = []
     line_pages: list[int] = []
@@ -238,7 +265,7 @@ def _sections_from_pages(pages: list[str]) -> tuple[PdfSection, ...]:
     boundaries: list[tuple[int, str, str]] = []
     for index, line in enumerate(lines):
         title = _WHITESPACE_RE.sub(" ", line.strip())
-        kind = _heading_kind(title)
+        kind = _line_heading_kind(title)
         if kind is not None and len(title) <= 160:
             boundaries.append((index, title, kind))
 

@@ -336,8 +336,10 @@ class FindingContent(BaseModel):
     source_url: str = Field(..., description="该发现的出处 URL（必须来自给定来源）")
     evidence_quote: str = Field(
         "",
-        max_length=500,
-        description="支持该发现的来源原文短句；必须逐字来自 source_url 对应内容",
+        description=(
+            "支持该发现的必要连续原文；必须逐字来自 source_url 对应内容。"
+            "保留归属、条件及表格标题/表头/相关行，不限于单句，不得拼接或省略"
+        ),
     )
     confidence: float = Field(0.7, ge=0.0, le=1.0, description="置信度 0~1")
     # 该论断所描述的对象——对照表里的"行"。方法名 / 方案名 / 数据集名。

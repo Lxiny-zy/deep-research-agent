@@ -50,6 +50,32 @@ def test_parse_pdf_preserves_numbers_and_classifies_sections() -> None:
     assert "Table 1" in document.text
 
 
+def test_abstract_continuation_is_not_misclassified_as_a_method_heading() -> None:
+    from deep_research.models import Source
+    from deep_research.tools.oa_pdf_fulltext import _sections_from_pages
+    from deep_research.workbench.paper_abstract import abstract_span
+
+    pages = [
+        "Abstract: We introduce a new stitching strategy. Lastly, a spectral correction\n"
+        "method using covariance correspondences is proposed for spectral consistency.\n"
+        "Results show improvements in the evaluated scenes.\n"
+        "Keywords: stitching; spectral correction\n"
+        "1. Introduction\nBackground text.\n"
+        "Methods and Materials\nMethod details.\n"
+        "3 Experiments and Results\nMeasured outcomes."
+    ]
+    sections = _sections_from_pages(pages)
+    assert [s.canonical for s in sections] == ["abstract", "introduction", "method", "experiment"]
+    assert "method using covariance" in sections[0].text
+    assert "Results show improvements" in sections[0].text
+    source = Source(url="https://example.org/paper", content=sections[0].render())
+    span = abstract_span(source)
+    assert span is not None
+    abstract = source.content[span[0] : span[1]]
+    assert abstract.startswith("We introduce") and abstract.endswith("evaluated scenes.")
+    assert "Keywords" not in abstract
+
+
 def test_no_heading_pdf_has_an_other_fallback() -> None:
     fitz = pytest.importorskip("fitz")
     document = fitz.open()

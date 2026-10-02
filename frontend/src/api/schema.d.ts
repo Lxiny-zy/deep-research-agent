@@ -2547,7 +2547,7 @@ export interface components {
             entity?: string;
             /**
              * Evidence Quote
-             * @description 支持该发现的来源原文短句；必须逐字来自 source_url 对应内容
+             * @description 支持该发现的必要连续原文；必须逐字来自 source_url 对应内容。保留归属、条件及表格标题/表头/相关行，不限于单句，不得拼接或省略
              * @default
              */
             evidence_quote?: string;

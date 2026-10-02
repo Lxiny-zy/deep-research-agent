@@ -16,6 +16,8 @@ import pickle
 import re
 import subprocess
 import sys
+import time
+from contextlib import aclosing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -160,7 +162,43 @@ async def run_case(key: str, profile: dict, output: Path, paper: Path | None) ->
         run_id=run_id,
         initial_execution=execution,
     )
-    llm = LLM.from_params(
+
+    class CaptureLLM(LLM):
+        calls = 0
+
+        async def _stream_once(self, system, user, *, temperature=0.4):
+            # Retain each response, including invalid JSON and interrupted output,
+            # so a failed cold run can be diagnosed without paid full re-extraction.
+            self.calls += 1
+            number, started, chunks = self.calls, time.monotonic(), []
+            status = "interrupted"
+            try:
+                async with aclosing(
+                    super()._stream_once(system, user, temperature=temperature)
+                ) as stream:
+                    async for chunk in stream:
+                        chunks.append(chunk)
+                        yield chunk
+                status = "complete"
+            finally:
+                record = json.dumps(
+                    {
+                        "call": number,
+                        "status": status,
+                        "seconds": time.monotonic() - started,
+                        "input_chars": len(system) + len(user),
+                        "output": "".join(chunks),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                if profile["api_key"] in record:
+                    raise RuntimeError("Refusing to persist a credential")
+                await asyncio.to_thread(
+                    (target / f"response-{number}.json").write_text, record, encoding="utf-8"
+                )
+
+    llm = CaptureLLM.from_params(
         agent.tracer,
         api_key=profile["api_key"],
         base_url=profile["base_url"],
@@ -180,10 +218,22 @@ async def run_case(key: str, profile: dict, output: Path, paper: Path | None) ->
     agent.researcher.verification_llm = llm
 
     def progress(event):
-        if event.type in {"start", "done", "error"}:
+        if event.type in {"start", "done", "error"} or (
+            event.stage != "LLM" and event.type in {"info", "finding"}
+        ):
             print(f"{key}: {event.stage} {event.type} ({event.elapsed:.0f}s)", flush=True)
 
     agent.tracer.subscribe(progress)
+
+    async def heartbeat():
+        while True:
+            await asyncio.sleep(30)
+            print(
+                f"{key}: still running; recorded model tokens={agent.tracer.total_tokens}",
+                flush=True,
+            )
+
+    beat = asyncio.create_task(heartbeat())
     try:
         await agent.run(query)
         detail = await repo.get_run(run_id)
@@ -220,6 +270,8 @@ async def run_case(key: str, profile: dict, output: Path, paper: Path | None) ->
         )
         return record
     finally:
+        beat.cancel()
+        await asyncio.gather(beat, return_exceptions=True)
         await agent.aclose()
 
 
