@@ -84,7 +84,10 @@ def table_from_html(html: str, width: float) -> PdfTable:
                 )
                 + 2
                 for row in cells
-                for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.+]*", plain_html(row[i]))
+                for word in re.findall(
+                    r"[-+−]?\d+(?:\.\d+)?[eE][-+−]?\d+|[A-Za-z0-9][A-Za-z0-9_.+]*",
+                    plain_html(row[i]),
+                )
             ]
             + [
                 float(value) + 1

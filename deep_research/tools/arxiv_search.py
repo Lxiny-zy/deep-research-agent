@@ -27,7 +27,7 @@ import httpx
 
 from ..models import ScholarlyMetadata, Source
 from .arxiv_fulltext import ArxivEprintFetcher, ArxivFulltextError
-from .base import SearchTool
+from .base import SearchTool, reading_question, required_sections
 from .fanout import expand_in_order
 
 logger = logging.getLogger(__name__)
@@ -137,17 +137,8 @@ class ArxivSearch(SearchTool):
     async def _fulltext_sources(self, source: Source, query: str) -> list[Source]:
         if source.scholarly is None or not source.scholarly.work_id:
             return [source]
-        required: set[str] = set()
-        query_lower = query.casefold()
-        if any(
-            token in query_lower
-            for token in ("psnr", "ssim", "benchmark", "accuracy", "数值", "指标", "结果")
-        ):
-            required.add("results")
-        elif any(
-            token in query_lower for token in ("method", "approach", "protocol", "方法", "实验")
-        ):
-            required.update(("method", "experiment"))
+        query = reading_question(query)
+        required = required_sections(query)
         # The selector receives only canonical section names; it ignores a required name
         # that is absent. The fetcher also keeps an abstract section when one exists.
         fetcher = self._eprint_fetcher

@@ -429,13 +429,46 @@ def _canonical_required(value: str) -> str:
     return _heading_kind(value) or _normalise_heading(value)
 
 
+def _required_pdf_indices(sections: tuple[PdfSection, ...], names: set[str]) -> set[int]:
+    selected: set[int] = set()
+    parent: tuple[str, ...] | None = None
+    active = False
+    for section in sections:
+        match = re.match(r"^\s*(\d+(?:\.\d+)*)(?:\.?\s+)", section.title)
+        number = tuple(match[1].split(".")) if match else None
+        descendant = (
+            active
+            and parent is not None
+            and number is not None
+            and len(number) > len(parent)
+            and number[: len(parent)] == parent
+        )
+        unnumbered_child = (
+            active
+            and number is None
+            and section.canonical == "other"
+            and not _normalise_heading(section.title).startswith(
+                ("references", "bibliography", "acknowledg", "参考文献", "致谢")
+            )
+        )
+        if descendant or unnumbered_child:
+            selected.add(section.index)
+            continue
+        required = section.canonical in names
+        active = required and section.canonical != "abstract"
+        parent = number
+        if required:
+            selected.add(section.index)
+    return selected
+
+
 def select_pdf_sections(
     document: PdfDocument,
     query: str,
     max_chars: int = 12_000,
     required: Iterable[str] | bool = (),
 ) -> list[PdfSection]:
-    """Select required and query-relevant PDF sections deterministically."""
+    """Keep required sections whole; max_chars targets additional related text."""
     if max_chars <= 0 or not document.sections:
         return []
     if required is True:
@@ -446,13 +479,14 @@ def select_pdf_sections(
         required_names = {_canonical_required(required)}
     else:
         required_names = {_canonical_required(str(item)) for item in required}
+    required_indices = _required_pdf_indices(document.sections, required_names)
     query_terms = [term for term in re.findall(r"[a-z0-9]+", query.casefold()) if len(term) > 1]
     scored: list[tuple[float, int, PdfSection]] = []
     for section in document.sections:
         title_terms = set(re.findall(r"[a-z0-9]+", section.title.casefold()))
         body_terms = re.findall(r"[a-z0-9]+", section.text.casefold())
         score = (
-            (1000.0 if section.canonical in required_names else 0.0)
+            (1000.0 if section.index in required_indices else 0.0)
             + sum(4 for term in query_terms if term in title_terms)
             + sum(1 for term in query_terms if term in body_terms)
         )
@@ -461,37 +495,23 @@ def select_pdf_sections(
     if not scored:
         scored = [(0.0, section.index, section) for section in document.sections]
     scored.sort(key=lambda item: (-item[0], item[1]))
-    chosen: list[PdfSection] = []
-    used = 0
+    chosen = [
+        section
+        for section in document.sections
+        if section.index in required_indices and section.render()
+    ]
+    used = sum(len(section.render()) for section in chosen)
     for _, _, section in scored:
         rendered = section.render()
         if not rendered:
             continue
+        if section.index in required_indices:
+            continue
         remaining = max_chars - used
-        if remaining <= 0:
+        if remaining <= 0 and chosen:
             break
-        if len(rendered) > remaining:
-            if chosen:
-                continue
-            if remaining <= len(section.title):
-                section = PdfSection(
-                    section.title[:remaining],
-                    "",
-                    section.index,
-                    section.page_start,
-                    section.page_end,
-                    section.canonical,
-                )
-            else:
-                section = PdfSection(
-                    section.title,
-                    section.text[: remaining - len(section.title) - 1],
-                    section.index,
-                    section.page_start,
-                    section.page_end,
-                    section.canonical,
-                )
-            rendered = section.render()
+        if chosen and len(rendered) > remaining:
+            continue
         chosen.append(section)
         used += len(rendered)
     chosen.sort(key=lambda section: section.index)

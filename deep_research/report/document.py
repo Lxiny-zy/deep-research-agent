@@ -273,6 +273,7 @@ class FinalReportValidation(BaseModel):
         "citation_and_numbers",
         "model_assessed_final_prose_support",
         "model_assessed_node_evidence_and_relations",
+        "source_processing",
     ] = "citation_and_numbers"
     issues: list[str] = Field(default_factory=list)
     fallback: bool = False

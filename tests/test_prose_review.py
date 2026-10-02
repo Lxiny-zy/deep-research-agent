@@ -429,6 +429,51 @@ async def test_failed_statistical_interpretation_keeps_data_but_blocks_formal_re
     assert not any(f.format in {"pdf", "docx", "html"} for f in bundle.files)
 
 
+@pytest.mark.parametrize("supported", [True, False])
+async def test_analysis_recovery_replaces_stale_review_and_fallback_status(settings, supported):
+    from deep_research.workbench.analysis import DataAnalyst
+    from deep_research.workbench.contract import CONTRACT_SCRATCH_KEY, build_contract
+    from deep_research.workbench.prose_review import reviewer_for_report, stored_review
+    from deep_research.workbench.templates import get_template
+
+    template = get_template("dataAnalysis")
+    statement = "变量存在相关关系。" if supported else "变量已经证明因果关系。"
+    body = "\n\n".join(f"## {s.title}\n{statement}" for s in template.sections)
+
+    class RecoveryStatistics(Judge):
+        async def stream(self, *args, **kwargs):
+            yield body
+
+    contract = build_contract(
+        template, "分析变量关系", attachments_csv="a,b\n1,2\n2,3.1\n3,4.2\n4,5.3"
+    )
+    contract.quality["max_revisions"] = 0
+    old_status = "fail" if supported else "pass"
+    old_review = {"input_hash": "old-body-and-ledger", "status": old_status}
+    bb = Blackboard(
+        query=contract.original_request,
+        scratch={
+            CONTRACT_SCRATCH_KEY: contract.model_dump(mode="json"),
+            "prose_review": old_review,
+            "_report_validation": {"fallback": True, "issues": ["上一版失败"]},
+        },
+    )
+    ctx = RunContext(
+        llm=RecoveryStatistics(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings
+    )
+    await DataAnalyst().step(bb, ctx)
+    record = stored_review(bb.scratch)
+    assert record == bb.scratch["workbench"]["extras"]["prose_review"]
+    assert record is not old_review
+    checker = reviewer_for_report(None, bb.query, [], [], bb.scratch, 0)
+    bound, issues = checker.check(bb.report.markdown, record)
+    assert bound and bool(issues) is not supported
+    validation = bb.scratch["_report_validation"]
+    assert validation["support_status"] == ("pass" if supported else "fail")
+    assert not validation["fallback"]
+    assert "上一版失败" not in validation["issues"]
+
+
 def test_statistics_review_uses_the_writer_ledger_and_distinguishes_input_origin():
     from deep_research.workbench.analysis import analyse, ledger_facts
     from deep_research.workbench.prose_review import reviewer_for_report

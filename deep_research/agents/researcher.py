@@ -17,13 +17,20 @@ from ..guardrails import (
     verify_claim_consistency,
 )
 from ..llm import LLM
-from ..models import ExtractedFindingList, Finding, ResearchResult, Source, SubQuestion
+from ..models import (
+    ExtractedFindingList,
+    ExtractionAudit,
+    Finding,
+    ResearchResult,
+    Source,
+    SubQuestion,
+)
 from ..observability import Tracer
 from ..persistence.repository import LeaseLostError
 from ..prompting import MEASUREMENT_SCOPE_RULES, PrefixPrompt
 from ..registry import register
 from ..scheduler import planned_search_queries, research_dag
-from ..tools.base import SearchTool
+from ..tools.base import SearchTool, reading_question_scope
 from ..workflow import ATTEMPTED_SCRATCH_KEY
 from .base import Blackboard, RunContext, direct_system_prompt, effective_require_corroboration
 
@@ -169,15 +176,18 @@ class Researcher:
             )
         found: dict[str, Source] = {}
         successful = 0
+        search_errors: set[str] = set()
         for query in queries or [sub_question]:
             try:
-                batch = await self.search.search(
-                    query, max_results=self.settings.results_per_search
-                )
+                with reading_question_scope(sub_question):
+                    batch = await self.search.search(
+                        query, max_results=self.settings.results_per_search
+                    )
                 successful += 1
             except LeaseLostError:
                 raise
             except Exception as exc:  # 一个检索式失败，不丢弃其他检索式取得的来源。
+                search_errors.add(type(exc).__name__)
                 self.tracer.emit(
                     "RESEARCHER", "error", f"检索失败「{query}」（{type(exc).__name__}）"
                 )
@@ -189,7 +199,13 @@ class Researcher:
                 ):
                     found[source.url] = source
         if not successful:
-            return None
+            return ResearchResult(
+                sub_question=sub_question,
+                extraction_audit=ExtractionAudit(
+                    question=sub_question,
+                    issues=[f"retrieval_call_failed:{','.join(sorted(search_errors))}"],
+                ),
+            )
         candidate_sources = list(found.values())
 
         if not candidate_sources:
@@ -260,11 +276,25 @@ class Researcher:
                 prompt,
                 ExtractedFindingList,
             )
+        except LeaseLostError:
+            raise
         except Exception as e:
-            self.tracer.emit("RESEARCHER", "error", f"抽取失败「{sub_question}」：{e}")
+            self.tracer.emit(
+                "RESEARCHER",
+                "error",
+                f"抽取失败「{sub_question}」（{type(e).__name__}），已保留来源",
+            )
             if self.raise_extraction_errors:
                 raise
-            return ResearchResult(sub_question=sub_question, findings=[])
+            return ResearchResult(
+                sub_question=sub_question,
+                findings=[],
+                extraction_audit=ExtractionAudit(
+                    question=sub_question,
+                    sources=[s.model_copy(deep=True) for s in sources],
+                    issues=[f"extraction_call_failed:{type(e).__name__}"],
+                ),
+            )
 
         from ..workbench.extraction import check_extraction
 

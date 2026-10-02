@@ -83,6 +83,7 @@ async def run_case(
     strategy: str | None = None,
     query_override: str | None = None,
     live_search: bool = False,
+    dataset_file: Path | None = None,
 ) -> dict:
     from deep_research.config import Settings
     from deep_research.llm import LLM
@@ -97,6 +98,8 @@ async def run_case(
     target.mkdir(parents=True, exist_ok=True)
     if live_search and (key not in {"autoResearch", "litReview"} or strategy == "none"):
         raise ValueError("Live retrieval requires an open research or literature review task")
+    if dataset_file is not None and key != "dataAnalysis":
+        raise ValueError("--dataset-file is only supported for data analysis")
     settings = Settings(
         llm_api_key=profile["api_key"],
         llm_base_url=profile["base_url"],
@@ -141,6 +144,8 @@ async def run_case(
     }[key]
     if query_override:
         query = query_override
+    elif dataset_file is not None:
+        query = "分析所提供的表格数据，说明样本量、缺失值、变量关系与局限，给出可复核的结论。"
     attachments = []
     if key != "dataAnalysis":
         inputs = ([paper] if paper else []) + (papers or [])
@@ -156,11 +161,19 @@ async def run_case(
     dataset = "scene,method_a_psnr_db,method_b_psnr_db\n" + "\n".join(
         f"s{i},{30 + i * 0.2:.1f},{31 + i * 0.2 + (i % 3) * 0.1:.1f}" for i in range(1, 13)
     )
+    if dataset_file is not None:
+        dataset = await asyncio.to_thread(dataset_file.read_text, encoding="utf-8-sig")
+        from deep_research.workbench.contract import DATASET_MAX_CHARS
+
+        if not dataset.strip() or len(dataset) > DATASET_MAX_CHARS:
+            raise ValueError("Dataset is empty or exceeds the complete-input capacity")
     contract = build_contract(
         template,
         query,
         attachments_csv=dataset if key == "dataAnalysis" else "",
-        dataset_source={"filename": "synthetic-paired-acceptance.csv"}
+        dataset_source={
+            "filename": dataset_file.name if dataset_file else "synthetic-paired-acceptance.csv"
+        }
         if key == "dataAnalysis"
         else None,
         quality=settings.quality,
@@ -335,7 +348,13 @@ async def run_case(
         metadata = {
             "model": profile["model"],
             "input": [item.filename for item in attachments]
-            or ("open research question" if live_search else "labelled synthetic paired data"),
+            or (
+                dataset_file.name
+                if dataset_file
+                else "open research question"
+                if live_search
+                else "labelled synthetic paired data"
+            ),
             "open_retrieval_calls": search.calls
             if isinstance(search, (ProvidedOnly, LiveSources))
             else None,
@@ -404,6 +423,9 @@ async def main() -> None:
     parser.add_argument("--strategy", choices=["none", "quick", "deep"])
     parser.add_argument("--query-file", type=Path)
     parser.add_argument(
+        "--dataset-file", type=Path, help="Complete local CSV for data-analysis acceptance"
+    )
+    parser.add_argument(
         "--live-search", action="store_true", help="Use live arXiv/OpenAlex for open research tasks"
     )
     parser.add_argument("--templates", nargs="+", default=["dataAnalysis"])
@@ -445,6 +467,7 @@ async def main() -> None:
             strategy=args.strategy,
             query_override=args.query_file.read_text(encoding="utf-8") if args.query_file else None,
             live_search=args.live_search,
+            dataset_file=args.dataset_file,
         )
 
 

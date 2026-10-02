@@ -31,6 +31,7 @@ async def main() -> None:
     from deep_research.persistence.repository import RunDetail
     from deep_research.prompting import load_global_rules
     from deep_research.report.service import requires_corroboration
+    from deep_research.workbench.analysis import DataAnalyst
     from deep_research.workbench.contract import (
         CONTRACT_SCRATCH_KEY,
         build_contract,
@@ -54,6 +55,11 @@ async def main() -> None:
     )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--storage-root", required=True, type=Path)
+    parser.add_argument(
+        "--patch-mindmap",
+        action="store_true",
+        help="Only repair rejected nodes of a bound saved mindmap",
+    )
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
     raw = args.detail.read_bytes()
@@ -71,10 +77,13 @@ async def main() -> None:
         "autoResearch": ResearchWriter,
         "slides": SlideWriter,
         "mindmap": MindmapWriter,
+        "dataAnalysis": DataAnalyst,
     }
     template = get_template(old.template)
     if template is None or old.template not in writers:
         raise ValueError("Unsupported writer recovery")
+    if args.patch_mindmap and old.template != "mindmap":
+        raise ValueError("--patch-mindmap requires a saved mindmap task")
     contract = build_contract(
         template,
         old.original_request,
@@ -82,6 +91,9 @@ async def main() -> None:
         tier=old.tier,
         strategy=old.strategy,
         quality=old.quality,
+        attachments_csv=old.dataset_csv,
+        dataset_source=old.dataset_source,
+        demo_data=old.demo_data is True,
     )
     assert contract.original_request == old.original_request
     assert contract.confirmed_choices == old.confirmed_choices
@@ -177,7 +189,12 @@ async def main() -> None:
             else None
         )
     )
-    print(f"Reusing {metadata['findings']} findings for {old.template}; no retrieval", flush=True)
+    print(
+        "Reusing frozen dataset; deterministic statistics and report recovery; no retrieval"
+        if old.template == "dataAnalysis"
+        else f"Reusing {metadata['findings']} findings for {old.template}; no retrieval",
+        flush=True,
+    )
 
     async def heartbeat():
         while True:
@@ -186,7 +203,94 @@ async def main() -> None:
 
     beat = asyncio.create_task(heartbeat())
     try:
-        await writers[old.template]().step(bb, ctx)
+        if args.patch_mindmap:
+            from dataclasses import asdict
+
+            from deep_research.models import Report
+            from deep_research.workbench.mindmap_contract import (
+                Mindmap,
+                checked_review,
+                review_record,
+            )
+            from deep_research.workbench.mindmap_edit import (
+                prime_review,
+                repair_nodes,
+                review_units,
+            )
+            from deep_research.workbench.support import SupportReviewer, digest, evidence_records
+            from deep_research.workbench.writers import mindmap_to_markdown
+
+            extras = bb.scratch["workbench"]["extras"]
+            model = Mindmap.model_validate(extras["mindmap"])
+            citations = list(detail.report.citations)
+            reviewer = SupportReviewer(
+                llm,
+                evidence_records(
+                    bb.results,
+                    {u: i for i, u in enumerate(citations, 1)},
+                    corroboration=settings.require_corroboration,
+                ),
+                llm.input_capacity_chars,
+            )
+            if not prime_review(
+                reviewer, model, bb.query, citations, bb.results, extras["node_review"]
+            ):
+                raise ValueError("Saved node review does not match the complete graph and evidence")
+            patched = await repair_nodes(
+                llm, reviewer, model, bb.query, citations, bb.results, extras["node_review"]
+            )
+            if patched is None:
+                raise ValueError("Saved graph needs structural revision or review service recovery")
+            model, changed = patched
+            next_units = review_units(model, bb.query)
+            reused = sum(
+                digest([asdict(u), [e for e in reviewer.evidence if e["citation"] in u.citations]])
+                in reviewer.cache
+                for u in next_units
+            )
+            save("patched-graph.json", model.model_dump(mode="json"))
+            print(
+                f"Patched nodes={changed}; reusing {reused}/{len(next_units)} unit checks",
+                flush=True,
+            )
+            decisions = await reviewer.review(next_units)
+            raw_graph = model.model_dump(mode="json")
+            audit = review_record(raw_graph, citations, bb.results, decisions)
+            audit["reviewer"] = reviewer.provenance
+            body = mindmap_to_markdown(model)
+            bound, issues = checked_review(raw_graph, citations, bb.results, audit, body)
+            assert bound
+            audit.update(status="fail" if issues else "pass", issues=issues)
+            old_revision = extras.get("revision", {})
+            attempt = old_revision.get("attempts", 0) + 1
+            bb.scratch["_mindmap"] = raw_graph
+            report = Report(query=bb.query, markdown=body, citations=citations)
+            next_extras = MindmapWriter().postprocess(bb, report, template)
+            next_extras.update(
+                node_review=audit,
+                node_repairs=[changed],
+                revision={
+                    **old_revision,
+                    "attempts": attempt,
+                    "chosen": attempt,
+                    "remaining": issues,
+                    "history": [
+                        *old_revision.get("history", []),
+                        {"attempt": attempt, "hard": len(issues)},
+                    ],
+                    "method": "bound_node_repair",
+                    "reused_units": reused,
+                },
+            )
+            bb.scratch["workbench"] = {"template": "mindmap", "extras": next_extras}
+            metadata.update(
+                mode="bound node repair; no retrieval or full graph rewrite",
+                changed_nodes=changed,
+                reused_units=reused,
+                reviewed_units=len(next_units) - reused,
+            )
+        else:
+            await writers[old.template]().step(bb, ctx)
         assert [r.material_data() for r in bb.results] == evidence_before
         detail.results, detail.report = bb.results, bb.report
         detail.orchestration.checkpoint.update(bb.model_dump(mode="json"))

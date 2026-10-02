@@ -3,9 +3,59 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from ..models import Source
 from ..observability import Tracer
+
+_READING_QUESTION: ContextVar[str] = ContextVar("source_reading_question", default="")
+
+
+@contextmanager
+def reading_question_scope(question: str) -> Iterator[None]:
+    """Keep per-question reading needs across async backend composition."""
+    token = _READING_QUESTION.set(question)
+    try:
+        yield
+    finally:
+        _READING_QUESTION.reset(token)
+
+
+def reading_question(search_query: str) -> str:
+    return _READING_QUESTION.get() or search_query
+
+
+def required_sections(question: str) -> set[str]:
+    text = question.casefold()
+    required: set[str] = set()
+    if any(
+        word in text for word in ("psnr", "ssim", "benchmark", "accuracy", "数值", "指标", "结果")
+    ):
+        required.add("results")
+    if any(
+        word in text
+        for word in (
+            "method",
+            "approach",
+            "mechanism",
+            "unfold",
+            "unroll",
+            "prior",
+            "方法",
+            "机制",
+            "先验",
+        )
+    ):
+        required.add("method")
+    if any(word in text for word in ("experiment", "protocol", "benchmark", "实验", "评测")):
+        required.update(("experiment", "results"))
+    if any(
+        word in text for word in ("limitation", "conclusion", "discussion", "局限", "结论", "边界")
+    ):
+        required.add("conclusion")
+    return required
 
 
 class SearchTool(ABC):

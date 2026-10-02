@@ -20,7 +20,7 @@ export const SETTINGS_HELP: Record<string, string> = {
   results_per_search:
     '每个子问题取回多少条检索结果参与证据抽取。调高增加候选来源，也会增加阅读与核验的 token 消耗。',
   fulltext_max_chars:
-    '解析 arXiv LaTeX 全文时，每篇论文最多保留多少字符参与证据抽取。按章节筛选后截断，越大越完整、越耗 token。',
+    '控制额外相关章节的选读规模。问题要求的章节和子节会完整保留，因此实际文本可超过此值。',
   max_run_seconds:
     '单次运行的最长时间（秒）。到时停止后续检索，用已核验的证据完成写作并如实标注未完成的部分。',
   fulltext_enabled:

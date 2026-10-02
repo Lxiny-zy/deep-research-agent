@@ -405,6 +405,35 @@ describe('RunPage database synchronization', () => {
     })
   })
 
+  it('explains source-processing failures without claiming the material lacks evidence', () => {
+    useResearchStreamMock.mockReturnValue(makeStream('done'))
+    useRunDetailMock.mockReturnValue({
+      data: makeDetail('done', '已保存的诊断结果'),
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+    useRunDocumentMock.mockReturnValue({
+      data: {
+        ...makeDocument(),
+        final_validation: {
+          scope: 'source_processing',
+          issues: ['方法子问题的模型抽取调用未完成'],
+          fallback: true,
+          semantic_verification: false,
+          support_status: 'fail',
+        },
+      },
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof useRunDocument>)
+    renderRunPage()
+    const notice = screen.getByRole('alert', { name: '材料处理未完成' })
+    expect(notice).toHaveTextContent('本次没有生成正式交付')
+    expect(notice).toHaveTextContent('方法子问题的模型抽取调用未完成')
+    expect(notice).not.toHaveTextContent('原文没有')
+  })
+
   it('opts into HSI tables for canonical literature review intents', () => {
     useResearchStreamMock.mockReturnValue(makeStream('done'))
     useRunDetailMock.mockReturnValue({

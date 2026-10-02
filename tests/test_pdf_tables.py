@@ -139,3 +139,18 @@ def test_figure_heading_moves_with_its_image():
         image_page = next(page for page in document if page.get_images())
         assert "实验图表" in image_page.get_text()
         assert all("实验图表" not in page.get_text() for page in document if not page.get_images())
+
+
+@pytest.mark.parametrize("value", ["5.478e-31", "5.478E+31", "-5.478e-31"])
+def test_scientific_notation_fits_inside_dense_statistical_table(value):
+    body = (
+        "| 变量 | 组间自由度 | 组内自由度 | 方差分析统计量 | p 值 | 复核 p 值 | 效应量 | 样本量 |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        f"| sepal_length_cm | 2 | 146 | 116.6104 | {value} | 1.668e-21 | 0.615 | 149 |\n"
+    )
+    data = render_pdf(body, title="科学计数法列宽")
+    with pymupdf.open(stream=data, filetype="pdf") as document:
+        words = document[0].get_text("words")
+        p = next(word for word in words if word[4] == value)
+        adjacent = next(word for word in words if word[4] == "1.668e-21")
+        assert p[2] + 2 < adjacent[0]

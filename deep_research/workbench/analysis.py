@@ -121,6 +121,8 @@ class AnalysisResult:
             lines.append("- 注意：用户未提供数据，以下为演示用合成数据")
         missing = {k: v for k, v in self.missing.items() if v}
         lines.append(f"- 缺失值：{missing or '无'}")
+        if self.tests or self.correlations:
+            lines.append("- 多重比较校正：本次统计未执行，台账 p 值为未经校正的结果。")
         lines.append("\n### 描述统计")
         for row in self.describe:
             lines.append(
@@ -157,12 +159,39 @@ class AnalysisResult:
                         "  推断前提：各配对对象独立，差值满足配对 t 检验的分布假设；"
                         "本轮未自动验证这些前提。"
                     )
+                for summary in test.get("group_summaries", []):
+                    lines.append(
+                        f"  分组 {summary['label']}: n={summary['n']}, 均值={summary['mean']}, "
+                        f"标准差={summary['std']}, 中位数={summary['median']}"
+                    )
+                if test.get("eta_squared") is not None:
+                    lines.append(
+                        f"  样本效应量 η²={test['eta_squared']}（组间平方和/总平方和），"
+                        f"有效总样本量={test['n_total']}。该量描述样本关联，不作因果解释。"
+                    )
+                if test.get("df_between") is not None:
+                    lines.append(
+                        f"  方差分析自由度：组间={test['df_between']}，组内={test['df_within']}。"
+                    )
+                if test.get("method") == "单因素方差分析":
+                    lines.append(
+                        "  推断前提：观测独立、各组残差近似正态且方差齐；"
+                        "本轮未自动验证这些前提，非参数复核不等于前提已成立。"
+                    )
+                elif test.get("method") == "Welch t 检验":
+                    lines.append(
+                        "  推断前提：两组独立、均值推断的分布条件适用；"
+                        "不要求两组方差相等，本轮未自动验证独立性或分布前提。"
+                    )
                 if test.get("reason"):
                     lines.append(f"  检验限制：{test['reason']}")
         if self.correlations:
             lines.append("\n### 相关性（Pearson）")
             for item in self.correlations:
-                lines.append(f"- {item['a']} 与 {item['b']}：r={item['r']}, p={item['p_value']}")
+                lines.append(
+                    f"- {item['a']} 与 {item['b']}：r={item['r']}, p={item['p_value']}"
+                    + (f"，有效样本量 n={item['n']}" if "n" in item else "")
+                )
         if self.figures:
             lines.append("\n### 图表")
             lines += [f"- {fig.title}：{fig.caption}" for fig in self.figures]
@@ -361,10 +390,11 @@ def analyse(
     tests: list[dict[str, Any]] = []
     for group in [] if paired_requested else categorical:
         for variable in numeric:
-            samples = [
-                values.dropna().to_numpy()
-                for _, values in frame.groupby(group, dropna=True)[variable]
+            grouped = [
+                (str(label), values.dropna().to_numpy())
+                for label, values in frame.groupby(group, dropna=True)[variable]
             ]
+            samples = [values for _, values in grouped]
             if len(samples) < 2 or any(len(sample) < 2 for sample in samples):
                 issues.append(
                     f"{variable} 按 {group} 的检验未执行：至少两组，且每组至少两条有效观测"
@@ -402,6 +432,17 @@ def analyse(
                 )
                 continue
             p_value = float(result.pvalue)
+            n_total = sum(len(sample) for sample in samples)
+            overall_mean = sum(float(np.sum(sample)) for sample in samples) / n_total
+            total_ss = sum(float(np.sum((sample - overall_mean) ** 2)) for sample in samples)
+            between_ss = sum(
+                len(sample) * (float(np.mean(sample)) - overall_mean) ** 2 for sample in samples
+            )
+            eta_squared = (
+                between_ss / total_ss
+                if total_ss > 0 and math.isfinite(total_ss) and math.isfinite(between_ss)
+                else None
+            )
             tests.append(
                 {
                     "variable": variable,
@@ -413,6 +454,20 @@ def analyse(
                     "robust_method": robust_name,
                     "robust_p": _fmt(float(robust.pvalue)),
                     "groups": int(len(samples)),
+                    "n_total": n_total,
+                    "df_between": len(samples) - 1 if len(samples) > 2 else None,
+                    "df_within": n_total - len(samples) if len(samples) > 2 else None,
+                    "eta_squared": _fmt(eta_squared) if eta_squared is not None else None,
+                    "group_summaries": [
+                        {
+                            "label": label,
+                            "n": len(sample),
+                            "mean": _fmt(float(np.mean(sample))),
+                            "std": _fmt(float(np.std(sample, ddof=1))),
+                            "median": _fmt(float(np.median(sample))),
+                        }
+                        for label, sample in grouped
+                    ],
                 }
             )
 
@@ -474,7 +529,13 @@ def analyse(
                 continue
             r, p = stats.pearsonr(pair[left], pair[right])
             correlations.append(
-                {"a": left, "b": right, "r": _fmt(float(r)), "p_value": _fmt(float(p))}
+                {
+                    "a": left,
+                    "b": right,
+                    "r": _fmt(float(r)),
+                    "p_value": _fmt(float(p)),
+                    "n": len(pair),
+                }
             )
 
     # Downloads must use the ledger that produced the report. In particular,
@@ -618,13 +679,23 @@ def _safe(text: str) -> str:
 
 
 def _numbers(text: str) -> set[str]:
-    return {m.rstrip(".") for m in re.findall(r"(?<![\w.])-?\d+(?:\.\d+)?(?:e[-+]?\d+)?", text)}
+    return {
+        m.rstrip(".").lower()
+        for m in re.findall(r"(?<![A-Za-z0-9_.])-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", text)
+    }
 
 
-def check_numbers(body: str, facts: str) -> list[str]:
+def check_numbers(body: str, facts: str, *, input_description: str = "") -> list[str]:
     """正文里出现、却不在统计台账里的数字（排除章节序号与 α=0.05 这类常量）。"""
     allowed = _numbers(facts) | {"0.05", "0", "1", "2", "3", "4", "5", "10", "95", "100"}
     stripped = re.sub(r"(?m)^\s*#+.*$|^\s*\d+[.)、]\s", "", body)
+    row_reference = re.compile(r"第\s*(\d+)\s*(?:行|条(?:记录|数据|样本)?|个(?:样本|记录))")
+    declared_rows = {match[1] for match in row_reference.finditer(input_description)}
+    # A declared record number identifies input provenance; it cannot justify
+    # a statistical value with the same digits elsewhere in the paragraph.
+    stripped = row_reference.sub(
+        lambda match: "输入记录" if match[1] in declared_rows else match[0], stripped
+    )
     return sorted(n for n in _numbers(stripped) if n not in allowed)
 
 
@@ -638,8 +709,17 @@ def fallback_report(result: AnalysisResult) -> str:
     lines = ["## 分析计划", f"问题：{result.question or '对数据做探索性分析'}。"]
     methods = ["描述统计"]
     if result.tests:
-        methods.append(
-            "按分类变量分组的显著性检验（两组 Welch t / 多组单因素方差分析，附非参数稳健性复核）"
+        methods.extend(
+            dict.fromkeys(
+                str(test["method"]) for test in result.tests if test.get("statistic") is not None
+            )
+        )
+        methods.extend(
+            dict.fromkeys(
+                str(test["robust_method"])
+                for test in result.tests
+                if test.get("robust_method") and test.get("robust_p") is not None
+            )
         )
     if result.correlations:
         methods.append("数值变量两两 Pearson 相关")
@@ -653,11 +733,22 @@ def fallback_report(result: AnalysisResult) -> str:
     lines += ["", "## 图表"] + [f"- {fig.title}：{fig.caption}" for fig in result.figures]
     conclusions = []
     for test in result.tests:
-        verdict = "存在显著差异" if test["significant"] else "未发现显著差异"
+        verdict = (
+            "存在显著差异"
+            if test["significant"] is True
+            else "未发现显著差异"
+            if test["significant"] is False
+            else "未完成差异检验"
+        )
         conclusions.append(
             f"- {test['variable']} 在不同 {test['group']} 之间{verdict}"
-            f"（{test['method']}，p={test['p_value']}；"
-            f"{test['robust_method']} p={test['robust_p']}）。"
+            f"（{test['method']}，p={test['p_value']}"
+            + (
+                f"；{test['robust_method']} p={test['robust_p']}"
+                if test.get("robust_method") and test.get("robust_p") is not None
+                else ""
+            )
+            + "）。"
         )
     for item in result.correlations:
         conclusions.append(
@@ -665,7 +756,7 @@ def fallback_report(result: AnalysisResult) -> str:
         )
     if not conclusions:
         conclusions.append("- 数据中没有可检验的分组或相关关系，仅给出描述统计。")
-    conclusions.append("- 以上结论均由统计代码直接得出；显著性阈值 α=0.05，未做多重比较校正。")
+    conclusions.append("- 以上结论依据本次实际执行的统计；检验前提与适用范围见台账及分析说明。")
     lines += ["", "## 结论", *conclusions]
     return "\n".join(lines)
 
@@ -717,6 +808,8 @@ class DataAnalyst:
             "均值与中位数接近不能证明分布对称、无偏或满足检验前提。"
             "区分各方法的标准差、配对差值标准差与方法间均值差，不把它们统称为残余或总体离散。"
             "不要在报告中声明‘所有数字照抄、未经改写’等写作过程保证，直接陈述统计事实。"
+            "用户输入说明中的行号可作为输入来源说明复述，不能当作测量值或统计量。"
+            "效应量按台账数值及样本含义解释，不引用台账未提供的经验阈值作大小分级。"
         )
         user = f"分析问题：{question or '对数据做探索性分析'}\n\n## 统计台账\n{facts}\n"
         from .gates import structure_gate
@@ -749,7 +842,10 @@ class DataAnalyst:
 
         async def assess(draft: str) -> Assessment:
             # 数字与章节是硬性要求；文体问题同样要求修订。三者都是确定性检查。
-            hard = [f"数字「{n}」不在统计台账中" for n in check_numbers(draft, facts)[:10]]
+            hard = [
+                f"数字「{n}」不在统计台账中"
+                for n in check_numbers(draft, facts, input_description=question)[:10]
+            ]
             if not draft:
                 hard.append("正文为空")
             hard += list(structure_gate(draft, template).issues)
@@ -771,7 +867,7 @@ class DataAnalyst:
             )
         except Exception as exc:  # 写作失败不影响统计结果交付
             ctx.tracer.emit("SYNTHESIZER", "error", f"分析报告撰写失败，交付统计摘要：{exc}")
-        unsupported = check_numbers(body, facts) if body else ["empty"]
+        unsupported = check_numbers(body, facts, input_description=question) if body else ["empty"]
         # 结构复核：报告必须按模板章节组织。缺章节多半意味着模型没按任务写
         # （例如泛泛而谈、或把别的任务的模板套了过来），此时统计摘要更可靠。
         if not unsupported and structure_gate(body, template).status != "pass":
@@ -804,6 +900,16 @@ class DataAnalyst:
         extras[PROSE_REVIEW_KEY] = await reviewer.review(bb.report.markdown)
         extras[PROSE_REVIEW_KEY]["mechanically_finalized"] = True
         extras[PROSE_REVIEW_KEY]["body_replaced"] = bool(unsupported)
+        # A recovered report replaces both copies of the previous review. The
+        # report service reads the root record before the workbench extras.
+        bb.scratch[PROSE_REVIEW_KEY] = extras[PROSE_REVIEW_KEY]
+        bb.scratch["_report_validation"] = {
+            "scope": "model_assessed_final_prose_support",
+            "issues": list(extras[PROSE_REVIEW_KEY]["issues"]),
+            "fallback": bool(unsupported),
+            "semantic_verification": True,
+            "support_status": extras[PROSE_REVIEW_KEY]["status"],
+        }
         if revision_log is not None:
             extras["revision"] = revision_log.to_dict()
         bb.scratch[WORKBENCH_SCRATCH_KEY] = WriterState(

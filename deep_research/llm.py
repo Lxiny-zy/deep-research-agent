@@ -56,6 +56,10 @@ def extract_json(text: str) -> dict:
     return json.loads(text)
 
 
+class InputCapacityError(ValueError):
+    """An explicitly configured model context cannot fit the request."""
+
+
 class LLM:
     def __init__(self, settings: Settings, tracer: Tracer) -> None:
         self.settings = settings
@@ -133,6 +137,12 @@ class LLM:
             return max(1, self.context_window_tokens - self.settings.llm_max_output_tokens) * 2
         return self.settings.llm_max_input_chars
 
+    @property
+    def enforced_input_capacity_chars(self) -> int | None:
+        # An unspecified model context follows the provider. The fallback
+        # character target guides batching; it is not a known model limit.
+        return self.input_capacity_chars if self.context_window_tokens is not None else None
+
     def _generation_options(self, temperature: float) -> dict[str, Any]:
         if self.parameter_mode == "reasoning":
             return {"reasoning_effort": self.reasoning_effort}
@@ -154,8 +164,9 @@ class LLM:
         raise AssertionError("unreachable")
 
     def _reserve(self, system: str, user: str) -> TokenReservation:
-        if len(system) + len(user) > self.input_capacity_chars:
-            raise ValueError("模型输入超过 LLM_MAX_INPUT_CHARS 限制")
+        limit = self.enforced_input_capacity_chars
+        if limit is not None and len(system) + len(user) > limit:
+            raise InputCapacityError("模型输入超过已配置的上下文容量（字符估算）")
         assert self.tracer.budget is not None
         self.tracer.budget.update(self.tracer.total_tokens)
         # UTF-8 bytes plus framing are a conservative admission estimate, not a billing claim.

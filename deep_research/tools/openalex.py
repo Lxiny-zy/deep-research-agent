@@ -31,7 +31,7 @@ from typing import Any
 import httpx
 
 from ..models import ScholarlyMetadata, Source
-from .base import SearchTool
+from .base import SearchTool, reading_question, required_sections
 from .fanout import expand_in_order
 from .oa_pdf_fulltext import OaPdfFetcher, OaPdfFulltextError
 
@@ -144,17 +144,8 @@ class OpenAlexSearch(SearchTool):
             # arXiv has a lossless LaTeX e-print path; let ArxivSearch own it
             # instead of extracting a lower-fidelity PDF copy here.
             return [source]
-        required: set[str] = set()
-        query_lower = query.casefold()
-        if any(
-            token in query_lower
-            for token in ("psnr", "ssim", "benchmark", "accuracy", "指标", "结果")
-        ):
-            required.add("results")
-        elif any(
-            token in query_lower for token in ("method", "approach", "protocol", "方法", "实验")
-        ):
-            required.update(("method", "experiment"))
+        query = reading_question(query)
+        required = required_sections(query)
         return await fetcher.sections(
             source,
             query,

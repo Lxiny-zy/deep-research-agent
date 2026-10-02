@@ -403,7 +403,7 @@ def select_sections(
     max_chars: int = 12_000,
     required: Iterable[str] | bool = (),
 ) -> list[LatexSection]:
-    """Select required and query-relevant sections in stable document order."""
+    """Keep required sections whole; max_chars is an optional-context target."""
     if max_chars <= 0 or not document.sections:
         return []
     if required is True:
@@ -421,14 +421,23 @@ def select_sections(
         required_names = {_canonical(required)}
     else:
         required_names = {_canonical(str(x)) for x in required}
+    required_indices: set[int] = set()
+    parent_level: int | None = None
+    for section in document.sections:
+        if parent_level is not None and section.level > parent_level:
+            required_indices.add(section.index)
+            continue
+        parent_level = None
+        if _canonical(section.title) in required_names:
+            required_indices.add(section.index)
+            parent_level = section.level if section.command in _LEVELS else None
     query_terms = [t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 1]
     scored: list[tuple[float, int, LatexSection]] = []
     for sec in document.sections:
-        canon = _canonical(sec.title)
         title_terms = set(re.findall(r"[a-z0-9]+", sec.title.lower()))
         body_terms = re.findall(r"[a-z0-9]+", sec.text.lower())
         score = (
-            (1000.0 if canon in required_names else 0.0)
+            (1000.0 if sec.index in required_indices else 0.0)
             + sum(4 for t in query_terms if t in title_terms)
             + sum(1 for t in query_terms if t in body_terms)
         )
@@ -437,32 +446,23 @@ def select_sections(
     if not scored:
         scored = [(0.0, sec.index, sec) for sec in document.sections]
     scored.sort(key=lambda item: (-item[0], item[1]))
-    chosen: list[LatexSection] = []
-    used = 0
+    chosen = [
+        section
+        for section in document.sections
+        if section.index in required_indices and section.render()
+    ]
+    used = sum(len(section.render()) for section in chosen)
     for _, _, sec in scored:
         rendered = sec.render()
         if not rendered:
             continue
+        if sec.index in required_indices:
+            continue
         remaining = max_chars - used
-        if remaining <= 0:
+        if remaining <= 0 and chosen:
             break
-        if len(rendered) > remaining:
-            if chosen:
-                continue
-            if remaining <= len(sec.title):
-                sec = LatexSection(
-                    sec.title[:remaining], "", sec.level, sec.starred, sec.command, sec.index
-                )
-            else:
-                sec = LatexSection(
-                    sec.title,
-                    sec.text[: remaining - len(sec.title) - 1],
-                    sec.level,
-                    sec.starred,
-                    sec.command,
-                    sec.index,
-                )
-            rendered = sec.render()
+        if chosen and len(rendered) > remaining:
+            continue
         chosen.append(sec)
         used += len(rendered)
     chosen.sort(key=lambda s: s.index)

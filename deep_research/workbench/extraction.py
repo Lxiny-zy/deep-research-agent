@@ -24,6 +24,30 @@ from .quality import policy_from
 from .quote_repair import quote_options, resolve_quote
 
 
+def processing_failures(results: list[ResearchResult]) -> list[str]:
+    """A model/input failure is not evidence that the paper lacks information."""
+    failures = []
+    for result in results:
+        audit = result.extraction_audit
+        if audit is None:
+            continue
+        for issue in audit.issues:
+            if issue.startswith(("extraction_call_failed:", "retrieval_call_failed:")):
+                kind = issue.split(":", 1)[1]
+                reason = (
+                    "输入超过已配置的模型上下文容量"
+                    if kind == "InputCapacityError"
+                    else f"检索调用未完成（{kind}）"
+                    if issue.startswith("retrieval_call_failed:")
+                    else f"模型抽取调用未完成（{kind}）"
+                )
+                failures.append(
+                    f"子问题「{result.sub_question}」：{reason}"
+                    + ("，来源已保存" if audit.sources else "")
+                )
+    return list(dict.fromkeys(failures))
+
+
 def _content_key(finding: FindingContent) -> str:
     data = finding.model_dump(include=set(FindingContent.model_fields), exclude={"confidence"})
     statement = " ".join(finding.statement.split()).casefold()

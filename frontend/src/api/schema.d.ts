@@ -2643,7 +2643,7 @@ export interface components {
              * @default citation_and_numbers
              * @enum {string}
              */
-            scope?: "citation_and_numbers" | "model_assessed_final_prose_support" | "model_assessed_node_evidence_and_relations";
+            scope?: "citation_and_numbers" | "model_assessed_final_prose_support" | "model_assessed_node_evidence_and_relations" | "source_processing";
             /**
              * Semantic Verification
              * @default false

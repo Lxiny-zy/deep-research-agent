@@ -30,7 +30,7 @@ const NUM_FIELDS: NumField[] = [
   { key: 'max_rounds', label: '反思补洞轮数', min: 0, max: 5 },
   { key: 'max_concurrency', label: '并行检索上限', min: 1, max: 16 },
   { key: 'results_per_search', label: '每问检索来源数', min: 1, max: 15 },
-  { key: 'fulltext_max_chars', label: 'arXiv 全文字符预算', min: 1_000, max: 200_000 },
+  { key: 'fulltext_max_chars', label: '全文选读目标长度', min: 1_000, max: 200_000 },
   { key: 'max_run_seconds', label: '整次运行期限（秒）', min: 1, max: 86400 },
 ]
 

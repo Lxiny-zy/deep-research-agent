@@ -442,6 +442,24 @@ export default function RunPage() {
             ) : (
               <>
                 {!streaming &&
+                  structuredDocument.data?.final_validation?.scope === 'source_processing' && (
+                    <div className="run-validation-note" role="alert" aria-label="材料处理未完成">
+                      <AppIcon name="shield" size={14} aria-hidden="true" />
+                      <div>
+                        <p>
+                          部分检索或材料抽取未完成，本次没有生成正式交付。已有来源和结果已保留。
+                        </p>
+                        <ul>
+                          {(structuredDocument.data.final_validation.issues ?? []).map(
+                            (issue, index) => (
+                              <li key={index}>{issue}</li>
+                            ),
+                          )}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+                {!streaming &&
                   structuredDocument.data?.final_validation?.scope === 'citation_and_numbers' && (
                     <p className="run-validation-note" role="status">
                       <AppIcon name="shield" size={14} aria-hidden="true" />

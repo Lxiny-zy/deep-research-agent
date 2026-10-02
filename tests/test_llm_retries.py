@@ -181,10 +181,21 @@ async def test_missing_usage_falls_back_to_estimate(make_llm):
 @pytest.mark.asyncio
 async def test_input_over_limit_is_rejected_before_calling_provider(make_llm, settings):
     llm, completions, _, _ = make_llm()
-    settings.llm_max_input_chars = 10
-    with pytest.raises(ValueError, match="LLM_MAX_INPUT_CHARS"):
+    llm.context_window_tokens = 5
+    with pytest.raises(ValueError, match="已配置的上下文容量"):
         await llm.complete("system", "user text")
     assert completions.requests == []
+
+
+@pytest.mark.asyncio
+async def test_unspecified_provider_context_is_not_rejected_by_fallback_character_target(
+    make_llm, settings
+):
+    llm, completions, _, _ = make_llm(_response("ok", 5))
+    settings.llm_max_input_chars = 10
+    assert llm.context_window_tokens is None and llm.enforced_input_capacity_chars is None
+    assert await llm.complete("system", "user text exceeding the batching target") == "ok"
+    assert len(completions.requests) == 1
 
 
 @pytest.mark.asyncio

@@ -187,7 +187,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 37,
+        "format_version": 40,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -413,6 +413,11 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         markdown_gate(markdown),
         length_gate(markdown, template),
     ]
+    from .extraction import processing_failures
+
+    incomplete = processing_failures(detail.results)
+    if incomplete:
+        gates.append(GateResult("source_processing", "fail", incomplete))
     gates.append(structure_gate(markdown, template, extras))
     validation = scratch.get("_report_validation")
     prose = extras.get("prose_review")
@@ -517,6 +522,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             "provided_corpus",
             "task_content",
             "review_coverage",
+            "source_processing",
         }
         and g.status == "fail"
         for g in gates
@@ -655,14 +661,30 @@ def _stats_xlsx(result: Any) -> bytes:
         "ci_low",
         "ci_high",
         "reason",
+        "n_total",
+        "df_between",
+        "df_within",
+        "eta_squared",
     ]
     tests.append(test_headers)
     for row in result.tests:
         tests.append([row.get(key) for key in test_headers])
+    if any(row.get("group_summaries") for row in result.tests):
+        groups = workbook.create_sheet("分组统计")
+        groups.append(["variable", "group", "label", "n", "mean", "std", "median"])
+        for test in result.tests:
+            for summary in test.get("group_summaries", []):
+                groups.append(
+                    [
+                        test["variable"],
+                        test["group"],
+                        *[summary.get(key) for key in ("label", "n", "mean", "std", "median")],
+                    ]
+                )
     corr = workbook.create_sheet("相关性")
-    corr.append(["a", "b", "r", "p_value"])
+    corr.append(["a", "b", "r", "p_value", "n"])
     for row in result.correlations:
-        corr.append([row.get(key) for key in ("a", "b", "r", "p_value")])
+        corr.append([row.get(key) for key in ("a", "b", "r", "p_value", "n")])
     if result.issues:
         notices = workbook.create_sheet("未完成分析")
         notices.append(["说明"])

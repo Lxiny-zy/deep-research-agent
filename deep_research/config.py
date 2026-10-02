@@ -102,6 +102,8 @@ class Settings:
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o-mini"))
     # 0: omit the output cap and use the provider default, including reasoning.
     llm_max_output_tokens: int = field(default_factory=lambda: _int_env("LLM_MAX_OUTPUT_TOKENS", 0))
+    # Planning/batching target when the model profile has no explicit context.
+    # It must not reject requests as if it were a known provider context limit.
     llm_max_input_chars: int = field(
         default_factory=lambda: _int_env("LLM_MAX_INPUT_CHARS", 200_000)
     )
@@ -152,6 +154,7 @@ class Settings:
     # arXiv sources can be expanded from their LaTeX e-print before evidence extraction.
     # Failure falls back to the metadata abstract; this flag controls only the optional fetch.
     fulltext_enabled: bool = field(default_factory=lambda: _bool_env("FULLTEXT_ENABLED", True))
+    # Additional-context target: required sections and their children stay complete.
     fulltext_max_chars: int = field(default_factory=lambda: _int_env("FULLTEXT_MAX_CHARS", 12_000))
     # 开启后，仅允许至少两个独立发布方交叉印证且无冲突的论断进入反思与最终报告。
     require_corroboration: bool = field(

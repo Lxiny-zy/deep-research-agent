@@ -346,6 +346,7 @@ HARD_GATES = frozenset(
         "provided_corpus",
         "task_content",
         "review_coverage",
+        "source_processing",
     }
 )
 

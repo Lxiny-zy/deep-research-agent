@@ -143,4 +143,14 @@ class ReportService:
                         semantic_verification=True,
                         support_status="fail" if issues or not bound else "pass",
                     )
+        from ..workbench.extraction import processing_failures
+
+        if failures := processing_failures(detail.results):
+            document.final_validation = FinalReportValidation(
+                scope="source_processing",
+                issues=failures,
+                fallback=True,
+                semantic_verification=False,
+                support_status="fail",
+            )
         return document

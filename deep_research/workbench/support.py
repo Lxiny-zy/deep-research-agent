@@ -194,6 +194,7 @@ class SupportReviewer:
     ) -> None:
         self.llm, self.evidence = llm, evidence
         self.capacity = getattr(llm, "input_capacity_chars", capacity)
+        self.enforced_capacity = getattr(llm, "enforced_input_capacity_chars", self.capacity)
         self.cache: dict[str, SupportDecision] = {}
         self.protocol_repairs: list[dict[str, Any]] = []
         self.context = context
@@ -248,7 +249,10 @@ class SupportReviewer:
         system_size = len(structured_system_prompt(self.system, SupportDecisions))
         fitting: list[SupportUnit] = []
         for unit in pending:
-            if system_size + len(self._prompt([unit])) > self.capacity:
+            if (
+                self.enforced_capacity is not None
+                and system_size + len(self._prompt([unit])) > self.enforced_capacity
+            ):
                 results[unit.id] = SupportDecision(
                     unit_id=unit.id,
                     verdict="uncertain",
@@ -353,9 +357,9 @@ class SupportReviewer:
         if failed:
             issues = {unit.id: output[unit.id].reason for unit in failed}
             prompt = self._prompt(failed, issues)
-            fits = (
+            fits = self.enforced_capacity is None or (
                 len(structured_system_prompt(self.system, SupportDecisions)) + len(prompt)
-                <= self.capacity
+                <= self.enforced_capacity
             )
             if fits:
                 output.update(await self._judge_once(failed, issues))
