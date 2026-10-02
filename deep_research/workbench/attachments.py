@@ -67,6 +67,8 @@ class Attachment(BaseModel):
     truncated: bool = False
     # 原文件是否已保存（目前仅 PDF），精读工作区据此决定能否显示原版版面
     stored: bool = False
+    title: str = Field(default="", max_length=300)
+    authors: list[str] = Field(default_factory=list, max_length=32)
     chunks: list[AttachmentChunk] = Field(default_factory=list, max_length=MAX_CHUNKS_PER_FILE)
 
     def preview(self, limit: int = 240) -> str:
@@ -93,10 +95,11 @@ class Attachment(BaseModel):
     def sources(self) -> list[Source]:
         return [
             Source(
-                title=self.filename,
+                title=self.title or self.filename,
                 url=attachment_url(self.id, chunk.ordinal),
                 content=chunk.content,
                 locator=chunk.locator,
+                document_authors=self.authors,
             )
             for chunk in self.chunks
         ]
@@ -160,6 +163,7 @@ async def parse_attachment(raw: bytes, filename: str, mime_type: str = "") -> At
         for index, chunk in enumerate(prepared.chunks)
         if str(chunk.get("content", "")).strip()
     ]
+    authors = prepared.metadata.get("authors")
     return Attachment(
         id=hashlib.sha256(raw).hexdigest()[:24],
         filename=filename[:300] or "未命名文件",
@@ -167,6 +171,8 @@ async def parse_attachment(raw: bytes, filename: str, mime_type: str = "") -> At
         mime_type=prepared.mime_type,
         size=len(raw),
         char_count=prepared.char_count,
+        title=str(prepared.metadata.get("document_title") or ""),
+        authors=authors if isinstance(authors, list) else [],
         truncated=len(chunks) > MAX_CHUNKS_PER_FILE,
         chunks=chunks[:MAX_CHUNKS_PER_FILE],
     )

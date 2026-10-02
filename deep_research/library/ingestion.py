@@ -333,7 +333,12 @@ async def prepare_source(
                     ordinal_start=len(chunks),
                 )
             )
-        metadata = {"page_count": document.page_count}
+        metadata = {
+            "page_count": document.page_count,
+            "document_title": document.title,
+            "authors": list(document.authors),
+        }
+        resolved_title = resolved_title or document.title
         resolved_mime = "application/pdf"
     else:
         decoded = _decode_text(raw)

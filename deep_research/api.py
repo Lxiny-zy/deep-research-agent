@@ -1641,7 +1641,14 @@ async def create_run(
         raise HTTPException(
             422, {"code": "unknown_template", "message": f"未知任务模板：{req.template}"}
         )
-    if project is not None and task_template is not None and not task_template.supports_library:
+    if (
+        project is not None
+        and task_template is not None
+        and (
+            not task_template.supports_library
+            or (task_template.key == "litReview" and req.strategy == "none")
+        )
+    ):
         raise HTTPException(
             422,
             {
@@ -1790,10 +1797,13 @@ async def create_run(
             quality=settings.quality,
         )
         if (
-            task_template.input_kind == "paper"
+            (
+                task_template.input_kind == "paper"
+                or (task_template.key == "litReview" and req.strategy == "none")
+            )
             and not contract.papers
             and not req.attachments
-            and not pasted_paper_text(contract)
+            and (task_template.input_kind != "paper" or not pasted_paper_text(contract))
         ):
             # 评审 / 精读的对象是一篇具体论文：没有论文就不建 run，
             # 否则只会得到一份空转的交付，或被换成检索到的另一篇论文。
@@ -1801,7 +1811,9 @@ async def create_run(
                 422,
                 {
                     "code": "paper_required",
-                    "message": f"请提供要{task_template.title}的论文："
+                    "message": "请上传用于综述的文献文件，或粘贴 arXiv / DOI / 论文链接"
+                    if task_template.key == "litReview"
+                    else f"请提供要{task_template.title}的论文："
                     "粘贴 arXiv / DOI / 论文链接或论文文本，或上传论文文件",
                 },
             )

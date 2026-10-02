@@ -3895,6 +3895,8 @@ export interface components {
              * @default
              */
             content_hash?: string;
+            /** Document Authors */
+            document_authors?: string[];
             /**
              * Locator
              * @default

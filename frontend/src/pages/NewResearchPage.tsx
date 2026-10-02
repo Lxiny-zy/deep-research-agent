@@ -55,10 +55,9 @@ function ResearchComposer() {
   )
   const activeTemplate = templates.data?.find((item) => item.key === templateKey)
   const isDataTask = activeTemplate?.input_kind === 'dataset'
-  const supportsLibrary = activeTemplate
+  const templateSupportsLibrary = activeTemplate
     ? activeTemplate.supports_library !== false
     : !['peerReview', 'paperRead', 'dataAnalysis'].includes(templateKey)
-  const effectiveProjectId = supportsLibrary ? projectId : ''
   // 课题调研允许在「高级」里改用自定义流程；其它任务由「任务 + 检索策略」决定流程。
   const templateOwnsWorkflow = Boolean(activeTemplate && activeTemplate.key !== 'autoResearch')
   const strategies = activeTemplate?.strategies ?? []
@@ -71,6 +70,9 @@ function ResearchComposer() {
     strategyChoice?.template === templateKey
       ? strategyChoice.key
       : (activeTemplate?.default_strategy ?? null)
+  const supportsLibrary =
+    templateSupportsLibrary && !(templateKey === 'litReview' && strategy === 'none')
+  const effectiveProjectId = supportsLibrary ? projectId : ''
   const contract = useContractPreview(templateKey, query, templateOwnsWorkflow, strategy)
   // 课题调研选了「快速检索 / 深度检索」时由策略决定流程；只有用户在高级里
   // 选了自定义流程（非内置 deep/quick）才以它为准。
@@ -446,7 +448,9 @@ function ResearchComposer() {
                 <span className="hint">
                   {activeTemplate?.input_kind === 'dataset'
                     ? '用于补充说明；统计数据请通过上方表格入口上传或粘贴。'
-                    : '可补充论文或背景材料。'}
+                    : templateKey === 'litReview' && strategy === 'none'
+                      ? '作为本次综述的指定文献，会逐份核对并引用。'
+                      : '可补充论文或背景材料。'}
                 </span>
               </span>
               <AttachmentDropzone

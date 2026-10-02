@@ -99,8 +99,12 @@ class TaskTemplate:
             "strategies": [
                 {
                     "key": key,
-                    "label": STRATEGY_LABELS[key][0],
-                    "description": STRATEGY_LABELS[key][1],
+                    "label": "仅指定文献"
+                    if self.key == "litReview" and key == "none"
+                    else STRATEGY_LABELS[key][0],
+                    "description": "比较上传文件与指定论文，不补充外部文献"
+                    if self.key == "litReview" and key == "none"
+                    else STRATEGY_LABELS[key][1],
                     "workflow": name,
                 }
                 for key, name in self.strategies.items()
@@ -164,7 +168,7 @@ LIT_REVIEW = TaskTemplate(
         "按主题对比主要方法，最后总结开放问题并列出参考文献。"
     ),
     icon="library",
-    strategies={"deep": "lit_review", "quick": "lit_review_quick"},
+    strategies={"deep": "lit_review", "quick": "lit_review_quick", "none": "lit_review_provided"},
     default_strategy="deep",
     input_kind="topic",
     input_label="综述主题",
@@ -188,6 +192,7 @@ LIT_REVIEW = TaskTemplate(
     ),
     min_length=1500,
     min_citations=6,
+    accepts_attachments=True,
     tier_default="deep",
     tags=("综述", "写作"),
 )

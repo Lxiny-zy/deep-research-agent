@@ -27,7 +27,7 @@ from ..prompting import MEASUREMENT_SCOPE_RULES, SCIENTIFIC_MARKDOWN, PrefixProm
 from ..registry import register
 from ..report.validation import finalize_report
 from ..token_budget import TokenBudgetExceeded
-from .contract import TaskContract, contract_from_scratch
+from .contract import TaskContract, contract_from_scratch, provided_review
 from .mindmap_contract import Mindmap, MindmapNode, review_record, structural_issues, units
 from .paper_abstract import abstract_section_support, checked_abstracts, prepare_abstracts
 from .prose_review import PROSE_REVIEW_KEY, ProseReviewer
@@ -254,6 +254,7 @@ class TemplateWriter:
                 min_citations=min_citations,
                 require_corroboration=require_corroboration,
                 check_citations=self.check_citations,
+                scratch=bb.scratch,
                 section_support=abstract_section_support(bb.scratch)
                 if template.key == "paperRead"
                 else None,
@@ -297,7 +298,7 @@ class TemplateWriter:
         policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
         min_citations = (
             contract.min_citations
-            if contract is not None and contract.min_citations
+            if contract is not None and (contract.min_citations or provided_review(contract))
             else policy.min_citations_for(template.key, template.min_citations)
         )
         revision_log: RevisionLog | None = None

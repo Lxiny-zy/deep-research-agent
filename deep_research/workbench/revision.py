@@ -67,9 +67,11 @@ class RevisionLog:
 
 
 def _used_indices(body: str) -> set[int]:
+    from ..bibliography import source_body
+
     return {
         int(number)
-        for match in _CITE.findall(citation_text(body))
+        for match in _CITE.findall(citation_text(source_body(body)))
         for number in re.split(r"\s*[,，]\s*", match)
     }
 
@@ -95,6 +97,7 @@ def assess_draft(
     require_corroboration: bool = False,
     check_citations: bool = True,
     section_support: dict[str, str] | None = None,
+    scratch: dict[str, Any] | None = None,
 ) -> Assessment:
     """对一版草稿做全部确定性检查，并写成交给写作者的返工说明。"""
     hard: list[str] = []
@@ -124,6 +127,11 @@ def assess_draft(
     used = len(_used_indices(body) & set(url_to_idx.values()))
     idx_to_url = {index: url for url, index in url_to_idx.items()}
     cited_urls = [idx_to_url[i] for i in sorted(_used_indices(body)) if i in idx_to_url]
+    if scratch is not None:
+        from .corpus import corpus_issues
+
+        hard += corpus_issues(scratch, results, cited_urls, writable_only=True)
+        soft += corpus_issues(scratch, results)
     report = evaluate(
         body,
         template_key=template.key,

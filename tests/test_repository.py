@@ -229,6 +229,18 @@ async def test_source_snapshots_preserve_changed_content(repo) -> None:
     assert len({source.content_hash for source in detail.sources}) == 2
 
 
+async def test_document_authors_survive_persistence_and_metadata_update(repo) -> None:
+    run_id = await repo.create_run("Document metadata")
+    source = Source(url="https://paper.test/a.pdf", title="Paper", content="Original text")
+    await repo.save_sources(run_id, [source])
+    source.document_authors = ["Alice Smith", "Bob Jones"]
+    await repo.save_sources(run_id, [source])
+    detail = await repo.get_run(run_id)
+    assert detail is not None and len(detail.sources) == 1
+    assert detail.sources[0].document_authors == source.document_authors
+    assert detail.sources[0].scholarly is None
+
+
 @pytest.mark.asyncio
 async def test_save_report_overwrites_existing_report(repo) -> None:
     """Retries and resumed execution must keep one report per run."""

@@ -73,7 +73,16 @@ PY
     return payload
 
 
-async def run_case(key: str, profile: dict, output: Path, paper: Path | None) -> dict:
+async def run_case(
+    key: str,
+    profile: dict,
+    output: Path,
+    paper: Path | None,
+    *,
+    papers: list[Path] | None = None,
+    strategy: str | None = None,
+    query_override: str | None = None,
+) -> dict:
     from deep_research.config import Settings
     from deep_research.llm import LLM
     from deep_research.orchestrator import DeepResearchAgent, create_initial_execution
@@ -127,11 +136,20 @@ async def run_case(key: str, profile: dict, output: Path, paper: Path | None) ->
             "后续问题组织，不编造事实。"
         ),
     }[key]
-    attachment = None
+    if query_override:
+        query = query_override
+    attachments = []
     if key != "dataAnalysis":
-        if paper is None:
+        inputs = ([paper] if paper else []) + (papers or [])
+        if not inputs:
             raise ValueError("Paper input required")
-        attachment = await parse_attachment(await asyncio.to_thread(paper.read_bytes), paper.name)
+        for input_path in inputs:
+            item = await parse_attachment(
+                await asyncio.to_thread(input_path.read_bytes), input_path.name
+            )
+            if item.truncated:
+                raise ValueError("Acceptance input is truncated")
+            attachments.append(item)
     dataset = "scene,method_a_psnr_db,method_b_psnr_db\n" + "\n".join(
         f"s{i},{30 + i * 0.2:.1f},{31 + i * 0.2 + (i % 3) * 0.1:.1f}" for i in range(1, 13)
     )
@@ -143,21 +161,34 @@ async def run_case(key: str, profile: dict, output: Path, paper: Path | None) ->
         if key == "dataAnalysis"
         else None,
         quality=settings.quality,
+        strategy=strategy,
     )
-    execution = create_initial_execution(
-        query, template.workflow, settings, requested_workflow=template.workflow
-    )
+    workflow = template.workflow_for(strategy)
+    execution = create_initial_execution(query, workflow, settings, requested_workflow=workflow)
     scratch = execution.checkpoint.setdefault("scratch", {})
     scratch[CONTRACT_SCRATCH_KEY] = contract.model_dump(mode="json")
-    if attachment:
-        scratch[ATTACHMENTS_SCRATCH_KEY] = [attachment.model_dump(mode="json")]
+    if attachments:
+        scratch[ATTACHMENTS_SCRATCH_KEY] = [item.model_dump(mode="json") for item in attachments]
+
+    class ProvidedOnly(_FixedSources):
+        calls = 0
+
+        async def search(self, query, *, max_results=5):
+            self.calls += 1
+            raise AssertionError("A provided-material review must not perform open retrieval")
+
+    search = (
+        ProvidedOnly([])
+        if strategy == "none"
+        else _FixedSources([s for a in attachments for s in a.sources()])
+    )
     repo = InMemoryRepository()
     run_id = await repo.create_run(query, execution=execution)
     agent = DeepResearchAgent(
         settings,
-        search_tool=_FixedSources(attachment.sources() if attachment else []),
-        workflow=template.workflow,
-        requested_workflow=template.workflow,
+        search_tool=search,
+        workflow=workflow,
+        requested_workflow=workflow,
         repo=repo,
         run_id=run_id,
         initial_execution=execution,
@@ -236,6 +267,8 @@ async def run_case(key: str, profile: dict, output: Path, paper: Path | None) ->
     beat = asyncio.create_task(heartbeat())
     try:
         await agent.run(query)
+        if isinstance(search, ProvidedOnly) and search.calls:
+            raise AssertionError("Unexpected retrieval in provided-only workflow")
         detail = await repo.get_run(run_id)
         if detail is None:
             raise RuntimeError("Missing persisted local result")
@@ -247,7 +280,8 @@ async def run_case(key: str, profile: dict, output: Path, paper: Path | None) ->
         (target / "local-detail.pickle").write_bytes(frozen)
         metadata = {
             "model": profile["model"],
-            "input": str(paper.name) if attachment else "labelled synthetic paired data",
+            "input": [item.filename for item in attachments] or "labelled synthetic paired data",
+            "open_retrieval_calls": search.calls if isinstance(search, ProvidedOnly) else None,
             "search": "frozen supplied paper sources; not a search recall test",
             "tokens": agent.tracer.total_tokens,
             "run_status": detail.status,
@@ -304,6 +338,9 @@ async def main() -> None:
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--paper", type=Path)
+    parser.add_argument("--papers", type=Path, nargs="+")
+    parser.add_argument("--strategy", choices=["none", "quick", "deep"])
+    parser.add_argument("--query-file", type=Path)
     parser.add_argument("--templates", nargs="+", default=["dataAnalysis"])
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
@@ -334,7 +371,15 @@ async def main() -> None:
         flush=True,
     )
     for key in args.templates:
-        await run_case(key, profile, args.output, args.paper)
+        await run_case(
+            key,
+            profile,
+            args.output,
+            args.paper,
+            papers=args.papers,
+            strategy=args.strategy,
+            query_override=args.query_file.read_text(encoding="utf-8") if args.query_file else None,
+        )
 
 
 if __name__ == "__main__":

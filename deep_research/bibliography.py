@@ -258,8 +258,12 @@ def build_bibliography(
             doi_link = re.search(r"https?://(?:dx\.)?doi\.org/10\.\d{4,9}/\S+", primary, re.I)
             if doi_link:
                 link = doi_link[0].rstrip(".,;")
+        elif source and source.document_authors:
+            reference = ", ".join(source.document_authors) + ". " + (title or source.title)
         elif identity.startswith("https://workspace.invalid/"):
             reference = title or "本地文档"
+            if source and source.scholarly and source.scholarly.authors:
+                reference = ", ".join(source.scholarly.authors) + ". " + reference
         elif reference.endswith(url):
             reference = reference[: -len(url)] + link
         if identity not in documents:

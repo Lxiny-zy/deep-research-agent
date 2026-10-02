@@ -27,14 +27,13 @@ from ..models import Source, SubQuestion
 from ..registry import register
 from ..tools.base import SearchTool
 from .attachments import attachments_from_scratch
-from .contract import PaperReference, contract_from_scratch, pasted_paper_text
+from .contract import PaperReference, contract_from_scratch, pasted_paper_text, provided_review
 from .roles import PAPER_INTAKE_ROLE
 
 logger = logging.getLogger(__name__)
 
 INTAKE_SOURCES_KEY = "intake_sources"
 PAPER_SOURCES_KEY = "paper_sources"
-_MAX_SOURCES = 12
 
 
 class _FixedSources(SearchTool):
@@ -68,15 +67,23 @@ async def _fetch_document(url: str) -> list[Source]:
     kind = "pdf" if url.casefold().split("?", 1)[0].endswith(".pdf") else "url"
     prepared = await prepare_source(kind=kind, title="", origin_url=url)
     title = prepared.title or url
+    metadata = getattr(prepared, "metadata", {})
+    authors = metadata.get("authors")
     base = (prepared.origin_url or url).split("#", 1)[0]
     sources: list[Source] = []
-    for chunk in prepared.chunks[:_MAX_SOURCES]:
+    for chunk in prepared.chunks:
         content = str(chunk.get("content", ""))
         if not content.strip():
             continue
         # 每个片段一个独立 URL：逐字核验按 URL 找来源，片段共用 URL 会让引文锚错位置。
         sources.append(
-            Source(title=title, url=f"{base}#chunk-{chunk.get('ordinal', 0)}", content=content)
+            Source(
+                title=title,
+                url=f"{base}#chunk-{chunk.get('ordinal', 0)}",
+                content=content,
+                locator=str(chunk.get("locator") or ""),
+                document_authors=authors if isinstance(authors, list) else [],
+            )
         )
     return sources
 
@@ -113,7 +120,7 @@ def pasted_sources(text: str) -> list[Source]:
             content=chunk,
             locator=f"第 {index} 段",
         )
-        for index, chunk in enumerate(chunks[:_MAX_SOURCES], 1)
+        for index, chunk in enumerate(chunks, 1)
     ]
 
 
@@ -123,6 +130,7 @@ def _record(
     papers: list[PaperReference],
     sources: list[Source],
     failures: list[dict[str, Any]],
+    documents: list[dict[str, Any]] | None = None,
 ) -> None:
     bb.scratch[INTAKE_SOURCES_KEY] = {
         "mode": mode,
@@ -137,6 +145,18 @@ def _record(
             for source in sources
         ],
         "failures": failures,
+        "documents": [
+            *(documents or []),
+            *[
+                {
+                    "input_url": f"https://workspace.invalid/attachments/{attachment.id}",
+                    "title": attachment.filename,
+                    "source_urls": [s.url for s in attachment.sources()],
+                    "truncated": attachment.truncated,
+                }
+                for attachment in attachments_from_scratch(bb.scratch)
+            ],
+        ],
     }
 
 
@@ -144,6 +164,10 @@ def _question_for(template_key: str, focus: str) -> str:
     base = {
         "peerReview": "这篇论文的研究问题、方法、实验设置、主要结果与作者声称的贡献分别是什么？",
         "paperRead": "这篇论文的核心贡献、方法细节、关键公式、实验结果与局限分别是什么？",
+        "litReview": (
+            "按研究主题提取指定文献各自的方法、输入与实验条件、主要结果和边界，"
+            "保留论文归属，不能混写不同文献的数值或假设。"
+        ),
     }.get(template_key, "这篇论文的主要内容、方法与结论是什么？")
     return f"{base} 用户关注：{focus}" if focus else base
 
@@ -156,6 +180,14 @@ class PaperIntake:
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         contract = contract_from_scratch(bb.scratch)
+        if contract is None and bb.scratch.get("requested_workflow") == "lit_review_provided":
+            from .contract import CONTRACT_SCRATCH_KEY, build_contract
+            from .templates import LIT_REVIEW
+
+            contract = build_contract(
+                LIT_REVIEW, bb.query, strategy="none", quality=ctx.settings.quality
+            )
+            bb.scratch[CONTRACT_SCRATCH_KEY] = contract.model_dump(mode="json")
         if contract is None:
             # 没有任务契约的旧运行无从得知评审对象，沿用主题检索
             bb.scratch["pending_sub_questions"] = [SubQuestion(question=bb.query)]
@@ -163,11 +195,18 @@ class PaperIntake:
 
         papers = contract.papers
         failures: list[dict[str, Any]] = []
-        focus = contract.focus
+        focus = contract.focus or (contract.original_request if provided_review(contract) else "")
+        documents: list[dict[str, Any]] = []
         if papers:
             mode = "papers"
             collected: list[Source] = []
             for paper in papers:
+                document: dict[str, Any] = {
+                    "input_url": paper.url,
+                    "title": paper.value,
+                    "source_urls": [],
+                }
+                documents.append(document)
                 try:
                     sources = await fetch_paper(paper, ctx)
                 except Exception as exc:  # 单篇失败隔离：记录原因，继续下一篇
@@ -179,7 +218,7 @@ class PaperIntake:
                 if not sources:
                     failures.append({"url": paper.url, "error": "未取得任何可用正文"})
                 collected.extend(sources)
-            collected = collected[:_MAX_SOURCES]
+                document["source_urls"] = [source.url for source in sources]
         elif attachments := attachments_from_scratch(bb.scratch):
             # 上传的论文已由 attachment_reader 逐片段读过并核验；这里只登记评审对象，
             # 绝不退回开放检索——那会把用户给的论文换成相关度排序里的另一篇。
@@ -191,7 +230,7 @@ class PaperIntake:
                 data={"category": "paper_intake", "mode": "attachments"},
             )
             return bb
-        elif pasted := pasted_paper_text(contract):
+        elif not provided_review(contract) and (pasted := pasted_paper_text(contract)):
             mode = "pasted"
             collected = pasted_sources(pasted)
             focus = ""  # 粘贴的是论文本身，不是用户的关注点
@@ -205,12 +244,9 @@ class PaperIntake:
             )
             return bb
 
-        _record(bb, mode, papers, collected, failures)
+        _record(bb, mode, papers, collected, failures, documents)
         # 取回的正文随 checkpoint 冻结：精读工作区的后续对话直接复用，不必再次联网取回
-        bb.scratch[PAPER_SOURCES_KEY] = [
-            source.model_dump(mode="json", include={"title", "url", "content", "locator"})
-            for source in collected
-        ]
+        bb.scratch[PAPER_SOURCES_KEY] = [source.model_dump(mode="json") for source in collected]
         ctx.tracer.emit(
             "RESEARCHER",
             "info",

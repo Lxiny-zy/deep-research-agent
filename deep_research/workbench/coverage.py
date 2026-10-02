@@ -15,11 +15,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..bibliography import build_bibliography, work_keys
 from ..guardrails import report_eligible
 from ..models import ResearchResult
 from .contract import contract_from_scratch
 from .quality import coerce_policy
-from .scholarly import requested_year
+from .scholarly import requested_year, source_counts
 from .templates import get_template
 
 _YEAR = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
@@ -58,7 +59,9 @@ def coverage_gaps(
     policy = coerce_policy(contract.quality if contract is not None else settings_quality)
     template = get_template(contract.template) if contract is not None else None
     findings = _eligible(results, require_corroboration)
-    sources = {finding.source_url for finding in findings}
+    sources = list(dict.fromkeys(finding.source_url for finding in findings))
+    document_keys = work_keys(build_bibliography("", sources, findings))
+    source_count = source_counts(sources, document_keys=document_keys)[0]
     gaps: list[str] = []
     suggestions: list[str] = []
     minimum = 0
@@ -66,8 +69,8 @@ def coverage_gaps(
         minimum = contract.min_citations
     elif template is not None:
         minimum = policy.min_citations_for(template.key, template.min_citations)
-    if minimum and len(sources) < minimum:
-        gaps.append(f"已核验的不同来源只有 {len(sources)} 个，交付要求至少 {minimum} 个")
+    if minimum and source_count < minimum:
+        gaps.append(f"已核验的不同文献只有 {source_count} 篇，交付要求至少 {minimum} 篇")
         suggestions.append(
             "从尚未覆盖的方向（代表方法、对比基线、数据集与评测、应用场景、近期进展）"
             "分别提出更具体的子问题，每个子问题指向一批不同的文献"
@@ -98,7 +101,8 @@ def coverage_gaps(
         suggestions=suggestions,
         metrics={
             "findings": len(findings),
-            "sources": len(sources),
+            "sources": source_count,
+            "source_locations": len(sources),
             "required_sources": minimum,
         },
     )

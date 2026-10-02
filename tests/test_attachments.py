@@ -105,6 +105,64 @@ async def test_parse_text_and_reject_unsupported_or_empty():  # type: ignore[no-
         await parse_attachment(b"", "empty.txt")
 
 
+async def test_pdf_metadata_reaches_bibliography_only_when_confirmed_on_first_page():
+    import hashlib
+
+    import pymupdf
+
+    from deep_research.bibliography import build_bibliography
+    from deep_research.guardrails import EvidenceVerifier
+    from deep_research.models import Finding
+
+    title = "Deep Spectral Reconstruction"
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), title + "\nAlice Smith and Bob Jones\nVerified method description.")
+    document.set_metadata(
+        {
+            "title": title,
+            "author": "Alice Smith; Bob Jones; Unknown Person",
+            "creationDate": "D:20260101000000",
+            "subject": "Imaginary Journal",
+        }
+    )
+    raw = document.tobytes()
+    document.close()
+    attachment = await parse_attachment(raw, "short.pdf")
+    assert attachment.id == hashlib.sha256(raw).hexdigest()[:24]
+    assert attachment.filename == "short.pdf" and attachment.title == title
+    assert attachment.authors == ["Alice Smith", "Bob Jones"]
+    source = attachment.sources()[0]
+    assert source.scholarly is None  # A PDF author is not evidence of publication status.
+    finding = Finding(
+        statement="Verified method description.",
+        source_url=source.url,
+        evidence_quote="Verified method description.",
+    )
+    finding = EvidenceVerifier().verify(finding, source).finding
+    assert finding is not None
+    catalog = build_bibliography("Method [1].", [source.url], [finding], [source])
+    assert catalog.documents[0].reference == "Alice Smith, Bob Jones. " + title
+    assert catalog.documents[0].url == ""
+
+
+@pytest.mark.parametrize("author", ["Alice Smith; Bob Jones", "Alice Smith, Bob Jones"])
+def test_pdf_author_delimiters_and_stale_template_metadata(author):
+    from deep_research.tools.oa_pdf_fulltext import _confirmed_metadata
+
+    first_page = "Deep Spectral Reconstruction\nAlice Smith and Bob Jones"
+    assert _confirmed_metadata({"title": "Old unrelated report", "author": author}, first_page) == (
+        "",
+        (),
+    )
+    assert _confirmed_metadata(
+        {"title": "Deep Spectral Reconstruction", "author": author}, first_page
+    ) == (
+        "Deep Spectral Reconstruction",
+        ("Alice Smith", "Bob Jones"),
+    )
+
+
 @pytest.mark.asyncio
 async def test_limit_attachments_dedupes_and_bounds_chunks():  # type: ignore[no-untyped-def]
     note = await parse_attachment("正文".encode(), "a.txt")

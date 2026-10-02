@@ -187,7 +187,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 26,
+        "format_version": 27,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -379,9 +379,11 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     from .quality import coerce_policy
 
     policy = coerce_policy(contract.quality if contract is not None else None)
+    from .contract import provided_review
+
     min_citations = (
         contract.min_citations
-        if contract is not None and contract.min_citations
+        if contract is not None and (contract.min_citations or provided_review(contract))
         else policy.min_citations_for(template.key, template.min_citations)
     )
     gates: list[GateResult] = [
@@ -390,6 +392,15 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         length_gate(markdown, template),
     ]
     gates.append(structure_gate(markdown, template, extras))
+    if provided_review(contract):
+        from .corpus import corpus_issues
+        from .revision import _used_indices
+
+        selected = _used_indices(markdown)
+        issues = corpus_issues(
+            scratch, detail.results, [u for i, u in enumerate(citations, 1) if i in selected]
+        )
+        gates.append(GateResult("provided_corpus", "fail" if issues else "pass", issues))
     if template.key == "mindmap" and extras.get("mindmap"):
         from .mindmap_contract import checked_review
 
@@ -453,7 +464,8 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     if template.key == "peerReview":
         gates.append(review_gate(extras))
     citation_failed = any(
-        g.name in {"citation", "node_evidence", "prose_evidence"} and g.status == "fail"
+        g.name in {"citation", "node_evidence", "prose_evidence", "provided_corpus"}
+        and g.status == "fail"
         for g in gates
     )
 

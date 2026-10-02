@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib
 import ipaddress
 import re
+import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from types import ModuleType
@@ -147,6 +148,8 @@ class PdfDocument:
     text: str
     sections: tuple[PdfSection, ...]
     page_count: int = 0
+    title: str = ""
+    authors: tuple[str, ...] = ()
 
     @property
     def content(self) -> str:
@@ -378,6 +381,7 @@ def parse_oa_pdf(raw: bytes, limits: OaPdfLimits | None = None) -> PdfDocument:
             if total > lim.max_total_chars:
                 raise OaPdfParseError("PDF text exceeds total text limit")
             pages.append(text)
+        title, authors = _confirmed_metadata(document.metadata or {}, pages[0])
     except OaPdfParseError:
         raise
     except Exception as exc:
@@ -390,7 +394,35 @@ def parse_oa_pdf(raw: bytes, limits: OaPdfLimits | None = None) -> PdfDocument:
     sections = _sections_from_pages(pages)
     if not text or not sections:
         raise OaPdfParseError("PDF contains no extractable text")
-    return PdfDocument(text=text, sections=sections, page_count=len(pages))
+    return PdfDocument(
+        text=text, sections=sections, page_count=len(pages), title=title, authors=authors
+    )
+
+
+def _confirmed_metadata(metadata: dict[str, Any], first_page: str) -> tuple[str, tuple[str, ...]]:
+    """Use explicit PDF metadata only when also present on its first page.
+
+    PDF creation dates and subject fields are not publication years or venues.
+    Metadata from an old document template must not become a new bibliography.
+    """
+
+    def normalized(value: str) -> str:
+        return "".join(c for c in unicodedata.normalize("NFKC", value).casefold() if c.isalnum())
+
+    page = normalized(first_page)
+    title = re.sub(r"\s+", " ", str(metadata.get("title") or "")).strip()
+    if not 8 <= len(title) <= 300 or normalized(title) not in page:
+        return "", ()
+    raw = str(metadata.get("author") or "")
+    names = [name.strip() for name in raw.split(";") if name.strip()]
+    if len(names) == 1 and "," in raw:
+        comma_names = [name.strip() for name in raw.split(",") if name.strip()]
+        if all(len(name.split()) >= 2 for name in comma_names):
+            names = comma_names
+    authors = tuple(
+        dict.fromkeys(name for name in names if 3 <= len(name) <= 150 and normalized(name) in page)
+    )
+    return title, authors[:32]
 
 
 def _canonical_required(value: str) -> str:

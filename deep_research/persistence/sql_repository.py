@@ -572,6 +572,7 @@ class SqlRepository:
                         "content": source.content,
                         "content_hash": content_hash,
                         "locator": source.locator,
+                        "document_authors": source.document_authors,
                         "scholarly": (
                             source.scholarly.model_dump(mode="json")
                             if source.scholarly is not None
@@ -590,6 +591,7 @@ class SqlRepository:
                     "title": statement.excluded.title,
                     "content": statement.excluded.content,
                     "locator": statement.excluded.locator,
+                    "document_authors": statement.excluded.document_authors,
                     "scholarly": statement.excluded.scholarly,
                 },
             )
@@ -1272,6 +1274,7 @@ class SqlRepository:
                         content=source.content,
                         content_hash=source.content_hash,
                         locator=source.locator,
+                        document_authors=source.document_authors or [],
                         scholarly=(
                             ScholarlyMetadata.model_validate(source.scholarly)
                             if isinstance(source.scholarly, dict)

@@ -178,6 +178,16 @@ LIT_REVIEW_QUICK = Workflow(
     ],
 )
 
+LIT_REVIEW_PROVIDED = Workflow(
+    name="lit_review_provided",
+    description="指定材料综述：完整读取上传文件与指定论文，只在给定文献范围内比较和写作",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="paper_intake"),
+        Step(agent="survey_writer"),
+    ],
+)
+
 SLIDES_DEEP = Workflow(
     name="slides_deep",
     description="幻灯片（深度检索）：多轮检索与证据补洞后生成演示文稿",
@@ -232,6 +242,7 @@ WORKBENCH_WORKFLOWS = (
     RESEARCH_QUICK,
     LIT_REVIEW,
     LIT_REVIEW_QUICK,
+    LIT_REVIEW_PROVIDED,
     PEER_REVIEW,
     PAPER_READ,
     DATA_ANALYSIS,

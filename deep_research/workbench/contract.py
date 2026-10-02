@@ -173,7 +173,8 @@ def build_contract(
             focus = query.strip()
         else:
             focus, dataset = _split_dataset(query)
-    papers = extract_papers(query) if template.input_kind == "paper" else []
+    provided_review = template.key == "litReview" and strategy == "none"
+    papers = extract_papers(query) if template.input_kind == "paper" or provided_review else []
     if template.input_kind == "paper":
         focus = _URL_RE.sub("", query)
         focus = _ARXIV_RE.sub("", focus)
@@ -181,8 +182,15 @@ def build_contract(
     from .quality import coerce_policy
 
     policy = coerce_policy(quality)
-    min_citations = policy.min_citations_for(template.key, template.min_citations)
+    min_citations = (
+        0 if provided_review else policy.min_citations_for(template.key, template.min_citations)
+    )
     constraints: list[str] = []
+    if provided_review:
+        constraints.append(
+            "仅使用明确指定的论文与上传文件，不补充外部文献；逐篇核对并在正文引用每份材料。"
+            "按主题比较，明确输入范围；不将有限材料称为领域全景，不为满足开放检索的数量门槛凑数。"
+        )
     if min_citations:
         constraints.append(f"至少引用 {min_citations} 个不同的已核验来源，不得用无关文献凑数。")
     if template.min_length:
@@ -213,7 +221,7 @@ def build_contract(
         title=f"{template.title}：{title}",
         original_request=query.strip()[:20_000],
         focus=focus[:2000],
-        papers=papers[:5],
+        papers=papers,
         # 超长数据在接口层就被拒绝，这里的上限只是兜底，不作为截断手段
         dataset_csv=dataset[:DATASET_MAX_CHARS],
         dataset_source=dict(dataset_source or {}) if dataset else {},
@@ -251,6 +259,10 @@ def contract_from_scratch(scratch: dict[str, Any]) -> TaskContract | None:
         return TaskContract.model_validate(raw)
     except ValueError:
         return None
+
+
+def provided_review(contract: TaskContract | None) -> bool:
+    return contract is not None and contract.template == "litReview" and contract.strategy == "none"
 
 
 __all__ = [

@@ -241,7 +241,7 @@ def _results(count: int) -> list[ResearchResult]:
 
 def test_coverage_gaps_track_the_survey_minimum() -> None:
     gaps = coverage_gaps(_scratch("litReview", "高光谱重建综述"), _results(5), "q")
-    assert gaps.open and "至少 20 个" in gaps.gaps[0]
+    assert gaps.open and "至少 20 篇" in gaps.gaps[0]
     assert "is_sufficient=true" in gap_prompt(gaps)
     closed = coverage_gaps(
         _scratch("litReview", "高光谱重建综述", survey_min_citations=5), _results(5), "q"

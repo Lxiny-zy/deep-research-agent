@@ -61,6 +61,19 @@ const RESEARCH = {
 
 const TEMPLATES = [
   RESEARCH,
+  {
+    ...template('litReview', '文献综述', 'lit_review'),
+    default_strategy: 'deep' as const,
+    strategies: [
+      { key: 'deep' as const, label: '深度检索', description: '检索文献', workflow: 'lit_review' },
+      {
+        key: 'none' as const,
+        label: '仅指定文献',
+        description: '比较指定材料',
+        workflow: 'lit_review_provided',
+      },
+    ],
+  },
   template('peerReview', '同行评审', 'peer_review'),
   template('dataAnalysis', '数据分析', 'data_analysis'),
 ]
@@ -161,6 +174,54 @@ describe('NewResearchPage task templates', () => {
     // 专项任务不经意图澄清；档位默认取模板的 tier_default
     expect(mocks.assessIntent).not.toHaveBeenCalled()
     expect(body.tier).toBe('standard')
+  })
+
+  it('submits a closed review without the previously selected library project', async () => {
+    render(
+      <MemoryRouter>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByLabelText(/文献综述/))
+    fireEvent.change(await screen.findByLabelText(/资料库项目/), { target: { value: 'p1' } })
+    fireEvent.click(screen.getByLabelText('仅指定文献'))
+    expect(screen.queryByLabelText(/资料库项目/)).not.toBeInTheDocument()
+    expect(screen.getByText(/会逐份核对并引用/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('文献综述输入'), {
+      target: { value: '比较 https://paper.test/a.pdf 和 https://paper.test/b.pdf' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '开始文献综述' }))
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
+    expect(mocks.createRun.mock.calls[0][0]).toMatchObject({
+      template: 'litReview',
+      strategy: 'none',
+      workflow: null,
+      project_id: null,
+    })
+    expect(mocks.assessIntent).not.toHaveBeenCalled()
+  })
+
+  it('restores the library project when switching back to an open review', async () => {
+    render(
+      <MemoryRouter>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByLabelText(/文献综述/))
+    fireEvent.change(await screen.findByLabelText(/资料库项目/), { target: { value: 'p1' } })
+    fireEvent.click(screen.getByLabelText('仅指定文献'))
+    fireEvent.click(screen.getByLabelText('深度检索'))
+    expect(screen.getByLabelText(/资料库项目/)).toHaveValue('p1')
+    fireEvent.change(screen.getByLabelText('文献综述输入'), {
+      target: { value: '高光谱重建方法综述' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '开始文献综述' }))
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
+    expect(mocks.createRun.mock.calls[0][0]).toMatchObject({
+      template: 'litReview',
+      strategy: 'deep',
+      project_id: 'p1',
+    })
   })
 
   it('lets the user override the tier and shows the daily quota', async () => {

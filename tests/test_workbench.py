@@ -304,6 +304,24 @@ async def test_lit_review_run_produces_checked_deliverables(settings) -> None:
     assert by_name["citation"].status in {"pass", "warn"}  # 假数据只有 1 个来源，低于 6 的下限
 
 
+async def test_closed_review_cannot_export_when_a_supplied_document_is_missing(settings):
+    body = "\n\n".join(
+        f"## {title}\n发现X [1]"
+        for title in ("摘要", "引言", "主题综述", "方法对比", "开放问题", "结论")
+    )
+    _, detail, _ = await _run("litReview", "比较指定文献", body, settings)
+    scratch = detail.orchestration.checkpoint["scratch"]
+    scratch[CONTRACT_SCRATCH_KEY] = build_contract(
+        get_template("litReview"),
+        "Compare https://a.com and https://missing.test/paper.pdf",
+        strategy="none",
+    ).model_dump(mode="json")
+    bundle = build_bundle(detail)
+    corpus = next(gate for gate in bundle.gates if gate.name == "provided_corpus")
+    assert corpus.status == "fail" and any("missing.test" in issue for issue in corpus.issues)
+    assert not {"pdf", "docx", "html"}.intersection(file.format for file in bundle.files)
+
+
 class RevisingLLM(WorkbenchLLM):
     """首稿缺章节并带口语化措辞，收到返工要求后给出合格正文。"""
 
@@ -606,6 +624,33 @@ async def test_create_run_with_template_freezes_contract_and_workflow(api_repo) 
     contract = detail.orchestration.checkpoint["scratch"][CONTRACT_SCRATCH_KEY]
     assert contract["template"] == "paperRead"
     assert contract["strategy"] == "none"
+
+
+async def test_provided_review_requires_real_inputs_and_freezes_closed_scope(api_repo):
+    api, repo = api_repo
+    async with _client(api.app) as client:
+        missing = await client.post(
+            "/api/runs",
+            json={
+                "template": "litReview",
+                "strategy": "none",
+                "query": "Only supplied documents. " * 12,
+            },
+        )
+        created = await client.post(
+            "/api/runs",
+            json={
+                "template": "litReview",
+                "strategy": "none",
+                "query": "Compare https://arxiv.org/abs/2401.00001 and https://arxiv.org/abs/2401.00002",
+            },
+        )
+    assert missing.status_code == 422
+    assert created.status_code == 202, created.text
+    detail = await repo.get_run(created.json()["run_id"])
+    assert detail.orchestration.workflow_name == "lit_review_provided"
+    contract = detail.orchestration.checkpoint["scratch"][CONTRACT_SCRATCH_KEY]
+    assert contract["min_citations"] == 0 and len(contract["papers"]) == 2
 
 
 @pytest.mark.asyncio

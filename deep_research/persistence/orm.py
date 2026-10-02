@@ -351,6 +351,7 @@ class SourceRow(Base):
     # 它整体来自单个检索后端的一次响应、整体被消费，没有任何按单字段查询的需求，
     # 而拆列会让每加一个字段都要一次迁移。非学术来源为 NULL。
     scholarly: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True, default=None)
+    document_authors: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=None)
 
     run: Mapped[ResearchRun] = relationship(back_populates="sources")
 
