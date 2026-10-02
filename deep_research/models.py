@@ -9,16 +9,25 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class SubQuestion(BaseModel):
     question: str = Field(..., description="一个可独立检索的子问题")
     rationale: str = Field("", description="为什么需要研究它")
+    search_queries: list[str] = Field(
+        default_factory=list,
+        description="实际检索用的简洁关键词组；保留范围、年份与实体，不把完整问答说明当搜索词",
+    )
     depends_on: list[int] = Field(
         default_factory=list,
         description="依赖的前驱子问题序号（本计划内 0 起始下标）；为空表示无依赖、可立即并行检索",
     )
+
+    @field_validator("search_queries")
+    @classmethod
+    def clean_search_queries(cls, queries: list[str]) -> list[str]:
+        return list(dict.fromkeys(query.strip() for query in queries if query.strip()))
 
 
 class ResearchPlan(BaseModel):
@@ -444,6 +453,10 @@ class Reflection(BaseModel):
     is_sufficient: bool = Field(..., description="现有证据是否足以回答原问题")
     gaps: list[str] = Field(default_factory=list, description="仍缺失的信息点")
     new_sub_questions: list[str] = Field(default_factory=list, description="为补洞而新增的子问题")
+    search_queries: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="新增子问题原文到简洁检索式的映射；每个问题单独给出必要的关键词组",
+    )
 
 
 class Report(BaseModel):

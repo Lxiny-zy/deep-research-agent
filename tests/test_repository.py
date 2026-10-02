@@ -75,6 +75,36 @@ async def repo(request):
     await engine.dispose()
 
 
+async def test_search_queries_survive_plan_reflection_and_artifact_replacement(repo):
+    run_id = await repo.create_run("原始研究问题")
+    plan = ResearchPlan(
+        interpretation="保留完整范围",
+        sub_questions=[
+            SubQuestion(
+                question="完整子问题", search_queries=["short academic query", "another method"]
+            )
+        ],
+    )
+    followup = SubQuestion(question="补充问题", search_queries=["specific missing evidence"])
+    await repo.save_plan(run_id, plan)
+    await repo.add_sub_questions(run_id, [followup], origin="reflection", round=1)
+    detail = await repo.get_run(run_id)
+    assert [sq.search_queries for sq in detail.sub_questions] == [
+        ["short academic query", "another method"],
+        ["specific missing evidence"],
+    ]
+    await repo.replace_artifacts(
+        run_id,
+        plan=plan,
+        reflection_rounds=[(1, [followup])],
+        results=[],
+        report=Report(query="原始研究问题", markdown="结论", citations=[]),
+    )
+    restored = await repo.get_run(run_id)
+    assert restored.sub_questions == detail.sub_questions
+    assert restored.sub_questions[0].question == "完整子问题"
+
+
 @pytest.mark.asyncio
 async def test_extraction_audit_survives_storage_with_no_admitted_findings(repo):
     from deep_research.agents.base import Blackboard

@@ -19,6 +19,17 @@ from .observability import Tracer
 ResearchOne = Callable[[str, "list[Finding] | None"], Awaitable["ResearchResult | None"]]
 
 
+def planned_search_queries(sub_questions: list[SubQuestion], question: str) -> list[str]:
+    return list(
+        dict.fromkeys(
+            query
+            for item in sub_questions
+            if item.question == question
+            for query in item.search_queries
+        )
+    )
+
+
 async def research_dag(
     sub_questions: list[SubQuestion],
     research_one: ResearchOne,

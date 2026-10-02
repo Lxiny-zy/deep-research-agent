@@ -259,6 +259,7 @@ class SubQuestionRow(Base):
     question: Mapped[str] = mapped_column(Text)
     rationale: Mapped[str] = mapped_column(Text, default="")
     depends_on: Mapped[list[int]] = mapped_column(JSON, default=list)
+    search_queries: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     origin: Mapped[str] = mapped_column(String(16), default="plan")  # plan / reflection
     round: Mapped[int] = mapped_column(Integer, default=0)
 

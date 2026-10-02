@@ -4048,6 +4048,11 @@ export interface components {
              * @default
              */
             rationale?: string;
+            /**
+             * Search Queries
+             * @description 实际检索用的简洁关键词组；保留范围、年份与实体，不把完整问答说明当搜索词
+             */
+            search_queries?: string[];
         };
         /**
          * TableBlock

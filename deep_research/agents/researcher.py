@@ -17,11 +17,12 @@ from ..guardrails import (
     verify_claim_consistency,
 )
 from ..llm import LLM
-from ..models import ExtractedFindingList, Finding, ResearchResult, Source
+from ..models import ExtractedFindingList, Finding, ResearchResult, Source, SubQuestion
 from ..observability import Tracer
+from ..persistence.repository import LeaseLostError
 from ..prompting import MEASUREMENT_SCOPE_RULES, PrefixPrompt
 from ..registry import register
-from ..scheduler import research_dag
+from ..scheduler import planned_search_queries, research_dag
 from ..tools.base import SearchTool
 from ..workflow import ATTEMPTED_SCRATCH_KEY
 from .base import Blackboard, RunContext, direct_system_prompt, effective_require_corroboration
@@ -109,6 +110,7 @@ class Researcher:
         pending = bb.scratch.pop("pending_sub_questions", None)
         if pending is None:  # 未指定则取整份计划（首轮）
             pending = bb.plan.sub_questions if bb.plan else []
+        pending = [SubQuestion.model_validate(item) for item in pending]
         # 优先复用引擎挂在 ctx 上的 run 级共享信号量：并行图里 K 个 researcher 节点
         # 若各自建 Semaphore(max_concurrency)，总并发会放大为 K×max_concurrency。
         # 未被注入（如单测直接调 step）时才自建，保持向后兼容。
@@ -129,6 +131,11 @@ class Researcher:
                     question,
                     context_findings=context_findings,
                     require_corroboration=require_corroboration,
+                    **(
+                        {"search_queries": queries}
+                        if (queries := planned_search_queries(pending, question))
+                        else {}
+                    ),
                 )
             attempted[question] = len(result.findings) if result is not None else 0
             return result
@@ -149,15 +156,41 @@ class Researcher:
         context_findings: list[Finding] | None = None,
         *,
         require_corroboration: bool | None = None,  # 保留签名兼容；背景过滤不再依赖印证
+        search_queries: list[str] | None = None,
     ) -> ResearchResult | None:
         self.tracer.emit("RESEARCHER", "start", f"检索：{sub_question}")
-        try:
-            candidate_sources = await self.search.search(
-                sub_question, max_results=self.settings.results_per_search
+        queries = list(dict.fromkeys(q.strip() for q in search_queries or [] if q.strip()))
+        if queries:
+            self.tracer.emit(
+                "RESEARCHER",
+                "info",
+                f"使用 {len(queries)} 组关键词检索，按完整子问题抽取证据",
+                data={"category": "search_queries", "question": sub_question, "queries": queries},
             )
-        except Exception as e:  # 单个 Researcher 失败被隔离，不拖垮全局
-            self.tracer.emit("RESEARCHER", "error", f"检索失败「{sub_question}」：{e}")
+        found: dict[str, Source] = {}
+        successful = 0
+        for query in queries or [sub_question]:
+            try:
+                batch = await self.search.search(
+                    query, max_results=self.settings.results_per_search
+                )
+                successful += 1
+            except LeaseLostError:
+                raise
+            except Exception as exc:  # 一个检索式失败，不丢弃其他检索式取得的来源。
+                self.tracer.emit(
+                    "RESEARCHER", "error", f"检索失败「{query}」（{type(exc).__name__}）"
+                )
+                continue
+            for source in batch:
+                # Keep a coherent snapshot; do not splice different response versions.
+                if source.url not in found or (
+                    not found[source.url].content.strip() and source.content.strip()
+                ):
+                    found[source.url] = source
+        if not successful:
             return None
+        candidate_sources = list(found.values())
 
         if not candidate_sources:
             self.tracer.emit("RESEARCHER", "info", f"无结果：{sub_question}")

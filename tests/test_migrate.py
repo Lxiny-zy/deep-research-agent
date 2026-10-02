@@ -32,6 +32,54 @@ async def test_upgrade_head_initializes_sqlite(tmp_path) -> None:
         await engine.dispose()
 
 
+async def test_search_queries_migration_preserves_existing_questions_and_roundtrips(tmp_path):
+    from alembic import command
+    from deep_research.persistence.db import make_sessionmaker
+    from deep_research.persistence.sql_repository import SqlRepository
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'queries-upgrade.db'}"
+    config = AlembicConfig("alembic.ini")
+    config.attributes["database_url"] = url
+    await asyncio.to_thread(command.upgrade, config, "0036")
+    engine = make_engine(url)
+    try:
+        run_id = await SqlRepository(make_sessionmaker(engine)).create_run("完整研究目标")
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO sub_question "
+                    "(id, run_id, idx, question, rationale, depends_on, origin, round) "
+                    "VALUES ('old', :run, 0, :question, '', '[]', 'plan', 0)"
+                ),
+                {"run": run_id, "question": "旧版完整问题"},
+            )
+    finally:
+        await engine.dispose()
+    await asyncio.to_thread(command.upgrade, config, "0037")
+    engine = make_engine(url)
+    try:
+        detail = await SqlRepository(make_sessionmaker(engine)).get_run(run_id)
+        assert detail.sub_questions[0].question == "旧版完整问题"
+        assert detail.sub_questions[0].search_queries == []
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE sub_question SET search_queries = '[\"CASSI unfolding\"]'")
+            )
+        detail = await SqlRepository(make_sessionmaker(engine)).get_run(run_id)
+        assert detail.sub_questions[0].search_queries == ["CASSI unfolding"]
+    finally:
+        await engine.dispose()
+    await asyncio.to_thread(command.downgrade, config, "0036")
+    await asyncio.to_thread(command.upgrade, config, "0037")
+    engine = make_engine(url)
+    try:
+        detail = await SqlRepository(make_sessionmaker(engine)).get_run(run_id)
+        assert detail.sub_questions[0].question == "旧版完整问题"
+        assert detail.sub_questions[0].search_queries == []
+    finally:
+        await engine.dispose()
+
+
 async def test_qa_request_migration_preserves_legacy_messages(tmp_path):
     from alembic import command
     from deep_research.persistence.db import make_sessionmaker

@@ -60,7 +60,7 @@ from .reproducibility import (
     build_run_manifest,
 )
 from .runner import CommandRunner
-from .scheduler import research_dag
+from .scheduler import planned_search_queries, research_dag
 from .skills import default_skill_resolver
 from .token_budget import TokenBudget
 from .tools.base import SearchTool
@@ -444,14 +444,29 @@ class DeepResearchAgent:
         self._run_started = True
 
     async def _research_one(
-        self, question: str, context_findings: list[Finding] | None = None
+        self,
+        question: str,
+        context_findings: list[Finding] | None = None,
+        *,
+        search_queries: list[str] | None = None,
     ) -> ResearchResult | None:
         async with self._sem:  # 限流，避免打爆检索 API
+            if search_queries:
+                return await self.researcher.run(
+                    question, context_findings=context_findings, search_queries=search_queries
+                )
             return await self.researcher.run(question, context_findings=context_findings)
 
     async def _research_dag(self, sub_questions: list[SubQuestion]) -> list[ResearchResult]:
         """按依赖拓扑分层并行检索（保留为公开方法：测试替换 self.researcher 后直接调用）。"""
-        return await research_dag(sub_questions, self._research_one, self.tracer)
+
+        async def one(question: str, context: list[Finding] | None) -> ResearchResult | None:
+            queries = planned_search_queries(sub_questions, question)
+            return await self._research_one(
+                question, context, **({"search_queries": queries} if queries else {})
+            )
+
+        return await research_dag(sub_questions, one, self.tracer)
 
     async def run(self, query: str) -> Report:
         self._claim_run()

@@ -229,7 +229,9 @@ def _normalize_question(text: str) -> str:
     return "".join(text.casefold().split()).rstrip("?？。.")
 
 
-def _unseen_sub_questions(bb: Blackboard, questions: list[str]) -> list[SubQuestion]:
+def _unseen_sub_questions(
+    bb: Blackboard, questions: list[str], search_queries: dict[str, list[str]] | None = None
+) -> list[SubQuestion]:
     """过滤掉本次运行已研究过的子问题（含零发现的），并对新问题自身去重。"""
     seen = {_normalize_question(sq.question) for sq in (bb.plan.sub_questions if bb.plan else [])}
     seen.update(_normalize_question(result.sub_question) for result in bb.results)
@@ -248,7 +250,9 @@ def _unseen_sub_questions(bb: Blackboard, questions: list[str]) -> list[SubQuest
         if not key or key in seen:
             continue
         seen.add(key)
-        fresh.append(SubQuestion(question=question))
+        fresh.append(
+            SubQuestion(question=question, search_queries=(search_queries or {}).get(question, []))
+        )
     return fresh
 
 
@@ -1160,7 +1164,9 @@ class WorkflowEngine:
             if reflection is None or reflection.is_sufficient or not reflection.new_sub_questions:
                 _commit_blackboard(bb, candidate)
                 break
-            new_subs = _unseen_sub_questions(candidate, reflection.new_sub_questions)
+            new_subs = _unseen_sub_questions(
+                candidate, reflection.new_sub_questions, reflection.search_queries
+            )
             if not new_subs:
                 # 反思提出的全是已研究过的问题：再跑只会重复同样的检索与抽取。
                 _commit_blackboard(bb, candidate)

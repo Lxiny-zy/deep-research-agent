@@ -67,6 +67,7 @@ def _sub_question_row(
         question=sub_question.question,
         rationale=sub_question.rationale,
         depends_on=sub_question.depends_on,
+        search_queries=sub_question.search_queries,
         origin=origin,
         round=round_,
     )
@@ -459,6 +460,7 @@ class SqlRepository:
                         question=sq.question,
                         rationale=sq.rationale,
                         depends_on=sq.depends_on,
+                        search_queries=sq.search_queries,
                         origin="plan",
                         round=0,
                     )
@@ -491,6 +493,7 @@ class SqlRepository:
                         question=sq.question,
                         rationale=sq.rationale,
                         depends_on=sq.depends_on,
+                        search_queries=sq.search_queries,
                         origin=origin,
                         round=round,
                     )
@@ -1180,6 +1183,7 @@ class SqlRepository:
                     question=sq.question,
                     rationale=sq.rationale,
                     depends_on=list(sq.depends_on or []),
+                    search_queries=list(sq.search_queries or []),
                 )
                 for sq in run.sub_questions
             ]
