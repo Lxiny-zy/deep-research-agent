@@ -1126,6 +1126,8 @@ async def _enqueue_run(
     execution: WorkflowRun,
     idempotency_key: str | None,
     response: Response,
+    *,
+    request_hash: str | None = None,
 ) -> CreateRunResponse:
     """在 worker 模式下持久化一个待领取的 run。
 
@@ -1135,7 +1137,7 @@ async def _enqueue_run(
     try:
         run_id, created = await repo.create_run_once(
             req.query,
-            request_hash=_run_request_hash(req),
+            request_hash=request_hash or _run_request_hash(req),
             idempotency_key=idempotency_key,
             execution=execution,
             claimable=True,
@@ -1910,15 +1912,50 @@ async def create_run(
                         "message": "配置检查未通过：" + "；".join(preflight.errors),
                     },
                 )
+    return await _submit_prepared_run(
+        request,
+        response,
+        req,
+        execution,
+        settings,
+        effective_query,
+        workflow_name,
+        normalized_key=normalized_key,
+        lease_owner=lease_owner,
+        supplied_plan=supplied_plan,
+    )
+
+
+async def _submit_prepared_run(
+    request: Request,
+    response: Response,
+    req: CreateRunRequest,
+    execution: WorkflowRun,
+    settings: Settings,
+    effective_query: str,
+    workflow_name: str | None,
+    *,
+    normalized_key: str | None,
+    lease_owner: str,
+    supplied_plan: Any | None = None,
+    request_hash: str | None = None,
+) -> CreateRunResponse:
+    """Share durable admission, leases and cleanup across new and revised tasks."""
+    repo: ResearchRepository = request.app.state.repo
+    principal = principal_for(request)
     if _worker_mode(request.app):
         # worker 模式：本进程只入队。不占准入名额、不建 EventHub、不派发 task——
         # 执行、租约与事件全部归领取到该 run 的 worker。
-        return await _enqueue_run(request, repo, req, execution, normalized_key, response)
+        return await _enqueue_run(
+            request, repo, req, execution, normalized_key, response, request_hash=request_hash
+        )
     try:
         admission = await _acquire_run_slot(request.app)
     except HTTPException:
         if normalized_key:
-            existing_id = await repo.find_run_once(normalized_key, _run_request_hash(req))
+            existing_id = await repo.find_run_once(
+                normalized_key, request_hash or _run_request_hash(req)
+            )
             if existing_id:
                 response.headers["Idempotency-Replayed"] = "true"
                 return CreateRunResponse(run_id=existing_id)
@@ -1926,7 +1963,7 @@ async def create_run(
     try:
         run_id, created = await repo.create_run_once(
             req.query,
-            request_hash=_run_request_hash(req),
+            request_hash=request_hash or _run_request_hash(req),
             idempotency_key=normalized_key,
             execution=execution,
             lease_owner=lease_owner,

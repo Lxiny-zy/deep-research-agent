@@ -9,6 +9,7 @@ import {
   setApiKey,
   streamRun,
   uploadAttachment,
+  reviseRunContent,
 } from './client'
 
 describe('binary document upload', () => {
@@ -25,6 +26,33 @@ describe('binary document upload', () => {
     expect(String(url)).toBe(`/api/attachments/file?filename=${encodeURIComponent(file.name)}`)
     expect(init?.body).toBe(file)
     expect(new Headers(init?.headers).get('Content-Type')).toBe('application/pdf')
+  })
+})
+
+describe('content revision request identity', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    clearApiKey()
+  })
+
+  it('reuses the saved identity after a tab reload and clears it on logout', async () => {
+    const version = 'a'.repeat(64)
+    sessionStorage.setItem(
+      'dr_pending_run_revision:parent',
+      JSON.stringify({ version, id: 'saved-revision-intent' }),
+    )
+    const fetcher = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ run_id: 'child' }), { status: 202 }),
+      )
+    await reviseRunContent('parent', version)
+    await reviseRunContent('parent', version)
+    const bodies = fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
+    expect(bodies[0]).toEqual({ source_version: version, request_id: 'saved-revision-intent' })
+    expect(bodies[1]).toEqual(bodies[0])
+    clearApiKey()
+    expect(sessionStorage.getItem('dr_pending_run_revision:parent')).toBeNull()
   })
 })
 

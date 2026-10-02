@@ -24,6 +24,7 @@ from typing import Any
 
 from ..agents.base import Blackboard, RunContext
 from ..models import Report
+from ..persistence.repository import LeaseLostError
 from ..registry import register
 from .contract import TaskContract, contract_from_scratch
 from .templates import get_template
@@ -848,12 +849,36 @@ class DataAnalyst:
         )
         assert reviewer is not None
 
+        from .content_revision import revision_seed
+
+        seed, seed_review = revision_seed(bb)
+        seed_pending = seed is not None
+
         async def write(revision: str | None) -> str:
+            nonlocal seed_pending
+            if seed_pending and seed is not None:
+                seed_pending = False
+                reviewer.prime(seed.markdown, seed_review)
+                initial = await assess(seed.markdown)
+                if initial.clean or not initial.can_revise:
+                    return seed.markdown
+                from .revision import revision_prompt
+
+                revision = revision_prompt(seed.markdown, initial)
             chunks: list[str] = []
+            first = True
             async for delta in ctx.llm_for(self.name).stream(
                 system, user + (revision or ""), temperature=0.2
             ):
-                ctx.tracer.emit("SYNTHESIZER", "token", data={"delta": delta})
+                ctx.tracer.emit(
+                    "SYNTHESIZER",
+                    "token",
+                    data={
+                        "delta": delta,
+                        **({"replace": True} if first and revision else {}),
+                    },
+                )
+                first = False
                 chunks.append(delta)
             return "".join(chunks).strip()
 
@@ -882,6 +907,8 @@ class DataAnalyst:
             body, revision_log = await write_with_revisions(
                 write, assess, max_revisions=policy.max_revisions
             )
+        except LeaseLostError:
+            raise
         except Exception as exc:  # 写作失败不影响统计结果交付
             ctx.tracer.emit("SYNTHESIZER", "error", f"分析报告撰写失败，交付统计摘要：{exc}")
         unsupported = check_numbers(body, facts, input_description=question) if body else ["empty"]
@@ -907,8 +934,9 @@ class DataAnalyst:
                 },
             )
             body = fallback_report(result)
-        if result.synthetic:
-            body = "> 注意：未提供数据，本报告基于可复现的合成示例数据演示分析流程。\n\n" + body
+        notice = "> 注意：未提供数据，本报告基于可复现的合成示例数据演示分析流程。\n\n"
+        if result.synthetic and not body.startswith(notice):
+            body = notice + body
         bb.report = Report(query=bb.query, markdown=body + "\n", citations=[])
         bb.scratch[ANALYSIS_SCRATCH_KEY] = result.snapshot()
         # 图片不进 checkpoint：分析是确定性的（合成数据也用固定种子），交付层按

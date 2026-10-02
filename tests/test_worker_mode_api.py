@@ -39,6 +39,7 @@ def worker_repo(monkeypatch) -> InMemoryRepository:
         raise AssertionError("worker 模式下 API 进程不得执行研究任务")
 
     monkeypatch.setattr(api, "_execute", _must_not_execute)
+    monkeypatch.setattr(api, "_run_limiter", api._RateLimiter(max_calls=1000, window_seconds=60))
     return repo
 
 

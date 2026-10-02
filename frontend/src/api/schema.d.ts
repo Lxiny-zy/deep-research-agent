@@ -1023,6 +1023,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{run_id}/revise": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revise Content */
+        post: operations["revise_content_api_runs__run_id__revise_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{run_id}/stream": {
         parameters: {
             query?: never;
@@ -1947,6 +1964,13 @@ export interface components {
             xai_api_key_hint: string;
             /** Xai Api Key Set */
             xai_api_key_set: boolean;
+        };
+        /** ContentRevisionRequest */
+        ContentRevisionRequest: {
+            /** Request Id */
+            request_id: string;
+            /** Source Version */
+            source_version: string;
         };
         /**
          * ContextResolution
@@ -6699,6 +6723,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revise_content_api_runs__run_id__revise_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContentRevisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */

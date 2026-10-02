@@ -175,6 +175,9 @@ class TemplateWriter:
 
         if template.key not in _CONCEPT_FIGURE_TEMPLATES or not material:
             return None
+        ctx.tracer.emit(
+            "SYNTHESIZER", "info", "生成配套概念图示…", data={"category": "figure_generation"}
+        )
         system = ctx.system_prompt(
             "你负责为研究交付物设计一张概念图（框架或分类法）。只用素材中出现的概念，"
             "按需要输出节点（label 为简短名词短语，语言与素材一致）与节点间关系，不凑节点数；"
@@ -248,12 +251,36 @@ class TemplateWriter:
                 abstracts=checked_abstracts(bb.scratch) if template.key == "paperRead" else None,
             )
 
+        from .content_revision import revision_seed
+
+        seed, seed_review = revision_seed(bb)
+        if template.key not in {"autoResearch", "litReview", "paperRead"} or (
+            seed is not None and seed.citations != list(url_to_idx)
+        ):
+            seed = None
+        seed_pending = seed is not None
+
         async def write(revision: str | None) -> str:
+            nonlocal seed_pending
+            body = None
+            if seed_pending and seed is not None and reviewer is not None:
+                seed_pending = False
+                reviewer.prime(seed.markdown, seed_review)
+                ctx.tracer.emit(
+                    "SYNTHESIZER", "info", "复用原稿与已有证据，检查需要继续修订的部分…"
+                )
+                initial = await assess(seed.markdown)
+                if initial.clean or not initial.can_revise:
+                    body = seed.markdown
+                else:
+                    from .revision import revision_prompt
+
+                    revision = revision_prompt(seed.markdown, initial)
             if revision is not None:
                 ctx.tracer.emit("SYNTHESIZER", "info", "按质量检查结果修订正文…")
-            body = None
             if (
-                revision is not None
+                body is None
+                and revision is not None
                 and local_revision
                 and reviewer is not None
                 and last_audit is not None
@@ -461,6 +488,9 @@ class TemplateWriter:
             )
             current = ConceptFigure.model_validate(figure)
             for attempt in range(policy.max_revisions + 1):
+                ctx.tracer.emit(
+                    "SYNTHESIZER", "info", "核对图示节点与关系…", data={"category": "figure_review"}
+                )
                 figure_record = await review_figure(current, figure_reviewer)
                 if (
                     figure_record["status"] == "pass"
@@ -831,7 +861,47 @@ class MindmapWriter(TemplateWriter):
         last_record: dict[str, Any] | None = None
         repairs: list[list[str]] = []
 
+        from .content_revision import REVISION_KEY
+        from .mindmap_edit import prime_review
+
+        seed_model: Mindmap | None = None
+        if (
+            REVISION_KEY in bb.scratch
+            and bb.report is not None
+            and bb.report.citations == citations
+        ):
+            extras = bb.scratch.get("workbench", {}).get("extras", {})
+            try:
+                prior_model = Mindmap.model_validate(extras.get("mindmap"))
+            except ValueError:
+                prior_model = None
+            if prior_model is not None and not structural_issues(prior_model, len(citations)):
+                prime_review(
+                    reviewer,
+                    prior_model,
+                    bb.query,
+                    citations,
+                    bb.results,
+                    extras.get("node_review"),
+                )
+                decisions = await reviewer.review(review_units(prior_model, bb.query))
+                last_record = review_record(
+                    prior_model.model_dump(mode="json"), citations, bb.results, decisions
+                )
+                last_model = prior_model
+                if not last_record["issues"]:
+                    seed_model = prior_model
+
         async def write(revision: str | None) -> str:
+            nonlocal seed_model
+            if seed_model is not None:
+                model, seed_model = seed_model, None
+                bb.scratch["_mindmap"] = model.model_dump(mode="json")
+                body = mindmap_to_markdown(model)
+                versions[body] = deepcopy(bb.scratch["_mindmap"])
+                return body
+            if revision is None and last_model is not None:
+                revision = "继续修订原图未通过的节点"
             patched = (
                 await repair_nodes(
                     ctx.llm_for(self.name),

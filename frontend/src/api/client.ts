@@ -115,6 +115,7 @@ function formatDetail(detail: unknown, fallback: string): string {
 
 const API_KEY_STORAGE = 'dr_api_key'
 let memoryApiKey: string | null = null
+const revisionRequests = new Map<string, string>()
 
 // Existing tab sessions stay valid; remembered credentials survive reopening the browser.
 export function getApiKey(): string | null {
@@ -177,6 +178,7 @@ export function clearApiKey(): void {
 }
 
 export function clearWorkspaceState(): void {
+  revisionRequests.clear()
   void clearReaderPdfCache()
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('dr:credentials-cleared'))
   pendingSubmission = null
@@ -887,6 +889,39 @@ export function getDeliverables(id: string, signal?: AbortSignal): Promise<Deliv
   return request<DeliverableRegistry>(`/api/runs/${encodeURIComponent(id)}/deliverables`, {
     signal,
   })
+}
+
+export function reviseRunContent(runId: string, sourceVersion: string): Promise<CreateRunResponse> {
+  const key = `${runId}/${sourceVersion}`
+  const storageKey = `dr_pending_run_revision:${runId}`
+  let requestId = revisionRequests.get(key)
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null')
+    if (
+      saved?.version === sourceVersion &&
+      typeof saved?.id === 'string' &&
+      /^[A-Za-z0-9_-]{8,64}$/.test(saved.id)
+    ) {
+      requestId = saved.id
+    }
+  } catch {
+    /* A tab can still retry using its in-memory identity. */
+  }
+  requestId ??= crypto.randomUUID()
+  revisionRequests.set(key, requestId)
+  try {
+    sessionStorage.setItem(storageKey, JSON.stringify({ version: sourceVersion, id: requestId }))
+  } catch {
+    /* Storage is optional. */
+  }
+  return request<CreateRunResponse>(
+    `/api/runs/${encodeURIComponent(runId)}/revise`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ source_version: sourceVersion, request_id: requestId }),
+    },
+    120_000,
+  )
 }
 
 export function retryDeliverable(

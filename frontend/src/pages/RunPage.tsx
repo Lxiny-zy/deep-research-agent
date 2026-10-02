@@ -494,6 +494,7 @@ export default function RunPage() {
                   loading={deliverables.isLoading}
                   error={deliverables.error}
                   onUpdated={deliverables.setRegistry}
+                  onRevisionCreated={(runId) => navigate(`/runs/${encodeURIComponent(runId)}`)}
                 />
               )}
               {structuredDocument.data && (

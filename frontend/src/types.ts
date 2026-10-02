@@ -899,6 +899,7 @@ export interface DeliverableItem {
 }
 
 export interface DeliverableRegistry {
+  content_revision?: { available: boolean; reason: string; source_version: string }
   content_version?: string
   input_version?: string
   parent_version?: string
@@ -917,6 +918,7 @@ export interface DeliverableRegistry {
 }
 
 export interface RunTemplateInfo {
+  revision_source?: { parent_run_id: string; source_version: string } | null
   template: TaskTemplate
   contract: TaskContract | null
   extras: { score?: number | null; stats?: Record<string, number>; figures?: number }

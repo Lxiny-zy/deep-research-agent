@@ -9,11 +9,15 @@ import type { DeliverableRegistry, TaskContract, TaskTemplate } from '../types'
 const mocks = vi.hoisted(() => ({
   fetchDeliverable: vi.fn(),
   retryDeliverable: vi.fn(),
+  reviseRunContent: vi.fn(),
+  getDeliverables: vi.fn(),
   downloadBlob: vi.fn(),
 }))
 vi.mock('../api/client', () => ({
   fetchDeliverable: mocks.fetchDeliverable,
   retryDeliverable: mocks.retryDeliverable,
+  reviseRunContent: mocks.reviseRunContent,
+  getDeliverables: mocks.getDeliverables,
 }))
 vi.mock('../lib/download', () => ({ downloadBlob: mocks.downloadBlob }))
 
@@ -145,6 +149,75 @@ const registry: DeliverableRegistry = {
 }
 
 describe('DeliverablesPanel', () => {
+  it('starts a separate content revision while retaining the original file registry', async () => {
+    const created = vi.fn()
+    mocks.reviseRunContent.mockResolvedValue({ run_id: 'revision-child' })
+    const failed = {
+      ...registry,
+      status: 'fail' as const,
+      content_revision: { available: true, reason: '', source_version: 'a'.repeat(64) },
+    }
+    render(
+      <DeliverablesPanel
+        runId="original"
+        registry={failed}
+        loading={false}
+        error={null}
+        onRevisionCreated={created}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '继续修订内容' }))
+    await waitFor(() => expect(created).toHaveBeenCalledWith('revision-child'))
+    expect(mocks.reviseRunContent).toHaveBeenCalledWith('original', 'a'.repeat(64))
+    expect(screen.getByText('评审（PDF）')).toBeInTheDocument()
+  })
+
+  it('does not offer content revision to a read-only user', () => {
+    render(
+      <DeliverablesPanel
+        runId="original"
+        registry={{
+          ...registry,
+          can_retry: false,
+          content_revision: { available: true, reason: '', source_version: 'a'.repeat(64) },
+        }}
+        loading={false}
+        error={null}
+        onRevisionCreated={vi.fn()}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: '继续修订内容' })).not.toBeInTheDocument()
+  })
+
+  it('refreshes the offered source version after a content conflict', async () => {
+    const updated = vi.fn()
+    const original = {
+      ...registry,
+      content_revision: { available: true, reason: '', source_version: 'a'.repeat(64) },
+    }
+    const next = {
+      ...original,
+      content_revision: { ...original.content_revision, source_version: 'b'.repeat(64) },
+    }
+    mocks.reviseRunContent.mockRejectedValue(
+      Object.assign(new Error('版本已更新'), { status: 409 }),
+    )
+    mocks.getDeliverables.mockResolvedValue(next)
+    render(
+      <DeliverablesPanel
+        runId="original"
+        registry={original}
+        loading={false}
+        error={null}
+        onUpdated={updated}
+        onRevisionCreated={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '继续修订内容' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('版本已更新')
+    await waitFor(() => expect(updated).toHaveBeenCalledWith(next))
+  })
+
   it('retries the failed format and reuses its request ID after a connection failure', async () => {
     const failed = {
       ...registry,
@@ -226,6 +299,24 @@ describe('DeliverablesPanel', () => {
 })
 
 describe('RunTaskSummary', () => {
+  it('links a revision back to the preserved original task', () => {
+    render(
+      <RunTaskSummary
+        info={{
+          template: template(),
+          contract,
+          extras: {},
+          analysis: null,
+          intake: null,
+          revision_source: { parent_run_id: 'original', source_version: 'v' },
+        }}
+      />,
+    )
+    expect(screen.getByRole('link', { name: '查看原任务' })).toHaveAttribute(
+      'href',
+      '/runs/original',
+    )
+  })
   it('shows the review score and intake failures', () => {
     render(
       <RunTaskSummary

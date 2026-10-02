@@ -29,6 +29,17 @@ export default function RunTaskSummary({ info }: { info: RunTemplateInfo | undef
         )}
       </div>
       <dl className="run-task-facts">
+        {info.revision_source && (
+          <>
+            <dt>内容修订</dt>
+            <dd>
+              本次复用原任务资料继续修订。{' '}
+              <a href={`/runs/${encodeURIComponent(info.revision_source.parent_run_id)}`}>
+                查看原任务
+              </a>
+            </dd>
+          </>
+        )}
         {contract?.papers && contract.papers.length > 0 && (
           <>
             <dt>指定论文</dt>

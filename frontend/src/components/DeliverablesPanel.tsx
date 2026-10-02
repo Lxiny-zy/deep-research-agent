@@ -2,7 +2,12 @@ import { useRef, useState } from 'react'
 import { AppIcon, type AppIconName } from './AppIcon'
 import InfoTip from './InfoTip'
 import { formatLabel, humanSize } from '../lib/workbench'
-import { fetchDeliverable, getDeliverables, retryDeliverable } from '../api/client'
+import {
+  fetchDeliverable,
+  getDeliverables,
+  retryDeliverable,
+  reviseRunContent,
+} from '../api/client'
 import { downloadBlob } from '../lib/download'
 import type { DeliverableItem, DeliverableRegistry, GateResult, GateStatus } from '../types'
 
@@ -185,6 +190,7 @@ interface Props {
   loading: boolean
   error: unknown
   onUpdated?: (registry: DeliverableRegistry) => void
+  onRevisionCreated?: (runId: string) => void
 }
 
 /**
@@ -192,10 +198,38 @@ interface Props {
  * 只对浏览器能原生打开的格式（自包含 HTML / PDF / PNG）提供预览，其余只提供下载。
  * 自包含 HTML 本身不含脚本（思维导图的折叠脚本除外，且不访问网络）。
  */
-export default function DeliverablesPanel({ runId, registry, loading, error, onUpdated }: Props) {
+export default function DeliverablesPanel({
+  runId,
+  registry,
+  loading,
+  error,
+  onUpdated,
+  onRevisionCreated,
+}: Props) {
   const [busy, setBusy] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const requests = useRef(new Map<string, string>())
+
+  async function revise() {
+    if (!registry?.content_revision?.available || busy !== null) return
+    setBusy('content-revision')
+    setActionError(null)
+    try {
+      const next = await reviseRunContent(runId, registry.content_revision.source_version)
+      onRevisionCreated?.(next.run_id)
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : '继续修订失败')
+      if (cause instanceof Error && 'status' in cause && cause.status === 409) {
+        try {
+          onUpdated?.(await getDeliverables(runId))
+        } catch {
+          /* Keep the original error. */
+        }
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
 
   async function retry(format: string) {
     if (!registry?.content_version || busy !== null) return
@@ -286,6 +320,28 @@ export default function DeliverablesPanel({ runId, registry, loading, error, onU
         </span>
       </div>
       <QualitySummary gates={registry.gates} />
+      {registry.content_revision?.available &&
+        registry.can_retry !== false &&
+        onRevisionCreated && (
+          <div className="run-validation-note">
+            <div>
+              <p>复用已有资料继续修订，保留当前任务和文件。</p>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={busy !== null}
+                onClick={revise}
+              >
+                {busy === 'content-revision' ? '正在创建修订任务…' : '继续修订内容'}
+              </button>
+            </div>
+          </div>
+        )}
+      {registry.status === 'fail' &&
+        registry.content_revision &&
+        !registry.content_revision.available && (
+          <p className="hint">{registry.content_revision.reason}</p>
+        )}
       {Boolean(registry.failures?.length) && (
         <ul className="run-file-list" aria-label="未完成的交付格式">
           {registry.failures?.map((failure) => (

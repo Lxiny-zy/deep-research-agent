@@ -12,6 +12,7 @@ import logging
 import re
 from typing import Any, Literal
 from urllib.parse import quote
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -38,6 +39,11 @@ class ContractPreviewRequest(BaseModel):
     template: str = Field(min_length=1, max_length=40)
     query: str = Field(min_length=1, max_length=200_000)
     strategy: Literal["none", "quick", "deep"] | None = None
+
+
+class ContentRevisionRequest(BaseModel):
+    source_version: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class DeliveryRetryRequest(BaseModel):
@@ -205,7 +211,96 @@ async def get_deliverables(run_id: str, request: Request) -> dict[str, Any]:
     from ..http.auth import principal_for
 
     registry["can_retry"] = principal_for(request).can_research
+    from .content_revision import revision_offer
+
+    detail = await request.app.state.repo.get_run(run_id)
+    if detail is not None:
+        registry["content_revision"] = revision_offer(detail, bundle.gates)
     return registry
+
+
+@router.post("/runs/{run_id}/revise", status_code=202)
+async def revise_content(
+    run_id: str, body: ContentRevisionRequest, request: Request, response: Response
+) -> dict[str, str]:
+    from .. import api as api_module
+    from ..http.auth import principal_for
+    from ..orchestrator import snapshot_catalog_for_execution
+    from ..persistence.repository import IdempotencyConflictError
+    from .content_revision import prepare_revision, revision_offer, source_version
+    from .support import digest
+
+    principal = principal_for(request)
+    if not principal.can_research:
+        raise HTTPException(403, "当前身份为只读，无法继续修订")
+    repo = request.app.state.repo
+    detail = await repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(404, "run not found")
+    key = digest(["content-revision", principal.id, body.request_id])
+    request_hash = digest([principal.id, run_id, body.source_version])
+    try:
+        existing = await repo.find_run_once(key, request_hash)
+    except IdempotencyConflictError as exc:
+        raise HTTPException(409, "修订请求标识已用于其他任务或版本") from exc
+    if existing:
+        response.headers["Idempotency-Replayed"] = "true"
+        return {"run_id": existing}
+    if source_version(detail) != body.source_version:
+        raise HTTPException(409, "任务材料或正文已变化，请刷新后再继续修订")
+    bundle = await _bundle(request, run_id)
+    offer = revision_offer(detail, bundle.gates)
+    if not offer["available"]:
+        raise HTTPException(409, offer["reason"])
+    await api_module._check_rate_limit(request)
+    settings = request.app.state.settings
+    if settings.daily_run_quota is not None:
+        from .usage import quota_view, usage_today
+
+        if quota_view(await usage_today(repo, principal.id), settings)["exhausted"]:
+            raise HTTPException(429, "今日研究额度已用完，将于 UTC 零点重置")
+    try:
+        execution, current = await prepare_revision(detail, settings)
+        await snapshot_catalog_for_execution(
+            execution, getattr(request.app.state, "catalog", None), current
+        )
+        catalog = getattr(request.app.state, "catalog", None)
+        if catalog is not None and hasattr(catalog, "list_search_profiles"):
+            from ..catalog.dto import CatalogRuntimeSnapshot
+            from ..catalog.preflight import inspect_snapshot
+            from ..orchestrator import RUN_CATALOG_CHECKPOINT_KEY, workflow_catalog_roles
+            from ..workflow import Workflow
+
+            snapshot = execution.checkpoint["scratch"].get(RUN_CATALOG_CHECKPOINT_KEY)
+            if snapshot is not None:
+                ready = await inspect_snapshot(
+                    catalog,
+                    current,
+                    CatalogRuntimeSnapshot.model_validate(snapshot),
+                    workflow_catalog_roles(Workflow.model_validate(execution.definition)),
+                )
+                if not ready.ok:
+                    raise ValueError("配置检查未通过：" + "；".join(ready.errors))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    latest = await repo.get_run(run_id)
+    if latest is None or latest.status != "done" or source_version(latest) != body.source_version:
+        raise HTTPException(409, "原任务已变化，请刷新后再继续修订")
+    result = await api_module._submit_prepared_run(
+        request,
+        response,
+        api_module.CreateRunRequest(
+            query=detail.query, workflow=execution.workflow_name, project_id=detail.project_id
+        ),
+        execution,
+        current,
+        str(execution.input.get("query") or detail.query),
+        execution.workflow_name,
+        normalized_key=key,
+        lease_owner=uuid4().hex,
+        request_hash=request_hash,
+    )
+    return {"run_id": result.run_id}
 
 
 @router.post("/runs/{run_id}/deliverables/retry")
@@ -427,6 +522,7 @@ async def get_run_template(run_id: str, request: Request) -> dict[str, Any]:
         "extras": safe_extras,
         "analysis": analysis if isinstance(analysis, dict) else None,
         "intake": intake if isinstance(intake, dict) else None,
+        "revision_source": scratch.get("content_revision") if isinstance(scratch, dict) else None,
     }
 
 

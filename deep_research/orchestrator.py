@@ -909,6 +909,17 @@ class DeepResearchAgent:
             ).model_dump(mode="json")
 
         if self.repo is not None and run_id is not None:
+            from .workbench.content_revision import REVISION_SOURCES_KEY
+
+            if seeded_sources := bb.scratch.get(REVISION_SOURCES_KEY):
+                from .models import Source
+
+                await self.repo.save_sources(
+                    run_id,
+                    [Source.model_validate(source) for source in seeded_sources],
+                    lease_owner=self._lease_owner,
+                )
+                bb.scratch.pop(REVISION_SOURCES_KEY, None)
 
             async def save_source_snapshots(sources):  # type: ignore[no-untyped-def]
                 await self.repo.save_sources(run_id, sources, lease_owner=self._lease_owner)
