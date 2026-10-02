@@ -24,7 +24,12 @@ from typing import Any
 from ..agents.researcher import Researcher
 from ..guardrails import report_eligible
 from ..models import ExtractedFindingList, Finding, ResearchResult, Source
-from ..prompting import SCIENTIFIC_MARKDOWN, PrefixPrompt, structured_system_prompt
+from ..prompting import (
+    MEASUREMENT_SCOPE_RULES,
+    SCIENTIFIC_MARKDOWN,
+    PrefixPrompt,
+    structured_system_prompt,
+)
 from ..report.validation import ReportCheck, validate_body
 from ..tools.base import SearchTool
 from .qa_cache import PaperEvidenceCache, evidence_cache_key
@@ -51,6 +56,7 @@ _PAPER_SYSTEM = (
     "不把使用某个已有算法说成作者发明了该算法。先直接回答问题，再解释原文依据。"
     "论文已经读取；本轮核验素材未覆盖的细节，不等于论文中没有。"
     "不要要求重新上传或提供已读取的全文，也不要例行罗列与当前问题无关的缺口清单。"
+    + MEASUREMENT_SCOPE_RULES
 )
 _PAPER_EXTRACTION = (
     "这是论文问答的证据抽取。发现必须直接回应当前问题，保留作者归属和适用条件。"
@@ -227,10 +233,11 @@ async def answer_question(
         )
         cached = paper_cache.get(cache_key) if paper_cache is not None else None
         reused = False
+        read_urls: set[str] = set()
         if cached is not None:
             paper_findings, raw = cached
         else:
-            from .paper_evidence import current_findings, merge_findings, select_findings
+            from .paper_evidence import current_findings, merge_findings, plan_findings
 
             pool_key = "pool:" + evidence_cache_key(cache_scope, "", paper_sources, researcher)
             pooled = paper_cache.get(pool_key) if paper_cache is not None else None
@@ -241,13 +248,45 @@ async def answer_question(
             )
             if candidates and on_event is not None:
                 on_event({"type": "status", "message": "正在核对已有论文证据能否回答本轮问题…"})
-            selected = await select_findings(candidates, question, history, researcher)
-            if selected is not None:
-                paper_findings, raw, reused = selected, len(selected), True
-            else:
-                paper_findings, raw = (
-                    (await _verified(researcher, query, thoughts)) if paper_sources else ([], 0)
+            selection = await plan_findings(
+                candidates, question, history, researcher, paper_sources
+            )
+            collected = list(selection.findings)
+            raw = 0
+            paper_findings = []
+            while not selection.sufficient:
+                remaining = [s for s in paper_sources if s.url not in read_urls]
+                if not remaining:
+                    paper_findings = collected
+                    break
+                chosen = [s for s in remaining if s.url in selection.source_urls] or remaining
+                if on_event is not None:
+                    on_event(
+                        {"type": "status", "message": f"正在补读 {len(chosen)} 个相关原文片段…"}
+                    )
+                researcher.search = _FixedSources(chosen)
+                read_query = query
+                if selection.missing_topics:
+                    read_query += "\n补读须解决的问题：" + json.dumps(
+                        selection.missing_topics, ensure_ascii=False
+                    )
+                other, count = await _verified(researcher, read_query, thoughts)
+                raw += count
+                read_urls.update(s.url for s in chosen)
+                candidates = merge_findings(candidates, other)
+                collected = merge_findings(collected, selection.findings, other)
+                if paper_cache is not None:
+                    paper_cache.put(pool_key, candidates, len(candidates))
+                if not any(s.url not in read_urls for s in paper_sources):
+                    paper_findings = collected
+                    break
+                selection = await plan_findings(
+                    candidates, question, history, researcher, paper_sources, read_urls
                 )
+            if selection.sufficient:
+                paper_findings = selection.findings
+                reused = not read_urls
+                raw = raw or len(paper_findings)
             if paper_cache is not None:
                 paper_cache.put(cache_key, paper_findings, raw)
                 merged = merge_findings(candidates, paper_findings)
@@ -268,7 +307,9 @@ async def answer_question(
         thoughts.append(
             {
                 "tool": "paper_read",
-                "input": f"{len(paper_sources)} 个已读取论文片段，按单次上下文容量组装",
+                "input": f"本轮补读 {len(read_urls)} 个原文片段（共 {len(paper_sources)} 个）"
+                if read_urls
+                else f"复用 {len(paper_findings)} 条已核验证据",
                 "observation": f"论文中保留 {len(paper_findings)} 条已核验证据"
                 + (
                     f"（{raw - len(paper_findings)} 条未通过核验）"

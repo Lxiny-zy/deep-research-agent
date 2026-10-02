@@ -67,6 +67,24 @@ def test_restart_and_versioned_download_reuse_exact_saved_bytes(tmp_path):
         assert data in {b"version one", b"version two"}
 
 
+def test_support_policy_change_forces_a_new_delivery_version(tmp_path, monkeypatch):
+    from deep_research.workbench import support
+
+    first = build_or_load(detail(), str(tmp_path), None, bundle)
+    monkeypatch.setattr(support, "SUPPORT_POLICY_VERSION", support.SUPPORT_POLICY_VERSION + 1)
+    calls = []
+
+    def rebuild(run):
+        calls.append(run.id)
+        return bundle(run)
+
+    second = build_or_load(detail(), str(tmp_path), None, rebuild)
+    assert calls and first.content_version != second.content_version
+    assert (
+        load_version(detail(), str(tmp_path), first.content_version).files[0].data == b"version one"
+    )
+
+
 def test_corrupted_version_is_not_overwritten_or_silently_regenerated(tmp_path):
     build_or_load(detail(), str(tmp_path), None, bundle)
     store, _ = delivery_store(detail(), str(tmp_path))

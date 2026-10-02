@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field
 
 from ..models import ResearchResult
-from .support import SupportDecision, SupportUnit, digest, evidence_records
+from .support import SUPPORT_POLICY_VERSION, SupportDecision, SupportUnit, digest, evidence_records
 
 
 class MindmapNode(BaseModel):
@@ -72,6 +72,7 @@ def input_hash(raw: dict, citations: list[str], results: list[ResearchResult]) -
     return digest(
         {
             "version": 1,
+            "policy": SUPPORT_POLICY_VERSION,
             "mindmap": Mindmap.model_validate(raw).model_dump(mode="json"),
             "citations": citations,
             "results": [r.material_data() for r in results],

@@ -64,6 +64,14 @@ SCIENTIFIC_MARKDOWN = (
     r"正文中的美元金额写为 \$，代码放在代码标记内。"
 )
 
+MEASUREMENT_SCOPE_RULES = (
+    "数值必须保留统计范围：区分某一分组/子图的均值与跨分组汇总均值。"
+    "一张图覆盖多个数据集，不代表某处图例的均值对全部数据集进行了汇总。"
+    "只有原文明示汇总总体与计算口径时才能写‘全部数据集的平均值’；"
+    "多个子图或列应分别核对，不能把一处数值当作整图唯一结果。"
+    "无法确认数值与分组的对应关系时，明确限定为该处图例/子图，不猜测适用的数据集。"
+)
+
 # Keep production runs usable when a wheel/container omits the optional
 # framework directory.  This is deliberately short and only contains rules
 # that protect the execution boundary; the repository file remains the

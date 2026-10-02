@@ -361,10 +361,19 @@ class Finding(FindingContent):
     verification: EvidenceVerification = Field(default_factory=EvidenceVerification)
 
 
+class RepairFindingContent(FindingContent):
+    quote_id: str = Field(
+        "",
+        description=(
+            "可选：本候选给定的原文区间编号。使用时 evidence_quote 留空，由程序回填完整原文"
+        ),
+    )
+
+
 class CandidateRepair(BaseModel):
     candidate_id: str
     action: Literal["repair", "drop"]
-    findings: list[FindingContent] = Field(default_factory=list)
+    findings: list[RepairFindingContent] = Field(default_factory=list)
     reason: str
 
 
@@ -389,8 +398,18 @@ class ExtractionAttempt(BaseModel):
     round: int = 0
     action: Literal["initial", "repair", "drop", "error"] = "initial"
     proposals: list[FindingContent] = Field(default_factory=list)
+    quote_ids: list[str] = Field(default_factory=list)
     checks: list[CandidateCheck] = Field(default_factory=list)
     reason: str = ""
+
+
+class QuoteOption(BaseModel):
+    id: str
+    source_url: str
+    source_content_hash: str
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+    text: str
 
 
 class ExtractionCandidate(BaseModel):
@@ -398,10 +417,11 @@ class ExtractionCandidate(BaseModel):
     original: FindingContent
     attempts: list[ExtractionAttempt] = Field(default_factory=list)
     accepted: bool = False
+    quote_options: list[QuoteOption] = Field(default_factory=list)
 
 
 class ExtractionAudit(BaseModel):
-    version: int = 1
+    version: int = 2
     question: str
     sources: list[Source] = Field(default_factory=list)
     candidates: list[ExtractionCandidate] = Field(default_factory=list)

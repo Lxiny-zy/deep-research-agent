@@ -2585,6 +2585,8 @@ export interface components {
             checks?: components["schemas"]["CandidateCheck"][];
             /** Proposals */
             proposals?: components["schemas"]["FindingContent"][];
+            /** Quote Ids */
+            quote_ids?: string[];
             /**
              * Reason
              * @default
@@ -2608,7 +2610,7 @@ export interface components {
             sources?: components["schemas"]["Source"][];
             /**
              * Version
-             * @default 1
+             * @default 2
              */
             version?: number;
         };
@@ -2624,6 +2626,8 @@ export interface components {
             /** Id */
             id: string;
             original: components["schemas"]["FindingContent"];
+            /** Quote Options */
+            quote_options?: components["schemas"]["QuoteOption"][];
         };
         /** FinalReportValidation */
         FinalReportValidation: {
@@ -3418,6 +3422,21 @@ export interface components {
             unit?: string;
             /** Value */
             value?: number | null;
+        };
+        /** QuoteOption */
+        QuoteOption: {
+            /** End */
+            end: number;
+            /** Id */
+            id: string;
+            /** Source Content Hash */
+            source_content_hash: string;
+            /** Source Url */
+            source_url: string;
+            /** Start */
+            start: number;
+            /** Text */
+            text: string;
         };
         /** ReferenceDocument */
         ReferenceDocument: {

@@ -21,6 +21,7 @@ from ..models import (
 from ..persistence.repository import LeaseLostError
 from ..prompting import PrefixPrompt, structured_system_prompt
 from .quality import policy_from
+from .quote_repair import quote_options, resolve_quote
 
 
 def _content_key(finding: FindingContent) -> str:
@@ -104,6 +105,9 @@ def _repairable(candidate: ExtractionCandidate) -> bool:
                 "semantic_evidence_exceeds_input_capacity",
                 "unchanged_candidate",
                 "duplicate_accepted_finding",
+                "repair_quote_id_not_allowed",
+                "repair_quote_snapshot_mismatch",
+                "repair_quote_reference_conflict",
             )
         )
         for reason in reasons
@@ -116,6 +120,12 @@ def _suffix(question: str, candidates: list[ExtractionCandidate]) -> str:
             "candidate_id": item.id,
             "original": item.original.model_dump(),
             "last_attempt": item.attempts[-1].model_dump(),
+            "quote_options": [
+                {**option.model_dump(exclude={"text"}), "full_source": True}
+                if "-full-" in option.id
+                else option.model_dump()
+                for option in item.quote_options
+            ],
         }
         for item in candidates
     ]
@@ -125,6 +135,12 @@ def _suffix(question: str, candidates: list[ExtractionCandidate]) -> str:
         "只修复下列失败候选，不能添加其他主题或重复已通过的发现。"
         "修复要保留原信息目标，不能以无关的简单事实代替。"
         "可以扩大连续引文、纠正数值/单位、去掉无依据的条件、将复合论断拆成自洽事实。"
+        "quote_options 是程序从本来源定位的完整连续原文候选，并非已核验结论。"
+        "如其中原文支持修复后的论断，优先填写该区间的 quote_id、evidence_quote 留空；"
+        "程序将精确回填区间原文，避免重抄页眉页脚、公式控制字符时丢字。"
+        "full_source=true 的选项指该 URL 的完整来源原文，已在固定来源区给出，诊断区不重复；"
+        "局部区间缺少图注/表头/归属/条件时，可选完整来源区间，但仍不能猜测分组对应关系。"
+        "只能使用当前候选列出的编号；仍须判断区间是否完整支持论断，不能仅凭区间存在就接受。"
         "每条仍只能引用原候选相同的 source_url，不得跨来源拼句；"
         "数值候选必须保留可核验的结构化数值，不能删除 quantity 或原单位来绕过检查。"
         "科学计数法的 value 必须是完整数值而非尾数，rendered 保留明确的指数；"
@@ -218,6 +234,9 @@ async def check_extraction(
             pending = [item for item in audit.candidates if _repairable(item)]
             if not pending:
                 break
+            for item in pending:
+                if not item.quote_options:
+                    item.quote_options = quote_options(item, audit.sources)
             researcher.tracer.emit(
                 "RESEARCHER",
                 "info",
@@ -257,7 +276,10 @@ async def check_extraction(
                     attempt = ExtractionAttempt(
                         round=round_,
                         action=repair.action,
-                        proposals=repair.findings,
+                        proposals=[
+                            FindingContent.model_validate(f.model_dump()) for f in repair.findings
+                        ],
+                        quote_ids=[f.quote_id for f in repair.findings],
                         reason=repair.reason,
                     )
                     previous = {
@@ -283,7 +305,9 @@ async def check_extraction(
                         )
                     )
                     for proposal in repair.findings:
-                        check = _mechanical(proposal, audit.sources, researcher)
+                        resolved, quote_problems = resolve_quote(proposal, item, audit.sources)
+                        check = _mechanical(resolved, audit.sources, researcher)
+                        check.problems.extend(quote_problems)
                         if proposal.source_url != item.original.source_url:
                             check.problems.append("repair_changed_source")
                         if not numeric_preserved:

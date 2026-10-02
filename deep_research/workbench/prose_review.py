@@ -16,7 +16,14 @@ from ..models import ResearchResult
 from .delivery.markdown import _parser, framing_paragraphs
 from .delivery.math_markdown import citation_text, only_math
 from .gates import _body_without_references
-from .support import SupportDecision, SupportReviewer, SupportUnit, digest, evidence_records
+from .support import (
+    SUPPORT_POLICY_VERSION,
+    SupportDecision,
+    SupportReviewer,
+    SupportUnit,
+    digest,
+    evidence_records,
+)
 
 PROSE_REVIEW_KEY = "prose_review"
 _CITE = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
@@ -277,6 +284,7 @@ class ProseReviewer:
         return digest(
             {
                 "version": 4 if self.translation_citations is not None else 3,
+                "support_policy": SUPPORT_POLICY_VERSION,
                 "body": body_text(markdown, strip_references=False),
                 "evidence": self.evidence,
                 "source_version": self.source_version,

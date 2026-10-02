@@ -149,6 +149,10 @@ class Measurement:
     raw: str  # 原文片段，便于把失败讲清楚
     start: int = 0
     end: int = 0
+    header_metric: str = ""
+    row_metric: str = ""
+    unit_origin: str = ""
+    entity: str = ""
 
     def __str__(self) -> str:  # pragma: no cover - 仅用于错误信息
         return self.raw
@@ -162,25 +166,113 @@ def normalize_unit(unit: str) -> tuple[str, float]:
     return _UNIT_SCALE.get(key, (key, 1.0))
 
 
+_UNIT_HEADER = re.compile(
+    rf"^\s*(?P<metric>[A-Za-z][A-Za-z _-]*?)\s*(?:/\s*(?P<slash>{_UNIT_PATTERN})"
+    rf"|\(\s*(?P<paren>{_UNIT_PATTERN})\s*\)|\[\s*(?P<bracket>{_UNIT_PATTERN})\s*\])\s*$",
+    re.IGNORECASE,
+)
+_LABELLED_VALUE = re.compile(
+    r"^\s*(?P<entity>[^,\n:=]+),\s*(?P<metric>[A-Za-z][A-Za-z0-9 _-]*?)\s*=\s*(?P<value>.+?)\s*$"
+)
+
+
+def _label_matches_header(label: str, header: str) -> bool:
+    label, header = label.strip().casefold(), header.strip().casefold()
+    # AT is the average-time legend key, only interpreted within an explicitly
+    # time-labelled block. It is not a global alias for arbitrary evidence.
+    if header in {"runtime", "inference time", "latency", "time", "average runtime"}:
+        return label in {
+            "at",
+            "runtime",
+            "inference time",
+            "latency",
+            "time",
+            "average runtime",
+            "average time",
+        } or any(
+            alias in {"runtime", "inference time", "latency"} for alias in _metric_aliases(label)
+        )
+    return bool(set(_metric_aliases(label)) & set(_metric_aliases(header)))
+
+
+def _labelled_units(text: str) -> dict[int, tuple[int, str, str, str, str, str]]:
+    """Bind a unit only inside consecutive `method, metric=value` legend rows.
+
+    A free-standing unit near a number, a second axis, a caption, a blank line
+    or a row for a different metric cannot extend this scope. Tables with
+    several columns need explicit row/column metadata, not this heuristic.
+    """
+    out: dict[int, tuple[int, str, str, str, str, str]] = {}
+    active: tuple[str, str, str] | None = None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        header = _UNIT_HEADER.fullmatch(line.strip())
+        if header:
+            active = (
+                header["metric"],
+                header["slash"] or header["paren"] or header["bracket"],
+                line.strip(),
+            )
+        elif active:
+            row = _LABELLED_VALUE.fullmatch(line.rstrip("\r\n"))
+            scalar = _MEASUREMENT_RE.fullmatch(row["value"]) if row else None
+            if row is None or scalar is None or not _label_matches_header(row["metric"], active[0]):
+                active = None
+            elif not scalar["unit"]:
+                start = offset + row.start("value") + scalar.start()
+                out[start] = (
+                    start + scalar.end(),
+                    active[1],
+                    active[0],
+                    row["metric"],
+                    active[2],
+                    row["entity"].strip(),
+                )
+        offset += len(line)
+    return out
+
+
+def _measurement_metric_matches(metric: str, item: Measurement) -> bool:
+    return (
+        not metric
+        or not item.header_metric
+        or metric.strip().casefold() == item.row_metric.casefold()
+        or _label_matches_header(metric, item.header_metric)
+    )
+
+
+def has_labelled_units(text: str) -> bool:
+    """Flag stored numeric claims whose unit/metric scope needs current rechecking."""
+    return bool(_labelled_units(text or ""))
+
+
 def parse_measurements(text: str) -> list[Measurement]:
     """抽出文本里所有"数值+单位"。
 
     带千分位的数字先去掉逗号再转 float——``44,250`` 与 ``44250`` 是同一个数。
     """
     out: list[Measurement] = []
+    labelled = _labelled_units(text or "")
     for match in _MEASUREMENT_RE.finditer(text or ""):
         value = _number_value(match)
         if value is None:
             continue
-        unit, scale = normalize_unit(match.group("unit") or "")
+        contextual = labelled.get(match.start())
+        raw_unit = contextual[1] if contextual else match.group("unit") or ""
+        unit, scale = normalize_unit(raw_unit)
+        end = contextual[0] if contextual else match.end()
         if math.isfinite(value * scale):
             out.append(
                 Measurement(
                     value=value * scale,
                     unit=unit,
-                    raw=match.group(0).strip(),
+                    raw=text[match.start() : end].strip(),
                     start=match.start(),
-                    end=match.end(),
+                    end=end,
+                    header_metric=contextual[2] if contextual else "",
+                    row_metric=contextual[3] if contextual else "",
+                    unit_origin=contextual[4] if contextual else "",
+                    entity=contextual[5] if contextual else "",
                 )
             )
     return out
@@ -282,6 +374,10 @@ def _metric_context_supported(
     candidates: list[int] = []
     for item in parse_measurements(evidence):
         if item.unit == canonical_unit and abs(item.value - target) <= tolerance:
+            if item.header_metric:
+                if _measurement_metric_matches(metric, item):
+                    return True
+                continue
             candidates.append(item.start)
     if not candidates:
         return True
@@ -390,7 +486,11 @@ def _relation_for_quantity(
     tolerance = tolerance_for(rendered or repr(value), value) * scale
     candidates: list[tuple[int, int]] = []
     for measurement in parse_measurements(evidence):
-        if measurement.unit == canonical_unit and abs(measurement.value - target) <= tolerance:
+        if (
+            measurement.unit == canonical_unit
+            and abs(measurement.value - target) <= tolerance
+            and _measurement_metric_matches(metric, measurement)
+        ):
             candidates.append((measurement.start, measurement.end))
     if not candidates:
         return ""
@@ -487,6 +587,15 @@ def measurement_supported(
     found = parse_measurements(evidence)
     if not found:
         return (False, "no_measurement_in_evidence")
+    same_measurement = [
+        item
+        for item in found
+        if item.unit == canonical_unit and abs(item.value - target) <= tolerance
+    ]
+    if same_measurement and not any(
+        _measurement_metric_matches(metric, item) for item in same_measurement
+    ):
+        return (False, f"metric_mismatch: labelled value is not attached to {metric}")
     if metric and not _metric_context_supported(metric, value, unit, rendered, evidence):
         return (False, f"metric_mismatch: value is not attached to {metric}")
 
@@ -494,7 +603,14 @@ def measurement_supported(
     # 放宽它就等于允许把 SSIM 的 0.948 报成 PSNR。
     for measurement in found:
         if measurement.unit == canonical_unit and abs(measurement.value - target) <= tolerance:
-            return (True, "quantity_found_in_evidence")
+            if not _measurement_metric_matches(metric, measurement):
+                continue
+            return (
+                True,
+                "quantity_found_in_labelled_block: " + measurement.unit_origin
+                if measurement.unit_origin
+                else "quantity_found_in_evidence",
+            )
 
     # 第二轮：数值对上但单位不符——单独报出来。这是最危险的一类错误
     # （数字是真的，含义是错的），必须让人看到而不是笼统说"没找到"。

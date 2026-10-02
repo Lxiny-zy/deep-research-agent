@@ -37,6 +37,20 @@ def reviewer(llm=None, results=None, **kwargs):
     )
 
 
+async def test_changed_support_policy_cannot_reuse_an_old_positive_review(monkeypatch):
+    from deep_research.workbench import prose_review
+
+    checker = reviewer()
+    body = "存在相关关系 [1]。"
+    record = await checker.review(body)
+    assert checker.check(body, record)[0]
+    monkeypatch.setattr(
+        prose_review, "SUPPORT_POLICY_VERSION", prose_review.SUPPORT_POLICY_VERSION + 1
+    )
+    assert not checker.check(body, record)[0]
+    assert not checker.prime(body, record)
+
+
 class Judge(FakeLLM):
     """Test decisions inspect actual text; unlike broad integration fixtures."""
 

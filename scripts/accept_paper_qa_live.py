@@ -79,6 +79,9 @@ async def main() -> None:
         help="Reuse real extraction/verifier responses; call the model only for the answer",
     )
     parser.add_argument("--questions", nargs="+", default=["分析论文主要内容", "论文创新点是啥"])
+    parser.add_argument(
+        "--history-json", type=Path, help="Resume trusted local query/answer history"
+    )
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -204,7 +207,14 @@ async def main() -> None:
         search_tool=_FixedSources([]),
         global_rules=load_global_rules(),
     )
-    history = []
+    history = json.loads(args.history_json.read_text(encoding="utf-8")) if args.history_json else []
+    if not isinstance(history, list) or any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("query"), str)
+        or not isinstance(item.get("answer"), str)
+        for item in history
+    ):
+        raise ValueError("Expected a list of query/answer history records")
     cache = PaperEvidenceCache()
     results = []
     try:

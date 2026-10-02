@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from ..guardrails import report_eligible
 from ..models import Finding, ResearchResult
 from ..persistence.repository import LeaseLostError
-from ..prompting import structured_system_prompt
+from ..prompting import MEASUREMENT_SCOPE_RULES, structured_system_prompt
 
 
 class SupportDecision(BaseModel):
@@ -39,6 +39,8 @@ class SupportUnit:
     kind: str = "claim"
     citations: list[int] = field(default_factory=list)
 
+
+SUPPORT_POLICY_VERSION = 2
 
 _SYSTEM = (
     "你是独立的成品证据核对者，不是写作者。给定已通过来源门禁的证据和待核对单元，"
@@ -67,6 +69,7 @@ _SYSTEM = (
     "逐句双向核对：原文的事实、数值、限定条件和逻辑关系全部保留且无新增，才判 supported。"
     "漏译、拿正文片段替代、混入其他章节、把保留态度变成肯定结论均不能通过；"
     "必须覆盖全部所给摘要，不能仅因若干句子正确就通过，不得把译文判为 non_factual。"
+    + MEASUREMENT_SCOPE_RULES
 )
 
 

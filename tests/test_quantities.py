@@ -92,6 +92,60 @@ def test_a_unit_glued_to_a_word_is_not_treated_as_a_unit() -> None:
     assert found[0].unit == ""
 
 
+@pytest.mark.parametrize("metric", ["AT", "Runtime", "average Runtime (AT)", "平均 Runtime（AT）"])
+def test_legend_unit_is_bound_to_its_header_metric_and_value_offsets(metric):
+    quote = "Runtime/s\nRANSAC, AT=2.4336\nLAF, AT=0.3398\nLPM, AT=0.1244"
+    supported, reason = measurement_supported(
+        value=0.3398, unit="s", rendered="0.3398", evidence=quote, metric=metric
+    )
+    assert supported and reason == "quantity_found_in_labelled_block: Runtime/s"
+    assert measurement_supported(
+        value=0.3398, unit="s", rendered="0.3398", evidence=quote, metric="Runtime"
+    )[0]
+    assert not measurement_supported(
+        value=0.3398, unit="s", rendered="0.3398", evidence=quote, metric="PSNR"
+    )[0]
+    values = parse_measurements(quote)
+    assert len(values) == 3 and all(value.unit == "s" for value in values)
+    assert quote[values[1].start : values[1].end] == "0.3398"
+    assert comparison_supported(
+        "=", quote, value=0.3398, unit="s", rendered="0.3398", metric=metric
+    )[0]
+
+
+@pytest.mark.parametrize("header", ["Runtime/ms", "Runtime (ms)", "Runtime [ms]"])
+def test_labelled_unit_conversion_does_not_borrow_a_neighbouring_metric(header):
+    quote = header + "\nAlpha, AT=339.8\nBeta, AT=433.0\nPSNR\nAlpha, PSNR=39.1"
+    assert measurement_supported(value=0.3398, unit="s", rendered="0.3398", evidence=quote)[0]
+    assert not measurement_supported(value=39.1, unit="ms", rendered="39.1", evidence=quote)[0]
+
+
+@pytest.mark.parametrize("separator", ["\n\n", "\nPrecision\n", "\nFigure 5 shows runtimes.\n"])
+def test_labelled_unit_scope_stops_at_block_boundaries(separator):
+    quote = "Runtime/s\nAlpha, AT=0.3398" + separator + "Beta, AT=0.5678"
+    assert not measurement_supported(value=0.5678, unit="s", rendered="0.5678", evidence=quote)[0]
+
+
+def test_unit_heading_does_not_apply_to_arbitrary_numbers_or_other_metric_rows():
+    for quote in ("Runtime/s\nPSNR 38.4", "Runtime/s\nAlpha, PSNR=38.4", "Runtime/s\n38.4"):
+        assert not measurement_supported(value=38.4, unit="s", rendered="38.4", evidence=quote)[0]
+    quote = "PSNR/dB\nAlpha, PSNR=38.4\nBeta, PSNR=35.2"
+    assert measurement_supported(
+        value=38.4, unit="dB", rendered="38.4", evidence=quote, metric="PSNR"
+    )[0]
+
+
+def test_legacy_verified_record_cannot_drop_a_labelled_unit():
+    quote = "Runtime/s\nLAF, AT=0.3398\nLPM, AT=0.1244"
+    finding = _finding(quote=quote, quantity=Quantity(metric="AT", value=0.3398, rendered="0.3398"))
+    finding.verification.status = "verified"
+    finding.verification.semantic_status = "supported"
+    finding.verification.quantity_status = "verified"
+    assert not report_eligible(finding)
+    finding.quantity.unit = "s"
+    assert report_eligible(finding)
+
+
 def test_unknown_units_are_kept_verbatim_without_conversion() -> None:
     assert normalize_unit("furlong") == ("furlong", 1.0)
 

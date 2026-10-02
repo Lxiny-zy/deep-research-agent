@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from ..agents.base import Blackboard, RunContext, effective_require_corroboration
 from ..guardrails import report_eligible
 from ..models import Report, ResearchResult
-from ..prompting import SCIENTIFIC_MARKDOWN, PrefixPrompt
+from ..prompting import MEASUREMENT_SCOPE_RULES, SCIENTIFIC_MARKDOWN, PrefixPrompt
 from ..registry import register
 from ..report.validation import finalize_report
 from ..token_budget import TokenBudgetExceeded
@@ -59,6 +59,7 @@ _BASE_SYSTEM = (
     "不得另加素材中不存在的常数或整数下标。"
     "比较结论须说明任务范围、指标口径与适用条件；不要补写与当前任务无关的领域术语或缺口。"
     + SCIENTIFIC_MARKDOWN
+    + MEASUREMENT_SCOPE_RULES
 )
 
 

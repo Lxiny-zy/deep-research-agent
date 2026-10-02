@@ -6,7 +6,7 @@ from dataclasses import asdict
 from typing import Any
 
 from .figures import ConceptFigure
-from .support import SupportDecision, SupportReviewer, SupportUnit, digest
+from .support import SUPPORT_POLICY_VERSION, SupportDecision, SupportReviewer, SupportUnit, digest
 
 FIGURE_REVIEW_KEY = "figure_review"
 _CONTEXT = (
@@ -102,7 +102,12 @@ def structure_issues(figure: ConceptFigure) -> list[str]:
 
 def figure_signature(figure: ConceptFigure, evidence: list[dict[str, Any]]) -> str:
     return digest(
-        {"version": 1, "figure": _normalized(figure).model_dump(mode="json"), "evidence": evidence}
+        {
+            "version": 1,
+            "policy": SUPPORT_POLICY_VERSION,
+            "figure": _normalized(figure).model_dump(mode="json"),
+            "evidence": evidence,
+        }
     )
 
 
