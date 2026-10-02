@@ -6,7 +6,7 @@ pydantic>=2.7,<3
 tldextract>=5,<6
 fastapi>=0.110,<1
 anyio>=4,<5
-uvicorn[standard]>=0.29,<1
+uvicorn[standard]>=0.52.4,<1
 
 # Persistence (PostgreSQL in prod / SQLite locally)
 sqlalchemy[asyncio]>=2.0,<3
