@@ -279,7 +279,7 @@ async def test_failed_step_marks_run_degraded(settings) -> None:
 
 
 @pytest.mark.asyncio
-async def test_expand_in_order_is_concurrent_ordered_and_stops_early() -> None:
+async def test_expand_in_order_limits_documents_and_keeps_their_complete_sections() -> None:
     started: list[int] = []
     in_flight = 0
     peak = 0
@@ -295,9 +295,17 @@ async def test_expand_in_order_is_concurrent_ordered_and_stops_early() -> None:
 
     out = await expand_in_order(list(range(10)), expand, limit=5, window=3)
 
-    assert out == ["0a", "0b", "1a", "1b", "2a"]
+    assert out == ["0a", "0b", "1a", "1b", "2a", "2b", "3a", "3b", "4a", "4b"]
     assert peak == 3
-    assert started == [0, 1, 2]  # 凑够 limit 后不再展开后续窗口
+    assert started == [0, 1, 2, 3, 4]  # 只展开所选文献，不因章节较多而挤掉后续文献。
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+async def test_nonpositive_document_limit_does_not_download_anything(limit):
+    async def forbidden(item):
+        raise AssertionError("No input item was selected")
+
+    assert await expand_in_order(["paper"], forbidden, limit=limit) == []
 
 
 @pytest.mark.asyncio

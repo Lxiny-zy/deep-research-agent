@@ -13,7 +13,7 @@ from dataclasses import asdict
 from typing import Any
 
 from ..models import ResearchResult
-from .delivery.markdown import _parser, framing_paragraphs
+from .delivery.markdown import _parser, framing_paragraphs, parse_blocks
 from .delivery.math_markdown import citation_text, equation_prose_spans, only_math
 from .gates import _body_without_references
 from .support import (
@@ -28,6 +28,59 @@ from .support import (
 
 PROSE_REVIEW_KEY = "prose_review"
 _CITE = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
+_TABLE_REF = re.compile(
+    r"(?<![A-Za-z])(?:Table|Tab\.?|表)\s*(\d+[a-z]?|[A-Z]\d*|[一二三四五六七八九十百]+)"
+    r"(?![A-Za-z0-9])",
+    re.I,
+)
+
+
+def _report_tables(markdown: str) -> dict[str, list[dict[str, str]]]:
+    """Own table labels require an adjacent caption and an actual Markdown table."""
+    tokens = _parser().parse(markdown)
+    lines = markdown.splitlines()
+    captions = [
+        token
+        for token in tokens
+        if token.type in {"paragraph_open", "heading_open"} and token.level == 0 and token.map
+    ]
+    tables: dict[str, list[dict[str, str]]] = {}
+    for token in tokens:
+        if token.type != "table_open" or token.level != 0 or not token.map:
+            continue
+        caption = next(
+            (
+                candidate
+                for candidate in reversed(captions)
+                if candidate.map and candidate.map[1] <= token.map[0]
+            ),
+            None,
+        )
+        if caption is None or caption.map is None:
+            continue
+        if any(line.strip() for line in lines[caption.map[1] : token.map[0]]):
+            continue
+        title = "\n".join(lines[caption.map[0] : caption.map[1]])
+        plain_title = " ".join(block.plain() for block in parse_blocks(title))
+        match = _TABLE_REF.match(plain_title.strip())
+        if match is None:
+            continue
+        tables.setdefault(match[1].casefold(), []).append(
+            {"caption": title, "table": "\n".join(lines[token.map[0] : token.map[1]])}
+        )
+    return tables
+
+
+def _table_context(text: str, tables: dict[str, list[dict[str, str]]]) -> str:
+    mentioned = {m[1].casefold() for m in _TABLE_REF.finditer(citation_text(text))}
+    selected = {label: entries for label, entries in tables.items() if label in mentioned}
+    if not selected:
+        return ""
+    return (
+        "\n本报告内的表格编号与内容（只用于辨认报告自身的表号、排布和内部对应关系，"
+        "不是来源论文中的表号或新增事实证据；明确提到原文/作者的表格仍须按来源证据核对）：\n"
+        + json.dumps(selected, ensure_ascii=False)
+    )
 
 
 def body_text(markdown: str, *, strip_references: bool = True) -> str:
@@ -59,6 +112,7 @@ def prose_units(
     tokens = _parser().parse(body)
     framing_lines = framing_paragraphs(body)
     equation_spans = equation_prose_spans(body)
+    report_tables = _report_tables(body)
     translation_ranges: dict[int, int] = {}
     if translation_citations is not None:
         from .paper_abstract import translation_title
@@ -164,6 +218,8 @@ def prose_units(
             context += "\n表题：" + table_caption + "\n表头：" + table_header
         elif previous and token.type != "heading_open":
             context += "\n前文（只用于理解指代，不是新证据）：" + previous
+        if token.type not in {"fence", "code_block", "math_block"} and not is_translation:
+            context += _table_context(text, report_tables)
         key = digest([text, context, kind, cited])
         ordinal = duplicates[key]
         duplicates[key] += 1
