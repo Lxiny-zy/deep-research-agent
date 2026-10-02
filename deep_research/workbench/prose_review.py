@@ -268,6 +268,7 @@ class ProseReviewer:
         implicit: bool = False,
         corroboration: bool = False,
         translation_citations: list[int] | None = None,
+        statistics: dict[str, Any] | None = None,
     ) -> None:
         self.evidence = evidence
         self.source_version = source_version
@@ -277,7 +278,16 @@ class ProseReviewer:
         self.corroboration = corroboration
         self.capacity = capacity
         self.translation_citations = translation_citations
-        self.reviewer = SupportReviewer(llm, evidence, capacity, context=f"用户问题：{query}")
+        self.statistics = statistics
+        from .analysis_review import STATISTICS_RULES
+
+        self.reviewer = SupportReviewer(
+            llm,
+            evidence,
+            capacity,
+            context=f"用户问题：{query}",
+            system_rules=STATISTICS_RULES if statistics is not None else "",
+        )
         self.records: dict[str, dict[str, Any]] = {}
 
     def prime(self, markdown: str, record: dict[str, Any] | None) -> bool:
@@ -347,6 +357,8 @@ class ProseReviewer:
         )
 
     def signature(self, markdown: str) -> str:
+        from .analysis_review import STATISTICS_POLICY_VERSION
+
         return digest(
             {
                 "version": 4 if self.translation_citations is not None else 3,
@@ -357,6 +369,11 @@ class ProseReviewer:
                 "query": self.query,
                 "uncited_sections": self.uncited_sections,
                 "implicit": self.implicit,
+                **(
+                    {"statistics_policy": STATISTICS_POLICY_VERSION}
+                    if self.statistics is not None
+                    else {}
+                ),
                 **(
                     {"translation_citations": self.translation_citations}
                     if self.translation_citations is not None
@@ -436,6 +453,13 @@ class ProseReviewer:
             record["can_revise"] = False
             if not any("缺少完整摘要原文" in issue for issue in record["issues"]):
                 record["issues"].append("缺少完整摘要原文，不能核验摘要翻译")
+        if self.statistics is not None:
+            from .analysis_review import count_scope_issues
+
+            scope_issues = count_scope_issues(markdown, self.statistics)
+            if scope_issues:
+                record["status"] = "fail"
+                record["issues"].extend(scope_issues)
         # This memo exists only for one revision loop. Unknown remains unknown;
         # do not reroll a judgement just because finalization added references.
         self.records[content_key] = record
@@ -460,7 +484,11 @@ class ProseReviewer:
             return False, ["终稿核验未覆盖全部正文单元"]
         if record.get("units") != locations:
             return False, ["终稿核验定位与正文不一致"]
-        problems = []
+        from .analysis_review import count_scope_issues
+
+        problems = (
+            count_scope_issues(markdown, self.statistics) if self.statistics is not None else []
+        )
         if self.translation_citations is not None and not any(
             u.kind == "translation" for u in units
         ):
@@ -505,10 +533,12 @@ def reviewer_for_report(
     ledger = scratch.get("analysis")
     if workbench.get("template") == "dataAnalysis" and isinstance(ledger, dict) and ledger:
         from .analysis import ledger_facts
+        from .analysis_review import sample_size_scopes
 
         version = digest(ledger)
         payload = {
             "computed_facts": ledger_facts(ledger),
+            "sample_size_scopes": sample_size_scopes(ledger),
             "user_input_description": query,
             "data_origin": "程序生成的演示数据" if ledger.get("synthetic") else "用户提供的数据",
             "origin_semantics": (
@@ -530,7 +560,13 @@ def reviewer_for_report(
             }
         ]
         return ProseReviewer(
-            llm, evidence, capacity, source_version=version, query=query, implicit=True
+            llm,
+            evidence,
+            capacity,
+            source_version=version,
+            query=query,
+            implicit=True,
+            statistics=ledger,
         )
     contract = contract_from_scratch(scratch)
     paper_read = workbench.get("template") == "paperRead" or bool(

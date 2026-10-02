@@ -63,11 +63,12 @@ class AnalysisResult:
     source: dict[str, Any] = field(default_factory=dict)
     issues: list[str] = field(default_factory=list)
     input_sha256: str = ""
+    figure_policy: int = 2
 
     def snapshot(self) -> dict[str, Any]:
         """Freeze computed values; plots can be redrawn from these and the same input."""
         return {
-            "version": 3,
+            "version": 4,
             "facts": self.facts(),
             **{
                 name: getattr(self, name)
@@ -84,6 +85,7 @@ class AnalysisResult:
                     "source",
                     "issues",
                     "input_sha256",
+                    "figure_policy",
                 )
             },
             "figures": [
@@ -555,7 +557,19 @@ def analyse(
     import matplotlib.pyplot as plt
 
     figures: list[Figure] = []
-    for test in [item for item in tests if not item.get("paired")][:3]:
+    # Old reports refer to specific plots. Preserve their recorded policy when
+    # redrawing a download; expanded coverage applies to new analyses only.
+    figure_policy = int(frozen.get("figure_policy", 1)) if frozen else 2
+    if figure_policy >= 2 and (not paired_requested or not tests):
+        from .analysis_figures import distribution_figures
+
+        figures.extend(
+            distribution_figures(frame, numeric, [] if paired_requested else categorical)
+        )
+    legacy_tests = (
+        [item for item in tests if not item.get("paired")][:3] if figure_policy == 1 else []
+    )
+    for test in legacy_tests:
         fig, ax = plt.subplots(figsize=(6.4, 3.8))
         grouped = frame.groupby(test["group"])[test["variable"]]
         labels = [str(label) for label, _ in grouped]
@@ -607,7 +621,7 @@ def analyse(
                 png=_png(fig),
             )
         )
-    if not tests and numeric:
+    if figure_policy == 1 and not tests and numeric:
         column = numeric[0]
         fig, ax = plt.subplots(figsize=(6.4, 3.8))
         ax.hist(frame[column].dropna().to_numpy(), bins=min(20, max(5, len(frame) // 5)))
@@ -656,6 +670,7 @@ def analyse(
         source={} if synthetic else dict(source or {}),
         issues=issues,
         input_sha256=input_sha256,
+        figure_policy=figure_policy,
     )
 
 
@@ -810,6 +825,8 @@ class DataAnalyst:
             "不要在报告中声明‘所有数字照抄、未经改写’等写作过程保证，直接陈述统计事实。"
             "用户输入说明中的行号可作为输入来源说明复述，不能当作测量值或统计量。"
             "效应量按台账数值及样本含义解释，不引用台账未提供的经验阈值作大小分级。"
+            "总体有效样本量、单个分组样本量和变量对样本量必须分别陈述，"
+            "‘各组、均、其余及其分组’等概括不能把总样本量分配给每一组。"
         )
         user = f"分析问题：{question or '对数据做探索性分析'}\n\n## 统计台账\n{facts}\n"
         from .gates import structure_gate
