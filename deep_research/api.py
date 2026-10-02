@@ -1633,7 +1633,12 @@ async def create_run(
             settings = replace(settings, orchestration_mode="planner-driven")
     lease_owner = uuid4().hex
 
-    from .workbench.contract import CONTRACT_SCRATCH_KEY, build_contract, pasted_paper_text
+    from .workbench.contract import (
+        CONTRACT_SCRATCH_KEY,
+        build_contract,
+        pasted_paper_text,
+        provided_material,
+    )
     from .workbench.templates import get_template
 
     task_template = get_template(req.template) if req.template else None
@@ -1644,10 +1649,7 @@ async def create_run(
     if (
         project is not None
         and task_template is not None
-        and (
-            not task_template.supports_library
-            or (task_template.key == "litReview" and req.strategy == "none")
-        )
+        and (not task_template.supports_library or req.strategy == "none")
     ):
         raise HTTPException(
             422,
@@ -1797,10 +1799,7 @@ async def create_run(
             quality=settings.quality,
         )
         if (
-            (
-                task_template.input_kind == "paper"
-                or (task_template.key == "litReview" and req.strategy == "none")
-            )
+            (task_template.input_kind == "paper" or provided_material(contract))
             and not contract.papers
             and not req.attachments
             and (task_template.input_kind != "paper" or not pasted_paper_text(contract))
@@ -1811,8 +1810,8 @@ async def create_run(
                 422,
                 {
                     "code": "paper_required",
-                    "message": "请上传用于综述的文献文件，或粘贴 arXiv / DOI / 论文链接"
-                    if task_template.key == "litReview"
+                    "message": "请上传本次任务使用的材料，或粘贴 arXiv / DOI / 指定材料链接"
+                    if provided_material(contract)
                     else f"请提供要{task_template.title}的论文："
                     "粘贴 arXiv / DOI / 论文链接或论文文本，或上传论文文件",
                 },

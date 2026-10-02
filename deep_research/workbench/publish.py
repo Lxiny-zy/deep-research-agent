@@ -187,7 +187,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 31,
+        "format_version": 32,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -391,7 +391,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     from .quality import coerce_policy
 
     policy = coerce_policy(contract.quality if contract is not None else None)
-    from .contract import provided_review
+    from .contract import provided_material, provided_review
 
     min_citations = (
         contract.min_citations
@@ -417,7 +417,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 [f"{template.title}正文未通过检查，目前仅保留证据摘录，尚未完成所要求的交付"],
             )
         )
-    if provided_review(contract):
+    if provided_material(contract):
         from .corpus import corpus_issues
         from .revision import _used_indices
 
@@ -426,10 +426,11 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             scratch, detail.results, [u for i, u in enumerate(citations, 1) if i in selected]
         )
         gates.append(GateResult("provided_corpus", "fail" if issues else "pass", issues))
-        from .review_coverage import coverage_issues
+        if provided_review(contract):
+            from .review_coverage import coverage_issues
 
-        coverage = coverage_issues(scratch, detail.results)
-        gates.append(GateResult("review_coverage", "fail" if coverage else "pass", coverage))
+            coverage = coverage_issues(scratch, detail.results)
+            gates.append(GateResult("review_coverage", "fail" if coverage else "pass", coverage))
     if template.key == "mindmap" and extras.get("mindmap"):
         from .mindmap_contract import checked_review
 

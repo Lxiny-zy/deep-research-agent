@@ -1,4 +1,4 @@
-"""Coverage of every explicitly supplied document in a closed literature review."""
+"""Coverage of every explicitly supplied document in a task without open retrieval."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from ..bibliography import document_identity
 from ..guardrails import report_eligible
 from ..models import ResearchResult
 from .attachments import attachments_from_scratch
-from .contract import contract_from_scratch, provided_review
+from .contract import contract_from_scratch, provided_material
 
 
 def corpus_issues(
@@ -20,7 +20,7 @@ def corpus_issues(
 ) -> list[str]:
     """Check supplied evidence and citations; revisions can only fix omitted citations."""
     contract = contract_from_scratch(scratch)
-    if not provided_review(contract):
+    if not provided_material(contract):
         return []
     assert contract is not None
     intake = scratch.get("intake_sources")
@@ -46,7 +46,7 @@ def corpus_issues(
     for paper in contract.papers:
         documents.setdefault(paper.url, {"title": paper.value, "source_urls": [paper.url]})
     if not documents:
-        return [] if writable_only else ["没有提供可用于综述的论文链接或上传材料"]
+        return [] if writable_only else ["没有提供可用于本任务的指定链接或上传材料"]
     usable = {f.source_url for r in results for f in r.findings if report_eligible(f)}
     identities = {document_identity(url)[0] for url in usable}
     cited = {document_identity(url)[0] for url in usable.intersection(cited_urls or [])}
@@ -54,7 +54,7 @@ def corpus_issues(
     for entry in documents.values():
         title = entry.get("title") or entry.get("input_url") or "指定文献"
         if entry.get("truncated") and not writable_only:
-            issues.append(f"指定材料「{title}」未完整导入，不能视为完成全文综述")
+            issues.append(f"指定材料「{title}」未完整导入，不能视为完成本任务")
         urls = entry.get("source_urls", [])
         expected = {
             document_identity(url)[0]

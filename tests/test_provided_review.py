@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from deep_research.agents.base import Blackboard, RunContext
 from deep_research.models import ExtractedFindingList, ResearchResult, Source
 from deep_research.observability import Tracer
@@ -11,7 +13,7 @@ from deep_research.workbench.corpus import corpus_issues
 from deep_research.workbench.coverage import coverage_gaps
 from deep_research.workbench.intake import PaperIntake, pasted_sources
 from deep_research.workbench.revision import _used_indices
-from deep_research.workbench.templates import LIT_REVIEW, PAPER_READ
+from deep_research.workbench.templates import LIT_REVIEW, MINDMAP, PAPER_READ, SLIDES
 from tests.fakes import FakeLLM, FakeSearch, verified_finding
 
 
@@ -48,12 +50,13 @@ def test_coverage_counts_versions_of_a_work_once():
     assert gaps.metrics["sources"] == 1
 
 
-async def test_corpus_requires_each_input_in_the_body_and_flags_truncation():
+@pytest.mark.parametrize("template", [LIT_REVIEW, SLIDES, MINDMAP])
+async def test_corpus_requires_each_input_in_the_body_and_flags_truncation(template):
     a = await parse_attachment(b"Alpha has verified supporting material.", "same.txt")
     b = await parse_attachment(b"Beta has other verified supporting material.", "same.txt")
     scratch = {
         CONTRACT_SCRATCH_KEY: build_contract(
-            LIT_REVIEW, "Compare supplied papers", strategy="none"
+            template, "Compare supplied papers", strategy="none"
         ).model_dump(),
         "attachments": [a.model_dump(), b.model_dump()],
     }
@@ -166,7 +169,10 @@ async def test_pdf_document_import_retains_all_prepared_chunks(monkeypatch):
     assert sources[-1].locator == "第 19 页"
 
 
-async def test_multi_paper_intake_keeps_late_documents_and_never_searches(settings, monkeypatch):
+@pytest.mark.parametrize("template", [LIT_REVIEW, SLIDES, MINDMAP])
+async def test_multi_paper_intake_keeps_late_documents_and_never_searches(
+    settings, monkeypatch, template
+):
     from deep_research.workbench import intake
 
     papers = [f"https://paper.test/{i}.pdf" for i in range(3)]
@@ -196,7 +202,7 @@ async def test_multi_paper_intake_keeps_late_documents_and_never_searches(settin
     monkeypatch.setattr(intake, "fetch_paper", fetch)
     bb = Blackboard(query="Compare these papers")
     bb.scratch[CONTRACT_SCRATCH_KEY] = build_contract(
-        LIT_REVIEW, "\n".join(papers), strategy="none"
+        template, "\n".join(papers), strategy="none"
     ).model_dump()
     ctx = RunContext(llm=Reader(), search_tool=Forbidden(), tracer=Tracer(), settings=settings)
     await PaperIntake().step(bb, ctx)
@@ -205,9 +211,12 @@ async def test_multi_paper_intake_keeps_late_documents_and_never_searches(settin
     assert not corpus_issues(bb.scratch, bb.results)
 
 
-async def test_missing_closed_corpus_does_not_treat_long_instructions_as_a_paper(settings):
+@pytest.mark.parametrize("template", [LIT_REVIEW, SLIDES, MINDMAP])
+async def test_missing_closed_corpus_does_not_treat_long_instructions_as_a_paper(
+    settings, template
+):
     contract = build_contract(
-        LIT_REVIEW, "Please compare only supplied papers. " * 15, strategy="none"
+        template, "Please compare only supplied papers. " * 15, strategy="none"
     )
     bb = Blackboard(
         query=contract.original_request, scratch={CONTRACT_SCRATCH_KEY: contract.model_dump()}

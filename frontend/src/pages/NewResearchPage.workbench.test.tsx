@@ -76,6 +76,19 @@ const TEMPLATES = [
   },
   template('peerReview', '同行评审', 'peer_review'),
   template('dataAnalysis', '数据分析', 'data_analysis'),
+  ...(['slides', 'mindmap'] as const).map((key) => ({
+    ...template(key, key === 'slides' ? '幻灯片' : '思维导图', key),
+    default_strategy: 'quick' as const,
+    strategies: [
+      { key: 'quick' as const, label: '快速检索', description: '检索资料', workflow: key },
+      {
+        key: 'none' as const,
+        label: '仅指定材料',
+        description: '整理指定材料',
+        workflow: `${key}_provided`,
+      },
+    ],
+  })),
 ]
 
 vi.mock('../hooks/useWorkbench', () => ({
@@ -241,6 +254,37 @@ describe('NewResearchPage task templates', () => {
       strategy: 'deep',
       project_id: 'p1',
     })
+  })
+
+  it.each([
+    ['slides', '幻灯片'],
+    ['mindmap', '思维导图'],
+  ])('submits %s with closed materials and restores open-search choices', async (key, title) => {
+    render(
+      <MemoryRouter>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByLabelText(new RegExp(title)))
+    fireEvent.change(await screen.findByLabelText(/资料库项目/), { target: { value: 'p1' } })
+    fireEvent.click(screen.getByLabelText('仅指定材料'))
+    expect(screen.queryByLabelText(/资料库项目/)).not.toBeInTheDocument()
+    expect(screen.getByText(/不补充外部资料/)).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('快速检索'))
+    expect(screen.getByLabelText(/资料库项目/)).toHaveValue('p1')
+    fireEvent.click(screen.getByLabelText('仅指定材料'))
+    fireEvent.change(screen.getByLabelText(`${title}输入`), {
+      target: { value: '整理 https://paper.test/a.pdf 和 https://paper.test/b.pdf' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: `开始${title}` }))
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
+    expect(mocks.createRun.mock.calls[0][0]).toMatchObject({
+      template: key,
+      strategy: 'none',
+      workflow: null,
+      project_id: null,
+    })
+    expect(mocks.assessIntent).not.toHaveBeenCalled()
   })
 
   it('lets the user override the tier and shows the daily quota', async () => {

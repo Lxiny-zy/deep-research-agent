@@ -173,8 +173,9 @@ def build_contract(
             focus = query.strip()
         else:
             focus, dataset = _split_dataset(query)
-    provided_review = template.key == "litReview" and strategy == "none"
-    papers = extract_papers(query) if template.input_kind == "paper" or provided_review else []
+    closed_material = template.key in {"litReview", "slides", "mindmap"} and strategy == "none"
+    closed_review = template.key == "litReview" and closed_material
+    papers = extract_papers(query) if template.input_kind == "paper" or closed_material else []
     if template.input_kind == "paper":
         focus = _URL_RE.sub("", query)
         focus = _ARXIV_RE.sub("", focus)
@@ -183,13 +184,18 @@ def build_contract(
 
     policy = coerce_policy(quality)
     min_citations = (
-        0 if provided_review else policy.min_citations_for(template.key, template.min_citations)
+        0 if closed_review else policy.min_citations_for(template.key, template.min_citations)
     )
     constraints: list[str] = []
-    if provided_review:
+    if closed_review:
         constraints.append(
             "仅使用明确指定的论文与上传文件，不补充外部文献；逐篇核对并在正文引用每份材料。"
             "按主题比较，明确输入范围；不将有限材料称为领域全景，不为满足开放检索的数量门槛凑数。"
+        )
+    elif closed_material:
+        constraints.append(
+            "仅使用上传文件与明确指定的链接，不进行开放检索；每份材料都须读取并在交付内容中"
+            "体现其相关证据，不得遗漏、用其他来源替代，或把任务说明当作来源材料。"
         )
     if min_citations:
         constraints.append(f"至少引用 {min_citations} 个不同的已核验来源，不得用无关文献凑数。")
@@ -263,6 +269,14 @@ def contract_from_scratch(scratch: dict[str, Any]) -> TaskContract | None:
 
 def provided_review(contract: TaskContract | None) -> bool:
     return contract is not None and contract.template == "litReview" and contract.strategy == "none"
+
+
+def provided_material(contract: TaskContract | None) -> bool:
+    return (
+        contract is not None
+        and contract.template in {"litReview", "slides", "mindmap"}
+        and contract.strategy == "none"
+    )
 
 
 __all__ = [

@@ -26,7 +26,7 @@ InputKind = Literal["topic", "paper", "dataset"]
 Strategy = Literal["none", "quick", "deep"]
 
 STRATEGY_LABELS: dict[str, tuple[str, str]] = {
-    "none": ("不检索", "只使用你提供的论文或数据"),
+    "none": ("不检索", "只使用你提供的材料"),
     "quick": ("快速检索", "规划后检索一轮即写作，省时省 token"),
     "deep": ("深度检索", "多子问题并行检索、逐字核验证据、反思补洞"),
 }
@@ -101,9 +101,13 @@ class TaskTemplate:
                     "key": key,
                     "label": "仅指定文献"
                     if self.key == "litReview" and key == "none"
+                    else "仅指定材料"
+                    if self.key in {"slides", "mindmap"} and key == "none"
                     else STRATEGY_LABELS[key][0],
                     "description": "比较上传文件与指定论文，不补充外部文献"
                     if self.key == "litReview" and key == "none"
+                    else "整理上传文件与指定链接，不补充外部资料"
+                    if self.key in {"slides", "mindmap"} and key == "none"
                     else STRATEGY_LABELS[key][1],
                     "workflow": name,
                 }
@@ -228,7 +232,13 @@ PEER_REVIEW = TaskTemplate(
     deliverables=("md", "docx", "pdf", "html"),
     examples=("https://arxiv.org/abs/2205.10102", "https://arxiv.org/abs/2501.12705"),
     writer_brief=(
-        "以严格、公正的顶会审稿人口吻写作。所有判断必须指向论文中的具体内容；"
+        "依据用户指定的评审目的与评价维度，给出严格、公正的意见。用户未指定投稿场景时，"
+        "不自行套用顶会录用门槛；说明本次评分依据。所有事实判断必须指向论文中的具体内容。"
+        "区分原文证实的缺陷、需作者澄清的问题和建议增加的验证；"
+        "未核实的信息不能作为确定缺陷或扣分事实，建议补充不等于原文没有。"
+        "复用既有模块本身不是缺陷；先明确哪些组件沿用、哪些改动由作者提出，再评价增量及其证据。"
+        "每项重要意见说明证据、对结论的影响和可执行的修改方法。"
+        "摘要与实验复述保持简洁，不重复搬运全部数据表；只列支持具体评审判断所必需的比较。"
         "评分用「评分：N/10」的格式单独成行，N 为 1–10 的整数。"
     ),
     min_length=800,
@@ -317,7 +327,7 @@ SLIDES = TaskTemplate(
         "问题与目标、方法、关键结果、讨论与局限、结论、Q&A。每页 3–5 条要点并附演讲备注。"
     ),
     icon="presentation",
-    strategies={"quick": "slides", "deep": "slides_deep"},
+    strategies={"quick": "slides", "deep": "slides_deep", "none": "slides_provided"},
     default_strategy="quick",
     input_kind="topic",
     input_label="演示主题或论文",
@@ -350,7 +360,7 @@ MINDMAP = TaskTemplate(
         "事实节点保留引用，交付可交互 HTML、静态 PNG 与完整 Markdown 大纲。"
     ),
     icon="mindmap",
-    strategies={"quick": "mindmap", "deep": "mindmap_deep"},
+    strategies={"quick": "mindmap", "deep": "mindmap_deep", "none": "mindmap_provided"},
     default_strategy="quick",
     input_kind="topic",
     input_label="导图主题",

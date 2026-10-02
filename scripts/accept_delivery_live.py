@@ -82,6 +82,7 @@ async def run_case(
     papers: list[Path] | None = None,
     strategy: str | None = None,
     query_override: str | None = None,
+    live_search: bool = False,
 ) -> dict:
     from deep_research.config import Settings
     from deep_research.llm import LLM
@@ -94,6 +95,8 @@ async def run_case(
 
     target = output / key
     target.mkdir(parents=True, exist_ok=True)
+    if live_search and (key not in {"autoResearch", "litReview"} or strategy == "none"):
+        raise ValueError("Live retrieval requires an open research or literature review task")
     settings = Settings(
         llm_api_key=profile["api_key"],
         llm_base_url=profile["base_url"],
@@ -141,7 +144,7 @@ async def run_case(
     attachments = []
     if key != "dataAnalysis":
         inputs = ([paper] if paper else []) + (papers or [])
-        if not inputs:
+        if not inputs and not live_search:
             raise ValueError("Paper input required")
         for input_path in inputs:
             item = await parse_attachment(
@@ -177,8 +180,59 @@ async def run_case(
             self.calls += 1
             raise AssertionError("A provided-material review must not perform open retrieval")
 
+    from deep_research.tools.base import SearchTool
+
+    class LiveSources(SearchTool):
+        """Public production backends with full retrieval records; no paid search keys."""
+
+        def __init__(self):
+            from deep_research.tools.arxiv_search import ArxivSearch
+            from deep_research.tools.composite import MultiBackendSearch
+            from deep_research.tools.openalex import OpenAlexSearch
+
+            options = {
+                "timeout": settings.request_timeout,
+                "fulltext": settings.fulltext_enabled,
+                "fulltext_max_chars": settings.fulltext_max_chars,
+            }
+            self.delegate = MultiBackendSearch([ArxivSearch(**options), OpenAlexSearch(**options)])
+            self.calls = 0
+
+        @property
+        def backend_name(self):
+            return self.delegate.backend_name
+
+        def set_tracer(self, tracer):
+            super().set_tracer(tracer)
+            self.delegate.set_tracer(tracer)
+
+        async def search(self, query, *, max_results=5):
+            self.calls += 1
+            number, started = self.calls, time.monotonic()
+            record = {"query": query, "requested_results": max_results, "status": "interrupted"}
+            try:
+                sources = await self.delegate.search(query, max_results=max_results)
+                record.update(
+                    status="complete", sources=[s.model_dump(mode="json") for s in sources]
+                )
+                return sources
+            except Exception as exc:
+                record.update(status="error", error_type=type(exc).__name__)
+                raise
+            finally:
+                record["seconds"] = time.monotonic() - started
+                encoded = json.dumps(record, ensure_ascii=False, indent=2)
+                if profile["api_key"] in encoded:
+                    raise RuntimeError("Refusing to persist a credential")
+                (target / f"retrieval-{number}.json").write_text(encoded, encoding="utf-8")
+
+        async def aclose(self):
+            await self.delegate.aclose()
+
     search = (
-        ProvidedOnly([])
+        LiveSources()
+        if live_search
+        else ProvidedOnly([])
         if strategy == "none"
         else _FixedSources([s for a in attachments for s in a.sources()])
     )
@@ -280,9 +334,14 @@ async def run_case(
         (target / "local-detail.pickle").write_bytes(frozen)
         metadata = {
             "model": profile["model"],
-            "input": [item.filename for item in attachments] or "labelled synthetic paired data",
-            "open_retrieval_calls": search.calls if isinstance(search, ProvidedOnly) else None,
-            "search": "frozen supplied paper sources; not a search recall test",
+            "input": [item.filename for item in attachments]
+            or ("open research question" if live_search else "labelled synthetic paired data"),
+            "open_retrieval_calls": search.calls
+            if isinstance(search, (ProvidedOnly, LiveSources))
+            else None,
+            "search": "live arXiv and OpenAlex with configured full-text expansion"
+            if live_search
+            else "frozen supplied paper sources; not a search recall test",
             "tokens": agent.tracer.total_tokens,
             "run_status": detail.status,
         }
@@ -307,6 +366,7 @@ async def run_case(
         beat.cancel()
         await asyncio.gather(beat, return_exceptions=True)
         await agent.aclose()
+        await search.aclose()
 
 
 def render_case(
@@ -343,6 +403,9 @@ async def main() -> None:
     parser.add_argument("--papers", type=Path, nargs="+")
     parser.add_argument("--strategy", choices=["none", "quick", "deep"])
     parser.add_argument("--query-file", type=Path)
+    parser.add_argument(
+        "--live-search", action="store_true", help="Use live arXiv/OpenAlex for open research tasks"
+    )
     parser.add_argument("--templates", nargs="+", default=["dataAnalysis"])
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
@@ -381,6 +444,7 @@ async def main() -> None:
             papers=args.papers,
             strategy=args.strategy,
             query_override=args.query_file.read_text(encoding="utf-8") if args.query_file else None,
+            live_search=args.live_search,
         )
 
 

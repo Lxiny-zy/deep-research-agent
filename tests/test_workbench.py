@@ -497,6 +497,99 @@ async def test_slides_and_mindmap_runs_deliver_binary_formats(settings) -> None:
     assert next(g for g in bundle.gates if g.name == "structure").status == "pass"
 
 
+@pytest.mark.parametrize("key", ["slides", "mindmap"])
+async def test_closed_visual_workflow_reads_each_file_once_and_requires_every_input(settings, key):
+    from deep_research.models import ExtractedFindingList
+    from deep_research.workbench.attachments import parse_attachment
+
+    attachments = [
+        await parse_attachment(b"Alpha uses spectral attention.", "alpha.txt"),
+        await parse_attachment(b"Beta uses spatial filters.", "beta.txt"),
+    ]
+    sources = [source for item in attachments for source in item.sources()]
+    extracted = []
+
+    class ClosedLLM(WorkbenchLLM):
+        async def parse(self, system, user, schema, **kwargs):
+            if schema is ExtractedFindingList:
+                selected = [source for source in sources if source.url in user]
+                extracted.extend(source.url for source in selected)
+                return ExtractedFindingList(
+                    findings=[verified_finding(s.content, s.url, s.content) for s in selected]
+                )
+            if schema is SlideDeck:
+                return SlideDeck(
+                    title="方法汇报",
+                    slides=[
+                        {
+                            "title": title,
+                            "bullets": [s.content for s in sources],
+                            "notes": "讨论两类方法。",
+                            "citations": [1, 2],
+                        }
+                        for title in get_template(key).section_titles()[1:]
+                    ],
+                )
+            if schema is Mindmap:
+                return Mindmap(
+                    root="两类方法",
+                    branches=[
+                        {"label": s.content, "kind": "claim", "citations": [i]}
+                        for i, s in enumerate(sources, 1)
+                    ],
+                )
+            return await super().parse(system, user, schema, **kwargs)
+
+    class NoSearch(FakeSearch):
+        calls = 0
+
+        async def search(self, *args, **kwargs):
+            self.calls += 1
+            raise AssertionError("Provided materials must not invoke open retrieval")
+
+    query = "根据上传的两份材料整理方法与结论"
+    template = get_template(key)
+    workflow = template.workflow_for("none")
+    execution = create_initial_execution(query, workflow, settings)
+    execution.checkpoint["scratch"].update(
+        {
+            CONTRACT_SCRATCH_KEY: build_contract(template, query, strategy="none").model_dump(),
+            "attachments": [item.model_dump() for item in attachments],
+        }
+    )
+    repo = InMemoryRepository()
+    run_id = await repo.create_run(query, execution=execution)
+    search = NoSearch()
+    agent = DeepResearchAgent(
+        settings,
+        llm=ClosedLLM(""),
+        search_tool=search,
+        workflow=workflow,
+        repo=repo,
+        run_id=run_id,
+        initial_execution=execution,
+    )
+    try:
+        await agent.run(query)
+        detail = await repo.get_run(run_id)
+        assert sorted(extracted) == sorted(s.url for s in sources)
+        assert search.calls == 0
+        bundle = build_bundle(detail)
+        gate = next(g for g in bundle.gates if g.name == "provided_corpus")
+        assert gate.status == "pass", gate.issues
+        formats = {file.format for file in bundle.files}
+        assert {"pptx", "md"} <= formats if key == "slides" else {"html", "png", "md"} <= formats
+        # A late/failed input cannot be ignored merely because the rest rendered.
+        extra = await parse_attachment(b"Gamma is another required material.", "gamma.txt")
+        detail.orchestration.checkpoint["scratch"]["attachments"].append(extra.model_dump())
+        failed = build_bundle(detail)
+        gate = next(g for g in failed.gates if g.name == "provided_corpus")
+        assert gate.status == "fail" and "gamma.txt" in str(gate.issues)
+        assert failed.status == "fail" and {file.format for file in failed.files} == {"md"}
+    finally:
+        await agent.aclose()
+
+
 @pytest.mark.asyncio
 async def test_data_analysis_run_falls_back_when_writer_invents_numbers(settings) -> None:
     query = "三种方法差异显著吗？\nmethod,psnr\n" + "\n".join(
@@ -711,6 +804,40 @@ async def test_provided_review_requires_real_inputs_and_freezes_closed_scope(api
     assert detail.orchestration.workflow_name == "lit_review_provided"
     contract = detail.orchestration.checkpoint["scratch"][CONTRACT_SCRATCH_KEY]
     assert contract["min_citations"] == 0 and len(contract["papers"]) == 2
+
+
+@pytest.mark.parametrize("key", ["slides", "mindmap"])
+async def test_provided_visual_task_rejects_missing_inputs_and_freezes_direct_workflow(
+    api_repo, key
+):
+    api, repo = api_repo
+    async with _client(api.app) as client:
+        missing = await client.post(
+            "/api/runs",
+            json={"template": key, "strategy": "none", "query": "整理指定材料。" * 50},
+        )
+        query = "整理 https://paper.test/a.pdf 和 https://paper.test/b.pdf"
+        preview = await client.post(
+            "/api/templates/contract", json={"template": key, "strategy": "none", "query": query}
+        )
+        created = await client.post(
+            "/api/runs",
+            json={"template": key, "strategy": "none", "workflow": "deep", "query": query},
+        )
+    assert missing.status_code == 422 and missing.json()["detail"]["code"] == "paper_required"
+    assert created.status_code == 202, created.text
+    assert len(await repo.list_runs()) == 1
+    detail = await repo.get_run(created.json()["run_id"])
+    assert detail.orchestration.workflow_name == f"{key}_provided"
+    contract = detail.orchestration.checkpoint["scratch"][CONTRACT_SCRATCH_KEY]
+    assert contract["strategy"] == "none" and len(contract["papers"]) == 2
+    assert preview.json()["papers"] == contract["papers"]
+    assert preview.json()["pasted_paper_chars"] == 0
+    assert [step.agent for step in WORKFLOWS[f"{key}_provided"].steps] == [
+        "attachment_reader",
+        "paper_intake",
+        "slide_writer" if key == "slides" else "mindmap_writer",
+    ]
 
 
 async def test_task_creation_retains_all_attachment_chunks_and_rejects_partial_uploads(api_repo):

@@ -22,7 +22,7 @@ from ..artifacts import ArtifactError
 from ..models import Source
 from ..persistence.repository import RunDetail
 from .attachments import attachments_from_scratch, load_original
-from .contract import PaperReference, contract_from_scratch, pasted_paper_text, provided_review
+from .contract import PaperReference, contract_from_scratch, pasted_paper_text, provided_material
 from .intake import PAPER_SOURCES_KEY, pasted_sources
 
 READER_CACHE_DIR = "reader"
@@ -79,7 +79,7 @@ def reader_documents(detail: RunDetail) -> list[dict[str, Any]]:
                 }
             )
         if (
-            not provided_review(contract)
+            not provided_material(contract)
             and not contract.papers
             and not documents
             and pasted_paper_text(contract)
@@ -114,7 +114,7 @@ def paper_sources_from_scratch(scratch: dict[str, Any]) -> list[Source]:
         contract = contract_from_scratch(scratch)
         pasted = (
             pasted_paper_text(contract)
-            if contract is not None and not provided_review(contract)
+            if contract is not None and not provided_material(contract)
             else ""
         )
         if pasted:

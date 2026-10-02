@@ -70,8 +70,7 @@ function ResearchComposer() {
     strategyChoice?.template === templateKey
       ? strategyChoice.key
       : (activeTemplate?.default_strategy ?? null)
-  const supportsLibrary =
-    templateSupportsLibrary && !(templateKey === 'litReview' && strategy === 'none')
+  const supportsLibrary = templateSupportsLibrary && strategy !== 'none'
   const effectiveProjectId = supportsLibrary ? projectId : ''
   const contract = useContractPreview(templateKey, query, templateOwnsWorkflow, strategy)
   // 课题调研选了「快速检索 / 深度检索」时由策略决定流程；只有用户在高级里
@@ -454,7 +453,9 @@ function ResearchComposer() {
                     ? '用于补充说明；统计数据请通过上方表格入口上传或粘贴。'
                     : templateKey === 'litReview' && strategy === 'none'
                       ? '作为本次综述的指定文献，会逐份核对并引用。'
-                      : '可补充论文或背景材料。'}
+                      : strategy === 'none' && ['slides', 'mindmap'].includes(templateKey)
+                        ? '仅使用这些文件与输入框中的指定链接，逐份读取，不补充外部资料。'
+                        : '可补充论文或背景材料。'}
                 </span>
               </span>
               <AttachmentDropzone

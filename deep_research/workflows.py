@@ -166,6 +166,22 @@ MINDMAP = Workflow(
     ],
 )
 
+SLIDES_PROVIDED = Workflow(
+    name="slides_provided",
+    description="指定材料汇报：读取上传文件与指定链接，生成有证据的幻灯片，不做开放检索",
+    steps=[Step(agent="attachment_reader"), Step(agent="paper_intake"), Step(agent="slide_writer")],
+)
+
+MINDMAP_PROVIDED = Workflow(
+    name="mindmap_provided",
+    description="指定材料导图：完整读取指定输入，组织概念与证据，不做开放检索",
+    steps=[
+        Step(agent="attachment_reader"),
+        Step(agent="paper_intake"),
+        Step(agent="mindmap_writer"),
+    ],
+)
+
 # 同一任务的其它检索策略：交付角色不变，只替换「怎么找证据」这一段。
 LIT_REVIEW_QUICK = Workflow(
     name="lit_review_quick",
@@ -249,8 +265,10 @@ WORKBENCH_WORKFLOWS = (
     DATA_ANALYSIS,
     SLIDES,
     SLIDES_DEEP,
+    SLIDES_PROVIDED,
     MINDMAP,
     MINDMAP_DEEP,
+    MINDMAP_PROVIDED,
 )
 
 WORKFLOWS = {

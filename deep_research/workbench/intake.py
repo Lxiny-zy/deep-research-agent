@@ -27,7 +27,7 @@ from ..models import Source, SubQuestion
 from ..registry import register
 from ..tools.base import SearchTool
 from .attachments import attachments_from_scratch
-from .contract import PaperReference, contract_from_scratch, pasted_paper_text, provided_review
+from .contract import PaperReference, contract_from_scratch, pasted_paper_text, provided_material
 from .roles import PAPER_INTAKE_ROLE
 
 logger = logging.getLogger(__name__)
@@ -168,6 +168,8 @@ def _question_for(template_key: str, focus: str) -> str:
             "按研究主题提取指定文献各自的方法、输入与实验条件、主要结果和边界，"
             "保留论文归属，不能混写不同文献的数值或假设。"
         ),
+        "slides": "按汇报主题提取问题、方法、关键结果与局限，保留讲解所需的条件和来源归属。",
+        "mindmap": "按导图主题提取核心概念、概念间关系、支持事实与待研究问题，保留来源归属。",
     }.get(template_key, "这篇论文的主要内容、方法与结论是什么？")
     return f"{base} 用户关注：{focus}" if focus else base
 
@@ -180,12 +182,20 @@ class PaperIntake:
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         contract = contract_from_scratch(bb.scratch)
-        if contract is None and bb.scratch.get("requested_workflow") == "lit_review_provided":
+        closed_workflows = {
+            "lit_review_provided": "litReview",
+            "slides_provided": "slides",
+            "mindmap_provided": "mindmap",
+        }
+        template_key = closed_workflows.get(bb.scratch.get("requested_workflow", ""))
+        if contract is None and template_key:
             from .contract import CONTRACT_SCRATCH_KEY, build_contract
-            from .templates import LIT_REVIEW
+            from .templates import get_template
 
+            template = get_template(template_key)
+            assert template is not None
             contract = build_contract(
-                LIT_REVIEW, bb.query, strategy="none", quality=ctx.settings.quality
+                template, bb.query, strategy="none", quality=ctx.settings.quality
             )
             bb.scratch[CONTRACT_SCRATCH_KEY] = contract.model_dump(mode="json")
         if contract is None:
@@ -195,7 +205,7 @@ class PaperIntake:
 
         papers = contract.papers
         failures: list[dict[str, Any]] = []
-        focus = contract.focus or (contract.original_request if provided_review(contract) else "")
+        focus = contract.focus or (contract.original_request if provided_material(contract) else "")
         documents: list[dict[str, Any]] = []
         if papers:
             mode = "papers"
@@ -230,7 +240,7 @@ class PaperIntake:
                 data={"category": "paper_intake", "mode": "attachments"},
             )
             return bb
-        elif not provided_review(contract) and (pasted := pasted_paper_text(contract)):
+        elif not provided_material(contract) and (pasted := pasted_paper_text(contract)):
             mode = "pasted"
             collected = pasted_sources(pasted)
             focus = ""  # 粘贴的是论文本身，不是用户的关注点
