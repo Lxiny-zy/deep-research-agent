@@ -55,6 +55,26 @@ describe('useAttachments', () => {
     expect(result.current.items[1].error).toBe('文档中没有可提取的文字')
     expect(result.current.payloads).toHaveLength(0)
   })
+
+  it('rejects an excessive selection as a whole instead of silently losing later files', () => {
+    const { result } = renderHook(() => useAttachments())
+    act(() => result.current.add(Array.from({ length: 9 }, (_, index) => file(`${index}.txt`))))
+    expect(result.current.items).toHaveLength(0)
+    expect(result.current.selectionError).toContain('本次选择未添加')
+    expect(mocks.uploadAttachment).not.toHaveBeenCalled()
+  })
+
+  it('keeps a truncated server response as an error, never a ready attachment', async () => {
+    mocks.uploadAttachment.mockResolvedValue({
+      attachment: { id: 'partial', truncated: true },
+      summary: { truncated: true },
+    })
+    const { result } = renderHook(() => useAttachments())
+    act(() => result.current.add([file('paper.txt')]))
+    await waitFor(() => expect(result.current.items[0].status).toBe('error'))
+    expect(result.current.items[0].error).toContain('未完整解析')
+    expect(result.current.payloads).toHaveLength(0)
+  })
 })
 
 describe('AttachmentDropzone', () => {

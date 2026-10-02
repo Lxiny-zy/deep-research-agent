@@ -26,8 +26,12 @@ from ..models import Source
 
 ATTACHMENTS_SCRATCH_KEY = "attachments"
 MAX_ATTACHMENTS = 8
-MAX_CHUNKS_PER_FILE = 40
-MAX_TOTAL_CHUNKS = 120
+# Resource bounds apply to complete inputs, never to a silently shortened copy.
+MAX_CHUNKS_PER_FILE = 2048
+MAX_PARSED_CHARS_PER_FILE = (
+    2_000_000  # Includes chunk overlap; import text itself is bounded to 1M.
+)
+MAX_TOTAL_PARSED_CHARS = 8_000_000
 MAX_FILE_BYTES = 16 * 1024 * 1024
 
 SUPPORTED_EXTENSIONS = {
@@ -157,12 +161,17 @@ async def parse_attachment(raw: bytes, filename: str, mime_type: str = "") -> At
         AttachmentChunk(
             ordinal=int(str(chunk.get("ordinal", index))),
             locator=str(chunk.get("locator", ""))[:300],
-            content=str(chunk.get("content", ""))[:8000],
+            content=str(chunk.get("content", "")),
             page=_page_of(chunk.get("page_start")),
         )
         for index, chunk in enumerate(prepared.chunks)
         if str(chunk.get("content", "")).strip()
     ]
+    if (
+        len(chunks) > MAX_CHUNKS_PER_FILE
+        or sum(len(c.content) for c in chunks) > MAX_PARSED_CHARS_PER_FILE
+    ):
+        raise AttachmentError("完整解析结果超过文件处理容量，未截断文件；请拆分材料后重试")
     authors = prepared.metadata.get("authors")
     return Attachment(
         id=hashlib.sha256(raw).hexdigest()[:24],
@@ -173,8 +182,7 @@ async def parse_attachment(raw: bytes, filename: str, mime_type: str = "") -> At
         char_count=prepared.char_count,
         title=str(prepared.metadata.get("document_title") or ""),
         authors=authors if isinstance(authors, list) else [],
-        truncated=len(chunks) > MAX_CHUNKS_PER_FILE,
-        chunks=chunks[:MAX_CHUNKS_PER_FILE],
+        chunks=chunks,
     )
 
 
@@ -256,24 +264,25 @@ def load_original(settings: Any, attachment_id: str) -> bytes | None:
 
 
 def limit_attachments(items: list[Attachment]) -> list[Attachment]:
-    """按总量上限截断（去重后保序），保证 checkpoint 与模型上下文都有界。"""
+    """Deduplicate complete files; reject excess inputs before creating a task."""
     seen: set[str] = set()
     kept: list[Attachment] = []
-    budget = MAX_TOTAL_CHUNKS
+    total_chars = 0
     for item in items:
-        if item.id in seen or budget <= 0 or len(kept) >= MAX_ATTACHMENTS:
+        if item.id in seen:
             continue
+        if len(kept) >= MAX_ATTACHMENTS:
+            raise AttachmentError(f"最多提交 {MAX_ATTACHMENTS} 个文件，请减少文件数量后重试")
+        if item.truncated or not item.chunks:
+            raise AttachmentError(f"「{item.filename}」未完整解析，请重新上传；未创建任务")
+        chars = sum(len(chunk.content) for chunk in item.chunks)
+        if chars > MAX_PARSED_CHARS_PER_FILE:
+            raise AttachmentError(f"「{item.filename}」完整文本超过文件处理容量，未创建任务")
+        total_chars += chars
+        if total_chars > MAX_TOTAL_PARSED_CHARS:
+            raise AttachmentError("附件合计文本超过 800 万字符，未创建任务；请减少文件或分批处理")
         seen.add(item.id)
-        chunks = item.chunks[:budget]
-        budget -= len(chunks)
-        kept.append(
-            item.model_copy(
-                update={
-                    "chunks": chunks,
-                    "truncated": item.truncated or len(chunks) < len(item.chunks),
-                }
-            )
-        )
+        kept.append(item)
     return kept
 
 

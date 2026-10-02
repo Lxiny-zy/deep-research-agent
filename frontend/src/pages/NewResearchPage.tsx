@@ -213,6 +213,10 @@ function ResearchComposer() {
   async function start() {
     const value = query.trim()
     if (!value || busy || attachments.uploading) return
+    if (attachments.selectionError || attachments.items.some((item) => item.status === 'error')) {
+      setError(attachments.selectionError || '有附件未成功解析，请重新上传或明确移除后再开始任务')
+      return
+    }
     if (isDataTask && dataset && !datasetSheet) {
       setError('这个文件有多张工作表，请先选择要分析的一张')
       return
@@ -459,6 +463,7 @@ function ResearchComposer() {
                 onRemove={attachments.remove}
                 disabled={busy}
                 full={attachments.full}
+                error={attachments.selectionError}
               />
             </div>
             {(() => {

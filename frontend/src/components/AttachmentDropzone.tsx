@@ -9,6 +9,7 @@ interface Props {
   onRemove: (key: string) => void
   disabled?: boolean
   full?: boolean
+  error?: string | null
 }
 
 const KIND_ICON: Record<string, AppIconName> = {
@@ -32,7 +33,14 @@ function kindLabel(item: AttachmentItem): string {
  * 任务附件区：拖放或点击上传，逐个显示解析状态（解析中 / 已就绪 + 片段数 / 失败原因）。
  * 模型会在检索前先阅读这些文件，结论同样经过逐字核验并在报告中标注文件与位置。
  */
-export default function AttachmentDropzone({ items, onAdd, onRemove, disabled, full }: Props) {
+export default function AttachmentDropzone({
+  items,
+  onAdd,
+  onRemove,
+  disabled,
+  full,
+  error,
+}: Props) {
   const inputId = useId()
   const [dragging, setDragging] = useState(false)
 
@@ -82,6 +90,11 @@ export default function AttachmentDropzone({ items, onAdd, onRemove, disabled, f
           }}
         />
       </div>
+      {error && (
+        <p role="alert" className="attach-item-error">
+          {error}
+        </p>
+      )}
       {items.length > 0 && (
         <ul className="attach-list" aria-label="已添加的附件">
           {items.map((item) => (

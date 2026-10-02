@@ -1828,20 +1828,22 @@ async def create_run(
         from .workbench.attachments import (
             ATTACHMENTS_SCRATCH_KEY,
             Attachment,
+            AttachmentError,
             limit_attachments,
         )
 
         try:
             parsed = [Attachment.model_validate(item) for item in req.attachments]
+            parsed = limit_attachments(parsed)
+        except AttachmentError as exc:
+            raise HTTPException(422, {"code": "invalid_attachment", "message": str(exc)}) from exc
         except ValidationError as exc:
             raise HTTPException(
                 422, {"code": "invalid_attachment", "message": "附件数据无效，请重新上传"}
             ) from exc
         scratch = execution.checkpoint.setdefault("scratch", {})
         if isinstance(scratch, dict):
-            scratch[ATTACHMENTS_SCRATCH_KEY] = [
-                item.model_dump(mode="json") for item in limit_attachments(parsed)
-            ]
+            scratch[ATTACHMENTS_SCRATCH_KEY] = [item.model_dump(mode="json") for item in parsed]
     if project is not None:
         scratch = execution.checkpoint.setdefault("scratch", {})
         if isinstance(scratch, dict):

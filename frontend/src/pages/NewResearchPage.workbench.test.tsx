@@ -148,6 +148,25 @@ describe('NewResearchPage task templates', () => {
     expect(screen.queryByLabelText(/资料库项目/)).not.toBeInTheDocument()
   })
 
+  it('requires failed attachments to be removed before submitting a partial selection', async () => {
+    render(
+      <MemoryRouter>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByLabelText(/文献综述/))
+    fireEvent.change(screen.getByLabelText('文献综述输入'), { target: { value: '研究这些文件' } })
+    fireEvent.change(screen.getByLabelText('上传附件'), {
+      target: { files: [new File(['bad'], 'bad.exe')] },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '开始文献综述' }))
+    expect(await screen.findByText(/有附件未成功解析/)).toBeInTheDocument()
+    expect(mocks.createRun).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '移除 bad.exe' }))
+    fireEvent.click(screen.getByRole('button', { name: '开始文献综述' }))
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
+  })
+
   it('submits a specialised template directly with its key and no workflow', async () => {
     render(
       <MemoryRouter>

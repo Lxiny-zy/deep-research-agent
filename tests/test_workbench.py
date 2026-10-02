@@ -322,6 +322,41 @@ async def test_closed_review_cannot_export_when_a_supplied_document_is_missing(s
     assert not {"pdf", "docx", "html"}.intersection(file.format for file in bundle.files)
 
 
+async def test_missing_corpus_does_not_trigger_rewrites_or_optional_figures(settings, monkeypatch):
+    from deep_research.agents.base import Blackboard, RunContext
+    from deep_research.models import ResearchResult
+    from deep_research.observability import Tracer
+    from deep_research.workbench.writers import SurveyWriter
+    from tests.fakes import verified_finding
+
+    query = "Compare https://a.com and https://missing.test/paper.pdf"
+    contract = build_contract(get_template("litReview"), query, strategy="none")
+    bb = Blackboard(
+        query=query,
+        scratch={CONTRACT_SCRATCH_KEY: contract.model_dump()},
+        results=[
+            ResearchResult(sub_question="q", findings=[verified_finding("发现X", "https://a.com")])
+        ],
+    )
+    body = "\n\n".join(
+        f"## {title}\n发现X [1]" for title in ("引言", "主题综述", "方法对比", "开放问题", "结论")
+    )
+    body = "## 摘要\n本文比较所给文献的方法与局限。\n\n" + body
+    llm = WorkbenchLLM(body)
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("Incomplete corpus must not trigger optional figure generation")
+
+    monkeypatch.setattr(SurveyWriter, "concept_figure", unexpected)
+    await SurveyWriter().step(
+        bb, RunContext(llm=llm, search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
+    )
+    extras = bb.scratch["workbench"]["extras"]
+    assert extras["revision"]["attempts"] == 1
+    assert "concept_figure_skipped" in extras
+    assert any("missing.test" in item for item in extras["revision"]["advisories"])
+
+
 class RevisingLLM(WorkbenchLLM):
     """首稿缺章节并带口语化措辞，收到返工要求后给出合格正文。"""
 
@@ -651,6 +686,35 @@ async def test_provided_review_requires_real_inputs_and_freezes_closed_scope(api
     assert detail.orchestration.workflow_name == "lit_review_provided"
     contract = detail.orchestration.checkpoint["scratch"][CONTRACT_SCRATCH_KEY]
     assert contract["min_citations"] == 0 and len(contract["papers"]) == 2
+
+
+async def test_task_creation_retains_all_attachment_chunks_and_rejects_partial_uploads(api_repo):
+    from deep_research.workbench.attachments import parse_attachment
+
+    api, repo = api_repo
+    files = [
+        await parse_attachment(
+            (f"Paper {i} " + "Evidence text. " * 14000 + f"END-{i}").encode(), f"{i}.txt"
+        )
+        for i in range(3)
+    ]
+    payload = {
+        "template": "litReview",
+        "strategy": "none",
+        "query": "综述这些文献",
+        "attachments": [item.model_dump() for item in files],
+    }
+    async with _client(api.app) as client:
+        created = await client.post("/api/runs", json=payload)
+        payload["attachments"][2]["truncated"] = True
+        rejected = await client.post("/api/runs", json=payload)
+    assert created.status_code == 202, created.text
+    assert rejected.status_code == 422 and "未完整" in rejected.json()["detail"]["message"]
+    detail = await repo.get_run(created.json()["run_id"])
+    frozen = detail.orchestration.checkpoint["scratch"]["attachments"]
+    assert len(frozen) == 3 and sum(len(a["chunks"]) for a in frozen) > 120
+    assert all(f"END-{i}" in a["chunks"][-1]["content"] for i, a in enumerate(frozen))
+    assert len(await repo.list_runs()) == 1
 
 
 @pytest.mark.asyncio

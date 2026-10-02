@@ -384,8 +384,12 @@ class TemplateWriter:
             bb.scratch[PROSE_REVIEW_KEY] = extras[PROSE_REVIEW_KEY]
         if revision_log is not None:
             extras["revision"] = revision_log.to_dict()
+        from .corpus import corpus_issues
+
+        corpus_complete = not corpus_issues(bb.scratch, bb.results)
         content_ready = (
             not body_replaced
+            and corpus_complete
             and not extras.get("revision", {}).get("remaining")
             and (reviewer is None or extras[PROSE_REVIEW_KEY]["status"] == "pass")
         )

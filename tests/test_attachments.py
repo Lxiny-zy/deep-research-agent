@@ -170,6 +170,34 @@ async def test_limit_attachments_dedupes_and_bounds_chunks():  # type: ignore[no
     assert len(kept) == 1
 
 
+async def test_long_attachments_keep_all_chunks_and_late_files():
+    files = [
+        await parse_attachment(
+            (f"Paper {i}\n" + "Continuous text. " * 12000 + f"END-{i}").encode(), f"{i}.txt"
+        )
+        for i in range(3)
+    ]
+    assert all(len(item.chunks) > 40 and not item.truncated for item in files)
+    assert sum(len(item.chunks) for item in files) > 120
+    kept = limit_attachments(files)
+    assert [item.model_dump() for item in kept] == [item.model_dump() for item in files]
+    assert all(f"END-{i}" in item.chunks[-1].content for i, item in enumerate(kept))
+
+
+async def test_attachment_bounds_reject_instead_of_changing_material(monkeypatch):
+    from deep_research.workbench import attachments
+
+    files = [await parse_attachment(f"Paper {i} body".encode(), f"{i}.txt") for i in range(9)]
+    with pytest.raises(AttachmentError, match="最多提交"):
+        limit_attachments(files)
+    with pytest.raises(AttachmentError, match="未完整"):
+        limit_attachments([files[0].model_copy(update={"truncated": True})])
+    monkeypatch.setattr(attachments, "MAX_TOTAL_PARSED_CHARS", 15)
+    with pytest.raises(AttachmentError, match="合计文本"):
+        limit_attachments(files[:2])
+    assert all(not item.truncated and len(item.chunks) == 1 for item in files)
+
+
 def _client(app) -> httpx.AsyncClient:  # type: ignore[no-untyped-def]
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
