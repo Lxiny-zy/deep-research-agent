@@ -65,3 +65,18 @@ def test_document_labels_are_not_empirical_numbers_but_measurements_remain_check
     assert "unsupported_number" in invalid.issues
     math = validate_body("表达式 $x=2$ [1]。", results, mapping, fallback=False)
     assert "unsupported_number" in math.issues
+
+
+def test_captions_and_bold_headings_need_no_printed_cite_but_keep_numeric_checks():
+    from deep_research.report.validation import validate_body
+
+    finding = verified_finding(statement="准确率42%", evidence_quote="准确率42%")
+    evidence = [ResearchResult(sub_question="q", findings=[finding])]
+    body = "**结果说明**\n\n表 1 指标对照\n\n| 指标 | 结果 |\n|---|---|\n| 准确率 | 42% [1] |"
+    assert not validate_body(body, evidence, {finding.source_url: 1}, fallback=False).issues
+    assert (
+        "unsupported_number"
+        in validate_body(
+            body.replace("指标对照", "准确率99%"), evidence, {finding.source_url: 1}, fallback=False
+        ).issues
+    )

@@ -1118,6 +1118,7 @@ class DeepResearchAgent:
             and prose_reviewer.check(bb.report.markdown, previous_review)[0]
         )
         if not reviewed_mindmap and not reviewed_prose and (bb.results or bb.report.citations):
+            from .workbench.paper_abstract import abstract_section_support
             from .workbench.scholarly import uncited_sections_for
 
             bb.report, check = await run_blocking(
@@ -1127,6 +1128,7 @@ class DeepResearchAgent:
                 require_corroboration=effective_require_corroboration(bb, self.settings),
                 # 与写作者同一口径：任务契约规定不带引用的章节（摘要）不按「必须引用」判
                 uncited_sections=uncited_sections_for(bb.scratch),
+                section_support=abstract_section_support(bb.scratch),
             )
             prior_issues = [
                 issue

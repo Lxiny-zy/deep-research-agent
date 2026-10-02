@@ -134,6 +134,21 @@ def test_fragment_anchors_count_one_document_without_forcing_writer_to_delete_ci
     assert gate.metrics["anchors_used"] == 4
 
 
+def test_other_program_chunk_urls_keep_document_identity_and_article_parameters():
+    for citations in (
+        [f"https://workspace.invalid/pasted/paper?chunk={i}" for i in range(1, 3)],
+        [f"https://example.org/article?id=42#chunk-{i}" for i in range(2)],
+        [f"https://example.org/paper.pdf?id=42&dr_section=pdf-{i}" for i in range(2)],
+    ):
+        assert not check_sources(citations, 2, 1)
+        assert [f.code for f in check_sources(citations, 2, 2)] == ["citation-shortfall"]
+    distinct = [
+        "https://example.org/article?id=42#chunk-0",
+        "https://example.org/article?id=43#chunk-0",
+    ]
+    assert not check_sources(distinct, 2, 2)
+
+
 def test_recency_requires_sources_from_requested_year() -> None:
     assert requested_year("2025 年以来扩散模型用于光谱重建的进展") == 2025
     assert requested_year("progress since 2024") == 2024

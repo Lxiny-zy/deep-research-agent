@@ -57,9 +57,16 @@ _SYSTEM = (
     "prose/summary 为正文单元，可能是段落、标题、表格的一行或代码；仍须逐项核对其中事实，"
     "只能对纯标题、明确的主观评分、建议或不预设结论的问题判 non_factual。"
     "summary 单元按版式可以省略印刷引用，其 citations 是后台允许的证据范围，不是事实免检。"
+    "本报告自身的编排说明（如表中列出哪些项目、空栏如何表示）可依据给定的报告表格或结构判断，"
+    "不要求原论文为这份报告的编排提供证据，可判 non_factual；"
+    "但夹带的实验结果、指标定义、优劣、来源缺失断言或因果解释仍必须由原始证据支持。"
     "不要将来源时间范围内的‘目前’扩大为今天的状态，或将特定条件下结果扩大为所有场景。"
     "统计场景要区分相关、因果和一致性；均值/中位数接近不能证明分布形状；"
     "不同变量的标准差与配对差值标准差不可混称为方法间总体变异或模型残差。"
+    "translation 是一个完整摘要翻译章节，不是摘要总结。只对照该单元指定的原摘要，"
+    "逐句双向核对：原文的事实、数值、限定条件和逻辑关系全部保留且无新增，才判 supported。"
+    "漏译、拿正文片段替代、混入其他章节、把保留态度变成肯定结论均不能通过；"
+    "必须覆盖全部所给摘要，不能仅因若干句子正确就通过，不得把译文判为 non_factual。"
 )
 
 
@@ -96,18 +103,25 @@ def digest(value: Any) -> str:
 
 class SupportReviewer:
     def __init__(
-        self, llm: Any, evidence: list[dict[str, Any]], capacity: int, *, context: str = ""
+        self,
+        llm: Any,
+        evidence: list[dict[str, Any]],
+        capacity: int,
+        *,
+        context: str = "",
+        system_rules: str = "",
     ) -> None:
         self.llm, self.evidence = llm, evidence
         self.capacity = getattr(llm, "input_capacity_chars", capacity)
         self.cache: dict[str, SupportDecision] = {}
         self.context = context
+        self.system = _SYSTEM + ("\n" + system_rules if system_rules else "")
 
     @property
     def provenance(self) -> dict[str, Any]:
         return {
             "model": getattr(self.llm, "model", type(self.llm).__name__),
-            "prompt_sha256": hashlib.sha256(_SYSTEM.encode()).hexdigest(),
+            "prompt_sha256": hashlib.sha256(self.system.encode()).hexdigest(),
             "schema_version": 1,
             "method": "model_judgement_over_verified_evidence",
         }
@@ -130,14 +144,27 @@ class SupportReviewer:
                     verdict="unsupported",
                     reason="本单元使用了不存在或未通过准入的引用编号",
                 )
-            elif unit.kind == "claim" and not selected:
+            elif unit.kind in {"claim", "translation"} and not selected:
                 results[unit.id] = SupportDecision(
-                    unit_id=unit.id, verdict="unsupported", reason="事实节点没有可用的引用证据"
+                    unit_id=unit.id,
+                    verdict="unsupported",
+                    reason=(
+                        "缺少完整摘要原文，不能核验摘要翻译"
+                        if unit.kind == "translation"
+                        else "事实节点没有可用的引用证据"
+                    ),
+                )
+            elif unit.kind == "translation" and not any(
+                line.strip() and not line.lstrip().startswith("#")
+                for line in unit.text.splitlines()
+            ):
+                results[unit.id] = SupportDecision(
+                    unit_id=unit.id, verdict="unsupported", reason="摘要翻译为空"
                 )
             else:
                 pending.append(unit)
         batch: list[SupportUnit] = []
-        system_size = len(structured_system_prompt(_SYSTEM, SupportDecisions))
+        system_size = len(structured_system_prompt(self.system, SupportDecisions))
         for unit in pending:
             trial = [*batch, unit]
             if batch and (
@@ -173,7 +200,7 @@ class SupportReviewer:
     async def _judge(self, units: list[SupportUnit]) -> dict[str, SupportDecision]:
         try:
             response = await self.llm.parse(
-                _SYSTEM, self._prompt(units), SupportDecisions, temperature=0.0
+                self.system, self._prompt(units), SupportDecisions, temperature=0.0
             )
         except LeaseLostError:
             raise
@@ -202,7 +229,7 @@ class SupportReviewer:
                         not decision.evidence_ids
                         or not set(decision.evidence_ids).issubset(valid_ids)
                     )
-                ) or (decision.verdict == "non_factual" and unit.kind == "claim")
+                ) or (decision.verdict == "non_factual" and unit.kind in {"claim", "translation"})
                 if invalid:
                     decision = SupportDecision(
                         unit_id=unit.id,

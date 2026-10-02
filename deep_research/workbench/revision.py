@@ -94,6 +94,7 @@ def assess_draft(
     min_citations: int,
     require_corroboration: bool = False,
     check_citations: bool = True,
+    section_support: dict[str, str] | None = None,
 ) -> Assessment:
     """对一版草稿做全部确定性检查，并写成交给写作者的返工说明。"""
     hard: list[str] = []
@@ -106,6 +107,7 @@ def assess_draft(
             require_corroboration=require_corroboration,
             fallback=False,
             uncited_sections=abstract_sections(template.key, policy),
+            section_support=section_support,
         )
         hard += describe_problems(check)
     hard += _missing_sections(body, template)

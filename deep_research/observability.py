@@ -141,6 +141,12 @@ class Tracer:
             data=data,
         )
         if type == "token":
+            if (data or {}).get("replace"):
+                self.flush_tokens()
+                self._token_pending = event
+                self._token_parts = [str((data or {}).get("delta", ""))]
+                self.flush_tokens()
+                return event
             if self._token_pending is not None and self._token_pending.stage != stage:
                 self.flush_tokens()
             self._token_pending = event

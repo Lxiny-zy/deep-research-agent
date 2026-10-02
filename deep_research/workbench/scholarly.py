@@ -262,10 +262,24 @@ def _normalize_url(url: str) -> str:
 
     url = normalize_url(url)
     parts = urlsplit(url)
-    if parts.hostname == "workspace.invalid" and parts.path.startswith("/attachments/"):
+    if parts.hostname == "workspace.invalid" and parts.path.startswith(
+        ("/attachments/", "/pasted/")
+    ):
         # Chunks in the same uploaded paper share a document identity. Other
         # URLs keep document-selecting queries such as article?id=123.
         query = urlencode([(key, value) for key, value in parse_qsl(parts.query) if key != "chunk"])
+        url = urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+    elif any(
+        key == "dr_section" and re.fullmatch(r"pdf-\d+", value)
+        for key, value in parse_qsl(parts.query)
+    ):
+        query = urlencode(
+            [
+                (key, value)
+                for key, value in parse_qsl(parts.query)
+                if not (key == "dr_section" and re.fullmatch(r"pdf-\d+", value))
+            ]
+        )
         url = urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
     url = re.sub(r"^https?://(www\.)?", "", url.strip(), flags=re.I).rstrip("/")
     url = re.sub(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?", r"arxiv:\1", url)
@@ -281,8 +295,12 @@ def source_counts(
         parts = urlsplit(url)
         if (
             parts.hostname == "workspace.invalid"
-            and parts.path.startswith("/attachments/")
+            and parts.path.startswith(("/attachments/", "/pasted/"))
             and "chunk" in parse_qs(parts.query)
+        ):
+            return _normalize_url(url)
+        if re.fullmatch(r"chunk-\d+", parts.fragment.rsplit("#", 1)[-1]) or any(
+            re.fullmatch(r"pdf-\d+", value) for value in parse_qs(parts.query).get("dr_section", [])
         ):
             return _normalize_url(url)
         return None

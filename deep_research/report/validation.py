@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 
 from ..guardrails import report_eligible
 from ..models import Report, ResearchResult
+from ..workbench.delivery.markdown import framing_paragraphs
 from ..workbench.delivery.math_markdown import (
     citation_text,
     only_math,
@@ -71,6 +72,7 @@ def validate_body(
     require_corroboration: bool = False,
     fallback: bool = True,
     uncited_sections: tuple[str, ...] = (),
+    section_support: dict[str, str] | None = None,
 ) -> ReportCheck:
     """复核正文的引用与数值。
 
@@ -110,6 +112,7 @@ def validate_body(
         unknown = sorted(all_indices - set(evidence))
         problems.append(("invalid_citation", "", f"引用了不存在的素材编号 {unknown}"))
     all_support = _numbers("\n".join(text for items in evidence.values() for text in items))
+    frames = set(framing_paragraphs(body).values())
     heading = ""
     for paragraph in validation_paragraphs(body):
         headings = [
@@ -122,6 +125,7 @@ def validate_body(
         exempt = bool(uncited_sections) and any(
             key.casefold() in heading.casefold() for key in uncited_sections
         )
+        exempt = exempt or "\n".join(paragraph.splitlines()).strip() in frames
         content = "\n".join(
             line for line in paragraph.splitlines() if not line.lstrip().startswith("#")
         )
@@ -132,6 +136,23 @@ def validate_body(
             for match in _CITATION.findall(_citation_text(content))
             for number in re.split(r"\s*[,，]\s*", match)
         }
+        dedicated = next(
+            (
+                text
+                for key, text in (section_support or {}).items()
+                if key.casefold() in heading.casefold()
+            ),
+            None,
+        )
+        if dedicated is not None:
+            unsupported = sorted(_numbers(content) - _numbers(dedicated))
+            if unsupported:
+                issues.append("unsupported_number")
+                shown = "、".join(format(v.normalize(), "f") for v in unsupported[:5])
+                problems.append(
+                    ("unsupported_number", _excerpt(content), f"数字 {shown} 在本节原文中找不到")
+                )
+            continue
         if not indices and not exempt:
             exempt = only_math(content)
         if not indices and exempt:
@@ -184,6 +205,7 @@ def finalize_report(
     *,
     require_corroboration: bool = False,
     uncited_sections: tuple[str, ...] = (),
+    section_support: dict[str, str] | None = None,
 ) -> tuple[Report, ReportCheck]:
     """Apply the same checks after every terminal research role, including custom roles."""
     eligible = {
@@ -204,6 +226,7 @@ def finalize_report(
         mapping,
         require_corroboration=require_corroboration,
         uncited_sections=uncited_sections,
+        section_support=section_support,
     )
     included = [
         (url, index) for url, index in mapping.items() if index in check.evidence_by_citation

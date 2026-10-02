@@ -9,10 +9,11 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from dataclasses import asdict
 from typing import Any
 
 from ..models import ResearchResult
-from .delivery.markdown import _parser
+from .delivery.markdown import _parser, framing_paragraphs
 from .delivery.math_markdown import citation_text, only_math
 from .gates import _body_without_references
 from .support import SupportDecision, SupportReviewer, SupportUnit, digest, evidence_records
@@ -34,6 +35,7 @@ def prose_units(
     *,
     uncited_sections: tuple[str, ...] = (),
     implicit: bool = False,
+    translation_citations: list[int] | None = None,
 ) -> tuple[list[SupportUnit], list[dict[str, Any]]]:
     body = body_text(markdown, strip_references=not implicit)
     lines = body.splitlines()
@@ -47,7 +49,41 @@ def prose_units(
     previous = ""
     in_header = False
     tokens = _parser().parse(body)
+    framing_lines = framing_paragraphs(body)
+    translation_ranges: dict[int, int] = {}
+    if translation_citations is not None:
+        from .paper_abstract import translation_title
+
+        for index, token in enumerate(tokens):
+            if (
+                token.type != "heading_open"
+                or not token.map
+                or not translation_title(tokens[index + 1].content)
+            ):
+                continue
+            stop = next(
+                (
+                    other.map[0]
+                    for other in tokens[index + 1 :]
+                    if other.type == "heading_open"
+                    and other.map
+                    and int(other.tag[1:]) <= int(token.tag[1:])
+                ),
+                len(lines),
+            )
+            translation_ranges[token.map[0]] = stop
+    translation_segments: list[tuple[int, int]] = []
+    for start, end in sorted(translation_ranges.items()):
+        if not translation_segments or start >= translation_segments[-1][1]:
+            translation_segments.append((start, end))
+    first_translation = translation_segments[0][0] if translation_segments else None
     for index, token in enumerate(tokens):
+        if (
+            token.map
+            and any(start <= token.map[0] < end for start, end in translation_segments)
+            and not (token.type == "heading_open" and token.map[0] == first_translation)
+        ):
+            continue
         if token.type == "table_open" and token.map:
             table_caption = previous
             table_text = "\n".join(lines[token.map[0] : token.map[1]])
@@ -72,7 +108,14 @@ def prose_units(
         ):
             continue
         start, end = token.map
-        text = "\n".join(lines[start:end]).strip()
+        is_translation = token.type == "heading_open" and start == first_translation
+        if is_translation:
+            end = translation_segments[-1][1]
+        text = (
+            "\n\n".join("\n".join(lines[a:b]) for a, b in translation_segments)
+            if is_translation
+            else "\n".join(lines[start:end])
+        ).strip()
         if not text:
             continue
         if token.type == "heading_open":
@@ -84,7 +127,7 @@ def prose_units(
         if token.type == "tr_open" and in_header:
             table_header = text
         section = " / ".join(name for _, name in headings)
-        kind = "prose"
+        kind = "translation" if is_translation else "prose"
         # Code literals and code spans are not bibliography references.
         cite_text = (
             "" if token.type in {"fence", "code_block", "math_block"} else citation_text(text)
@@ -92,13 +135,16 @@ def prose_units(
         cited = sorted(
             {int(n) for group in _CITE.findall(cite_text) for n in re.split(r"\s*[,，]\s*", group)}
         )
+        if is_translation:
+            cited = list(translation_citations or [])
         implicit_here = (
             implicit
             or token.type in {"heading_open", "math_block"}
             or only_math(text)
+            or start in framing_lines
             or any(word.casefold() in section.casefold() for word in uncited_sections)
         )
-        if not cited and implicit_here:
+        if not cited and implicit_here and not is_translation:
             cited, kind = list(available), "summary"
         context = section
         if token.type == "tr_open" and not in_header:
@@ -133,6 +179,7 @@ def can_revise(decisions: list[SupportDecision]) -> bool:
                 "完整证据超过核验模型输入容量",
                 "核验节点缺失或重复",
                 "核验未提供本节点可用的证据映射",
+                "缺少完整摘要原文",
             )
         )
         for d in decisions
@@ -151,6 +198,7 @@ class ProseReviewer:
         uncited_sections: tuple[str, ...] = (),
         implicit: bool = False,
         corroboration: bool = False,
+        translation_citations: list[int] | None = None,
     ) -> None:
         self.evidence = evidence
         self.source_version = source_version
@@ -158,8 +206,34 @@ class ProseReviewer:
         self.uncited_sections = uncited_sections
         self.implicit = implicit
         self.corroboration = corroboration
+        self.capacity = capacity
+        self.translation_citations = translation_citations
         self.reviewer = SupportReviewer(llm, evidence, capacity, context=f"用户问题：{query}")
         self.records: dict[str, dict[str, Any]] = {}
+
+    def prime(self, markdown: str, record: dict[str, Any]) -> bool:
+        """Reuse only bound, valid decisions; uncertain results never become facts."""
+        bound, _ = self.check(markdown, record)
+        if not bound:
+            return False
+        units, _ = self.units(markdown)
+        decisions = {
+            item["unit_id"]: SupportDecision.model_validate(item) for item in record["decisions"]
+        }
+        for unit in units:
+            decision = decisions[unit.id]
+            selected = [e for e in self.evidence if e["citation"] in unit.citations]
+            allowed = {e["id"] for e in selected}
+            if decision.verdict == "uncertain":
+                continue
+            if decision.verdict == "supported" and (
+                not decision.evidence_ids or not set(decision.evidence_ids).issubset(allowed)
+            ):
+                continue
+            if decision.verdict == "non_factual" and unit.kind in {"claim", "translation"}:
+                continue
+            self.reviewer.cache[digest([asdict(unit), selected])] = decision
+        return True
 
     @classmethod
     def research(
@@ -172,36 +246,58 @@ class ProseReviewer:
         query: str = "",
         uncited_sections: tuple[str, ...] = (),
         corroboration: bool = False,
+        abstracts: list[dict[str, Any]] | None = None,
     ) -> ProseReviewer:
+        evidence = evidence_records(results, mapping, corroboration=corroboration)
+        for index, abstract in enumerate(abstracts or [], 1):
+            evidence.append(
+                {
+                    "id": "abstract-" + digest(abstract),
+                    "citation": -index,
+                    "statement": "完整摘要原文，仅用于忠实翻译检查，不供其他章节引用",
+                    "quote": abstract["text"],
+                    "source": abstract["source_url"],
+                    "reference": abstract["source_title"],
+                }
+            )
         return cls(
             llm,
-            evidence_records(results, mapping, corroboration=corroboration),
+            evidence,
             capacity,
             source_version=digest([r.model_dump(mode="json") for r in results]),
             query=query,
             uncited_sections=uncited_sections,
             corroboration=corroboration,
+            translation_citations=list(range(-1, -len(abstracts) - 1, -1))
+            if abstracts is not None
+            else None,
         )
 
     def signature(self, markdown: str) -> str:
         return digest(
             {
-                "version": 3,
+                "version": 4 if self.translation_citations is not None else 3,
                 "body": body_text(markdown, strip_references=False),
                 "evidence": self.evidence,
                 "source_version": self.source_version,
                 "query": self.query,
                 "uncited_sections": self.uncited_sections,
                 "implicit": self.implicit,
+                **(
+                    {"translation_citations": self.translation_citations}
+                    if self.translation_citations is not None
+                    else {}
+                ),
             }
         )
 
     def units(self, markdown: str) -> tuple[list[SupportUnit], list[dict[str, Any]]]:
         return prose_units(
             markdown,
-            sorted({e["citation"] for e in self.evidence}),
+            sorted({e["citation"] for e in self.evidence if e["citation"] >= 0}),
             uncited_sections=self.uncited_sections,
             implicit=self.implicit,
+            translation_citations=self.translation_citations,
         )
 
     async def review(self, markdown: str) -> dict[str, Any]:
@@ -216,8 +312,8 @@ class ProseReviewer:
         problems = [d for d in decisions if d.verdict not in {"supported", "non_factual"}]
         by_id = {unit.id: unit for unit in units}
         positions = {loc["id"]: loc["start_line"] for loc in locations}
-        record = {
-            "version": 3,
+        record: dict[str, Any] = {
+            "version": 4 if self.translation_citations is not None else 3,
             "input_hash": signature,
             "status": "fail" if problems or not units else "pass",
             "scope": "model_assessed_final_prose_support",
@@ -234,6 +330,16 @@ class ProseReviewer:
         }
         if not units:
             record["issues"] = ["正文没有可核对内容"]
+        if self.translation_citations is not None and not any(
+            u.kind == "translation" for u in units
+        ):
+            record["status"] = "fail"
+            record["issues"].append("缺少摘要翻译章节")
+        if self.translation_citations == []:
+            record["status"] = "fail"
+            record["can_revise"] = False
+            if not any("缺少完整摘要原文" in issue for issue in record["issues"]):
+                record["issues"].append("缺少完整摘要原文，不能核验摘要翻译")
         # This memo exists only for one revision loop. Unknown remains unknown;
         # do not reroll a judgement just because finalization added references.
         self.records[content_key] = record
@@ -241,7 +347,7 @@ class ProseReviewer:
 
     def check(self, markdown: str, record: Any) -> tuple[bool, list[str]]:
         if not isinstance(record, dict) or record.get("input_hash") != self.signature(markdown):
-            return False, ["正文或证据已变更，终稿核验记录不再适用"]
+            return False, ["正文、证据或核验规则已变更，原终稿核验记录不再适用"]
         units, locations = self.units(markdown)
         try:
             decisions = [SupportDecision.model_validate(d) for d in record.get("decisions", [])]
@@ -257,6 +363,12 @@ class ProseReviewer:
         if record.get("units") != locations:
             return False, ["终稿核验定位与正文不一致"]
         problems = []
+        if self.translation_citations is not None and not any(
+            u.kind == "translation" for u in units
+        ):
+            problems.append("缺少摘要翻译章节")
+        if self.translation_citations == []:
+            problems.append("缺少完整摘要原文，不能核验摘要翻译")
         positions = {location["id"]: location["start_line"] for location in locations}
         for d in decisions:
             allowed = {
@@ -264,6 +376,8 @@ class ProseReviewer:
             }
             if d.verdict not in {"supported", "non_factual"}:
                 problems.append(f"第 {positions[d.unit_id]} 行：{d.reason}")
+            elif d.verdict == "non_factual" and expected[d.unit_id].kind == "translation":
+                problems.append(f"第 {positions[d.unit_id]} 行：译文未完成忠实性与完整性核对")
             elif d.verdict == "supported" and (
                 not d.evidence_ids or not set(d.evidence_ids).issubset(allowed)
             ):
@@ -282,6 +396,7 @@ def reviewer_for_report(
     corroboration: bool = False,
 ) -> ProseReviewer | None:
     from .contract import contract_from_scratch
+    from .paper_abstract import checked_abstracts
     from .scholarly import uncited_sections_for
 
     workbench = scratch.get("workbench", {})
@@ -317,7 +432,11 @@ def reviewer_for_report(
         return ProseReviewer(
             llm, evidence, capacity, source_version=version, query=query, implicit=True
         )
-    if not results or not citations:
+    contract = contract_from_scratch(scratch)
+    paper_read = workbench.get("template") == "paperRead" or bool(
+        contract and contract.template == "paperRead"
+    )
+    if (not results or not citations) and not paper_read:
         return None
     corroboration = corroboration or bool(
         (stored_review(scratch) or {}).get("require_corroboration")
@@ -335,6 +454,7 @@ def reviewer_for_report(
         query=query,
         uncited_sections=uncited,
         corroboration=corroboration,
+        abstracts=checked_abstracts(scratch) if paper_read else None,
     )
 
 

@@ -68,7 +68,7 @@ async def _fetch_document(url: str) -> list[Source]:
     kind = "pdf" if url.casefold().split("?", 1)[0].endswith(".pdf") else "url"
     prepared = await prepare_source(kind=kind, title="", origin_url=url)
     title = prepared.title or url
-    base = prepared.origin_url or url
+    base = (prepared.origin_url or url).split("#", 1)[0]
     sources: list[Source] = []
     for chunk in prepared.chunks[:_MAX_SOURCES]:
         content = str(chunk.get("content", ""))

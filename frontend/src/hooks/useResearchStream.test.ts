@@ -18,6 +18,13 @@ function ev(partial: Partial<ResearchEvent>): ResearchEvent {
 }
 
 describe('reduceStream', () => {
+  it('replaces a provisional draft without marking the run complete or appending the old draft', () => {
+    let state = reduceStream(base, ev({ type: 'token', data: { delta: 'old draft' } }))
+    state = reduceStream(state, ev({ type: 'token', data: { delta: 'revised', replace: true } }))
+    state = reduceStream(state, ev({ type: 'token', data: { delta: ' tail' } }))
+    expect(state.reportMarkdown).toBe('revised tail')
+    expect(state.status).toBe('streaming')
+  })
   it('merges reasoning by call across interleaved activity without changing totals or earlier state', () => {
     const first = ev({
       stage: 'LLM',

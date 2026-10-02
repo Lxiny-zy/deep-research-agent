@@ -93,7 +93,10 @@ def reader_documents(detail: RunDetail) -> list[dict[str, Any]]:
 
 def paper_sources(detail: RunDetail) -> list[Source]:
     """任务里已冻结的全部论文片段：上传文件 + 论文链接取回的正文 + 粘贴文本。"""
-    scratch = _scratch(detail)
+    return paper_sources_from_scratch(_scratch(detail))
+
+
+def paper_sources_from_scratch(scratch: dict[str, Any]) -> list[Source]:
     sources = [source for item in attachments_from_scratch(scratch) for source in item.sources()]
     raw = scratch.get(PAPER_SOURCES_KEY)
     if isinstance(raw, list):

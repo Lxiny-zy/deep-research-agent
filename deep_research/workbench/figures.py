@@ -73,87 +73,185 @@ def _levels(figure: ConceptFigure) -> list[list[ConceptNode]]:
 
 
 def render_concept_png(figure: ConceptFigure) -> bytes:
+    """Draw at a fixed report width so embedding never shrinks labels to tiny text."""
+    import math
+
     import matplotlib
 
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+    from matplotlib.font_manager import FontProperties
     from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+    from matplotlib.path import Path as PlotPath
 
     from .analysis import _chart_font
 
     _chart_font()
     levels = _levels(figure) or [[]]
-    horizontal = figure.layout == "flow"
-    span = max(len(level) for level in levels) or 1
-    width = 3.2 * (len(levels) if horizontal else span) + 1
-    height = 1.6 * (span if horizontal else len(levels)) + 1.4
-    fig, ax = plt.subplots(figsize=(max(6.0, width), max(3.2, height)))
-    ax.axis("off")
-    palette = ["#1f5f8b", "#2e8b57", "#b5651d", "#7b4fa0", "#b03a48", "#3a7d7c"]
-    groups = sorted({node.group for node in figure.nodes if node.group})
-    positions: dict[str, tuple[float, float]] = {}
+    horizontal = figure.layout == "flow" and len(levels) <= 3 and max(map(len, levels)) <= 3
+    if not horizontal:
+        levels = [level[i : i + 3] for level in levels for i in range(0, len(level), 3)] or [[]]
+    span = max(map(len, levels)) or 1
+    columns = len(levels) if horizontal else span
+    width = 6.8
+    plot_width = width * 72 * 0.9
+    x_range = columns * 3.2 + (0 if horizontal else 0.6)
+    scale = plot_width / x_range
+    fig = Figure(figsize=(width, 3.2), dpi=200)
+    renderer = FigureCanvasAgg(fig).get_renderer()
+
+    def wrap(text: str, size: float, points: float) -> str:
+        output = []
+        font = FontProperties(size=size)
+        if text.count("$") and text.count("$") % 2 == 0:
+            measured = renderer.get_text_width_height_descent(text, font, True)[0]
+            if measured > points * fig.dpi / 72:
+                raise ValueError("图示数学标签过宽，请使用简短标签并将公式置于正文")
+            return text
+        for source_line in text.splitlines() or [""]:
+            line = ""
+            for char in source_line:
+                measured = renderer.get_text_width_height_descent(line + char, font, False)[0]
+                if line and measured > points * fig.dpi / 72:
+                    output.append(line.rstrip())
+                    line = char.lstrip()
+                else:
+                    line += char
+            output.append(line)
+        return "\n".join(output)
+
+    labels = {node.id: wrap(node.label, 10.5, 2.4 * scale - 12) for node in figure.nodes}
+    edge_labels = [wrap(edge.label, 8.5, min(120, plot_width / 3)) for edge in figure.edges]
+    node_points = max([28.0] + [len(label.splitlines()) * 13 + 12 for label in labels.values()])
+    gap_points = max([24.0] + [len(label.splitlines()) * 11 + 12 for label in edge_labels if label])
+    node_height, step = node_points / scale, (node_points + gap_points) / scale
+    positions = {}
     for level_index, level in enumerate(levels):
         for slot, node in enumerate(level):
             offset = (span - len(level)) / 2 + slot
-            x, y = (
-                (level_index * 3.2, -offset * 1.6)
+            positions[node.id] = (
+                (level_index * 3.2, -offset * step)
                 if horizontal
-                else (offset * 3.2, -level_index * 1.8)
+                else (offset * 3.2, -level_index * step)
             )
-            positions[node.id] = (x, y)
-            color = palette[groups.index(node.group) % len(palette)] if node.group else "#14222f"
-            ax.add_patch(
-                FancyBboxPatch(
-                    (x - 1.2, y - 0.42),
-                    2.4,
-                    0.84,
-                    boxstyle="round,pad=0.04,rounding_size=0.18",
-                    facecolor="white",
-                    edgecolor=color,
-                    linewidth=1.8,
-                )
+    xs = [p[0] for p in positions.values()] or [0]
+    ys = [p[1] for p in positions.values()] or [0]
+    groups = sorted({node.group for node in figure.nodes if node.group})
+    group_columns = min(3, len(groups)) or 1
+    group_labels = [wrap(group, 8.5, plot_width / group_columns - 12) for group in groups]
+    group_line_height = max([0] + [len(label.splitlines()) * 11 + 4 for label in group_labels])
+    legend_height = math.ceil(len(groups) / group_columns) * group_line_height
+    title = wrap(figure.title, 13, plot_width)
+    top = 20 + len(title.splitlines()) * 16 + legend_height
+    bottom = 12
+    padding = gap_points / scale
+    y_min, y_max = min(ys) - node_height / 2 - padding, max(ys) + node_height / 2 + padding
+    plot_height = max(100, (y_max - y_min) * scale)
+    height_points = bottom + plot_height + top
+    fig.set_size_inches(width, height_points / 72)
+    ax = fig.add_axes((0.05, bottom / height_points, 0.9, plot_height / height_points))
+    ax.axis("off")
+    ax.set_xlim(min(xs) - 1.6, min(xs) - 1.6 + x_range)
+    ax.set_ylim(y_min, y_max)
+    palette = ["#1f5f8b", "#2e8b57", "#b5651d", "#7b4fa0", "#b03a48", "#3a7d7c"]
+    for node in figure.nodes:
+        x, y = positions[node.id]
+        color = palette[groups.index(node.group) % len(palette)] if node.group else "#14222f"
+        ax.add_patch(
+            FancyBboxPatch(
+                (x - 1.2, y - node_height / 2),
+                2.4,
+                node_height,
+                boxstyle="round,pad=0.025,rounding_size=0.09",
+                facecolor="white",
+                edgecolor=color,
+                linewidth=1.2,
+                zorder=3,
             )
-            ax.text(x, y, node.label, ha="center", va="center", fontsize=10.5, color="#14222f")
-    for edge in figure.edges:
+        )
+        ax.text(
+            x,
+            y,
+            labels[node.id],
+            ha="center",
+            va="center",
+            fontsize=10.5,
+            color="#14222f",
+            zorder=4,
+        )
+    for index, edge in enumerate(figure.edges):
         if edge.source not in positions or edge.target not in positions:
             continue
         (x0, y0), (x1, y1) = positions[edge.source], positions[edge.target]
-        if horizontal:
-            start, end = (x0 + 1.2, y0), (x1 - 1.2, y1)
-        else:
-            start, end = (x0, y0 - 0.42), (x1, y1 + 0.42)
-        ax.add_patch(
-            FancyArrowPatch(
-                start, end, arrowstyle="-|>", mutation_scale=12, color="#5b6675", lw=1.2
+        if abs(y1 - y0) > step * 1.5 and not horizontal:
+            direction = 1 if y1 > y0 else -1
+            lane = max(xs) + 1.45 + 0.1 * (index % 3)
+            start = (x0, y0 + direction * node_height / 2)
+            end = (x1, y1 - direction * node_height / 2)
+            near_source, near_target = y0 + direction * step / 2, y1 - direction * step / 2
+            vertices = [
+                start,
+                (x0, near_source),
+                (lane, near_source),
+                (lane, near_target),
+                (x1, near_target),
+                end,
+            ]
+            arrow = FancyArrowPatch(
+                path=PlotPath(vertices),
+                arrowstyle="-|>",
+                mutation_scale=10,
+                color="#5b6675",
+                lw=1,
+                zorder=1,
             )
-        )
+            label_x, label_y = (lane + x1) / 2, near_target
+        elif abs(y1 - y0) < 0.01:
+            direction = 1 if x1 > x0 else -1
+            start, end = (x0 + direction * 1.2, y0), (x1 - direction * 1.2, y1)
+            arrow = FancyArrowPatch(
+                start, end, arrowstyle="-|>", mutation_scale=10, color="#5b6675", lw=1, zorder=1
+            )
+            label_x, label_y = (x0 + x1) / 2, y0 + node_height / 2 + padding / 2
+        else:
+            direction = 1 if y1 > y0 else -1
+            start, end = (
+                (x0, y0 + direction * node_height / 2),
+                (x1, y1 - direction * node_height / 2),
+            )
+            arrow = FancyArrowPatch(
+                start, end, arrowstyle="-|>", mutation_scale=10, color="#5b6675", lw=1, zorder=1
+            )
+            label_x, label_y = (x0 + x1) / 2, (start[1] + end[1]) / 2
+        ax.add_patch(arrow)
         if edge.label:
             ax.text(
-                (start[0] + end[0]) / 2,
-                (start[1] + end[1]) / 2 + 0.18,
-                edge.label,
+                label_x,
+                label_y,
+                edge_labels[index],
                 ha="center",
+                va="center",
                 fontsize=8.5,
                 color="#5b6675",
+                zorder=2,
+                bbox={"facecolor": "white", "edgecolor": "none", "pad": 1},
             )
-    for index, group in enumerate(groups):
-        ax.text(
-            0,
-            0.9 + 0.35 * index,
-            f"■ {group}",
+    fig.text(0.5, 1 - 8 / height_points, title, ha="center", va="top", fontsize=13, color="#10283d")
+    legend_top = height_points - 14 - len(title.splitlines()) * 16
+    for index, _group in enumerate(groups):
+        row, column = divmod(index, group_columns)
+        fig.text(
+            0.05 + (column + 0.5) * 0.9 / group_columns,
+            (legend_top - row * group_line_height) / height_points,
+            "■ " + group_labels[index],
             color=palette[index % len(palette)],
-            fontsize=9,
-            ha="left",
-            transform=ax.transData,
+            fontsize=8.5,
+            ha="center",
+            va="top",
         )
-    xs = [p[0] for p in positions.values()] or [0]
-    ys = [p[1] for p in positions.values()] or [0]
-    ax.set_xlim(min(xs) - 1.6, max(xs) + 1.6)
-    ax.set_ylim(min(ys) - 1.0, max(ys) + 1.2 + 0.35 * len(groups))
-    ax.set_title(figure.title, fontsize=13, color="#10283d", pad=10)
     buffer = io.BytesIO()
-    fig.savefig(buffer, format="png", dpi=150, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
+    fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight", facecolor="white")
     return buffer.getvalue()
 
 

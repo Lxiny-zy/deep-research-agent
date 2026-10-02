@@ -59,7 +59,10 @@ export function reduceStream(prev: ResearchStreamState, ev: ResearchEvent): Rese
   switch (ev.type) {
     case 'token': {
       const delta = (ev.data as { delta?: string } | null)?.delta ?? ''
-      return { ...base, reportMarkdown: base.reportMarkdown + delta }
+      return {
+        ...base,
+        reportMarkdown: ev.data?.replace === true ? delta : base.reportMarkdown + delta,
+      }
     }
     case 'report': {
       const report = ev.data as unknown as Report | null
@@ -145,6 +148,11 @@ export function useResearchStream(runId: string | null, restartToken = 0): Resea
       }
       if (eventId) lastEventId = eventId
       if (ev.type === 'token') {
+        if (ev.data?.replace === true) {
+          flushTokens()
+          setState((prev) => reduceStream(prev, ev))
+          return
+        }
         tokenParts.push((ev.data as { delta?: string } | null)?.delta ?? '')
         tokenEvent = ev
         tokenTimer ??= setTimeout(flushTokens, 100)

@@ -165,7 +165,7 @@ def _file_stem(title: str) -> str:
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     payload = {
-        "format_version": 12,
+        "format_version": 15,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,
@@ -201,6 +201,10 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     citations = list(report.citations) if report is not None else []
     contract = contract_from_scratch(scratch)
     title = (contract.title if contract else "") or f"{template.title}：{detail.query[:40]}"
+    if template.key == "paperRead":
+        from .titles import paper_report_title
+
+        title = paper_report_title(markdown, title, detail.query)
     created_at = detail.created_at
     created = created_at.isoformat() if created_at is not None else ""
     from .scholarly import source_counts
@@ -239,12 +243,34 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     # 概念图：写作者整理的结构描述 → 确定性示意图，插在正文第一个二级标题之后
     raw_figure = extras.get("concept_figure") if isinstance(extras, dict) else None
     if isinstance(raw_figure, dict):
+        from ..report.service import requires_corroboration
+        from .figure_review import FIGURE_REVIEW_KEY, check_figure
         from .figures import ConceptFigure, render_concept_png
+        from .support import evidence_records
 
+        concept: ConceptFigure | None = None
         try:
             concept = ConceptFigure.model_validate(raw_figure)
-            png = render_concept_png(concept)
-        except Exception:
+            figure_evidence = evidence_records(
+                detail.results,
+                {url: i for i, url in enumerate(citations, 1)},
+                corroboration=requires_corroboration(detail),
+            )
+            issues = check_figure(concept, figure_evidence, extras.get(FIGURE_REVIEW_KEY))
+            if issues:
+                input_gates.append(
+                    GateResult(
+                        "figure_evidence", "warn", ["图示未纳入交付：" + issue for issue in issues]
+                    )
+                )
+                concept = None
+            else:
+                png = render_concept_png(concept)
+                input_gates.append(GateResult("figure_evidence", "pass"))
+        except Exception as exc:
+            input_gates.append(
+                GateResult("figure_evidence", "warn", [f"图示生成未完成：{type(exc).__name__}"])
+            )
             concept = None
         if concept is not None:
             name = "fig_concept.png"
@@ -254,10 +280,17 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             )
             caption = concept.caption or concept.title
             block = f"\n\n![{concept.title}（{caption}）]({name})\n\n"
-            parts = re.split(r"(?m)(^##\s[^\n]*\n(?:(?!^##\s)[^\n]*\n)*)", markdown, maxsplit=1)
-            markdown = (
-                parts[0] + parts[1] + block + parts[2] if len(parts) == 3 else markdown + block
+            method = re.search(
+                r"(?im)^##\s+(?:方法[^\n]*|研究方法[^\n]*|Methods?[^\n]*|Approach[^\n]*)\n",
+                markdown,
             )
+            if method:
+                markdown = markdown[: method.end()] + block + markdown[method.end() :]
+            else:
+                parts = re.split(r"(?m)(^##\s[^\n]*\n(?:(?!^##\s)[^\n]*\n)*)", markdown, maxsplit=1)
+                markdown = (
+                    parts[0] + parts[1] + block + parts[2] if len(parts) == 3 else markdown + block
+                )
 
     # 数据分析：确定性地重算图表（与运行时同一函数、同一数据），把图挂进正文
     if template.key == "dataAnalysis":

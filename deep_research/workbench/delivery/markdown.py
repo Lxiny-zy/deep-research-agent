@@ -7,6 +7,7 @@ HTML——关掉 html 选项，在解析这一步就把这条路堵死。
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -74,6 +75,40 @@ def _parser() -> MarkdownIt:
     md.enable("strikethrough")
     md.use(math_plugin)
     return md
+
+
+def framing_paragraphs(markdown: str) -> dict[int, str]:
+    """Short bold headings and table captions need no printed citation marker.
+
+    Their factual content still undergoes numeric and semantic checks.
+    """
+    tokens = _parser().parse(markdown)
+    lines = markdown.splitlines()
+    frames: dict[int, str] = {}
+    for index, token in enumerate(tokens):
+        if token.type != "paragraph_open" or not token.map:
+            continue
+        children = [
+            child
+            for child in tokens[index + 1].children or []
+            if child.type != "text" or child.content.strip()
+        ]
+        text = "".join(child.content for child in children if child.type == "text")
+        heading = (
+            len(children) >= 3
+            and children[0].type == "strong_open"
+            and children[-1].type == "strong_close"
+            and all(child.type == "text" for child in children[1:-1])
+            and 0 < len(text.strip()) <= 40
+        )
+        caption = (
+            index + 3 < len(tokens)
+            and tokens[index + 3].type == "table_open"
+            and re.match(r"^\s*(?:表\s*[\d一二三四五六七八九十A-Z]|Table\s+[\dA-Z])", text, re.I)
+        )
+        if heading or caption:
+            frames[token.map[0]] = "\n".join(lines[token.map[0] : token.map[1]]).strip()
+    return frames
 
 
 def _inlines(token: Token | None) -> list[Inline]:
