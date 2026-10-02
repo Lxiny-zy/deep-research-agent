@@ -140,8 +140,9 @@ def take_table_prefix(previous: str) -> tuple[str, str, str]:
 
 def take_trailing_heading(previous: str) -> tuple[str, str]:
     lead = ""
-    headings = list(re.finditer(r"<h[1-4](?:\s[^>]*)?>.*?</h[1-4]>", previous, re.S))
-    if headings and not previous[headings[-1].end() :].strip():
-        last = headings[-1]
-        lead, previous = last[0], previous[: last.start()]
+    headings = list(re.finditer(r"<h[1-6](?:\s[^>]*)?>.*?</h[1-6]>", previous, re.S))
+    for last in reversed(headings):
+        if previous[last.end() :].strip():
+            break
+        lead, previous = last[0] + lead, previous[: last.start()]
     return previous, lead

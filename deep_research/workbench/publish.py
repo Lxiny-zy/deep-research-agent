@@ -165,7 +165,7 @@ def _file_stem(title: str) -> str:
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     payload = {
-        "format_version": 15,
+        "format_version": 18,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,

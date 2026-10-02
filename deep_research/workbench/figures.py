@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -44,31 +45,66 @@ class ConceptFigure(BaseModel):
 
 
 def _levels(figure: ConceptFigure) -> list[list[ConceptNode]]:
-    """按关系做拓扑分层（有环时退化为声明顺序），每层从左到右排布。"""
+    """Layer the condensation DAG; feedback cycles must not reset their descendants."""
     ids = [node.id for node in figure.nodes]
-    incoming = {node_id: 0 for node_id in ids}
     children: dict[str, list[str]] = {node_id: [] for node_id in ids}
     for edge in figure.edges:
-        if edge.source in incoming and edge.target in incoming:
-            incoming[edge.target] += 1
-            children[edge.source].append(edge.target)
-    depth = {node_id: 0 for node_id in ids}
-    frontier = [node_id for node_id in ids if incoming[node_id] == 0]
-    seen: set[str] = set()
+        if edge.source in children and edge.target in children:
+            if edge.target not in children[edge.source]:
+                children[edge.source].append(edge.target)
+    indices: dict[str, int] = {}
+    low: dict[str, int] = {}
+    stack: list[str] = []
+    active: set[str] = set()
+    components: list[list[str]] = []
+
+    def visit(node: str) -> None:
+        indices[node] = low[node] = len(indices)
+        stack.append(node)
+        active.add(node)
+        for child in children[node]:
+            if child not in indices:
+                visit(child)
+                low[node] = min(low[node], low[child])
+            elif child in active:
+                low[node] = min(low[node], indices[child])
+        if low[node] == indices[node]:
+            group = []
+            while True:
+                member = stack.pop()
+                active.remove(member)
+                group.append(member)
+                if member == node:
+                    break
+            components.append(group)
+
+    for node in ids:
+        if node not in indices:
+            visit(node)
+    order = {node: i for i, node in enumerate(ids)}
+    components.sort(key=lambda group: min(order[node] for node in group))
+    owner = {node: i for i, group in enumerate(components) for node in group}
+    successors: dict[int, list[int]] = {i: [] for i in range(len(components))}
+    incoming = dict.fromkeys(successors, 0)
+    for node, targets in children.items():
+        for child in targets:
+            a, b = owner[node], owner[child]
+            if a != b and b not in successors[a]:
+                successors[a].append(b)
+                incoming[b] += 1
+    depth = dict.fromkeys(successors, 0)
+    frontier = [i for i in successors if incoming[i] == 0]
     while frontier:
         current = frontier.pop(0)
-        if current in seen:
-            continue
-        seen.add(current)
-        for child in children[current]:
-            depth[child] = max(depth[child], depth[current] + 1)
-            incoming[child] -= 1
-            if incoming[child] <= 0:
-                frontier.append(child)
+        for component_child in successors[current]:
+            depth[component_child] = max(depth[component_child], depth[current] + 1)
+            incoming[component_child] -= 1
+            if incoming[component_child] == 0:
+                frontier.append(component_child)
     by_id = {node.id: node for node in figure.nodes}
     levels: dict[int, list[ConceptNode]] = {}
     for node_id in ids:
-        levels.setdefault(depth[node_id] if node_id in seen else 0, []).append(by_id[node_id])
+        levels.setdefault(depth[owner[node_id]], []).append(by_id[node_id])
     return [levels[key] for key in sorted(levels)]
 
 
@@ -91,7 +127,14 @@ def render_concept_png(figure: ConceptFigure) -> bytes:
     levels = _levels(figure) or [[]]
     horizontal = figure.layout == "flow" and len(levels) <= 3 and max(map(len, levels)) <= 3
     if not horizontal:
-        levels = [level[i : i + 3] for level in levels for i in range(0, len(level), 3)] or [[]]
+        # Four columns keep long, branched flows within report height while
+        # preserving the same readable font size and measured text wrapping.
+        max_columns = 4 if len(levels) > 8 else 3
+        levels = [
+            level[i : i + max_columns]
+            for level in levels
+            for i in range(0, len(level), max_columns)
+        ] or [[]]
     span = max(map(len, levels)) or 1
     columns = len(levels) if horizontal else span
     width = 6.8
@@ -111,13 +154,26 @@ def render_concept_png(figure: ConceptFigure) -> bytes:
             return text
         for source_line in text.splitlines() or [""]:
             line = ""
-            for char in source_line:
-                measured = renderer.get_text_width_height_descent(line + char, font, False)[0]
+            # Keep short English terms and acronyms (e.g. SAD) together.
+            tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9_./-]*|\s+|.", source_line)
+            for token in tokens:
+                token_width = renderer.get_text_width_height_descent(token, font, False)[0]
+                if token_width > points * fig.dpi / 72:
+                    for char in token:
+                        measured = renderer.get_text_width_height_descent(line + char, font, False)[
+                            0
+                        ]
+                        if line and measured > points * fig.dpi / 72:
+                            output.append(line.rstrip())
+                            line = ""
+                        line += char
+                    continue
+                measured = renderer.get_text_width_height_descent(line + token, font, False)[0]
                 if line and measured > points * fig.dpi / 72:
                     output.append(line.rstrip())
-                    line = char.lstrip()
+                    line = token.lstrip()
                 else:
-                    line += char
+                    line += token
             output.append(line)
         return "\n".join(output)
 
@@ -180,6 +236,7 @@ def render_concept_png(figure: ConceptFigure) -> bytes:
             color="#14222f",
             zorder=4,
         )
+    label_positions = []
     for index, edge in enumerate(figure.edges):
         if edge.source not in positions or edge.target not in positions:
             continue
@@ -208,12 +265,31 @@ def render_concept_png(figure: ConceptFigure) -> bytes:
             )
             label_x, label_y = (lane + x1) / 2, near_target
         elif abs(y1 - y0) < 0.01:
-            direction = 1 if x1 > x0 else -1
-            start, end = (x0 + direction * 1.2, y0), (x1 - direction * 1.2, y1)
-            arrow = FancyArrowPatch(
-                start, end, arrowstyle="-|>", mutation_scale=10, color="#5b6675", lw=1, zorder=1
-            )
-            label_x, label_y = (x0 + x1) / 2, y0 + node_height / 2 + padding / 2
+            if x1 < x0 or abs(x1 - x0) > 3.3:
+                # Feedback/long lateral arrows run below the row, never through
+                # intermediate boxes or over the labels of forward arrows.
+                lane_y = y0 - node_height / 2 - padding / 2
+                vertices = [
+                    (x0, y0 - node_height / 2),
+                    (x0, lane_y),
+                    (x1, lane_y),
+                    (x1, y1 - node_height / 2),
+                ]
+                arrow = FancyArrowPatch(
+                    path=PlotPath(vertices),
+                    arrowstyle="-|>",
+                    mutation_scale=10,
+                    color="#5b6675",
+                    lw=1,
+                    zorder=1,
+                )
+                label_x, label_y = (x0 + x1) / 2, lane_y
+            else:
+                start, end = (x0 + 1.2, y0), (x1 - 1.2, y1)
+                arrow = FancyArrowPatch(
+                    start, end, arrowstyle="-|>", mutation_scale=10, color="#5b6675", lw=1, zorder=1
+                )
+                label_x, label_y = (x0 + x1) / 2, y0 + node_height / 2 + padding / 2
         else:
             direction = 1 if y1 > y0 else -1
             start, end = (
@@ -226,17 +302,63 @@ def render_concept_png(figure: ConceptFigure) -> bytes:
             label_x, label_y = (x0 + x1) / 2, (start[1] + end[1]) / 2
         ax.add_patch(arrow)
         if edge.label:
-            ax.text(
-                label_x,
-                label_y,
-                edge_labels[index],
-                ha="center",
-                va="center",
-                fontsize=8.5,
-                color="#5b6675",
-                zorder=2,
-                bbox={"facecolor": "white", "edgecolor": "none", "pad": 1},
-            )
+            anchor = (label_x, label_y)
+            if abs(y1 - y0) < 0.01 and 0 < x1 - x0 <= 3.3:
+                anchor = (label_x, y0)
+            label_positions.append((label_x, label_y, edge_labels[index], anchor))
+    # Long labels from a fan-out, feedback loop and side links can share the
+    # same inter-row gap. Place them against measured bounds rather than
+    # allowing text to overlap; displaced labels retain a leader to their edge.
+    renderer = FigureCanvasAgg(fig).get_renderer()
+    occupied = [
+        patch.get_window_extent(renderer).expanded(1.04, 1.08)
+        for patch in ax.patches
+        if isinstance(patch, FancyBboxPatch)
+    ]
+    bounds = ax.get_window_extent(renderer)
+    offsets = sorted(
+        [
+            (x, y)
+            for y in (0, -12, 12, -24, 24, -36, 36)
+            for x in range(-int(plot_width / 2), int(plot_width / 2) + 1, 10)
+        ],
+        key=lambda pair: pair[0] ** 2 + (pair[1] * 2) ** 2,
+    )
+    offsets.insert(0, (0, 0))
+    for label_x, label_y, label, anchor in label_positions:
+        artist = ax.text(
+            label_x,
+            label_y,
+            label,
+            ha="center",
+            va="center",
+            fontsize=8.5,
+            color="#5b6675",
+            zorder=2,
+            bbox={"facecolor": "white", "edgecolor": "none", "pad": 1},
+        )
+        for dx, dy in offsets:
+            point = (label_x + dx / scale, label_y + dy / scale)
+            artist.set_position(point)
+            box = artist.get_window_extent(renderer).expanded(1.08, 1.2)
+            if (
+                bounds.contains(*box.p0)
+                and bounds.contains(*box.p1)
+                and not any(box.overlaps(other) for other in occupied)
+            ):
+                occupied.append(box)
+                if dx or dy:
+                    ax.plot(
+                        [anchor[0], point[0]],
+                        [anchor[1], point[1]],
+                        color="#8a949d",
+                        linewidth=0.5,
+                        linestyle=":",
+                        zorder=1,
+                    )
+                break
+        else:
+            raise ValueError("图示关系标签无法无重叠排布，请拆分复杂图示")
     fig.text(0.5, 1 - 8 / height_points, title, ha="center", va="top", fontsize=13, color="#10283d")
     legend_top = height_points - 14 - len(title.splitlines()) * 16
     for index, _group in enumerate(groups):

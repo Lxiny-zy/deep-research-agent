@@ -52,6 +52,9 @@ _BASE_SYSTEM = (
     "章节使用 Markdown 标题层级，不用加粗段落代替标题；避免连续堆砌逐项核验表，"
     "同类比较尽量合并为一张表，表前给出连续编号和明确表题，表下注明单位、缩写和缺失值含义。"
     "使用标准 Markdown 表格，由导出器排为三线表。引用紧随所支持的论断，"
+    "表格的每个事实或数据行都要有本次 [n] 引用（可放末列），不能仅在表题或表外段落引用。"
+    "单位、缩写定义与取值范围须有素材依据，不按常识补齐；公式沿用素材的符号与索引，"
+    "不得另加素材中不存在的常数或整数下标。"
     "比较结论须说明任务范围、指标口径与适用条件；不要补写与当前任务无关的领域术语或缺口。"
     + SCIENTIFIC_MARKDOWN
 )
@@ -377,7 +380,15 @@ class TemplateWriter:
             bb.scratch[PROSE_REVIEW_KEY] = extras[PROSE_REVIEW_KEY]
         if revision_log is not None:
             extras["revision"] = revision_log.to_dict()
-        figure = await self.concept_figure(ctx, template, material)
+        content_ready = (
+            not body_replaced
+            and not extras.get("revision", {}).get("remaining")
+            and (reviewer is None or extras[PROSE_REVIEW_KEY]["status"] == "pass")
+        )
+        figure = await self.concept_figure(ctx, template, material) if content_ready else None
+        if not content_ready and template.key in _CONCEPT_FIGURE_TEMPLATES:
+            extras["concept_figure_skipped"] = "正文尚未通过检查，暂不生成可选图示"
+            ctx.tracer.emit("SYNTHESIZER", "info", extras["concept_figure_skipped"])
         if figure is not None:
             from .figure_review import FIGURE_REVIEW_KEY, FIGURE_RULES, review_figure
             from .figures import ConceptFigure

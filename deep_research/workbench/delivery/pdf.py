@@ -310,6 +310,11 @@ def _layout_parts(
             or 'class="math-image"' in part
             and part.startswith("<p")
         ):
+            if parts and parts[-1].table is None and parts[-1].figure_width is None:
+                parts[-1].html, lead = take_trailing_heading(parts[-1].html)
+                if not parts[-1].html.strip():
+                    parts.pop()
+                part = lead + part
             parts.append(LayoutPart(part, minimum_height=heading_height(part)))
             continue
         if part.startswith("<table>"):
@@ -346,7 +351,33 @@ def _layout_parts(
             part = part.replace('width="440"', f'width="{width:.3f}"', 1)
             part = lead + part
         parts.append(LayoutPart(part, minimum, figure_width))
-    return parts
+    # Story does not reliably honor page-break-after:avoid. Give each heading
+    # group its own flow and reserve room for the start of its following prose.
+    # Tables, equations and figures already carry their measured heading lead.
+    flowed: list[LayoutPart] = []
+    heading = r"<h[1-6](?:\s[^>]*)?>.*?</h[1-6]>\s*"
+    for item in parts:
+        if item.table is not None or item.figure_width is not None or item.minimum_height:
+            flowed.append(item)
+            continue
+        pending = ""
+        for fragment in re.split(r"(?=<h[1-6](?:\s|>))", item.html):
+            fragment = pending + fragment
+            pending = ""
+            if not fragment.strip():
+                continue
+            heading_match = re.match(rf"(?:\s*{heading})+", fragment, re.S)
+            if heading_match and not fragment[heading_match.end() :].strip():
+                pending = fragment
+                continue
+            # Two 10.5 pt body lines at 1.6 line height, plus paragraph spacing.
+            minimum = (
+                min(page_height, heading_height(heading_match[0]) + 40) if heading_match else 0.0
+            )
+            flowed.append(LayoutPart(fragment, minimum_height=minimum))
+        if pending:
+            flowed.append(LayoutPart(pending, minimum_height=heading_height(pending)))
+    return flowed
 
 
 def pdf_text(data: bytes) -> tuple[int, str]:

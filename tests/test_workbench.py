@@ -1458,8 +1458,9 @@ class FigureLLM(WorkbenchLLM):
 
 @pytest.mark.asyncio
 async def test_survey_delivers_concept_figure_in_every_format(settings) -> None:
-    body = "\n\n".join(
-        f"## {t}\n发现X [1]" for t in ("摘要", "引言", "主题综述", "方法对比", "开放问题", "结论")
+    # This export fixture needs accepted prose before paying for an optional figure.
+    body = "## 摘要\n\n发现X。\n\n" + "\n\n".join(
+        f"## {t}\n发现X [1]" for t in ("引言", "主题综述", "方法对比", "开放问题", "局限", "结论")
     )
     template, execution = _execution("综述", "litReview", settings)
     repo = InMemoryRepository()
@@ -1476,6 +1477,8 @@ async def test_survey_delivers_concept_figure_in_every_format(settings) -> None:
     await agent.run("综述")
     detail = await repo.get_run(run_id)
     assert detail is not None
+    extras = detail.orchestration.checkpoint["scratch"]["workbench"]["extras"]
+    assert extras["prose_review"]["status"] == "pass" and not extras["revision"]["remaining"]
     bundle = build_bundle(detail)
     assert any(f.name == "figures/fig_concept.png" for f in bundle.files)
     consistency = next(g for g in bundle.gates if g.name == "consistency")

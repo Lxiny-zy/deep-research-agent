@@ -8,6 +8,28 @@ import pytest
 from deep_research.workbench.delivery.pdf import PdfRenderError, render_pdf
 
 
+@pytest.mark.parametrize("paragraphs", [16, 17, 18, 19, 20, 21, 22])
+def test_prose_heading_has_following_text_on_the_same_page(paragraphs):
+    intro = "\n\n".join(["前置内容用于让后续章节接近页末，检查分页衔接。"] * paragraphs)
+    body = intro + "\n\n## 主要结果\n\n### 比较分析\n\nFOLLOWING-TEXT 后文第一段。\n\n末段正文。"
+    data = render_pdf(body, title="章节分页")
+    with pymupdf.open(stream=data, filetype="pdf") as document:
+        pages = [page.get_text() for page in document]
+    matched = [text for text in pages if "主要结果" in text]
+    assert len(matched) == 1 and "FOLLOWING-TEXT" in matched[0] and "比较分析" in matched[0]
+
+
+def test_consecutive_headings_stay_with_table():
+    intro = "\n\n".join(["前置内容用于检查表格前多级标题的分页。"] * 20)
+    body = (
+        intro + "\n\n## 实验结果\n\n### 比较结果\n\n| Method | Value |\n|---|---|\n| ALPHA | 3.5 |"
+    )
+    data = render_pdf(body, title="多级表格标题")
+    with pymupdf.open(stream=data, filetype="pdf") as document:
+        pages = [page.get_text() for page in document]
+    assert all("ALPHA" in text and "比较结果" in text for text in pages if "实验结果" in text)
+
+
 def test_short_table_and_caption_move_together_instead_of_leaving_a_single_row():
     intro = "\n\n".join(["这是用于占位的前置段落，以便表格接近页面底部。"] * 18)
     table = "\n\n## 配对结果\n\n表 1 配对比较\n\n| Identifier | Value |\n|---|---|\n"
