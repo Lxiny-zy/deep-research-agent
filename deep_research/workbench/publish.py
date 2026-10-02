@@ -187,7 +187,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 28,
+        "format_version": 29,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -426,6 +426,10 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             scratch, detail.results, [u for i, u in enumerate(citations, 1) if i in selected]
         )
         gates.append(GateResult("provided_corpus", "fail" if issues else "pass", issues))
+        from .review_coverage import coverage_issues
+
+        coverage = coverage_issues(scratch, detail.results)
+        gates.append(GateResult("review_coverage", "fail" if coverage else "pass", coverage))
     if template.key == "mindmap" and extras.get("mindmap"):
         from .mindmap_contract import checked_review
 
@@ -462,7 +466,12 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                         "prose_evidence",
                         "fail" if issues or not bound else "pass",
                         issues,
-                        {"units": len(record.get("units", [])), "method": "model_assessment"},
+                        {
+                            "units": len(record.get("units", [])),
+                            "method": "not_reviewed"
+                            if record.get("model_review_skipped")
+                            else "model_assessment",
+                        },
                     )
                 )
     if min_citations or citations:
@@ -489,7 +498,15 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     if template.key == "peerReview":
         gates.append(review_gate(extras))
     citation_failed = any(
-        g.name in {"citation", "node_evidence", "prose_evidence", "provided_corpus", "task_content"}
+        g.name
+        in {
+            "citation",
+            "node_evidence",
+            "prose_evidence",
+            "provided_corpus",
+            "task_content",
+            "review_coverage",
+        }
         and g.status == "fail"
         for g in gates
     )

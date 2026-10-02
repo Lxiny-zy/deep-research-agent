@@ -345,6 +345,7 @@ HARD_GATES = frozenset(
         "prose_evidence",
         "provided_corpus",
         "task_content",
+        "review_coverage",
     }
 )
 

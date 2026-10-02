@@ -5,6 +5,7 @@
 from ..workbench import analysis as _workbench_analysis  # noqa: E402,F401
 from ..workbench import attachment_reader as _workbench_attachments  # noqa: E402,F401
 from ..workbench import intake as _workbench_intake  # noqa: E402,F401
+from ..workbench import review_coverage as _workbench_review_coverage  # noqa: E402,F401
 from ..workbench import writers as _workbench_writers  # noqa: E402,F401
 from .aggregator import Aggregator
 from .coordinator import Coordinator

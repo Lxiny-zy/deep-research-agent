@@ -309,12 +309,14 @@ async def run_case(
         await agent.aclose()
 
 
-def render_case(detail, target: Path, quota: int | None, metadata: dict) -> dict:
+def render_case(
+    detail, target: Path, quota: int | None, metadata: dict, *, storage_root: Path | None = None
+) -> dict:
     from deep_research.workbench.delivery_store import build_or_load, load_version
     from deep_research.workbench.publish import build_bundle
 
     target.mkdir(parents=True, exist_ok=True)
-    root = str(target / "work")
+    root = str(storage_root if storage_root is not None else target / "work")
     bundle = build_or_load(detail, root, quota, build_bundle)
     restored = load_version(detail, root, bundle.content_version)
     assert [file.data for file in bundle.files] == [file.data for file in restored.files]

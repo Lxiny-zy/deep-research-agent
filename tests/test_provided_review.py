@@ -215,3 +215,6 @@ async def test_missing_closed_corpus_does_not_treat_long_instructions_as_a_paper
     ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
     await PaperIntake().step(bb, ctx)
     assert bb.scratch["intake_sources"]["mode"] == "missing" and not bb.results
+    from deep_research.workbench.reader import paper_sources_from_scratch
+
+    assert paper_sources_from_scratch(bb.scratch) == []

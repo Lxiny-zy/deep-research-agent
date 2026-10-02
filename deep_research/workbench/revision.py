@@ -132,6 +132,9 @@ def assess_draft(
 
         hard += corpus_issues(scratch, results, cited_urls, writable_only=True)
         soft += corpus_issues(scratch, results)
+        from .review_coverage import coverage_issues
+
+        soft += coverage_issues(scratch, results)
     report = evaluate(
         body,
         template_key=template.key,

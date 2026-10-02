@@ -219,8 +219,10 @@ class ProseReviewer:
         self.reviewer = SupportReviewer(llm, evidence, capacity, context=f"用户问题：{query}")
         self.records: dict[str, dict[str, Any]] = {}
 
-    def prime(self, markdown: str, record: dict[str, Any]) -> bool:
+    def prime(self, markdown: str, record: dict[str, Any] | None) -> bool:
         """Reuse only bound, valid decisions; uncertain results never become facts."""
+        if not isinstance(record, dict) or record.get("model_review_skipped"):
+            return False
         bound, _ = self.check(markdown, record)
         if not bound:
             return False
@@ -311,13 +313,34 @@ class ProseReviewer:
             translation_citations=self.translation_citations,
         )
 
+    def cached_review(self, markdown: str) -> dict[str, Any] | None:
+        key = self.signature(body_text(markdown, strip_references=not self.implicit))
+        cached = self.records.get(key)
+        return {**cached, "input_hash": self.signature(markdown)} if cached is not None else None
+
+    def diagnostic_record(self, markdown: str) -> dict[str, Any]:
+        """Bind an explicit failure to diagnostic material without another model call."""
+        return {
+            "version": 4 if self.translation_citations is not None else 3,
+            "input_hash": self.signature(markdown),
+            "status": "fail",
+            "scope": "unreviewed_diagnostic_material",
+            "model_review_skipped": True,
+            "mechanically_finalized": True,
+            "body_replaced": True,
+            "issues": ["任务正文未通过，证据摘录仅用于诊断，未作为正式成品重新核验"],
+            "can_revise": False,
+            "require_corroboration": self.corroboration,
+            "uncited_sections": list(self.uncited_sections),
+        }
+
     async def review(self, markdown: str) -> dict[str, Any]:
         signature = self.signature(markdown)
         content_key = self.signature(body_text(markdown, strip_references=not self.implicit))
-        if content_key in self.records:
+        if cached := self.cached_review(markdown):
             # Adding code-owned bibliography text does not require rejudging
             # the same prose. The public record still binds the complete file.
-            return {**self.records[content_key], "input_hash": signature}
+            return cached
         units, locations = self.units(markdown)
         decisions = await self.reviewer.review(units)
         problems = [d for d in decisions if d.verdict not in {"supported", "non_factual"}]
@@ -360,6 +383,8 @@ class ProseReviewer:
     def check(self, markdown: str, record: Any) -> tuple[bool, list[str]]:
         if not isinstance(record, dict) or record.get("input_hash") != self.signature(markdown):
             return False, ["正文、证据或核验规则已变更，原终稿核验记录不再适用"]
+        if record.get("model_review_skipped"):
+            return True, ["诊断摘录未进行成品核验，不能作为正式报告交付"]
         units, locations = self.units(markdown)
         try:
             decisions = [SupportDecision.model_validate(d) for d in record.get("decisions", [])]

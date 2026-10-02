@@ -22,7 +22,7 @@ async def main() -> None:
     from deep_research.agents.base import Blackboard, RunContext
     from deep_research.agents.researcher import Researcher
     from deep_research.config import Settings
-    from deep_research.guardrails import report_eligible
+    from deep_research.guardrails import report_eligible, verify_claim_consistency
     from deep_research.llm import LLM
     from deep_research.models import ResearchResult, Source
     from deep_research.observability import Tracer
@@ -32,6 +32,7 @@ async def main() -> None:
     from deep_research.workbench.attachments import attachments_from_scratch, parse_attachment
     from deep_research.workbench.contract import contract_from_scratch, provided_review
     from deep_research.workbench.reader import paper_sources
+    from deep_research.workbench.review_coverage import ReviewEvidenceCoverage, coverage_issues
     from deep_research.workbench.writers import SurveyWriter
     from scripts.accept_delivery_live import remote_profile, render_case
 
@@ -39,7 +40,24 @@ async def main() -> None:
     parser.add_argument("--authorized-ssh", required=True)
     parser.add_argument("--detail", type=Path, required=True, help="Trusted local RunDetail pickle")
     parser.add_argument("--papers", type=Path, nargs="+", required=True)
+    parser.add_argument(
+        "--supplement",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="Validated findings recovered from these same documents",
+    )
+    parser.add_argument(
+        "--coverage-only",
+        action="store_true",
+        help="Check and repair evidence coverage, then freeze state without writing",
+    )
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--storage-root",
+        type=Path,
+        help="Optional short artifact-store path for Windows acceptance directories",
+    )
     args = parser.parse_args()
     snapshot = _ROOT / ".acceptance-snapshot.json"
     if not snapshot.is_file():
@@ -52,6 +70,8 @@ async def main() -> None:
     if not isinstance(detail, RunDetail) or detail.orchestration is None:
         raise ValueError("Expected trusted local task state")
     detail.results = [ResearchResult.model_validate(r.model_dump()) for r in detail.results]
+    for path in args.supplement:
+        detail.results.append(ResearchResult.model_validate_json(path.read_text(encoding="utf-8")))
     detail.sources = [Source.model_validate(s.model_dump()) for s in detail.sources]
     scratch = copy.deepcopy(detail.orchestration.checkpoint["scratch"])
     contract = contract_from_scratch(scratch)
@@ -182,14 +202,30 @@ async def main() -> None:
     )
     metadata = {
         "code": code,
-        "mode": "rewrite_from_retained_evidence",
+        "mode": "repair_evidence_coverage"
+        if args.coverage_only
+        else "rewrite_from_retained_evidence",
         "new_extractions": 0,
         "retained_findings": admitted,
         "inputs": confirmed,
         "model": profile["model"],
+        "model_options": {
+            key: profile.get(key)
+            for key in (
+                "temperature",
+                "parameter_mode",
+                "reasoning_effort",
+                "context_window_tokens",
+                "max_output_tokens",
+            )
+        },
+        "supplements": [
+            {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            for path in args.supplement
+        ],
     }
     save("input.json", metadata)
-    print(f"Reusing {admitted} findings; no repeat extraction", flush=True)
+    print(f"Reusing {admitted} findings; check coverage before writing", flush=True)
     tracer.subscribe(
         lambda e: (
             print(
@@ -210,7 +246,26 @@ async def main() -> None:
 
     beat = asyncio.create_task(heartbeat())
     try:
-        await SurveyWriter().step(bb, ctx)
+        if args.supplement:
+            print("Checking consistency of merged evidence before coverage", flush=True)
+            await verify_claim_consistency(bb.results, researcher.consistency_verifier, llm, tracer)
+        await ReviewEvidenceCoverage().step(bb, ctx)
+        metadata["new_extractions"] = sum(
+            (event.data or {}).get("read_calls", 0)
+            for event in tracer.events
+            if (event.data or {}).get("category") == "review_coverage"
+        )
+        issues = coverage_issues(bb.scratch, bb.results)
+        save(
+            "coverage.json",
+            {
+                "scope": "task evidence coverage only",
+                "issues": issues,
+                "record": bb.scratch.get("review_coverage"),
+            },
+        )
+        if not args.coverage_only and not issues:
+            await SurveyWriter().step(bb, ctx)
         detail.results, detail.report = bb.results, bb.report
         detail.orchestration.checkpoint.update(bb.model_dump(mode="json"))
         next_sequence = (
@@ -233,9 +288,17 @@ async def main() -> None:
         metadata["new_tokens"] = tracer.total_tokens
         metadata["cumulative_tokens"] = detail.total_tokens
         save("model-run.json", metadata)
-        registry = render_case(detail, args.output / "delivery", None, metadata)
-        save("acceptance.json", registry)
-        print(f"Recovery: {registry['status']}; files={len(registry['items'])}", flush=True)
+        if args.coverage_only or issues:
+            print(
+                f"Evidence coverage: {'fail' if issues else 'pass'}; no report generated",
+                flush=True,
+            )
+        else:
+            registry = render_case(
+                detail, args.output / "delivery", None, metadata, storage_root=args.storage_root
+            )
+            save("acceptance.json", registry)
+            print(f"Recovery: {registry['status']}; files={len(registry['items'])}", flush=True)
     finally:
         beat.cancel()
         await asyncio.gather(beat, return_exceptions=True)

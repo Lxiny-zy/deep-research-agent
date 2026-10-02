@@ -52,6 +52,7 @@ const ROLE_LABEL: Record<string, string> = {
   intent_router: '意图门禁',
   paper_intake: '取回指定论文',
   attachment_reader: '阅读上传文件',
+  review_evidence_coverage: '检查并补齐关键证据',
   research_writer: '撰写调研报告',
   survey_writer: '撰写文献综述',
   peer_reviewer: '撰写评审意见',

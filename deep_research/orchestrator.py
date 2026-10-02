@@ -1117,6 +1117,7 @@ class DeepResearchAgent:
             and previous_review.get("mechanically_finalized")
             and prose_reviewer.check(bb.report.markdown, previous_review)[0]
         )
+        diagnostic_fallback = False
         if not reviewed_mindmap and not reviewed_prose and (bb.results or bb.report.citations):
             from .workbench.paper_abstract import abstract_section_support
             from .workbench.scholarly import uncited_sections_for
@@ -1130,6 +1131,7 @@ class DeepResearchAgent:
                 uncited_sections=uncited_sections_for(bb.scratch),
                 section_support=abstract_section_support(bb.scratch),
             )
+            diagnostic_fallback = bool(check.issues)
             prior_issues = [
                 issue
                 for event in self.tracer.events
@@ -1171,6 +1173,8 @@ class DeepResearchAgent:
             if prose_reviewer is not None:
                 if reviewed_prose:
                     audit = previous_review
+                elif diagnostic_fallback:
+                    audit = prose_reviewer.diagnostic_record(bb.report.markdown)
                 else:
                     self.tracer.emit("ORCHESTRATOR", "info", "核对最终正文的事实与引用支持关系…")
                     audit = await prose_reviewer.review(bb.report.markdown)
@@ -1180,17 +1184,21 @@ class DeepResearchAgent:
                     )
                 bb.scratch[PROSE_REVIEW_KEY] = audit
                 validation = {
-                    "scope": "model_assessed_final_prose_support",
+                    "scope": "citation_and_numbers"
+                    if audit.get("model_review_skipped")
+                    else "model_assessed_final_prose_support",
                     "issues": audit["issues"],
                     "fallback": bool(audit.get("body_replaced")),
-                    "semantic_verification": True,
+                    "semantic_verification": not bool(audit.get("model_review_skipped")),
                     "support_status": audit["status"],
                 }
                 bb.scratch["_report_validation"] = validation
                 self.tracer.emit(
                     "ORCHESTRATOR",
                     "info",
-                    "最终正文支持关系核对完成",
+                    "任务正文未通过，已保留诊断摘录与原草稿"
+                    if audit.get("model_review_skipped")
+                    else "最终正文支持关系核对完成",
                     data={"report_validation": validation},
                 )
                 if engine.runtime.run is not None:

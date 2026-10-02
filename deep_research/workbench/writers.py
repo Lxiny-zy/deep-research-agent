@@ -379,7 +379,12 @@ class TemplateWriter:
         if body_replaced:
             extras["unapproved_draft"] = body
         if reviewer is not None:
-            extras[PROSE_REVIEW_KEY] = await reviewer.review(report.markdown)
+            if body_replaced:
+                if previous := reviewer.cached_review(body):
+                    extras["unapproved_draft_review"] = previous
+                extras[PROSE_REVIEW_KEY] = reviewer.diagnostic_record(report.markdown)
+            else:
+                extras[PROSE_REVIEW_KEY] = await reviewer.review(report.markdown)
             # The body crossed deterministic finalization above. Only this
             # writer's trusted postprocess (e.g. a subjective review score) ran after it.
             extras[PROSE_REVIEW_KEY]["mechanically_finalized"] = True
@@ -388,8 +393,11 @@ class TemplateWriter:
         if revision_log is not None:
             extras["revision"] = revision_log.to_dict()
         from .corpus import corpus_issues
+        from .review_coverage import coverage_issues
 
-        corpus_complete = not corpus_issues(bb.scratch, bb.results)
+        corpus_complete = not (
+            corpus_issues(bb.scratch, bb.results) or coverage_issues(bb.scratch, bb.results)
+        )
         content_ready = (
             not body_replaced
             and corpus_complete
@@ -447,7 +455,11 @@ class TemplateWriter:
             template=template.key, extras=extras
         ).model_dump(mode="json")
         ctx.tracer.emit(
-            "SYNTHESIZER", "info", f"{template.title}完成，引用 {len(report.citations)} 个来源"
+            "SYNTHESIZER",
+            "info",
+            f"{template.title}完成，引用 {len(report.citations)} 个来源"
+            if content_ready
+            else f"{template.title}处理结束，正文尚未通过交付检查",
         )
         return bb
 

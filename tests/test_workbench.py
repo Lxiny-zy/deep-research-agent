@@ -407,10 +407,24 @@ async def test_writer_revises_draft_that_fails_quality_checks(settings) -> None:
     assert any("20" in issue for issue in by_name["citation"].issues)
 
 
-async def test_rejected_writer_draft_is_retained_for_repair_without_repeating_research(settings):
+async def test_rejected_writer_draft_is_retained_for_repair_without_repeating_research(
+    settings, monkeypatch
+):
+    from deep_research.report.service import ReportService
+    from deep_research.workbench.support import SupportDecisions
+
+    checked = []
+    original = WorkbenchLLM.parse
+
+    async def observe(self, system, user, schema, **kwargs):
+        if schema is SupportDecisions:
+            checked.append(user)
+        return await original(self, system, user, schema, **kwargs)
+
+    monkeypatch.setattr(WorkbenchLLM, "parse", observe)
     settings.quality = {"max_revisions": 0}
     body = "## 结论\n\n准确率达到 99.99% [1]。"
-    report, detail, _ = await _run("autoResearch", "研究结论", body, settings)
+    report, detail, agent = await _run("autoResearch", "研究结论", body, settings)
     assert "99.99" not in report.markdown
     extras = detail.orchestration.checkpoint["scratch"]["workbench"]["extras"]
     assert "99.99" in extras["unapproved_draft"]
@@ -418,6 +432,12 @@ async def test_rejected_writer_draft_is_retained_for_repair_without_repeating_re
     assert next(g for g in bundle.gates if g.name == "task_content").status == "fail"
     assert bundle.status == "fail" and {file.format for file in bundle.files} == {"md"}
     assert bundle.files[0].status == "fail"
+    assert checked and not any("已验证素材摘要" in user for user in checked)
+    assert "unapproved_draft_review" in extras
+    assert extras["prose_review"]["model_review_skipped"]
+    document = await ReportService(agent.repo).document(detail.id)
+    assert not document.final_validation.semantic_verification
+    assert document.final_validation.support_status == "fail"
 
 
 @pytest.mark.asyncio

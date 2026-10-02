@@ -22,7 +22,7 @@ from ..artifacts import ArtifactError
 from ..models import Source
 from ..persistence.repository import RunDetail
 from .attachments import attachments_from_scratch, load_original
-from .contract import PaperReference, contract_from_scratch, pasted_paper_text
+from .contract import PaperReference, contract_from_scratch, pasted_paper_text, provided_review
 from .intake import PAPER_SOURCES_KEY, pasted_sources
 
 READER_CACHE_DIR = "reader"
@@ -78,7 +78,12 @@ def reader_documents(detail: RunDetail) -> list[dict[str, Any]]:
                     "note": "" if pdf_url else "该链接没有可直接显示的 PDF，可在原网站查看",
                 }
             )
-        if not contract.papers and not documents and pasted_paper_text(contract):
+        if (
+            not provided_review(contract)
+            and not contract.papers
+            and not documents
+            and pasted_paper_text(contract)
+        ):
             documents.append(
                 {
                     "id": "pasted",
@@ -107,7 +112,11 @@ def paper_sources_from_scratch(scratch: dict[str, Any]) -> list[Source]:
                 continue
     if not sources:
         contract = contract_from_scratch(scratch)
-        pasted = pasted_paper_text(contract) if contract is not None else ""
+        pasted = (
+            pasted_paper_text(contract)
+            if contract is not None and not provided_review(contract)
+            else ""
+        )
         if pasted:
             sources = pasted_sources(pasted)
     return sources

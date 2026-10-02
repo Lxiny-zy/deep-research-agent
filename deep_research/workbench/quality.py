@@ -48,6 +48,7 @@ class QualityPolicy(BaseModel):
     # ---- 返工与收敛 ----
     max_revisions: int = Field(2, ge=0, le=4)
     extraction_max_revisions: int = Field(1, ge=0, le=4)
+    review_evidence_rounds: int = Field(1, ge=0, le=4)
     fail_on_quality: bool = False
     min_evidence_findings: int = Field(3, ge=0, le=50)
 
@@ -167,6 +168,17 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "仅针对未通过原文、数值或语义检查的候选进行定向修复，保留已通过的发现。"
         "0 表示只保存失败记录。修复仍须重新核验；遇到服务错误或没有实质修改时停止，"
         "不重新抽取全文。",
+        0,
+        4,
+        "次",
+    ),
+    QualityField(
+        "review_evidence_rounds",
+        "综述关键证据补读轮数",
+        "返工与收敛",
+        "int",
+        "仅指定文献综述在写作前逐篇核对任务所需证据；有缺口时优先补读相关章节，"
+        "保留已有发现。0 表示只检查不补读。补读仍须核验，未覆盖关键内容时不交付正式综述。",
         0,
         4,
         "次",

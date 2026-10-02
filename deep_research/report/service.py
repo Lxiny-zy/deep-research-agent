@@ -91,10 +91,12 @@ class ReportService:
             if checker is not None and record is not None:
                 bound, issues = checker.check(detail.report.markdown, record)
                 document.final_validation = FinalReportValidation(
-                    scope="model_assessed_final_prose_support",
+                    scope="citation_and_numbers"
+                    if record.get("model_review_skipped")
+                    else "model_assessed_final_prose_support",
                     issues=issues,
                     fallback=bool(record.get("body_replaced")),
-                    semantic_verification=True,
+                    semantic_verification=not bool(record.get("model_review_skipped")),
                     support_status="fail" if issues or not bound else "pass",
                 )
             workbench = scratch.get("workbench", {})

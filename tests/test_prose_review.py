@@ -53,6 +53,18 @@ async def test_changed_support_policy_cannot_reuse_an_old_positive_review(monkey
     assert not checker.prime(body, record)
 
 
+def test_diagnostic_failure_record_is_never_a_positive_semantic_review():
+    checker = reviewer()
+    body = "## 已验证素材摘要\n\n变量存在相关关系 [1]。"
+    record = checker.diagnostic_record(body)
+    assert record["status"] == "fail" and record["model_review_skipped"]
+    assert checker.check(body, record)[0] and checker.check(body, record)[1]
+    assert not checker.prime(body, record)
+    record["status"] = "pass"
+    assert checker.check(body, record)[1]
+    assert not checker.check(body + "Changed", record)[0]
+
+
 @pytest.mark.parametrize(
     "body",
     [

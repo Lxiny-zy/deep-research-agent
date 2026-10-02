@@ -181,11 +181,10 @@ async def test_optional_figure_waits_for_accepted_prose(
     from deep_research.workbench.writers import TemplateWriter
     from tests.fakes import FakeLLM, FakeSearch, verified_finding
 
-    class Reviewer:
-        async def review(self, body):
-            return {"status": review_status, "issues": [] if review_status == "pass" else ["bad"]}
+    async def review(self, body):
+        return {"status": review_status, "issues": [] if review_status == "pass" else ["bad"]}
 
-    monkeypatch.setattr(ProseReviewer, "research", lambda *args, **kwargs: Reviewer())
+    monkeypatch.setattr(ProseReviewer, "review", review)
 
     class Writer(TemplateWriter):
         name = "research_writer"

@@ -184,6 +184,7 @@ LIT_REVIEW_PROVIDED = Workflow(
     steps=[
         Step(agent="attachment_reader"),
         Step(agent="paper_intake"),
+        Step(agent="review_evidence_coverage"),
         Step(agent="survey_writer"),
     ],
 )

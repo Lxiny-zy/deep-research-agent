@@ -23,10 +23,17 @@ const GATE_LABEL: Record<string, string> = {
   structured_content: '定稿一致性',
   node_evidence: '节点证据与关系',
   prose_evidence: '终稿结论依据',
+  provided_corpus: '指定文献覆盖',
+  review_coverage: '关键证据覆盖',
+  task_content: '任务正文完整性',
   figure_evidence: '图示关系核对',
 }
 
 const GATE_HELP: Record<string, string> = {
+  provided_corpus: '逐份检查指定文献是否有可用证据，以及正文是否实际引用了每份材料。',
+  review_coverage:
+    '写作前逐篇检查关键方法等内容是否足以回答本次综述问题，不足时按设置补读相关章节。',
+  task_content: '检查是否形成所要求的任务正文。证据摘录仅用于诊断未完成的任务。',
   figure_evidence: '核对节点、关系方向与图注是否有依据；未通过的可选图示不进入报告。',
   prose_evidence: '逐段核对最终表述是否得到所引证据支持；记录绑定最终正文，模型判断仍需人工复核。',
   citation: '正文引用编号必须全部指向已核验来源，并达到本任务的引用下限。',
