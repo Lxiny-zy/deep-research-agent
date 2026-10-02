@@ -7,6 +7,91 @@ from deep_research.report.validation import finalize_report
 from tests.fakes import verified_finding
 
 
+def calculation_check(body: str, values: str = "33.18, 32.67, 1, 3, 0"):
+    from deep_research.report.validation import validate_body
+
+    results = [
+        ResearchResult(
+            sub_question="原始数值",
+            findings=[verified_finding(statement=values, evidence_quote=values)],
+        )
+    ]
+    return validate_body(body, results, {"https://a.com": 1}, fallback=False)
+
+
+@pytest.mark.parametrize(
+    "equation,values",
+    [
+        ("33.18 - 32.67 = 0.51", "33.18, 32.67"),
+        ("33.18 − 32.67 = 0.51", "33.18, 32.67"),
+        ("3 + 1 = 4", "3, 1"),
+        (r"3 \times 2 = 6", "3, 2"),
+        (r"1 / 3 \approx 0.33", "1, 3"),
+        ("1e-4 - 1e-5 = 9e-5", "1e-4, 1e-5"),
+    ],
+)
+def test_explicit_computation_uses_cited_operands_and_program_verified_result(equation, values):
+    body = f"据所列原始值计算：${equation}$ [1]。"
+    check = calculation_check(body, values)
+    assert not check.issues and check.body == body
+
+
+@pytest.mark.parametrize(
+    "body,issue",
+    [
+        ("差值为0.51 [1]。", "unsupported_number"),
+        ("33.18 - 32.67 = 0.50 [1]。", "invalid_calculation"),
+        ("33.18 - 32.67 = 32.67 [1]。", "invalid_calculation"),
+        ("34.18 - 32.67 = 1.51 [1]。", "unsupported_number"),
+        ("1 / 0 = 0 [1]。", "invalid_calculation"),
+        ("1 / 3 = 0.33 [1]。", "invalid_calculation"),
+        ("33.18 - 32.67 = 0.51，准确率达到0.51 [1]。", "unsupported_number"),
+        ("1 + 33.18 - 32.67 = 0.51 [1]。", "invalid_calculation"),
+        ("33.18 - 32.67 = 0.51 + 1 [1]。", "invalid_calculation"),
+    ],
+)
+def test_computation_does_not_license_wrong_or_unbound_numbers(body, issue):
+    assert issue in calculation_check(body).issues
+
+
+def test_calculation_operands_cannot_come_from_an_uncited_source():
+    from deep_research.report.validation import validate_body
+
+    results = [
+        ResearchResult(
+            sub_question="q",
+            findings=[
+                verified_finding("33.18", "https://a.com", "33.18"),
+                verified_finding("32.67", "https://b.com", "32.67"),
+            ],
+        )
+    ]
+    mapping = {"https://a.com": 1, "https://b.com": 2}
+    assert validate_body("33.18 - 32.67 = 0.51 [1]。", results, mapping, fallback=False).issues
+    assert not validate_body(
+        "33.18 - 32.67 = 0.51 [1,2]。", results, mapping, fallback=False
+    ).issues
+
+
+def test_faithful_translation_cannot_add_a_derived_result():
+    from deep_research.report.validation import validate_body
+
+    results = [
+        ResearchResult(
+            sub_question="q",
+            findings=[verified_finding("33.18 and 32.67", evidence_quote="33.18 and 32.67")],
+        )
+    ]
+    check = validate_body(
+        "## 摘要翻译\n\n33.18 - 32.67 = 0.51 [1]。",
+        results,
+        {"https://a.com": 1},
+        fallback=False,
+        section_support={"摘要翻译": "33.18 and 32.67"},
+    )
+    assert "unsupported_number" in check.issues
+
+
 @pytest.mark.parametrize(
     "body,issue",
     [

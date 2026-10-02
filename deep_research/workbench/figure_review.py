@@ -6,7 +6,14 @@ from dataclasses import asdict
 from typing import Any
 
 from .figures import ConceptFigure
-from .support import SUPPORT_POLICY_VERSION, SupportDecision, SupportReviewer, SupportUnit, digest
+from .support import (
+    SUPPORT_POLICY_VERSION,
+    SupportDecision,
+    SupportReviewer,
+    SupportUnit,
+    asserted_comparison,
+    digest,
+)
 
 FIGURE_REVIEW_KEY = "figure_review"
 _CONTEXT = (
@@ -161,6 +168,9 @@ def check_figure(figure: ConceptFigure, evidence: list[dict[str, Any]], record: 
                 d.verdict == "supported"
                 and (not d.evidence_ids or not set(d.evidence_ids).issubset(known))
             )
-            or (d.verdict == "non_factual" and by_id[d.unit_id].kind == "claim")
+            or (
+                d.verdict == "non_factual"
+                and (by_id[d.unit_id].kind == "claim" or asserted_comparison(by_id[d.unit_id].text))
+            )
         )
     ]

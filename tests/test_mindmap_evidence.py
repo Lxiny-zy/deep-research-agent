@@ -68,15 +68,16 @@ async def test_reviewer_batches_nodes_caches_unchanged_units_and_requires_every_
     reviewer = SupportReviewer(llm, [], 50000)
     nodes = [SupportUnit(str(i), f"概念 {i}", kind="concept") for i in range(20)]
     decisions = await reviewer.review(nodes)
-    assert len(llm.calls) == 2 and len(decisions) == 20
+    assert len(llm.calls) == 4 and len(decisions) == 20
     assert decisions[15].verdict == decisions[-1].verdict == "uncertain"
     assert all(d.verdict == "non_factual" for d in decisions[:15])
     await reviewer.review(nodes)
-    assert len(llm.calls) == 3
-    assert [u["id"] for u in llm.calls[-1]["units"]] == ["15", "19"]
+    assert len(llm.calls) == 6
+    assert [u["id"] for u in llm.calls[-2]["units"]] == ["15", "19"]
+    assert [u["id"] for u in llm.calls[-1]["units"]] == ["19"]
     nodes[0].text = "新概念"
     await reviewer.review(nodes)
-    assert len(llm.calls) == 4
+    assert len(llm.calls) == 8
 
 
 async def test_evidence_must_belong_to_the_specific_node_not_another_node_in_batch():
@@ -107,6 +108,50 @@ async def test_evidence_must_belong_to_the_specific_node_not_another_node_in_bat
         ]
     )
     assert decisions[0].verdict == "uncertain" and decisions[1].verdict == "supported"
+
+
+async def test_only_invalid_evidence_mapping_is_retried_and_the_successful_unit_is_reused():
+    class Recovering(FakeLLM):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def parse(self, system, user, schema, **kwargs):
+            data = json.loads(user)
+            self.calls.append(data)
+            return SupportDecisions(
+                decisions=[
+                    {
+                        "unit_id": unit["id"],
+                        "verdict": "supported",
+                        "reason": "支持",
+                        "evidence_ids": []
+                        if len(self.calls) == 1 and unit["id"] == "0"
+                        else [
+                            item["id"]
+                            for item in data["evidence"]
+                            if item["citation"] in unit["citations"]
+                        ],
+                    }
+                    for unit in data["units"]
+                ]
+            )
+
+    llm = Recovering()
+    checker = SupportReviewer(
+        llm, evidence_records(evidence(), {"https://a.com": 1, "https://b.com": 2}), 50000
+    )
+    units = [
+        SupportUnit("0", "变量相关", citations=[1]),
+        SupportUnit("1", "既有滤波器", citations=[2]),
+    ]
+    decisions = await checker.review(units)
+    assert [item.verdict for item in decisions] == ["supported", "supported"]
+    assert len(llm.calls) == 2 and [item["id"] for item in llm.calls[1]["units"]] == ["0"]
+    assert set(llm.calls[1]["repair_issues"]) == {"0"}
+    assert checker.protocol_repairs[0]["remaining"] == []
+    await checker.review(units)
+    assert len(llm.calls) == 2
 
 
 async def test_missing_evidence_and_model_failure_never_count_as_pass():

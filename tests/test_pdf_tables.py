@@ -103,6 +103,28 @@ def test_long_identifiers_do_not_overlap_adjacent_numeric_cells(monkeypatch):
         render_pdf(body, title="Injected overlapping columns")
 
 
+def test_short_paper_names_remain_intact_beside_long_narrative_columns():
+    body = (
+        "| 文献 | 任务 | 输入测量 | 输出 | 核心机制 | 建模假设 | 引用 |\n"
+        "|---|---|---|---|---|---|---|\n"
+    )
+    for name in ("DGSMP", "MST++"):
+        body += (
+            f"| {name} | CASSI 压缩测量恢复 | 含掩膜调制、色散与求和的二维压缩测量 | "
+            "多个光谱通道的三维高光谱图像 | 学习空间与光谱相似度权重并联合优化 | "
+            "局部均值可由空间光谱邻域加权平均刻画，权重可学习 | [1][2][3][4] |\n"
+        )
+    data = render_pdf(body, title="多文献对比表")
+    with pymupdf.open(stream=data, filetype="pdf") as document:
+        words = document[0].get_text("words")
+        for name in ("DGSMP", "MST++"):
+            label = next(word for word in words if word[4] == name)
+            adjacent = next(
+                word for word in words if word[4] == "CASSI" and abs(word[1] - label[1]) < 2
+            )
+            assert label[2] + 2 < adjacent[0]
+
+
 def test_figure_heading_moves_with_its_image():
     import io
 

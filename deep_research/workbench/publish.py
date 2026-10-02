@@ -187,7 +187,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 27,
+        "format_version": 28,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -332,9 +332,16 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             markdown = _insert_concept(markdown, block)
             display_markdown = _insert_concept(display_markdown, block)
 
+    computed_fallback = False
     # 数据分析：确定性地重算图表（与运行时同一函数、同一数据），把图挂进正文
     if template.key == "dataAnalysis":
-        from .analysis import ANALYSIS_SCRATCH_KEY, DatasetError, allows_synthetic, analyse
+        from .analysis import (
+            ANALYSIS_SCRATCH_KEY,
+            DatasetError,
+            allows_synthetic,
+            analyse,
+            fallback_report,
+        )
 
         try:
             result = analyse(
@@ -348,6 +355,11 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             result = None
             input_gates.append(GateResult("analysis", "fail", [str(exc)]))
         if result is not None:
+            computed_fallback = (
+                report is not None
+                and normalize_territory(report.markdown).strip()
+                == normalize_territory(fallback_report(result)).strip()
+            )
             input_gates.append(
                 GateResult(
                     "analysis",
@@ -392,6 +404,19 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         length_gate(markdown, template),
     ]
     gates.append(structure_gate(markdown, template, extras))
+    validation = scratch.get("_report_validation")
+    prose = extras.get("prose_review")
+    if not computed_fallback and (
+        (isinstance(validation, dict) and validation.get("fallback") is True)
+        or (isinstance(prose, dict) and prose.get("body_replaced") is True)
+    ):
+        gates.append(
+            GateResult(
+                "task_content",
+                "fail",
+                [f"{template.title}正文未通过检查，目前仅保留证据摘录，尚未完成所要求的交付"],
+            )
+        )
     if provided_review(contract):
         from .corpus import corpus_issues
         from .revision import _used_indices
@@ -464,7 +489,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     if template.key == "peerReview":
         gates.append(review_gate(extras))
     citation_failed = any(
-        g.name in {"citation", "node_evidence", "prose_evidence", "provided_corpus"}
+        g.name in {"citation", "node_evidence", "prose_evidence", "provided_corpus", "task_content"}
         and g.status == "fail"
         for g in gates
     )

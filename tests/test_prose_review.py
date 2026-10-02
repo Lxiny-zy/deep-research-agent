@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
+import pytest
+
 from deep_research.agents.base import Blackboard, RunContext
 from deep_research.models import ExtractedFindingList, ResearchResult, Source
 from deep_research.observability import Tracer
@@ -49,6 +51,75 @@ async def test_changed_support_policy_cannot_reuse_an_old_positive_review(monkey
     )
     assert not checker.check(body, record)[0]
     assert not checker.prime(body, record)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "表 1 汇总三篇文献。三者的输入性质不同，任何跨行的精度比较都不成立。",
+        "注：三行任务的输入测量互不相同，其精度指标不可跨行比较。",
+        "Table 1. These inputs are different and cannot be directly compared.",
+    ],
+)
+async def test_factual_comparability_cannot_be_exempted_as_table_layout(body):
+    class ExemptingJudge(FakeLLM):
+        async def parse(self, system, user, schema, **kwargs):
+            data = json.loads(user)
+            return SupportDecisions(
+                decisions=[
+                    {
+                        "unit_id": unit["id"],
+                        "verdict": "non_factual",
+                        "evidence_ids": [],
+                        "reason": "表格编排与方法学比较边界说明",
+                    }
+                    for unit in data["units"]
+                ]
+            )
+
+    checker = reviewer(ExemptingJudge())
+    audit = await checker.review(body)
+    assert audit["status"] == "fail" and audit["can_revise"]
+    assert "不能作为纯编排说明免检" in audit["issues"][0]
+    # A stored successful label cannot bypass the same check at export or seed its cache.
+    forged = deepcopy(audit)
+    forged["status"] = "pass"
+    for item in forged["decisions"]:
+        item["verdict"] = "non_factual"
+    bound, issues = checker.check(body, forged)
+    assert bound and any("错误归类" in issue for issue in issues)
+    checker.reviewer.cache.clear()
+    assert checker.prime(body, forged) and not checker.reviewer.cache
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "表 1 汇总方法、输入和评价指标。",
+        "注：空栏表示本表没有列出该项目。",
+        "请核查两项研究的输入是否相同。",
+        "需进一步确认这些结果是否可以比较。",
+        "Investigate whether the inputs are different.",
+    ],
+)
+def test_pure_layout_and_open_comparison_questions_are_not_factual_claims(text):
+    from deep_research.workbench.support import asserted_comparison
+
+    assert not asserted_comparison(text)
+
+
+async def test_comparison_can_pass_when_the_judge_binds_supporting_evidence():
+    results = [
+        ResearchResult(
+            sub_question="输入",
+            findings=[
+                verified_finding("两项任务的输入相同", evidence_quote="两项任务的输入相同。")
+            ],
+        )
+    ]
+    audit = await reviewer(results=results).review("两项任务的输入相同 [1]。")
+    assert audit["status"] == "pass"
+    assert audit["decisions"][0]["evidence_ids"]
 
 
 class Judge(FakeLLM):

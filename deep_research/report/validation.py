@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException, Inexact, InvalidOperation, Underflow, localcontext
 
 from ..guardrails import report_eligible
 from ..models import Report, ResearchResult
@@ -19,6 +19,11 @@ from ..workbench.delivery.math_markdown import (
 
 _CITATION = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
 _NUMBER = re.compile(r"(?<![A-Za-z0-9_.])[-+]?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][-+]?\d+)?")
+_OPERAND = r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][-+]?\d+)?"
+_CALCULATION = re.compile(
+    rf"(?<![A-Za-z0-9_.])(?P<left>{_OPERAND})\s*(?P<op>[+*/×÷-])\s*"
+    rf"(?P<right>{_OPERAND})\s*(?P<relation>=|≈)\s*(?P<result>{_OPERAND})(?![\d.])"
+)
 _STRUCTURAL_REF = re.compile(
     r"(?<![A-Za-z])(?:图|表|公式|式|Figure|Fig\.?|Table|Equation|Eq\.?)"
     r"\s*\(?[A-Z]?\d+(?:[.-]\d+)*[a-z]?\)?",
@@ -61,6 +66,59 @@ def _numbers(text: str) -> set[Decimal]:
 
 def _citation_text(text: str) -> str:
     return citation_text(text)
+
+
+def _computed_numbers(text: str, support: set[Decimal]) -> tuple[set[Decimal], list[str]]:
+    """Check explicit binary arithmetic; operands still need cited evidence.
+
+    Only the result at the equation's position is accounted for, so it cannot
+    justify an unrelated claim containing the same number. Method, metric,
+    units and condition comparability still require final prose review.
+    """
+    normalized = unicodedata.normalize("NFKC", text).replace("−", "-")
+    for latex, symbol in ((r"\times", "×"), (r"\cdot", "*"), (r"\div", "÷"), (r"\approx", "≈")):
+        normalized = normalized.replace(latex, symbol)
+    invalid = []
+    for match in reversed(list(_CALCULATION.finditer(normalized))):
+        before = normalized[: match.start()].rstrip()
+        after = normalized[match.end() :].lstrip()
+        bullet = before.rsplit("\n", 1)[-1].strip() in {"-", "*", "+"}
+        if (before and before[-1] in "+-*/×÷" and not bullet) or (after and after[0] in "+-*/×÷="):
+            invalid.append("复杂算式需拆为逐步可核对的二元计算")
+            continue
+        operands = [match[key].replace(",", "") for key in ("left", "right", "result")]
+        if any(len(value) > 64 for value in operands):
+            invalid.append("算式数值过长，未验证")
+            continue
+        try:
+            left, right, reported = map(Decimal, operands)
+            with localcontext() as context:
+                context.prec, context.Emax, context.Emin = 80, 9999, -9999
+                context.traps[Underflow] = True
+                context.traps[Inexact] = match["relation"] == "="
+                operator = match["op"]
+                if operator == "+":
+                    value = left + right
+                elif operator == "-":
+                    value = left - right
+                elif operator in {"*", "×"}:
+                    value = left * right
+                else:
+                    value = left / right
+                if match["relation"] == "≈":
+                    exponent = reported.as_tuple().exponent
+                    if not isinstance(exponent, int):
+                        raise InvalidOperation("non-finite calculation result")
+                    value = value.quantize(Decimal(1).scaleb(exponent))
+                valid = value.is_finite() and value == reported
+        except DecimalException:
+            valid = False
+        if not valid:
+            invalid.append(f"算式结果不正确或无法精确验证：{match[0]}")
+        elif left in support and right in support:
+            start, end = match.span("result")
+            normalized = normalized[:start] + " " * (end - start) + normalized[end:]
+    return _numbers(normalized) - support, invalid
 
 
 def validate_body(
@@ -157,7 +215,13 @@ def validate_body(
         if not indices and not exempt:
             exempt = only_math(content)
         if not indices and exempt:
-            unsupported = sorted(_numbers(content) - all_support)
+            absent, invalid = _computed_numbers(content, all_support)
+            if invalid:
+                issues.append("invalid_calculation")
+                problems.extend(
+                    ("invalid_calculation", _excerpt(content), item) for item in invalid
+                )
+            unsupported = sorted(absent)
             if unsupported:
                 issues.append("unsupported_number")
                 shown = "、".join(format(v.normalize(), "f") for v in unsupported[:5])
@@ -173,7 +237,11 @@ def validate_body(
             issues.append("invalid_citation")
             continue
         support = "\n".join(text for index in indices for text in evidence[index])
-        missing = sorted(_numbers(content) - _numbers(support))
+        absent, invalid = _computed_numbers(content, _numbers(support))
+        if invalid:
+            issues.append("invalid_calculation")
+            problems.extend(("invalid_calculation", _excerpt(content), item) for item in invalid)
+        missing = sorted(absent)
         if missing:
             issues.append("unsupported_number")
             shown = "、".join(format(value.normalize(), "f") for value in missing[:5])

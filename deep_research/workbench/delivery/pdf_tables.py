@@ -37,6 +37,11 @@ class PdfTable:
 
 
 def table_from_html(html: str, width: float) -> PdfTable:
+    try:
+        import pymupdf
+    except ImportError:  # pragma: no cover - older package spelling
+        import fitz as pymupdf  # type: ignore[no-redef]
+
     head = re.search(r"<thead>(.*?)</thead>", html, re.S)
     body = re.search(r"<tbody>(.*?)</tbody>", html, re.S)
     if head is None or body is None:
@@ -66,11 +71,21 @@ def table_from_html(html: str, width: float) -> PdfTable:
         for i in range(columns)
     ]
 
-    # Formula images cannot wrap like text. Reserve their intrinsic width
-    # before distributing the remaining space according to prose length.
+    # Formula images and Latin identifiers cannot wrap like Chinese prose.
+    # Reserve both before distributing the remainder. Match the 9.5 pt table
+    # CSS and conservatively cover bold headings and monospaced inline code.
     minimums = [
         max(
             [12.0]
+            + [
+                max(
+                    pymupdf.get_text_length(word, fontname=font, fontsize=9.5)
+                    for font in ("hebo", "cour")
+                )
+                + 2
+                for row in cells
+                for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.+]*", plain_html(row[i]))
+            ]
             + [
                 float(value) + 1
                 for row in cells
@@ -81,7 +96,7 @@ def table_from_html(html: str, width: float) -> PdfTable:
     ]
     available = max(1, width - columns * 10)
     if sum(minimums) > available:
-        raise ValueError("表格公式总宽度超过版心，请将公式拆为多行或移到表格外")
+        raise ValueError("表格不可换行内容总宽度超过版心，请缩短列标题或将长公式移到表格外")
     widths = [weight / sum(weights) * available for weight in weights]
     pending = set(range(columns))
     remaining = available

@@ -7,7 +7,14 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field
 
 from ..models import ResearchResult
-from .support import SUPPORT_POLICY_VERSION, SupportDecision, SupportUnit, digest, evidence_records
+from .support import (
+    SUPPORT_POLICY_VERSION,
+    SupportDecision,
+    SupportUnit,
+    asserted_comparison,
+    digest,
+    evidence_records,
+)
 
 
 class MindmapNode(BaseModel):
@@ -126,6 +133,8 @@ def checked_review(
             not decision.evidence_ids or not set(decision.evidence_ids).issubset(allowed)
         ):
             problems.append(f"节点 {unit.id}：证据映射不属于该节点")
-        elif decision.verdict == "non_factual" and unit.kind == "claim":
+        elif decision.verdict == "non_factual" and (
+            unit.kind == "claim" or asserted_comparison(unit.text)
+        ):
             problems.append(f"节点 {unit.id}：事实节点不能免于证据核对")
     return True, problems

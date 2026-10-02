@@ -21,6 +21,7 @@ from .support import (
     SupportDecision,
     SupportReviewer,
     SupportUnit,
+    asserted_comparison,
     digest,
     evidence_records,
 )
@@ -239,6 +240,8 @@ class ProseReviewer:
                 continue
             if decision.verdict == "non_factual" and unit.kind in {"claim", "translation"}:
                 continue
+            if decision.verdict == "non_factual" and asserted_comparison(unit.text):
+                continue
             self.reviewer.cache[digest([asdict(unit), selected])] = decision
         return True
 
@@ -335,6 +338,7 @@ class ProseReviewer:
             "can_revise": can_revise(decisions),
             "require_corroboration": self.corroboration,
             "uncited_sections": list(self.uncited_sections),
+            "protocol_repairs": list(self.reviewer.protocol_repairs),
         }
         if not units:
             record["issues"] = ["正文没有可核对内容"]
@@ -386,6 +390,8 @@ class ProseReviewer:
                 problems.append(f"第 {positions[d.unit_id]} 行：{d.reason}")
             elif d.verdict == "non_factual" and expected[d.unit_id].kind == "translation":
                 problems.append(f"第 {positions[d.unit_id]} 行：译文未完成忠实性与完整性核对")
+            elif d.verdict == "non_factual" and asserted_comparison(expected[d.unit_id].text):
+                problems.append(f"第 {positions[d.unit_id]} 行：事实性比较被错误归类为纯编排说明")
             elif d.verdict == "supported" and (
                 not d.evidence_ids or not set(d.evidence_ids).issubset(allowed)
             ):

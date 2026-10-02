@@ -320,6 +320,7 @@ async def test_closed_review_cannot_export_when_a_supplied_document_is_missing(s
     corpus = next(gate for gate in bundle.gates if gate.name == "provided_corpus")
     assert corpus.status == "fail" and any("missing.test" in issue for issue in corpus.issues)
     assert not {"pdf", "docx", "html"}.intersection(file.format for file in bundle.files)
+    assert all(file.status == "fail" for file in bundle.files if file.format == "md")
 
 
 async def test_missing_corpus_does_not_trigger_rewrites_or_optional_figures(settings, monkeypatch):
@@ -413,6 +414,10 @@ async def test_rejected_writer_draft_is_retained_for_repair_without_repeating_re
     assert "99.99" not in report.markdown
     extras = detail.orchestration.checkpoint["scratch"]["workbench"]["extras"]
     assert "99.99" in extras["unapproved_draft"]
+    bundle = build_bundle(detail)
+    assert next(g for g in bundle.gates if g.name == "task_content").status == "fail"
+    assert bundle.status == "fail" and {file.format for file in bundle.files} == {"md"}
+    assert bundle.files[0].status == "fail"
 
 
 @pytest.mark.asyncio
