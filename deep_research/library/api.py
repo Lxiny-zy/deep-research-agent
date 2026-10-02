@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..access import Principal
 from ..http.auth import principal_for
+from ..upload_limits import DOCUMENT_MAX_BASE64_CHARS
 from .ingestion import SourceImportError, prepare_source
 from .models import Corpus, LibrarySource, Project, ProjectSummary, SourceChunk
 from .repository import LibraryConflictError, LibraryRepository
@@ -47,7 +48,7 @@ class ImportSourceRequest(BaseModel):
     title: str = Field(default="", max_length=300)
     kind: Literal["text", "markdown", "url", "doi", "pdf"]
     text: str = Field(default="", max_length=1_000_000)
-    data_base64: str = Field(default="", max_length=22_500_000)
+    data_base64: str = Field(default="", max_length=DOCUMENT_MAX_BASE64_CHARS)
     origin_url: str = Field(default="", max_length=4000)
     mime_type: str = Field(default="", max_length=100)
 

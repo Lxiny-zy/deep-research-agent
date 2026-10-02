@@ -4,7 +4,8 @@
 
 1. **上传即解析**（``POST /api/attachments``）：复用资料库的同一条解析链（PDF 按章节、
    Office 按标题 / 幻灯片 / 工作表、文本按段落），返回带定位的片段与摘要信息；
-   前端展示解析结果，用户确认后随创建任务一起提交。原始文件不落盘。
+   前端展示解析结果，用户确认后随创建任务一起提交。PDF 原文件按内容哈希保存，
+   供精读工作区读取原版；其他格式只保留解析结果。
 2. **任务内阅读**：片段冻结进任务契约所在的 checkpoint（``scratch.attachments``），
    ``AttachmentReader`` 角色把它们交给 Researcher 的「抽取 → 逐字核验 → 语义核验」链，
    和论文、检索来源走同一套证据纪律——模型读到的每句话都能指回文件里的具体位置。
@@ -23,6 +24,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ..models import Source
+from ..upload_limits import DOCUMENT_LIMIT_LABEL, DOCUMENT_MAX_BYTES
 
 ATTACHMENTS_SCRATCH_KEY = "attachments"
 MAX_ATTACHMENTS = 8
@@ -32,7 +34,7 @@ MAX_PARSED_CHARS_PER_FILE = (
     2_000_000  # Includes chunk overlap; import text itself is bounded to 1M.
 )
 MAX_TOTAL_PARSED_CHARS = 8_000_000
-MAX_FILE_BYTES = 16 * 1024 * 1024
+MAX_FILE_BYTES = DOCUMENT_MAX_BYTES
 
 SUPPORTED_EXTENSIONS = {
     ".pdf": "pdf",
@@ -137,7 +139,7 @@ async def parse_attachment(raw: bytes, filename: str, mime_type: str = "") -> At
     from ..library.ingestion import SourceImportError, prepare_source
 
     if len(raw) > MAX_FILE_BYTES:
-        raise AttachmentError("文件超过 16 MB 限制")
+        raise AttachmentError(f"文件超过 {DOCUMENT_LIMIT_LABEL} 限制")
     if not raw:
         raise AttachmentError("文件为空")
     kind = kind_for(filename, mime_type)
@@ -145,13 +147,11 @@ async def parse_attachment(raw: bytes, filename: str, mime_type: str = "") -> At
         raise AttachmentError(
             "不支持的文件类型；支持 PDF、Word、PowerPoint、Excel、Markdown、TXT、CSV 等"
         )
-    import base64
-
     try:
         prepared = await prepare_source(
             kind="pdf" if kind == "pdf" else ("markdown" if kind == "markdown" else "text"),
             title=filename,
-            data_base64=base64.b64encode(raw).decode("ascii"),
+            raw_bytes=raw,
             mime_type=mime_type,
             filename=filename,
         )

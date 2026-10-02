@@ -44,6 +44,7 @@ async def require_api_key(
             or path == "/api/templates/contract"
             # 上传附件、解析数据表只处理用户自己的文件，同属发起研究的一步
             or path == "/api/attachments"
+            or path == "/api/attachments/file"
             or path == "/api/datasets"
         )
     )

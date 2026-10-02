@@ -1,6 +1,7 @@
 import { useId, useState, type DragEvent } from 'react'
 import { AppIcon, type AppIconName } from './AppIcon'
 import { humanSize } from '../lib/workbench'
+import { DOCUMENT_LIMIT_LABEL } from '../lib/uploadLimits'
 import { ACCEPTED_EXTENSIONS, MAX_ATTACHMENTS, type AttachmentItem } from '../hooks/useAttachments'
 
 interface Props {
@@ -73,7 +74,8 @@ export default function AttachmentDropzone({
             </label>
           </strong>
           <small>
-            PDF、Word、PPT、Excel、Markdown、TXT、CSV · 单个 16 MB 以内 · 最多 {MAX_ATTACHMENTS} 个
+            PDF、Word、PPT、Excel、Markdown、TXT、CSV · 单个 {DOCUMENT_LIMIT_LABEL} 以内 · 最多{' '}
+            {MAX_ATTACHMENTS} 个
           </small>
         </span>
         <input
@@ -109,6 +111,7 @@ export default function AttachmentDropzone({
                 <span className="attach-item-meta">
                   <span className="attach-item-kind">{kindLabel(item)}</span>
                   {humanSize(item.size)}
+                  {item.status === 'queued' && ' · 等待上传'}
                   {item.status === 'uploading' && ' · 正在解析…'}
                   {item.status === 'ready' &&
                     item.summary &&

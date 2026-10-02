@@ -21,6 +21,9 @@ server {
     ssl_session_cache shared:TLS:10m;
     ssl_session_timeout 1d;
 
+    # 64 MiB raw uploads and legacy Base64 JSON envelopes.
+    client_max_body_size 96m;
+
     limit_req zone=deep_research_per_ip burst=30 nodelay;
     limit_req_status 429;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;

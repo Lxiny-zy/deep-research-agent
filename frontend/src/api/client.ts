@@ -369,10 +369,11 @@ export function importLibrarySource(
   projectId: string,
   body: ImportSourceInput,
 ): Promise<LibrarySource> {
-  return request<LibrarySource>(`/api/projects/${encodeURIComponent(projectId)}/sources/import`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  })
+  return request<LibrarySource>(
+    `/api/projects/${encodeURIComponent(projectId)}/sources/import`,
+    { method: 'POST', body: JSON.stringify(body) },
+    120_000,
+  )
 }
 
 export function listSourceChunks(
@@ -1261,14 +1262,26 @@ export function parseDatasetFile(
   })
 }
 
-/** 上传并解析一个任务附件（文件内容以 Base64 传输；PDF 原文件会保存，供精读页显示原版）。 */
+/** 上传文件原始字节；保留旧 Base64 调用方兼容入口。PDF 原文件供精读页显示。 */
 export function uploadAttachment(
-  body: { filename: string; mime_type: string; data_base64: string },
+  body: File | { filename: string; mime_type: string; data_base64: string },
   signal?: AbortSignal,
 ): Promise<AttachmentUploadResult> {
-  return request<AttachmentUploadResult>('/api/attachments', {
-    method: 'POST',
-    body: JSON.stringify(body),
-    signal,
-  })
+  if (body instanceof File) {
+    return request<AttachmentUploadResult>(
+      `/api/attachments/file?filename=${encodeURIComponent(body.name)}`,
+      {
+        method: 'POST',
+        body,
+        headers: { 'Content-Type': body.type || 'application/octet-stream' },
+        signal,
+      },
+      120_000,
+    )
+  }
+  return request<AttachmentUploadResult>(
+    '/api/attachments',
+    { method: 'POST', body: JSON.stringify(body), signal },
+    120_000,
+  )
 }

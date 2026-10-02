@@ -8,7 +8,25 @@ import {
   resumeRun,
   setApiKey,
   streamRun,
+  uploadAttachment,
 } from './client'
+
+describe('binary document upload', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('sends the original File bytes without a Base64 JSON wrapper', async () => {
+    const response = { attachment: { id: 'paper' }, summary: {} }
+    const fetcher = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify(response), { status: 201 }))
+    const file = new File(['%PDF-original'], '论文 & notes.pdf', { type: 'application/pdf' })
+    expect(await uploadAttachment(file)).toEqual(response)
+    const [url, init] = fetcher.mock.calls[0]
+    expect(String(url)).toBe(`/api/attachments/file?filename=${encodeURIComponent(file.name)}`)
+    expect(init?.body).toBe(file)
+    expect(new Headers(init?.headers).get('Content-Type')).toBe('application/pdf')
+  })
+})
 
 describe('API key persistence', () => {
   afterEach(() => {

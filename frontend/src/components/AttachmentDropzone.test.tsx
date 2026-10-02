@@ -41,7 +41,8 @@ describe('useAttachments', () => {
     expect(result.current.uploading).toBe(true)
     await waitFor(() => expect(result.current.payloads).toHaveLength(1))
     expect(mocks.uploadAttachment).toHaveBeenCalledWith(
-      expect.objectContaining({ filename: 'notes.md', data_base64: expect.any(String) }),
+      expect.objectContaining({ name: 'notes.md' }),
+      expect.any(AbortSignal),
     )
     expect(result.current.uploading).toBe(false)
   })
@@ -62,6 +63,38 @@ describe('useAttachments', () => {
     expect(result.current.items).toHaveLength(0)
     expect(result.current.selectionError).toContain('本次选择未添加')
     expect(mocks.uploadAttachment).not.toHaveBeenCalled()
+  })
+
+  it('accepts a normal paper over 16 MiB and rejects files beyond 64 MiB', async () => {
+    mocks.uploadAttachment.mockResolvedValue({ attachment: { id: 'large' }, summary: {} })
+    const large = file('large.pdf')
+    const excessive = file('excessive.pdf')
+    Object.defineProperty(large, 'size', { value: 19 * 1024 * 1024 })
+    Object.defineProperty(excessive, 'size', { value: 64 * 1024 * 1024 + 1 })
+    const { result } = renderHook(() => useAttachments())
+    act(() => result.current.add([large, excessive]))
+    await waitFor(() => expect(result.current.payloads).toHaveLength(1))
+    expect(mocks.uploadAttachment).toHaveBeenCalledTimes(1)
+    expect(result.current.items[1].error).toContain('64 MiB')
+  })
+
+  it('queues file uploads and skips a queued file removed by the user', async () => {
+    let finish!: (value: unknown) => void
+    mocks.uploadAttachment.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const { result } = renderHook(() => useAttachments())
+    act(() => result.current.add([file('first.pdf'), file('removed.pdf')]))
+    await waitFor(() => expect(mocks.uploadAttachment).toHaveBeenCalledTimes(1))
+    expect(result.current.items[0].status).toBe('uploading')
+    expect(result.current.items[1].status).toBe('queued')
+    act(() => result.current.remove(result.current.items[1].key))
+    await act(async () => finish({ attachment: { id: 'first' }, summary: {} }))
+    await waitFor(() => expect(result.current.uploading).toBe(false))
+    expect(mocks.uploadAttachment).toHaveBeenCalledTimes(1)
   })
 
   it('keeps a truncated server response as an error, never a ready attachment', async () => {

@@ -15,6 +15,7 @@ import {
   useSourceChunks,
 } from '../hooks/useLibrary'
 import type { ImportSourceInput, LibrarySourceKind } from '../types'
+import { DOCUMENT_LIMIT_LABEL, DOCUMENT_MAX_BYTES } from '../lib/uploadLimits'
 
 const SOURCE_MODES: Array<{ value: LibrarySourceKind; label: string; icon: AppIconName }> = [
   { value: 'url', label: '网页', icon: 'external' },
@@ -137,7 +138,8 @@ export default function LibraryPage() {
         for (const [index, file] of files.entries()) {
           setImportProgress(`正在导入 ${index + 1}/${files.length}：${file.name}`)
           try {
-            if (file.size > 16 * 1024 * 1024) throw new Error('文件超过 16 MB 限制')
+            if (file.size > DOCUMENT_MAX_BYTES)
+              throw new Error(`文件超过 ${DOCUMENT_LIMIT_LABEL} 限制`)
             const created = await importSource.mutateAsync({
               corpus_id: corpusId,
               kind: 'pdf',
@@ -481,7 +483,7 @@ export default function LibraryPage() {
                   )}
                   {importNeedsFile && (
                     <label className="field-label library-import-wide library-file-drop">
-                      PDF 文件（支持多选，每个最大 16 MB；批量按文件名命名）
+                      PDF 文件（支持多选，每个最大 {DOCUMENT_LIMIT_LABEL}；批量按文件名命名）
                       <span className="library-file-box">
                         <AppIcon name="download" size={18} aria-hidden="true" />
                         <span>

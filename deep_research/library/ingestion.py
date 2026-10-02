@@ -15,9 +15,10 @@ import httpx
 from ..blocking import run_blocking
 from ..security import ProviderURLPolicyError, provider_http_client, validate_provider_url
 from ..tools.oa_pdf_fulltext import OaPdfLimits, OaPdfParseError, parse_oa_pdf
+from ..upload_limits import DOCUMENT_LIMIT_LABEL, DOCUMENT_MAX_BYTES
 from .office import MIME_BY_KIND, OfficeParseError, parse_office, sniff_office
 
-MAX_SOURCE_BYTES = 16 * 1024 * 1024
+MAX_SOURCE_BYTES = DOCUMENT_MAX_BYTES
 MAX_SOURCE_CHARS = 1_000_000
 CHUNK_CHARS = 3_600
 CHUNK_OVERLAP = 320
@@ -167,13 +168,13 @@ async def _fetch(url: str) -> tuple[bytes, str, str]:
                     response.raise_for_status()
                     declared = response.headers.get("content-length", "")
                     if declared.isdigit() and int(declared) > MAX_SOURCE_BYTES:
-                        raise SourceImportError("来源文件超过 16 MB 限制")
+                        raise SourceImportError(f"来源文件超过 {DOCUMENT_LIMIT_LABEL} 限制")
                     pieces: list[bytes] = []
                     total = 0
                     async for piece in response.aiter_bytes():
                         total += len(piece)
                         if total > MAX_SOURCE_BYTES:
-                            raise SourceImportError("来源文件超过 16 MB 限制")
+                            raise SourceImportError(f"来源文件超过 {DOCUMENT_LIMIT_LABEL} 限制")
                         pieces.append(piece)
                     mime = (
                         response.headers.get("content-type", "application/octet-stream")
@@ -261,7 +262,7 @@ def _decode_base64(value: str) -> bytes:
     except (binascii.Error, ValueError) as exc:
         raise SourceImportError("文件内容不是有效的 Base64") from exc
     if len(raw) > MAX_SOURCE_BYTES:
-        raise SourceImportError("来源文件超过 16 MB 限制")
+        raise SourceImportError(f"来源文件超过 {DOCUMENT_LIMIT_LABEL} 限制")
     return raw
 
 
@@ -274,6 +275,7 @@ async def prepare_source(
     origin_url: str = "",
     mime_type: str = "",
     filename: str = "",
+    raw_bytes: bytes | None = None,
 ) -> PreparedSource:
     resolved_url = origin_url.strip()
     resolved_mime = mime_type.strip().lower()
@@ -281,7 +283,11 @@ async def prepare_source(
     if kind == "doi":
         doi = normalize_doi(origin_url)
         resolved_url = f"https://doi.org/{doi}"
-    if text.strip():
+    if raw_bytes is not None:
+        if len(raw_bytes) > MAX_SOURCE_BYTES:
+            raise SourceImportError(f"来源文件超过 {DOCUMENT_LIMIT_LABEL} 限制")
+        raw = raw_bytes
+    elif text.strip():
         raw = text.encode("utf-8")
         resolved_mime = resolved_mime or ("text/markdown" if kind == "markdown" else "text/plain")
     elif data_base64:

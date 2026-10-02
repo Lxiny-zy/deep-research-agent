@@ -93,13 +93,13 @@ async def test_redirect_without_location_and_redirect_loops_fail(monkeypatch):
 async def test_oversized_documents_are_rejected(monkeypatch):
     declared = str(ingestion.MAX_SOURCE_BYTES + 1)
     _install(monkeypatch, lambda _r: httpx.Response(200, headers={"content-length": declared}))
-    with pytest.raises(SourceImportError, match="16 MB"):
+    with pytest.raises(SourceImportError, match="64 MiB"):
         await prepare_source(title="", kind="url", origin_url="https://example.org/big")
 
     # 未声明长度时按实际读取的字节数截断
     monkeypatch.setattr(ingestion, "MAX_SOURCE_BYTES", 8)
     _install(monkeypatch, lambda _r: httpx.Response(200, content=b"0123456789abcdef"))
-    with pytest.raises(SourceImportError, match="16 MB"):
+    with pytest.raises(SourceImportError, match="64 MiB"):
         await prepare_source(title="", kind="url", origin_url="https://example.org/stream")
 
 

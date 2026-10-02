@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from ..artifacts import ArtifactError
 from ..blocking import run_blocking
+from ..upload_limits import DOCUMENT_LIMIT_LABEL, DOCUMENT_MAX_BASE64_CHARS, DOCUMENT_MAX_BYTES
 from .contract import build_contract, pasted_paper_text
 from .delivery_store import DeliveryConflict, build_or_load, current_version, load_version
 from .delivery_store import retry_format as retry_delivery_format
@@ -437,7 +438,7 @@ class AttachmentUpload(BaseModel):
 
     filename: str = Field(min_length=1, max_length=300)
     mime_type: str = Field(default="", max_length=120)
-    data_base64: str = Field(min_length=1, max_length=22_500_000)
+    data_base64: str = Field(min_length=1, max_length=DOCUMENT_MAX_BASE64_CHARS)
 
 
 @router.post("/attachments", status_code=201)
@@ -450,15 +451,50 @@ async def upload_attachment(req: AttachmentUpload, request: Request) -> dict[str
     import base64
     import binascii
 
-    from ..artifacts import ArtifactError
-    from .attachments import AttachmentError, parse_attachment, save_original
-
     try:
         raw = base64.b64decode(req.data_base64, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise HTTPException(422, "文件内容不是有效的 Base64") from exc
+    return await _store_attachment(raw, req.filename, req.mime_type, request)
+
+
+@router.post(
+    "/attachments/file",
+    status_code=201,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+            },
+        }
+    },
+)
+async def upload_attachment_file(
+    request: Request, filename: str = Query(min_length=1, max_length=300)
+) -> dict[str, Any]:
+    """Read a binary file incrementally, with a limit before parsing or storage."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > DOCUMENT_MAX_BYTES:
+        raise HTTPException(413, f"文件超过 {DOCUMENT_LIMIT_LABEL} 限制")
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > DOCUMENT_MAX_BYTES:
+            raise HTTPException(413, f"文件超过 {DOCUMENT_LIMIT_LABEL} 限制")
+        content.extend(chunk)
+    raw = bytes(content)
+    del content
+    mime_type = request.headers.get("content-type", "").split(";", 1)[0].strip()[:120]
+    return await _store_attachment(raw, filename, mime_type, request)
+
+
+async def _store_attachment(
+    raw: bytes, filename: str, mime_type: str, request: Request
+) -> dict[str, Any]:
+    from .attachments import AttachmentError, parse_attachment, save_original
+
     try:
-        attachment = await parse_attachment(raw, req.filename, req.mime_type)
+        attachment = await parse_attachment(raw, filename, mime_type)
     except AttachmentError as exc:
         raise HTTPException(422, str(exc)) from exc
     if attachment.kind == "pdf":
