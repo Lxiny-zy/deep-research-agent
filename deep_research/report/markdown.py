@@ -52,6 +52,9 @@ _CORROBORATION_LABEL = {
 
 def render_markdown(doc: ReportDocument) -> str:
     """把结构化文档投影成 Markdown。"""
+    from .presentation import presentation_document
+
+    doc = presentation_document(doc)
     sections: list[str] = []
     title = doc.title.strip() or doc.query.strip()
     if title:
@@ -204,8 +207,8 @@ def _overview(doc: ReportDocument) -> str:
 def _evidence_appendix(doc: ReportDocument) -> str:
     """证据附录：交互侧栏在纯文本里的等价物。
 
-    按 ``[n]`` 分组，顺序与参考来源一致，读者拿正文里的角标就能直接定位——
-    不依赖锚点跳转，因为各家 Markdown 的标题 slug 规则并不一致。
+    按原文定位分组，文献编号与位置标签分别呈现；不同片段的记录不能混到
+    第一处定位之下。纯文本阅读不依赖各家 Markdown 不一致的标题锚点规则。
     """
     # 免责声明已在文首出现一次。线性文档里再重复一遍只是噪声——它之所以在 HTML
     # 侧栏里重复，是因为侧栏会被单独打开阅读，而附录不会脱离文档存在。
@@ -218,7 +221,12 @@ def _evidence_appendix(doc: ReportDocument) -> str:
         records = by_citation[citation]
         reference = next((r.reference for r in records if r.reference), "")
         head = reference or next((r.source_url for r in records if r.source_url), "")
-        parts.append(f"### [{citation}] {_inline(head)}")
+        if doc.bibliography is not None:
+            from .presentation import evidence_label
+
+            parts.append(f"### {_inline(evidence_label(doc, citation))}")
+        else:
+            parts.append(f"### [{citation}] {_inline(head)}")
         for record in records:
             parts.append(_evidence_record(record))
     return "\n\n".join(parts)
@@ -234,7 +242,10 @@ def _evidence_record(record: EvidenceRecord) -> str:
     if record.context:
         # 引用块承载检索快照上下文；逐字引文在其中加粗，替代 HTML 的 <mark> 高亮。
         lines.append("")
-        lines.append(f"> {_inline(_emphasise(record.context, record.quote))}")
+        context = record.context
+        if record.quote and record.quote not in context:
+            context = record.quote
+        lines.append(f"> {_inline(_emphasise(context, record.quote))}")
     elif record.quote:
         lines.append("")
         lines.append(f"> {_inline(record.quote)}")

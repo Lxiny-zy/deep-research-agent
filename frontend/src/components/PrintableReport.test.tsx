@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import PrintableReport from './PrintableReport'
 import { displayReportTitle } from '../lib/reportTitle'
-import type { Finding } from '../types'
+import type { Finding, ReportDocument } from '../types'
 
 // 打印布局的性质，不是样式细节：
 // - 侧栏是「按需」的（一次一条），纸上必须被**替换**成一次性呈现的附录；
@@ -52,6 +52,69 @@ function finding(
 }
 
 const MARKDOWN = '# 报告\n\n正文引用了 [1]。\n\n## 参考来源\n[1] ' + URL_B + '\n'
+
+it('prints one bibliography entry while preserving both precise evidence locations and long quotes', () => {
+  const urls = [1, 2].map((index) => `https://workspace.invalid/attachments/paper?chunk=${index}`)
+  const markdown = '正文 [2]。'
+  const document: ReportDocument = {
+    schema_version: 1,
+    query: 'q',
+    blocks: [],
+    references: [],
+    evidence: [],
+    disclaimer: '',
+    overview: {
+      records: 2,
+      verbatim_matched: 2,
+      semantically_supported: 2,
+      corroborated: 0,
+      conflicted: 0,
+      blocked_sources: null,
+    },
+    bibliography: {
+      source_body: markdown,
+      body: '正文 [[1]](#cite-2)。',
+      documents: [
+        {
+          index: 1,
+          identity: 'paper',
+          title: 'Study',
+          reference: 'Author. Study. 2024.',
+          url: '',
+          locations: [1, 2],
+        },
+      ],
+      locations: urls.map((url, index) => ({
+        index: index + 1,
+        document: 1,
+        url,
+        label: `第 ${index + 1} 页`,
+        content_hashes: [],
+      })),
+    },
+  }
+  const longQuote = 'complete evidence '.repeat(100) + 'FULL QUOTE END'
+  const records = urls.map((url, index) =>
+    finding(
+      { source_url: url, evidence_quote: index ? longQuote : 'First quote' },
+      { evidence_context: index ? longQuote.slice(0, 100) : 'First quote' },
+    ),
+  )
+  const { container } = render(
+    <PrintableReport
+      markdown={markdown}
+      query="q"
+      citations={urls}
+      findings={records}
+      document={document}
+    />,
+  )
+  expect(container.querySelectorAll('.print-reference-list li')).toHaveLength(1)
+  expect(container.querySelector('.print-body')).toHaveTextContent('正文 [1]。')
+  expect(container.querySelector('.print-body')).not.toHaveTextContent('[2]')
+  expect(container.querySelectorAll('.print-appendix-group')).toHaveLength(2)
+  expect(screen.getByText(/FULL QUOTE END/)).toBeInTheDocument()
+})
 
 describe('PrintableReport：屏幕侧栏在纸上的等价物', () => {
   it('不把查询里的 Markdown 标题标记打印成正文', () => {

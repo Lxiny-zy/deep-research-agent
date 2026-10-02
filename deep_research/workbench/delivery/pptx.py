@@ -49,10 +49,15 @@ def _band(slide, top: int, height: int, color: RGBColor) -> None:  # type: ignor
     shape.line.fill.background()
 
 
-def _estimated_lines(text: str) -> int:
+def _weight(char: str, reference: bool = False) -> int:
+    return 2 if ord(char) > 0x2E80 or (reference and char in "MW@") else 1
+
+
+def _estimated_lines(
+    text: str, *, width: int = _CHARS_PER_LINE * 2, reference: bool = False
+) -> int:
     return sum(
-        max(1, -(-sum(2 if ord(ch) > 0x2E80 else 1 for ch in line) // (_CHARS_PER_LINE * 2)))
-        for line in text.split("\n")
+        max(1, -(-sum(_weight(ch, reference) for ch in line) // width)) for line in text.split("\n")
     )
 
 
@@ -69,7 +74,9 @@ def fit_report(deck: dict[str, Any]) -> list[dict[str, Any]]:
     return problems
 
 
-def _split_bullet(text: str) -> list[str]:
+def _split_bullet(
+    text: str, *, columns: int = _CHARS_PER_LINE * 2, max_lines: int = 4, reference: bool = False
+) -> list[str]:
     """Bound individual paragraphs without throwing away their remaining text."""
     pieces: list[str] = []
     while text:
@@ -77,9 +84,9 @@ def _split_bullet(text: str) -> list[str]:
         lines = 1
         end = 0
         for char in text:
-            weight = 2 if ord(char) > 0x2E80 else 1
-            if char == "\n" or width + weight > _CHARS_PER_LINE * 2:
-                if lines == 4:
+            weight = _weight(char, reference)
+            if char == "\n" or width + weight > columns:
+                if lines == max_lines:
                     break
                 lines += 1
                 width = 0
@@ -97,6 +104,26 @@ def _split_bullet(text: str) -> list[str]:
         pieces.append(text[:end])
         text = text[end:]
     return pieces
+
+
+def reference_pages(references: list[str]) -> list[list[str]]:
+    """Fit full citations at readable size; long entries continue without clipping."""
+    pages: list[list[str]] = []
+    page: list[str] = []
+    height = 0
+    for index, reference in enumerate(references, 1):
+        pieces = _split_bullet(reference, columns=100, max_lines=18, reference=True) or [""]
+        for part, piece in enumerate(pieces):
+            text = f"[{index}] " + ("（续）" if part else "") + piece
+            needed = _estimated_lines(text, width=100, reference=True) * 16 + 8
+            if page and height + needed > 360:
+                pages.append(page)
+                page, height = [], 0
+            page.append(text)
+            height += needed
+    if page:
+        pages.append(page)
+    return pages
 
 
 def paginate_deck(deck: dict[str, Any]) -> dict[str, Any]:
@@ -176,27 +203,26 @@ def render_pptx(deck: dict[str, Any], *, citations: list[str] | None = None) -> 
         page.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
         slide.notes_slide.notes_text_frame.text = spec.get("notes", "") or "（无备注）"
 
-    # 每页 14 条分页排完，不截断：幻灯片正文引用的 [15]+ 也必须能在这里查到
-    per_slide = 14
-    references = citations or []
-    for start in range(0, len(references), per_slide):
+    for page_index, references in enumerate(reference_pages(citations or [])):
         refs = presentation.slides.add_slide(blank)
         _band(refs, 0, Emu(1150000), _SOFT)
         title = refs.shapes.add_textbox(Emu(600000), Emu(250000), Emu(11000000), Emu(750000))
-        heading = "参考来源" if start == 0 else "参考来源（续）"
+        heading = "参考文献" if page_index == 0 else "参考文献（续）"
         _text(title.text_frame, heading, size=28, bold=True)
         body = refs.shapes.add_textbox(Emu(700000), Emu(1450000), Emu(10800000), Emu(4800000))
         frame = body.text_frame
         frame.word_wrap = True
+        frame.margin_top = frame.margin_bottom = 0
         frame.clear()
-        chunk = references[start : start + per_slide]
-        for offset, url in enumerate(chunk):
+        for offset, reference in enumerate(references):
             paragraph = frame.paragraphs[0] if offset == 0 else frame.add_paragraph()
             run = paragraph.add_run()
-            run.text = f"[{start + offset + 1}] {url}"
+            run.text = reference
             run.font.size = Pt(12)
             run.font.name = _FONT
-        refs.notes_slide.notes_text_frame.text = "参考来源列表。"
+            paragraph.line_spacing = Pt(16)
+            paragraph.space_after = Pt(8)
+        refs.notes_slide.notes_text_frame.text = "参考文献列表。"
 
     buffer = io.BytesIO()
     presentation.save(buffer)

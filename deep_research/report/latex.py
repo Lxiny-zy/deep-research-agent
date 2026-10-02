@@ -300,6 +300,9 @@ def render_latex(
     template: LatexTemplateName = "ctexart",
 ) -> str:
     """Render a deterministic XeLaTeX source from the whitelisted template registry."""
+    from .presentation import presentation_document
+
+    document = presentation_document(document)
 
     if profile not in {"academic", "technical", "executive", "appendix"}:
         raise ValueError(f"unknown LaTeX export profile: {profile}")
@@ -367,16 +370,21 @@ def render_latex(
     if document.references:
         lines.extend([r"\begin{thebibliography}{99}", r"\small"])
         for reference in document.references:
-            rendered = _escape(reference.reference or reference.url)
+            reference_text = reference.reference or reference.url
+            if reference.url and reference_text.endswith(reference.url):
+                reference_text = reference_text[: -len(reference.url)].rstrip()
+            rendered = _escape(reference_text)
             lines.append(
                 rf"\bibitem{{ref{reference.index}}} {rendered}"
-                rf"\\\url{{{_url(reference.url)}}}"
+                + (rf" \url{{{_url(reference.url)}}}" if reference.url else "")
             )
         lines.append(r"\end{thebibliography}")
     if profile in {"academic", "appendix"} and document.evidence:
+        from .presentation import evidence_label
+
         lines.extend([r"\appendix", r"\section{证据附录}"])
         for record in document.evidence:
-            lines.append(rf"\subsection{{来源 [{record.citation}]}}")
+            lines.append(rf"\subsection{{{_escape(evidence_label(document, record.citation))}}}")
             if record.statement:
                 lines.append(rf"\textbf{{论断：}}{_inline(record.statement)}\\")
             if record.quote:
@@ -419,8 +427,18 @@ def render_bibtex(document: ReportDocument, *, sources: list[Source] | None = No
     in the persisted reference text or URL.
     """
 
+    from ..bibliography import document_identity
+    from .presentation import presentation_document
+
+    document = presentation_document(document)
     entries: list[str] = []
     source_by_url = {source.url: source for source in sources or []}
+    for candidate in sources or []:
+        _, canonical = document_identity(
+            candidate.url, candidate.scholarly.doi if candidate.scholarly else ""
+        )
+        if canonical:
+            source_by_url.setdefault(canonical, candidate)
     doi_re = re.compile(r"10\.\d{4,9}/[^\s,}]+", re.IGNORECASE)
     for reference in document.references:
         rendered = reference.reference or reference.url
@@ -439,7 +457,8 @@ def render_bibtex(document: ReportDocument, *, sources: list[Source] | None = No
         if doi_match or scholarly_doi:
             doi = (doi_match.group(0) if doi_match else scholarly_doi).rstrip(".")
             fields.append(f"  doi = {{{_bib_value(doi)}}},")
-        fields.append(f"  url = {{{_bib_value(reference.url, url=True)}}},")
+        if reference.url:
+            fields.append(f"  url = {{{_bib_value(reference.url, url=True)}}},")
         entries.append("@misc{ref" + str(reference.index) + ",\n" + "\n".join(fields) + "\n}")
     return "\n\n".join(entries) + ("\n" if entries else "")
 

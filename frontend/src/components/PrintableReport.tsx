@@ -13,6 +13,7 @@ import {
   summarizeEvidence,
 } from '../lib/evidence'
 import { displayReportTitle } from '../lib/reportTitle'
+import { catalogForReport, documentNumber } from '../lib/bibliography'
 import type { Finding, ReportDocument } from '../types'
 
 // 可打印报告：屏幕上的应用 → 纸上的报告。
@@ -113,7 +114,9 @@ function EvidenceCard({ finding }: { finding: Finding }) {
       </p>
       {(context || quote) && (
         <blockquote cite={finding.source_url}>
-          {context ? highlighted(context, quote) : quote}
+          {context
+            ? highlighted(quote && !context.includes(quote) ? quote : context, quote)
+            : quote}
         </blockquote>
       )}
       {(v.quantity_label || v.conditions_label) && (
@@ -204,6 +207,10 @@ export default function PrintableReport({
   title?: string
 }) {
   const targets = useMemo(() => resolveCitationTargets(markdown, citations), [markdown, citations])
+  const catalog = useMemo(
+    () => catalogForReport(markdown, targets, document?.bibliography),
+    [markdown, targets, document?.bibliography],
+  )
   const overview = useMemo(() => summarizeEvidence(findings), [findings])
 
   // 打印时 [n] 退回普通文本标记。屏幕上它是按钮（点开侧栏），保留按钮外观会让
@@ -221,7 +228,10 @@ export default function PrintableReport({
 
   // 正文里 Synthesizer 追加的「## 参考来源」段落要剥掉——参考来源在下面独立成节，
   // 带着那一段会渲染两遍。只在结尾匹配，正文中间提到「参考来源」不受影响。
-  const body = useMemo(() => stripTrailingReferences(markdown), [markdown])
+  const body = useMemo(
+    () => catalog?.body ?? stripTrailingReferences(markdown),
+    [markdown, catalog],
+  )
 
   const cited = useMemo(() => citedSources(targets), [targets])
 
@@ -304,18 +314,29 @@ export default function PrintableReport({
 
       {cited.length > 0 && (
         <section className="print-references">
-          <h2>参考来源</h2>
+          <h2>{catalog ? '参考文献' : '参考来源'}</h2>
           <ol className="print-reference-list">
-            {cited.map(({ n, url }) => (
-              <li
-                key={`${n}-${url}`}
-                value={n}
-                className="print-reference-item"
-                data-reference-index={n}
-              >
-                <span className="print-reference-text">{referenceTextFor(findings, url)}</span>
-              </li>
-            ))}
+            {catalog
+              ? catalog.documents.map((entry) => (
+                  <li
+                    key={entry.identity}
+                    value={entry.index}
+                    className="print-reference-item"
+                    data-reference-index={entry.index}
+                  >
+                    <span className="print-reference-text">{entry.reference}</span>
+                  </li>
+                ))
+              : cited.map(({ n, url }) => (
+                  <li
+                    key={`${n}-${url}`}
+                    value={n}
+                    className="print-reference-item"
+                    data-reference-index={n}
+                  >
+                    <span className="print-reference-text">{referenceTextFor(findings, url)}</span>
+                  </li>
+                ))}
           </ol>
         </section>
       )}
@@ -329,7 +350,9 @@ export default function PrintableReport({
             return (
               <section className="print-appendix-group" key={`${n}-${url}`}>
                 <h3>
-                  [{n}] {referenceTextFor(findings, url)}
+                  [{documentNumber(catalog, n)}]{' '}
+                  {catalog?.locations.find((item) => item.index === n)?.label ||
+                    referenceTextFor(findings, url)}
                 </h3>
                 {forUrl.map((finding, i) => (
                   <EvidenceCard

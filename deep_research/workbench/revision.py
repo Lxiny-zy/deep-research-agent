@@ -111,7 +111,14 @@ def assess_draft(
         )
         hard += describe_problems(check)
     hard += _missing_sections(body, template)
-    available = source_counts(list(url_to_idx))[0]
+    from ..bibliography import build_bibliography, work_keys
+
+    document_keys = work_keys(
+        build_bibliography(
+            "", list(url_to_idx), [finding for result in results for finding in result.findings]
+        )
+    )
+    available = source_counts(list(url_to_idx), document_keys=document_keys)[0]
     # 可用来源不足下限是检索问题：只要求写作者用上全部可用来源，不要求它凑数。
     effective_minimum = min(min_citations, available)
     used = len(_used_indices(body) & set(url_to_idx.values()))
@@ -126,6 +133,7 @@ def assess_draft(
         min_citations=effective_minimum,
         policy=policy,
         source_texts=None,  # 时效覆盖是检索问题，不在写作返工里判
+        document_keys=document_keys,
     )
     hard += [finding.render() for finding in report.errors]
     soft += [finding.render() for finding in report.warnings]

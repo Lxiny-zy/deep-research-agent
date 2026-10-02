@@ -63,6 +63,9 @@ def render_xlsx(
     Excel formula.
     """
 
+    from .presentation import presentation_document
+
+    document = presentation_document(document)
     Workbook, styles = _load_openpyxl()
     table = _select_xlsx_table(document, table_id)
 

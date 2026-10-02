@@ -10,9 +10,12 @@
 from __future__ import annotations
 
 import base64
+import re
 from collections.abc import Mapping
 from html import escape
+from typing import Any
 
+from ...bibliography import Bibliography
 from .markdown import Block, Inline, parse_blocks, plain
 from .math import MathAsset
 from .math_pdf import math_html
@@ -109,7 +112,9 @@ def _inline_html(
             text = f"<strong>{text}</strong>"
         if item.italic:
             text = f"<em>{text}</em>"
-        if item.href and item.href.startswith(("http://", "https://")):
+        if not pdf and re.fullmatch(r"#cite-\d+(?:-\d+)*", item.href):
+            text = f'<a class="cite-ref" href="{item.href}">{text}</a>'
+        elif item.href and item.href.startswith(("http://", "https://")):
             text = f'<a href="{escape(item.href, quote=True)}">{text}</a>'
         out.append(text)
     return "".join(out).replace("\n", "<br>")
@@ -228,6 +233,8 @@ def render_html(
     kicker: str = "研究交付",
     meta: str = "",
     images: Mapping[str, bytes] | None = None,
+    bibliography: Bibliography | None = None,
+    evidence: list[dict[str, Any]] | None = None,
 ) -> str:
     """交付用自包含 HTML：一份文件，离线可读，无任何外链资源与脚本。"""
     blocks = parse_blocks(markdown)
@@ -251,6 +258,11 @@ def render_html(
         else ""
     )
     body = blocks_html(blocks, images=images)
+    if bibliography is None:
+        body = re.sub(
+            r'<a class="cite-ref" href="#cite-\d+(?:-\d+)*">(.*?)</a>', r"\1", body, flags=re.S
+        )
+    source_details = _citation_evidence_html(body, bibliography, evidence or [])
     return (
         '<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -258,7 +270,59 @@ def render_html(
         f'<header class="doc"><div class="kicker">{escape(kicker)}</div>'
         f"<h1>{_inline_html(title_inlines)}</h1>"
         + (f'<div class="meta">{escape(meta)}</div>' if meta else "")
-        + f"</header>{toc}<article>{body}</article></main></body></html>\n"
+        + f"</header>{toc}<article>{body}</article>{source_details}</main></body></html>\n"
+    )
+
+
+def _citation_evidence_html(
+    body: str, bibliography: Bibliography | None, evidence: list[dict[str, Any]]
+) -> str:
+    """CSS fragment targets reveal exact quoted locations, without scripts/network."""
+    if bibliography is None:
+        return ""
+    locations = {item.index: item for item in bibliography.locations}
+    documents = {item.index: item for item in bibliography.documents}
+    targets = dict.fromkeys(re.findall(r'href="#cite-(\d+(?:-\d+)*)"', body))
+    entries = []
+    for target in targets:
+        indices = [int(index) for index in target.split("-")]
+        if any(index not in locations for index in indices):
+            continue
+        sections = []
+        for index in indices:
+            location = locations[index]
+            document = documents[location.document]
+            records = [item for item in evidence if item.get("citation") == index]
+            quotes = (
+                "".join(
+                    f"<p>{escape(str(record['statement']))}</p>"
+                    f"<blockquote>{escape(str(record['quote']))}</blockquote>"
+                    for record in records
+                )
+                or "<p>该历史记录没有保存可展示的核验摘录。</p>"
+            )
+            link = (
+                f'<a href="{escape(document.url, quote=True)}" rel="noreferrer">打开文献</a>'
+                if document.url
+                else ""
+            )
+            hashes = escape(" ".join(location.content_hashes), quote=True)
+            sections.append(
+                f'<section data-source-hashes="{hashes}">'
+                f"<h3>[{document.index}] {escape(location.label or document.title)}</h3>"
+                f"{link}{quotes}</section>"
+            )
+        entries.append(
+            f'<aside class="citation-location" id="cite-{target}">'
+            f"<h2>引用依据</h2>{''.join(sections)}</aside>"
+        )
+    if not entries:
+        return ""
+    return (
+        "<style>.citation-location{display:none;margin:2em 0;padding:1em;border:1px solid #d7dde5}"
+        ".citation-location:target{display:block}"
+        ".citation-location blockquote{white-space:pre-wrap}"
+        ".cite-ref{white-space:nowrap}</style>" + "".join(entries)
     )
 
 

@@ -50,6 +50,9 @@ def render_csv(
     model and source content as data.
     """
 
+    from .presentation import presentation_document
+
+    document = presentation_document(document)
     tables = [block for block in document.blocks if isinstance(block, TableBlock)]
     table = _select_table(tables, table_id)
     if table is None or not table.columns:

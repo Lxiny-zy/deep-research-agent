@@ -42,7 +42,6 @@ from .pivot import pivot_tables
 
 # Synthesizer 会在正文末尾追加 "## 参考来源" 段落（``synthesizer._finalize``）。
 # 结构化文档里参考来源是独立字段，正文若把那一段带进来就会渲染两遍。
-_REFERENCES_HEADING = re.compile(r"\n#{2,3}\s*参考来源\s*\n.*\Z", re.DOTALL)
 _ATX_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _FENCE = re.compile(r"^(`{3,}|~{3,})")
 
@@ -116,6 +115,8 @@ def assemble_document(
     sections = _paper_sections(body, blocks)
     abstract = _take_abstract(sections)
 
+    from ..bibliography import build_bibliography
+
     return ReportDocument(
         query=query or (report.query if report is not None else ""),
         title=_leading_title(body),
@@ -123,6 +124,7 @@ def assemble_document(
         blocks=blocks,
         sections=sections,
         references=references,
+        bibliography=build_bibliography(body, citations, findings),
         evidence=_evidence(findings, index_by_url),
         overview=_overview(findings, events),
     )
@@ -257,11 +259,13 @@ def _paper_sections(body: str, blocks: list[Block]) -> list[PaperSection]:
 def _body(report: Report | None) -> str:
     """正文：去掉 Synthesizer 自动追加的参考来源段落。
 
-    只在**结尾**匹配（``\\Z``），因此正文中间出现"参考来源"字样的普通段落不会被误删。
+    只移除参考文献节，保留代码中的标题字样以及其后的附录内容。
     """
     if report is None:
         return ""
-    return _REFERENCES_HEADING.sub("", report.markdown).strip()
+    from ..bibliography import source_body
+
+    return source_body(report.markdown)
 
 
 def _references(citations: list[str], findings: list[Finding]) -> list[ReferenceEntry]:

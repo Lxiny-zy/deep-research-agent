@@ -96,6 +96,7 @@ export type Report = Required<Wire<'Report'>>
 
 /** Structured report wire contract returned by GET /api/runs/{id}/document. */
 export interface ReportDocument {
+  bibliography?: ReportBibliography | null
   final_validation?: Wire<'FinalReportValidation'> | null
   schema_version: number
   query: string
@@ -110,6 +111,26 @@ export interface ReportDocument {
   evidence: ReportEvidence[]
   overview: ReportOverview
   disclaimer: string
+}
+
+export interface ReportBibliography {
+  source_body: string
+  body: string
+  documents: {
+    index: number
+    identity: string
+    title: string
+    reference: string
+    url: string
+    locations: number[]
+  }[]
+  locations: {
+    index: number
+    document: number
+    url: string
+    label: string
+    content_hashes: string[]
+  }[]
 }
 
 export type ReportBlock = ProseBlock | TableBlock | ChartBlock

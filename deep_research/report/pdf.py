@@ -43,6 +43,9 @@ def render_pdf(document: ReportDocument) -> bytes:
 
 def render_pdf_html(document: ReportDocument) -> str:
     """Return the self-contained HTML consumed by WeasyPrint."""
+    from .presentation import presentation_document
+
+    document = presentation_document(document)
 
     parts = [
         "<!doctype html><html><head><meta charset='utf-8'>",
@@ -495,7 +498,13 @@ def _append_evidence(parts: list[str], document: ReportDocument) -> None:
     parts.append("<section class='appendix'><h2>Evidence appendix</h2>")
     for record in document.evidence:
         parts.append("<section class='evidence'>")
-        parts.append(f"<h3>[{record.citation}] {escape(record.statement)}</h3>")
+        if document.bibliography is not None:
+            from .presentation import evidence_label
+
+            label = evidence_label(document, record.citation)
+        else:
+            label = f"[{record.citation}]"
+        parts.append(f"<h3>{escape(label)} {escape(record.statement)}</h3>")
         if record.context:
             parts.append(f"<blockquote>{escape(record.context)}</blockquote>")
         if record.quote:

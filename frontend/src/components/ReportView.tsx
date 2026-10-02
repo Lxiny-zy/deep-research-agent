@@ -12,7 +12,8 @@ import {
   stripTrailingReferences,
   summarizeEvidence,
 } from '../lib/evidence'
-import type { Finding } from '../types'
+import type { Finding, ReportBibliography } from '../types'
+import { catalogForReport, citationLocations, documentNumber } from '../lib/bibliography'
 import { AppIcon } from './AppIcon'
 import EvidencePanel from './EvidencePanel'
 
@@ -29,6 +30,7 @@ export default function ReportView({
   citations = [],
   blockedSources = null,
   finalReview,
+  bibliography,
 }: {
   markdown: string
   streaming: boolean
@@ -37,8 +39,14 @@ export default function ReportView({
   citations?: string[]
   blockedSources?: number | null
   finalReview?: { status: string; issues: string[]; fallback?: boolean }
+  bibliography?: ReportBibliography | null
 }) {
-  const [activeCitation, setActiveCitation] = useState<number | null>(null)
+  const [activeLocations, setActiveLocations] = useState<number[]>([])
+  const activeCitation = activeLocations[0] ?? null
+  const setActiveCitation = useCallback(
+    (value: number | null) => setActiveLocations(value == null ? [] : [value]),
+    [],
+  )
   const activeCitationRef = useRef(activeCitation)
   activeCitationRef.current = activeCitation
   const citationTriggerRef = useRef<HTMLButtonElement | null>(null)
@@ -47,6 +55,10 @@ export default function ReportView({
     [markdown, citations, streaming],
   )
   const overview = useMemo(() => summarizeEvidence(findings), [findings])
+  const catalog = useMemo(
+    () => (streaming ? undefined : catalogForReport(markdown, targets, bibliography)),
+    [markdown, targets, bibliography, streaming],
+  )
   // 参考来源列表。结构化文档把「## 参考来源」从正文里剥掉并放进独立的
   // references 字段（见 report/assemble.py 的 _body），所以正文本身不再带
   // 这一段——不在这里补渲染，读者就只剩下角标，没有可平铺核对的来源清单。
@@ -55,13 +67,13 @@ export default function ReportView({
   // （结构化文档已剥离 / 旧 report.markdown 未剥离）因此行为一致，不会有
   // 一种路径印两遍、另一种路径不印。
   const body = useMemo(
-    () => (streaming ? markdown : stripTrailingReferences(markdown)),
-    [markdown, streaming],
+    () => (streaming ? markdown : (catalog?.body ?? stripTrailingReferences(markdown))),
+    [markdown, streaming, catalog],
   )
   const closeEvidence = useCallback(() => {
     setActiveCitation(null)
     citationTriggerRef.current?.focus()
-  }, [])
+  }, [setActiveCitation])
 
   const components = useMemo<Components>(
     () => ({
@@ -79,7 +91,9 @@ export default function ReportView({
             </a>
           )
         }
-        const n = Number(link.slice(CITE_HREF_PREFIX.length))
+        const indices = citationLocations(link)
+        const n = indices[0]
+        const display = documentNumber(catalog, n)
         const url = targets[n - 1]
         const clickable = Boolean(url) && (!streaming || findingsForUrl(findings, url).length > 0)
         if (!clickable) {
@@ -91,13 +105,13 @@ export default function ReportView({
             type="button"
             className={`cite-ref${activeCitationRef.current === n ? ' active' : ''}`}
             title={url}
-            aria-label={`查看引用 ${n} 的证据`}
+            aria-label={`查看引用 ${display} 的证据`}
             aria-controls="evidence-panel"
             aria-expanded={activeCitationRef.current === n}
             aria-pressed={activeCitationRef.current === n}
             onClick={(event) => {
               citationTriggerRef.current = event.currentTarget
-              setActiveCitation(n)
+              setActiveLocations(indices)
             }}
           >
             {children}
@@ -105,7 +119,7 @@ export default function ReportView({
         )
       },
     }),
-    [targets, findings, streaming],
+    [targets, findings, streaming, catalog],
   )
 
   if (!markdown) {
@@ -117,7 +131,9 @@ export default function ReportView({
   }
 
   const activeUrl = activeCitation != null ? targets[activeCitation - 1] : undefined
-  const activeFindings = findingsForUrl(findings, activeUrl)
+  const activeFindings = [
+    ...new Set(activeLocations.flatMap((index) => findingsForUrl(findings, targets[index - 1]))),
+  ]
   const reportIsLive = isLive ?? streaming
 
   return (
@@ -184,7 +200,7 @@ export default function ReportView({
       )}
       {!streaming && cited.length > 0 && (
         <div className="evidence-toolbar">
-          <span>{cited.length} 个引用来源</span>
+          <span>{catalog?.documents.length ?? cited.length} 个引用来源</span>
           <button
             type="button"
             className="btn btn-ghost btn-sm"
@@ -219,27 +235,50 @@ export default function ReportView({
               先给出一份会随后变化的清单，比暂时不给更容易误导。 */}
           {!streaming && cited.length > 0 && (
             <section className="report-references" aria-label="参考来源">
-              <h2>参考来源</h2>
+              <h2>{catalog ? '参考文献' : '参考来源'}</h2>
               <ol>
-                {cited.map(({ n, url }) => (
-                  <li key={`${n}-${url}`} value={n}>
-                    <a href={url} target="_blank" rel="noreferrer">
-                      {referenceTextFor(findings, url)}
-                    </a>
-                    <button
-                      type="button"
-                      className="reference-evidence-button"
-                      title={`查看来源 ${n} 的证据`}
-                      aria-label={`查看来源 ${n} 的证据`}
-                      onClick={(event) => {
-                        citationTriggerRef.current = event.currentTarget
-                        setActiveCitation(n)
-                      }}
-                    >
-                      <AppIcon name="file-search" size={15} aria-hidden="true" />
-                    </button>
-                  </li>
-                ))}
+                {catalog
+                  ? catalog.documents.map((document) => (
+                      <li key={document.identity} value={document.index}>
+                        {document.url ? (
+                          <a href={document.url} target="_blank" rel="noreferrer">
+                            {document.reference}
+                          </a>
+                        ) : (
+                          <span>{document.reference}</span>
+                        )}
+                        <button
+                          type="button"
+                          className="reference-evidence-button"
+                          aria-label={`查看文献 ${document.index} 的证据`}
+                          onClick={(event) => {
+                            citationTriggerRef.current = event.currentTarget
+                            setActiveLocations(document.locations)
+                          }}
+                        >
+                          <AppIcon name="file-search" size={15} aria-hidden="true" />
+                        </button>
+                      </li>
+                    ))
+                  : cited.map(({ n, url }) => (
+                      <li key={`${n}-${url}`} value={n}>
+                        <a href={url} target="_blank" rel="noreferrer">
+                          {referenceTextFor(findings, url)}
+                        </a>
+                        <button
+                          type="button"
+                          className="reference-evidence-button"
+                          title={`查看来源 ${n} 的证据`}
+                          aria-label={`查看来源 ${n} 的证据`}
+                          onClick={(event) => {
+                            citationTriggerRef.current = event.currentTarget
+                            setActiveCitation(n)
+                          }}
+                        >
+                          <AppIcon name="file-search" size={15} aria-hidden="true" />
+                        </button>
+                      </li>
+                    ))}
               </ol>
             </section>
           )}
@@ -248,11 +287,23 @@ export default function ReportView({
           <EvidencePanel
             id="evidence-panel"
             citation={activeCitation}
+            selectedLocationCount={catalog ? activeLocations.length : undefined}
+            displayCitation={catalog ? documentNumber(catalog, activeCitation) : undefined}
+            referenceUrl={
+              catalog?.documents.find(
+                (document) => document.index === documentNumber(catalog, activeCitation),
+              )?.url
+            }
             url={activeUrl}
             findings={activeFindings}
             allFindings={findings}
             onClose={closeEvidence}
-            sources={cited}
+            sources={cited.map((source) => ({
+              ...source,
+              label: catalog
+                ? `[${documentNumber(catalog, source.n)}] ${catalog.locations.find((item) => item.index === source.n)?.label || source.url}`
+                : undefined,
+            }))}
             onSelect={setActiveCitation}
           />
         )}

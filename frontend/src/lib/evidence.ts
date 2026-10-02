@@ -23,14 +23,15 @@ interface MdNode {
   children?: MdNode[]
 }
 
-const CITE_PATTERN = /\[(\d{1,3}(?:\s*[,，]\s*\d{1,3})*)\]/g
+const CITE_MARKER = String.raw`\[\d{1,3}(?:\s*[,，]\s*\d{1,3})*\]`
+const CITE_PATTERN = new RegExp(`${CITE_MARKER}(?:[ \\t]*(?:[,，][ \\t]*)?${CITE_MARKER})*`, 'g')
 
 /** remark 插件：把文本节点中的 [n] 转成 url 为 `#cite-n` 的 link 节点。 */
-export function remarkCitations() {
-  return (tree: unknown) => transformCitations(tree as MdNode)
+export function remarkCitations(options: { documents?: Record<number, number> } = {}) {
+  return (tree: unknown) => transformCitations(tree as MdNode, options.documents)
 }
 
-function transformCitations(node: MdNode): void {
+function transformCitations(node: MdNode, documents?: Record<number, number>): void {
   const children = node.children
   if (!children) return
   // 未解析成功的 [n] 引用标记可能被 micromark 拆成相邻的多个 text 节点，
@@ -47,29 +48,35 @@ function transformCitations(node: MdNode): void {
   const next: MdNode[] = []
   for (const child of merged) {
     if (child.type === 'text' && child.value) {
-      next.push(...splitCitationText(child.value))
+      next.push(...splitCitationText(child.value, documents))
       continue
     }
     // 链接内部不再转换，避免产生非法的嵌套链接。
     if (child.type !== 'link' && child.type !== 'linkReference') {
-      transformCitations(child)
+      transformCitations(child, documents)
     }
     next.push(child)
   }
   node.children = next
 }
 
-function splitCitationText(value: string): MdNode[] {
+function splitCitationText(value: string, documents?: Record<number, number>): MdNode[] {
   const out: MdNode[] = []
   let last = 0
   for (const match of value.matchAll(CITE_PATTERN)) {
     const start = match.index ?? 0
     if (start > last) out.push({ type: 'text', value: value.slice(last, start) })
-    for (const number of match[1].split(/\s*[,，]\s*/)) {
+    const groups = new Map<number, number[]>()
+    for (const text of match[0].match(/\d{1,3}/g) ?? []) {
+      const number = Number(text)
+      const display = documents?.[number] ?? number
+      groups.set(display, [...(groups.get(display) ?? []), number])
+    }
+    for (const [display, locations] of groups) {
       out.push({
         type: 'link',
-        url: `${CITE_HREF_PREFIX}${number}`,
-        children: [{ type: 'text', value: `[${number}]` }],
+        url: `${CITE_HREF_PREFIX}${[...new Set(locations)].join('-')}`,
+        children: [{ type: 'text', value: `[${display}]` }],
       })
     }
     last = start + match[0].length
@@ -292,7 +299,52 @@ export interface CitedSource {
  * 解析，所以必须先解析 targets、再剥离正文，不能反过来。
  */
 export function stripTrailingReferences(markdown: string): string {
-  return markdown.replace(/\n#{2,3}\s*参考来源\s*\n[\s\S]*$/, '').trim()
+  const lines = markdown.split(/\r?\n/)
+  const headings: { index: number; level: number; reference: boolean }[] = []
+  let fence = ''
+  let math = ''
+  lines.forEach((line, index) => {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1]
+    if (fence) {
+      if (marker?.[0] === fence[0] && marker.length >= fence.length && line.trim() === marker)
+        fence = ''
+      return
+    }
+    if (marker) {
+      fence = marker
+      return
+    }
+    if (math) {
+      if (line.trim() === math) math = ''
+      return
+    }
+    if (line.trim() === '$$') {
+      math = '$$'
+      return
+    }
+    if (line.trim() === '\\[') {
+      math = '\\]'
+      return
+    }
+    const heading = /^(#{1,6})[ \t]+(.+?)\s*$/.exec(line)
+    if (heading)
+      headings.push({
+        index,
+        level: heading[1].length,
+        reference: heading[1].length <= 3 && /^(参考来源|参考文献|References)$/i.test(heading[2]),
+      })
+  })
+  const remove = new Set<number>()
+  headings.forEach((heading, index) => {
+    if (!heading.reference) return
+    const end =
+      headings.slice(index + 1).find((next) => next.level <= heading.level)?.index ?? lines.length
+    for (let line = heading.index; line < end; line++) remove.add(line)
+  })
+  return lines
+    .filter((_, index) => !remove.has(index))
+    .join('\n')
+    .trim()
 }
 
 /**

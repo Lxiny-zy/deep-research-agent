@@ -24,7 +24,6 @@ _STRUCTURAL_REF = re.compile(
     r"\s*\(?[A-Z]?\d+(?:[.-]\d+)*[a-z]?\)?",
     re.I,
 )
-_REFERENCES = re.compile(r"\n#{1,3}\s*(?:参考来源|参考文献|References)\s*\n.*\Z", re.S | re.I)
 
 
 @dataclass(frozen=True)
@@ -99,7 +98,9 @@ def validate_body(
         return ReportCheck(
             "没有通过证据门禁的可用素材，无法生成事实性结论。", ("no_eligible_evidence",), {}
         )
-    body = _REFERENCES.sub("", body).strip()
+    from ..bibliography import source_body
+
+    body = source_body(body)
     issues: list[str] = []
     problems: list[tuple[str, str, str]] = []
     all_indices = {

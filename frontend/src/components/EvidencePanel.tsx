@@ -221,7 +221,15 @@ function highlightedContext(context: string, quote: string): ReactNode {
   )
 }
 
-function EvidenceCard({ finding, allFindings }: { finding: Finding; allFindings: Finding[] }) {
+function EvidenceCard({
+  finding,
+  allFindings,
+  locationLabel,
+}: {
+  finding: Finding
+  allFindings: Finding[]
+  locationLabel?: string
+}) {
   const verification = finding.verification
   const hash = verification.source_content_hash
   const context = verification.evidence_context?.trim() ?? ''
@@ -239,14 +247,17 @@ function EvidenceCard({ finding, allFindings }: { finding: Finding; allFindings:
   }
   return (
     <article className="evidence-card">
+      {locationLabel && <p className="muted small">{locationLabel}</p>}
       <p className="evidence-claim">{finding.statement}</p>
       {context ? (
         <figure className="evidence-context">
           <figcaption>
-            <span>检索快照上下文</span>
+            <span>{quote && !context.includes(quote) ? '完整原文摘录' : '检索快照上下文'}</span>
             <small>程序截取</small>
           </figcaption>
-          <blockquote cite={finding.source_url}>{highlightedContext(context, quote)}</blockquote>
+          <blockquote cite={finding.source_url}>
+            {highlightedContext(quote && !context.includes(quote) ? quote : context, quote)}
+          </blockquote>
         </figure>
       ) : (
         <figure className="evidence-context legacy">
@@ -351,6 +362,9 @@ function EvidenceCard({ finding, allFindings }: { finding: Finding; allFindings:
 export default function EvidencePanel({
   id,
   citation,
+  displayCitation,
+  referenceUrl,
+  selectedLocationCount,
   url,
   findings,
   allFindings,
@@ -360,11 +374,14 @@ export default function EvidencePanel({
 }: {
   id: string
   citation: number
+  displayCitation?: number
+  referenceUrl?: string
+  selectedLocationCount?: number
   url: string
   findings: Finding[]
   allFindings: Finding[]
   onClose: () => void
-  sources: { n: number; url: string }[]
+  sources: { n: number; url: string; label?: string }[]
   onSelect: (citation: number) => void
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -387,24 +404,28 @@ export default function EvidencePanel({
         className="evidence-drawer"
         role="dialog"
         aria-modal="true"
-        aria-label={`引用 ${citation} 的证据`}
+        aria-label={`引用 ${displayCitation ?? citation} 的证据`}
       >
         <div className="evidence-drawer-inner">
           <div className="evidence-drawer-head" aria-live="polite">
             <div className="evidence-drawer-title">
-              <span className="cite-ref inert">[{citation}]</span>
+              <span className="cite-ref inert">[{displayCitation ?? citation}]</span>
               <div className="evidence-source-meta">
                 {sourceTitle && <strong title={sourceTitle}>{sourceTitle}</strong>}
-                <a
-                  className="evidence-source"
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  title={url}
-                >
-                  {hostOf(url)}
-                  <AppIcon name="external" size={12} aria-hidden="true" />
-                </a>
+                {referenceUrl || !url.startsWith('https://workspace.invalid/') ? (
+                  <a
+                    className="evidence-source"
+                    href={referenceUrl || url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={referenceUrl || url}
+                  >
+                    {hostOf(referenceUrl || url)}
+                    <AppIcon name="external" size={12} aria-hidden="true" />
+                  </a>
+                ) : (
+                  <span className="muted small">本地文档</span>
+                )}
               </div>
             </div>
             <button
@@ -436,7 +457,7 @@ export default function EvidencePanel({
             >
               {sources.map((source) => (
                 <option key={source.n} value={source.n}>
-                  [{source.n}] {hostOf(source.url)}
+                  {source.label || `[${source.n}] ${hostOf(source.url)}`}
                 </option>
               ))}
             </select>
@@ -455,6 +476,9 @@ export default function EvidencePanel({
             </span>
           </div>
           <div className="evidence-drawer-body" ref={bodyRef}>
+            {selectedLocationCount != null && selectedLocationCount > 1 && (
+              <p className="muted small">本处引用关联 {selectedLocationCount} 处原文位置。</p>
+            )}
             <p className="evidence-verse">不独知其然，亦问其所据。</p>
             <p className="evidence-snapshot-note">
               展示的是检索服务返回的快照上下文，不等同于完整网页正文或事实已获证实。
@@ -470,6 +494,7 @@ export default function EvidencePanel({
                   key={`${f.verification.claim_id || f.source_url}-${i}`}
                   finding={f}
                   allFindings={allFindings}
+                  locationLabel={sources.find((source) => source.url === f.source_url)?.label}
                 />
               ))
             )}

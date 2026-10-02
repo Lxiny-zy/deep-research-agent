@@ -8,7 +8,7 @@ import QaStreamingAnswer from '../components/QaStreamingAnswer'
 import ReportView from '../components/ReportView'
 import type { PdfHighlight } from '../components/PdfViewer'
 import { useProjects } from '../hooks/useLibrary'
-import { useRunDetail } from '../hooks/useRuns'
+import { useRunDetail, useRunDocument } from '../hooks/useRuns'
 import { flattenFindings } from '../lib/evidence'
 import { documentForEvidence } from '../lib/readerDocuments'
 import { pendingQaId, reconcileQaRequests, runQaRequest } from '../lib/qaRequest'
@@ -35,6 +35,7 @@ export default function ReaderPage() {
   })
   const running = isActive(reader.data?.status)
   const detail = useRunDetail(id, { refetchInterval: running ? 5000 : false })
+  const reportDocument = useRunDocument(id, { enabled: !running && Boolean(detail.data?.report) })
   const projects = useProjects()
   const conversations = useQuery({
     queryKey: ['qa-conversations', 'run', id],
@@ -446,6 +447,7 @@ export default function ReaderPage() {
             (report?.markdown ? (
               <div className="reader-report">
                 <ReportView
+                  bibliography={reportDocument.data?.bibliography}
                   markdown={report.markdown}
                   streaming={false}
                   findings={flattenFindings(detail.data?.results)}

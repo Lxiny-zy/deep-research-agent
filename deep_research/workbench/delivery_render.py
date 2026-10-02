@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +24,16 @@ def render_bundle(
 ) -> DeliveryBundle:
     title, markdown, stem = context["title"], context["markdown"], context["stem"]
     extras, citations = context["extras"], context["citations"]
+    from ..bibliography import Bibliography, project_citations
+
+    bibliography = (
+        Bibliography.model_validate(context["bibliography"])
+        if context.get("bibliography")
+        else None
+    )
+    document_by_location = (
+        {item.index: item.document for item in bibliography.locations} if bibliography else {}
+    )
     files = [
         replace(file, status="pass", issues=[])
         for file in preserved
@@ -81,10 +92,19 @@ def render_bundle(
     body = without_repeated_title(markdown, title)
 
     def html() -> bytes:
+        from ..bibliography import Bibliography
         from .delivery.html import render_html
 
         return render_html(
-            body, title=title, kicker=context["kicker"], meta=context["meta"], images=images
+            body,
+            title=title,
+            kicker=context["kicker"],
+            meta=context["meta"],
+            images=images,
+            bibliography=Bibliography.model_validate(context["bibliography"])
+            if context.get("bibliography")
+            else None,
+            evidence=context.get("evidence", []),
         ).encode()
 
     def docx() -> bytes:
@@ -100,12 +120,33 @@ def render_bundle(
     def deck() -> dict:
         from .delivery.pptx import paginate_deck
 
-        return paginate_deck(extras.get("deck") or _deck_from_markdown(markdown, title))
+        value = deepcopy(
+            extras.get("deck")
+            or _deck_from_markdown(context.get("canonical_markdown", markdown), title)
+        )
+        if bibliography:
+            for spec in value.get("slides", []):
+                for key in ("title", "notes"):
+                    if isinstance(spec.get(key), str):
+                        spec[key] = project_citations(spec[key], bibliography, links=False)
+                spec["bullets"] = [
+                    project_citations(text, bibliography, links=False)
+                    for text in spec.get("bullets", [])
+                ]
+                spec["citations"] = list(
+                    dict.fromkeys(document_by_location.get(i, i) for i in spec.get("citations", []))
+                )
+        return paginate_deck(value)
 
     def pptx() -> bytes:
         from .delivery.pptx import render_pptx
 
-        return render_pptx(deck(), citations=citations)
+        return render_pptx(
+            deck(),
+            citations=[entry.reference for entry in bibliography.documents]
+            if bibliography
+            else citations,
+        )
 
     def mindmap() -> dict:
         used = {
@@ -113,7 +154,7 @@ def render_bundle(
             for d in (extras.get("node_review") or {}).get("decisions", [])
             for key in d.get("evidence_ids", [])
         }
-        return {
+        value = {
             **extras["mindmap"],
             "sources": [
                 {
@@ -130,7 +171,23 @@ def render_bundle(
                 }
                 for i, url in enumerate(citations, 1)
             ],
+            "bibliography": bibliography.model_dump(mode="json") if bibliography else None,
+            "evidence": [record for record in context["evidence"] if record["id"] in used],
         }
+        if bibliography:
+            value = deepcopy(value)
+
+            def label(nodes: list[dict]) -> None:
+                for node in nodes:
+                    node["display_citations"] = list(
+                        dict.fromkeys(
+                            document_by_location.get(i, i) for i in node.get("citations", [])
+                        )
+                    )
+                    label(node.get("children", []))
+
+            label(value.get("branches", []))
+        return value
 
     def map_html() -> bytes:
         from .delivery.mindmap import render_mindmap_html

@@ -165,13 +165,14 @@ def _file_stem(title: str) -> str:
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     payload = {
-        "format_version": 18,
+        "format_version": 21,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,
         "results": [result.model_dump(mode="json") for result in detail.results],
         "workflow": detail.orchestration.workflow_name if detail.orchestration else None,
         "scratch": _scratch(detail),
+        "sources": [source.model_dump(mode="json") for source in detail.sources],
     }
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
@@ -207,9 +208,18 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         title = paper_report_title(markdown, title, detail.query)
     created_at = detail.created_at
     created = created_at.isoformat() if created_at is not None else ""
+    from ..bibliography import build_bibliography, present_markdown, work_keys
+    from .reader import paper_sources
     from .scholarly import source_counts
 
-    distinct_sources = source_counts(citations, _references(detail))[0]
+    catalog = build_bibliography(
+        markdown,
+        citations,
+        [f for result in detail.results for f in result.findings],
+        [*detail.sources, *paper_sources(detail)],
+    )
+    document_keys = work_keys(catalog)
+    distinct_sources = source_counts(citations, document_keys=document_keys)[0]
     meta = f"{template.title} · {distinct_sources} 个已核验来源"
     if len(citations) > distinct_sources:
         meta += f" · {len(citations)} 处引用定位"
@@ -396,7 +406,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                     )
                 )
     if min_citations or citations:
-        gates.append(citation_gate(markdown, citations, template, min_citations))
+        gates.append(
+            citation_gate(markdown, citations, template, min_citations, document_keys=document_keys)
+        )
     if template.key not in {"slides", "mindmap"}:
         gates.append(
             scholarly_gate(
@@ -408,6 +420,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 policy=policy,
                 source_texts=_source_texts(detail, citations),
                 references=_references(detail),
+                document_keys=document_keys,
             )
         )
     revision = revision_gate(extras)
@@ -423,8 +436,16 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     from .delivery_render import render_bundle
     from .support import evidence_records
 
+    bibliography = None
+    canonical_markdown = markdown
+    if citations:
+        bibliography = catalog
+        markdown = present_markdown(markdown, bibliography)
+
     context = {
         "markdown": markdown,
+        "canonical_markdown": canonical_markdown,
+        "bibliography": bibliography.model_dump(mode="json") if bibliography else None,
         "title": title,
         "meta": meta,
         "stem": stem,
@@ -434,9 +455,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         "extras": extras,
         "citations": citations,
         "references": _references(detail),
-        "evidence": evidence_records(detail.results, {url: i for i, url in enumerate(citations, 1)})
-        if template.key == "mindmap"
-        else [],
+        "evidence": evidence_records(
+            detail.results, {url: i for i, url in enumerate(citations, 1)}
+        ),
         "statistics": statistics,
         "base_gates": [gate.to_dict() for gate in gates],
         "blocked": citation_failed,

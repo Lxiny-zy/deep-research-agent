@@ -52,7 +52,6 @@ class ScholarlyReport:
 
 
 _CITE = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
-_REFERENCES_SPLIT = re.compile(r"\n#{1,3}\s*(?:参考来源|参考文献|References)\s*\n")
 
 # 成对套话：同一句内出现前后两半才算命中（跨句不算）。
 _PAIRED_FRAMES: tuple[tuple[str, str, str], ...] = (
@@ -122,7 +121,9 @@ _LIMITATION_WORDS = (
 
 
 def _body(markdown: str) -> str:
-    return _REFERENCES_SPLIT.split(markdown, maxsplit=1)[0]
+    from ..bibliography import source_body
+
+    return source_body(markdown)
 
 
 def _sentences(text: str) -> list[str]:
@@ -256,90 +257,49 @@ def check_clusters(markdown: str, policy: QualityPolicy) -> list[Finding]:
 
 
 def _normalize_url(url: str) -> str:
-    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    from ..bibliography import document_identity
 
-    from ..tools.composite import normalize_url
-
-    url = normalize_url(url)
-    parts = urlsplit(url)
-    if parts.hostname == "workspace.invalid" and parts.path.startswith(
-        ("/attachments/", "/pasted/")
-    ):
-        # Chunks in the same uploaded paper share a document identity. Other
-        # URLs keep document-selecting queries such as article?id=123.
-        query = urlencode([(key, value) for key, value in parse_qsl(parts.query) if key != "chunk"])
-        url = urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
-    elif any(
-        key == "dr_section" and re.fullmatch(r"pdf-\d+", value)
-        for key, value in parse_qsl(parts.query)
-    ):
-        query = urlencode(
-            [
-                (key, value)
-                for key, value in parse_qsl(parts.query)
-                if not (key == "dr_section" and re.fullmatch(r"pdf-\d+", value))
-            ]
-        )
-        url = urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
-    url = re.sub(r"^https?://(www\.)?", "", url.strip(), flags=re.I).rstrip("/")
-    url = re.sub(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?", r"arxiv:\1", url)
-    return url
+    identity, _ = document_identity(url)
+    identity = re.sub(r"^(arxiv:.+?)v\d+$", r"\1", identity)
+    return re.sub(r"^https?://(www\.)?", "", identity, flags=re.I).rstrip("/")
 
 
 def source_counts(
-    citations: list[str], references: dict[str, str] | None = None
+    citations: list[str],
+    references: dict[str, str] | None = None,
+    *,
+    document_keys: dict[str, str] | None = None,
 ) -> tuple[int, list[str]]:
-    from urllib.parse import parse_qs, urlsplit
-
-    def chunk_family(url: str) -> str | None:
-        parts = urlsplit(url)
-        if (
-            parts.hostname == "workspace.invalid"
-            and parts.path.startswith(("/attachments/", "/pasted/"))
-            and "chunk" in parse_qs(parts.query)
-        ):
-            return _normalize_url(url)
-        if re.fullmatch(r"chunk-\d+", parts.fragment.rsplit("#", 1)[-1]) or any(
-            re.fullmatch(r"pdf-\d+", value) for value in parse_qs(parts.query).get("dr_section", [])
-        ):
-            return _normalize_url(url)
-        return None
-
-    seen: dict[str, str] = {}
+    # Display titles are not identities: distinct uploads commonly share a filename.
+    # Distinct locations/URLs of one work are valid citations; only literally
+    # repeated URL entries are duplicates. Both still count as one research work.
+    seen: set[str] = set()
+    urls: set[str] = set()
     duplicates: list[str] = []
-    repeated = 0
     for url in citations:
-        key = _normalize_url(url)
-        reference = (references or {}).get(url, "")
-        title_key = re.sub(r"\W+", "", reference.casefold())[:80] if reference else ""
-        for candidate in filter(None, (key, title_key)):
-            if candidate in seen:
-                repeated += 1
-                # Multiple quote locations in one uploaded document are valid
-                # anchors. Count one document without asking the writer to erase them.
-                family = chunk_family(url)
-                if (
-                    seen[candidate] == url
-                    or family is None
-                    or family != chunk_family(seen[candidate])
-                ):
-                    duplicates.append(url)
-                break
-            seen[candidate] = url
-    return max(0, len(citations) - repeated), duplicates
+        seen.add(_normalize_url((document_keys or {}).get(url) or url))
+        if url in urls:
+            duplicates.append(url)
+        urls.add(url)
+    return len(seen), duplicates
 
 
 def check_sources(
-    citations: list[str], used: int, minimum: int, *, references: dict[str, str] | None = None
+    citations: list[str],
+    used: int,
+    minimum: int,
+    *,
+    references: dict[str, str] | None = None,
+    document_keys: dict[str, str] | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
-    unique, duplicates = source_counts(citations, references)
+    unique, duplicates = source_counts(citations, references, document_keys=document_keys)
     if duplicates:
         findings.append(
             Finding(
                 "duplicate-source",
                 "error",
-                f"{len(duplicates)} 个来源与其它来源是同一文献（不同链接），重复计数",
+                f"引用列表中 {len(duplicates)} 处重复登记了相同来源链接",
                 _short(duplicates[0], 60),
             )
         )
@@ -427,6 +387,7 @@ def evaluate(
     policy: QualityPolicy,
     source_texts: list[str] | None = None,
     references: dict[str, str] | None = None,
+    document_keys: dict[str, str] | None = None,
 ) -> ScholarlyReport:
     """对一篇定稿跑全部学术检查；按任务类型与策略开关决定跑哪些。"""
     report = ScholarlyReport()
@@ -437,7 +398,7 @@ def evaluate(
     if citations:
         report.findings += check_clusters(markdown, policy)
     report.findings += check_sources(
-        citations, used_citations, min_citations, references=references
+        citations, used_citations, min_citations, references=references, document_keys=document_keys
     )
     if policy.recency_check and source_texts is not None:
         report.findings += check_recency(query, source_texts)
@@ -446,7 +407,7 @@ def evaluate(
     report.metrics = {
         "errors": len(report.errors),
         "warnings": len(report.warnings),
-        "citations_used": source_counts(citations, references)[0],
+        "citations_used": source_counts(citations, references, document_keys=document_keys)[0],
         "citation_anchors_used": used_citations,
         "citations_required": min_citations,
     }

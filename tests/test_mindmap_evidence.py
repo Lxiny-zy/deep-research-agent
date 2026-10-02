@@ -252,7 +252,8 @@ async def test_delivery_rejects_stale_or_failed_node_review(settings):
     assert any(f.name.endswith("-mindmap.html") for f in saved.files)
     html = next(f.data.decode() for f in saved.files if f.format == "html")
     assert "两变量存在相关，未证明因果关系。" in html
-    assert "<blockquote>" in html and 'href="#source-1"' in html
+    assert "<blockquote>" in html and 'href="#cite-1"' in html
+    assert 'id="cite-1"' in html
     changed = deepcopy(detail)
     changed.results[0].findings[0].evidence_quote = "原证据已经变更"
     rejected = build_bundle(changed)

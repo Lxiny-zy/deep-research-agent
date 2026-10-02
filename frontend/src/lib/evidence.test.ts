@@ -10,6 +10,18 @@ import {
   summarizeEvidence,
 } from './evidence'
 
+it('removes only a references section while retaining code and following appendices', () => {
+  const body =
+    'A\n\n```text\n## References\nkeep code\n```\n\n## 参考文献\nremove reference\n\n## 附录\nKEEP APPENDIX'
+  const result = stripTrailingReferences(body)
+  expect(result).toContain('## References\nkeep code')
+  expect(result).toContain('## 附录\nKEEP APPENDIX')
+  expect(result).not.toContain('remove reference')
+  expect(stripTrailingReferences('A\r\n\r\n## References\r\nref\r\n\r\n## Appendix\r\nB')).toBe(
+    'A\n\n## Appendix\nB',
+  )
+})
+
 function ev(over: Partial<ResearchEvent>): ResearchEvent {
   return { stage: 'RESEARCHER', type: 'info', message: '', elapsed: 1, ...over }
 }

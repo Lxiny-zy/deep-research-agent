@@ -110,15 +110,17 @@ def test_abstract_citation_cluster_and_limitations() -> None:
     assert check_limitations(body + "\n## 局限\n\n样本量有限 [1]。\n") == []
 
 
-def test_duplicate_sources_and_shortfall() -> None:
+def test_aliases_count_once_without_requiring_writer_to_remove_valid_locations() -> None:
     findings = check_sources(
         ["https://arxiv.org/abs/2205.10102", "https://arxiv.org/pdf/2205.10102v2.pdf"],
         used=2,
         minimum=20,
     )
     codes = [finding.code for finding in findings]
-    assert codes == ["duplicate-source", "citation-shortfall"]
-    assert "1 个" in findings[1].message  # 去重后只剩 1 个不同来源
+    assert codes == ["citation-shortfall"]
+    assert "1 个" in findings[0].message
+    duplicates = check_sources(["https://example.org/a"] * 2, used=2, minimum=20)
+    assert [finding.code for finding in duplicates] == ["duplicate-source", "citation-shortfall"]
 
 
 def test_fragment_anchors_count_one_document_without_forcing_writer_to_delete_citations():

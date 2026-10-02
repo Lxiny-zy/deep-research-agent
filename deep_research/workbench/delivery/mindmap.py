@@ -20,7 +20,9 @@ _PALETTE = ("#1f5f8b", "#2e8b57", "#b5651d", "#7b4fa0", "#b03a48", "#3a7d7c", "#
 
 def _label(node: dict[str, Any]) -> str:
     kind = {"claim": "【结论】", "question": "【待研究】"}.get(node.get("kind", ""), "")
-    citations = "".join(f"[{int(i)}]" for i in node.get("citations", []))
+    citations = "".join(
+        f"[{int(i)}]" for i in node.get("display_citations", node.get("citations", []))
+    )
     relation = str(node.get("relation", "包含"))
     relation = f"（{relation}）" if relation != "包含" else ""
     return f"{kind}{relation}{node.get('label', '')}{citations}"
@@ -208,9 +210,30 @@ details{margin:16px 28px 40px;background:#fff;border:1px solid #dfe4ea;border-ra
 
 def _outline_html(mindmap: dict[str, Any]) -> str:
     registered = {int(item["index"]) for item in mindmap.get("sources", [])}
+    from ...bibliography import Bibliography
+    from .html import _citation_evidence_html
+
+    catalog = (
+        Bibliography.model_validate(mindmap["bibliography"])
+        if mindmap.get("bibliography")
+        else None
+    )
+    documents = {item.index: item.document for item in catalog.locations} if catalog else {}
 
     def label(node: dict) -> str:
-        text = escape(_label({**node, "citations": []}))
+        text = escape(_label({**node, "citations": [], "display_citations": []}))
+        if catalog:
+            grouped: dict[int, list[int]] = {}
+            for index in node.get("citations", []):
+                grouped.setdefault(documents.get(index, index), []).append(index)
+            for document, locations in grouped.items():
+                target = "-".join(map(str, locations))
+                text += (
+                    f'<a href="#cite-{target}">[{document}]</a>'
+                    if all(index in registered for index in locations)
+                    else f"[{document}]"
+                )
+            return text
         for index in node.get("citations", []):
             text += (
                 f'<a href="#source-{int(index)}">[{int(index)}]</a>'
@@ -225,6 +248,21 @@ def _outline_html(mindmap: dict[str, Any]) -> str:
         items = "".join(f"<li>{label(node)}{walk(node.get('children', []))}</li>" for node in nodes)
         return f"<ul>{items}</ul>"
 
+    if catalog:
+        outline = walk(mindmap.get("branches", []))
+        bibliography = (
+            "<h2>参考文献</h2><ol>"
+            + "".join(
+                f'<li value="{entry.index}">{escape(entry.reference)}</li>'
+                for entry in catalog.documents
+            )
+            + "</ol>"
+        )
+        return (
+            outline
+            + bibliography
+            + _citation_evidence_html(outline, catalog, mindmap.get("evidence", []))
+        )
     references = []
     for item in mindmap.get("sources", []):
         url = str(item.get("url", ""))

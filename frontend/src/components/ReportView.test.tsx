@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { Finding } from '../types'
+import type { Finding, ReportBibliography } from '../types'
 import ReportView from './ReportView'
 
 it('distinguishes failed final prose review from verified source evidence', async () => {
@@ -62,6 +62,76 @@ function makeFinding(over: {
     },
   }
 }
+
+it('shows one paper while each inline citation opens its own original locations and complete quote', async () => {
+  const urls = [1, 2, 3].map((n) => `https://workspace.invalid/attachments/paper?chunk=${n}`)
+  const markdown = '方法 [2]。综合 [1,3]。'
+  const bibliography: ReportBibliography = {
+    source_body: markdown,
+    body: '方法 [[1]](#cite-2)。综合 [[1]](#cite-1-3)。',
+    documents: [
+      {
+        index: 1,
+        identity: 'paper',
+        title: 'Study',
+        reference: 'Author. Study. 2024.',
+        url: '',
+        locations: [1, 2, 3],
+      },
+    ],
+    locations: urls.map((url, i) => ({
+      index: i + 1,
+      document: 1,
+      url,
+      label: `第 ${i + 1} 页`,
+      content_hashes: [],
+    })),
+  }
+  const findings = urls.map((url, i) =>
+    makeFinding({
+      source_url: url,
+      statement: `CLAIM_${i + 1}`,
+      claim_id: `c${i}`,
+      evidence_quote: i === 2 ? 'long evidence '.repeat(100) + 'END FULL QUOTE' : `QUOTE_${i + 1}`,
+      evidence_context: i === 2 ? 'long evidence '.repeat(20) : undefined,
+    }),
+  )
+  const { rerender } = render(
+    <ReportView
+      markdown={markdown}
+      citations={urls}
+      findings={findings}
+      bibliography={bibliography}
+      streaming={false}
+    />,
+  )
+  expect(
+    within(screen.getByRole('region', { name: '参考来源' })).getAllByRole('listitem'),
+  ).toHaveLength(1)
+  await userEvent.click(screen.getAllByRole('button', { name: '查看引用 1 的证据' })[0])
+  let panel = screen.getByRole('dialog', { name: '引用 1 的证据' })
+  expect(within(panel).getByText('CLAIM_2')).toBeVisible()
+  expect(within(panel).queryByText('CLAIM_1')).toBeNull()
+  expect(within(panel).getByRole('combobox')).toHaveValue('2')
+  await userEvent.click(within(panel).getByRole('button', { name: '关闭证据侧栏' }))
+  await userEvent.click(screen.getAllByRole('button', { name: '查看引用 1 的证据' })[1])
+  panel = screen.getByRole('dialog', { name: '引用 1 的证据' })
+  expect(within(panel).getByText('CLAIM_1')).toBeVisible()
+  expect(within(panel).getByText('CLAIM_3')).toBeVisible()
+  expect(within(panel).getByText(/END FULL QUOTE/)).toBeVisible()
+  expect(within(panel).queryByText('CLAIM_2')).toBeNull()
+  await userEvent.click(within(panel).getByRole('button', { name: '关闭证据侧栏' }))
+  rerender(
+    <ReportView
+      markdown="Changed [2]."
+      citations={urls}
+      findings={findings}
+      bibliography={bibliography}
+      streaming={false}
+    />,
+  )
+  expect(screen.getByRole('button', { name: '查看引用 2 的证据' })).toBeVisible()
+})
 
 const MARKDOWN = [
   '# 结论',

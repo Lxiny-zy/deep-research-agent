@@ -461,6 +461,7 @@ export default function RunPage() {
                   citations={citations}
                   blockedSources={blockedSources}
                   finalReview={finalProseReview(detail.data)}
+                  bibliography={structuredDocument.data?.bibliography}
                 />
               </>
             )}

@@ -49,7 +49,9 @@ _ANCHOR_LINK = re.compile(r"\]\(#[^)]*\)")
 
 
 def _body_without_references(markdown: str) -> str:
-    return re.split(r"\n#{1,3}\s*(?:参考来源|参考文献|References)\s*\n", markdown, maxsplit=1)[0]
+    from ..bibliography import source_body
+
+    return source_body(markdown)
 
 
 def citation_gate(
@@ -57,6 +59,8 @@ def citation_gate(
     citations: list[str],
     template: TaskTemplate,
     min_citations: int | None = None,
+    *,
+    document_keys: dict[str, str] | None = None,
 ) -> GateResult:
     from .scholarly import source_counts
 
@@ -70,8 +74,10 @@ def citation_gate(
         issues.append(f"引用编号越界：{out_of_range}（共 {len(citations)} 个已核验来源）")
     unused = [i for i in range(1, len(citations) + 1) if i not in used]
     anchor_count = len(used - set(out_of_range))
-    distinct = source_counts([citations[i - 1] for i in sorted(used - set(out_of_range))])[0]
-    available = source_counts(citations)[0]
+    distinct = source_counts(
+        [citations[i - 1] for i in sorted(used - set(out_of_range))], document_keys=document_keys
+    )[0]
+    available = source_counts(citations, document_keys=document_keys)[0]
     minimum = template.min_citations if min_citations is None else min_citations
     if minimum and distinct < minimum:
         issues.append(f"已核验引用 {distinct} 个，少于要求的 {minimum} 个")
@@ -284,6 +290,7 @@ def scholarly_gate(
     policy: Any,
     source_texts: list[str] | None = None,
     references: dict[str, str] | None = None,
+    document_keys: dict[str, str] | None = None,
 ) -> GateResult:
     """学术写作质量：文体、摘要引用、引用堆砌、重复来源、引用下限、时效、局限说明。"""
     from .scholarly import evaluate
@@ -303,6 +310,7 @@ def scholarly_gate(
         policy=policy,
         source_texts=source_texts,
         references=references,
+        document_keys=document_keys,
     )
     issues = [f.render() for f in report.errors] + [
         f"（建议）{f.render()}" for f in report.warnings

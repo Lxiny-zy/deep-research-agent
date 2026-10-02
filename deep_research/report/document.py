@@ -30,7 +30,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+
+from ..bibliography import Bibliography
 
 # 分类色最多 3 个系列。这个数字不是审美选择，是 dataviz 调色板校验器在
 # scatter 等 all-pairs 图形下的实测上限：前三个槽位在明暗两种表面、全部
@@ -286,6 +288,7 @@ class ReportDocument(BaseModel):
     """
 
     model_config = ConfigDict(extra="ignore")
+    _bibliography_presented: bool = PrivateAttr(default=False)
 
     schema_version: int = 1
     query: str = ""
@@ -304,6 +307,7 @@ class ReportDocument(BaseModel):
     overview: Overview = Field(default_factory=Overview)
     disclaimer: str = DISCLAIMER
     final_validation: FinalReportValidation | None = None
+    bibliography: Bibliography | None = None
 
     def table(self, table_id: str) -> TableBlock | None:
         blocks = list(self.blocks)

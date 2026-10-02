@@ -1665,6 +1665,23 @@ export interface components {
             /** Skipped */
             skipped: number;
         };
+        /** Bibliography */
+        Bibliography: {
+            /**
+             * Body
+             * @default
+             */
+            body?: string;
+            /** Documents */
+            documents?: components["schemas"]["ReferenceDocument"][];
+            /** Locations */
+            locations?: components["schemas"]["ReferenceLocation"][];
+            /**
+             * Source Body
+             * @default
+             */
+            source_body?: string;
+        };
         /** CancelRunResponse */
         CancelRunResponse: {
             /** Run Id */
@@ -3265,6 +3282,30 @@ export interface components {
             /** Value */
             value?: number | null;
         };
+        /** ReferenceDocument */
+        ReferenceDocument: {
+            /** Identity */
+            identity: string;
+            /** Index */
+            index: number;
+            /** Locations */
+            locations?: number[];
+            /**
+             * Reference
+             * @default
+             */
+            reference?: string;
+            /**
+             * Title
+             * @default
+             */
+            title?: string;
+            /**
+             * Url
+             * @default
+             */
+            url?: string;
+        };
         /**
          * ReferenceEntry
          * @description 参考来源一条。``reference`` 是学术引用文本，为空则回退裸 ``url``。
@@ -3277,6 +3318,22 @@ export interface components {
              * @default
              */
             reference?: string;
+            /** Url */
+            url: string;
+        };
+        /** ReferenceLocation */
+        ReferenceLocation: {
+            /** Content Hashes */
+            content_hashes?: string[];
+            /** Document */
+            document: number;
+            /** Index */
+            index: number;
+            /**
+             * Label
+             * @default
+             */
+            label?: string;
             /** Url */
             url: string;
         };
@@ -3308,6 +3365,7 @@ export interface components {
             abstract?: string;
             /** Authors */
             authors?: string[];
+            bibliography?: components["schemas"]["Bibliography"] | null;
             /** Blocks */
             blocks?: (components["schemas"]["ProseBlock"] | components["schemas"]["TableBlock"] | components["schemas"]["ChartBlock"])[];
             /**

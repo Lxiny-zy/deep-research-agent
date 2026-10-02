@@ -58,6 +58,16 @@ class ReportService:
             include_hsi_tables=include_hsi_tables,
         )
         scratch = detail.orchestration.checkpoint.get("scratch", {}) if detail.orchestration else {}
+        if detail.report is not None:
+            from ..bibliography import build_bibliography
+            from ..workbench.reader import paper_sources
+
+            document.bibliography = build_bibliography(
+                detail.report.markdown,
+                detail.report.citations,
+                [finding for result in detail.results for finding in result.findings],
+                [*detail.sources, *paper_sources(detail)],
+            )
         validation = scratch.get("_report_validation") if isinstance(scratch, dict) else None
         if isinstance(validation, dict):
             document.final_validation = FinalReportValidation.model_validate(validation)

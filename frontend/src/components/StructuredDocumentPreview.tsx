@@ -1,4 +1,34 @@
 import type { ChartBlock, ReportBlock, ReportDocument, TableBlock, TableCell } from '../types'
+import { documentNumber } from '../lib/bibliography'
+import Markdown from 'react-markdown'
+import { remarkCitations } from '../lib/evidence'
+import { mathRemarkPlugins, mathRehypePlugins, normalizeMathMarkdown } from '../lib/scientificMath'
+
+function Caption({ text, document }: { text: string; document: ReportDocument }) {
+  const documents = Object.fromEntries(
+    (document.bibliography?.locations ?? []).map((item) => [item.index, item.document]),
+  )
+  return (
+    <div className="muted small">
+      <Markdown
+        remarkPlugins={[...mathRemarkPlugins, [remarkCitations, { documents }]]}
+        rehypePlugins={mathRehypePlugins}
+        components={{
+          a: ({ href, children }) =>
+            href?.startsWith('#cite-') ? (
+              <span>{children}</span>
+            ) : (
+              <a href={href} rel="noreferrer" target="_blank">
+                {children}
+              </a>
+            ),
+        }}
+      >
+        {normalizeMathMarkdown(text)}
+      </Markdown>
+    </div>
+  )
+}
 
 // 结构化报告块的屏幕呈现：表格按原样渲染，图降级为指向源表的一节。
 //
@@ -53,7 +83,7 @@ function ChartFallback({ chart, document }: { chart: ChartBlock; document: Repor
           ? `此处不渲染矢量图形；该图的完整源数据见表《${sourceName}》。`
           : `该图指向的源表 ${chart.source_table} 不在本文档中。`}
       </p>
-      {chart.caption && <p className="muted small">{chart.caption}</p>}
+      {chart.caption && <Caption text={chart.caption} document={document} />}
     </section>
   )
 }
@@ -93,7 +123,7 @@ export default function StructuredDocumentPreview({
             data-testid={`structured-table-${block.id}`}
           >
             <h4>{block.title || block.id}</h4>
-            {block.caption && <p className="muted small">{block.caption}</p>}
+            {block.caption && <Caption text={block.caption} document={document} />}
             <div className="structured-document-table-scroll">
               <table>
                 <thead>
@@ -120,7 +150,17 @@ export default function StructuredDocumentPreview({
                 <tbody>
                   {block.rows.map((row, rowIndex) => (
                     <tr key={`${row.label}-${rowIndex}`}>
-                      <th scope="row">{row.label || '未命名'}</th>
+                      <th scope="row">
+                        {row.label || '未命名'}
+                        {row.citation != null &&
+                          !Object.values(row.cells).some((cell) =>
+                            cell.citations.includes(row.citation!),
+                          ) && (
+                            <sup className="structured-document-citations">
+                              [{documentNumber(document.bibliography ?? undefined, row.citation)}]
+                            </sup>
+                          )}
+                      </th>
                       {block.columns.map((column) => {
                         const cell = cellFor(row, column.key)
                         const value = cell.value.trim() || '未报告'
@@ -139,7 +179,15 @@ export default function StructuredDocumentPreview({
                             )}
                             {cell.citations.length > 0 && (
                               <sup className="structured-document-citations">
-                                [{cell.citations.join(', ')}]
+                                [
+                                {[
+                                  ...new Set(
+                                    cell.citations.map((citation) =>
+                                      documentNumber(document.bibliography ?? undefined, citation),
+                                    ),
+                                  ),
+                                ].join(', ')}
+                                ]
                               </sup>
                             )}
                           </td>
