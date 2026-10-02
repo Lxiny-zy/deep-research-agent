@@ -118,7 +118,6 @@ async def main() -> None:
         quality=contract.quality,
     )
     tracer = Tracer()
-    tracer.prime_sequence(detail.events)
 
     def save(name, value):
         text = json.dumps(value, ensure_ascii=False, indent=2)
@@ -214,9 +213,14 @@ async def main() -> None:
         await SurveyWriter().step(bb, ctx)
         detail.results, detail.report = bb.results, bb.report
         detail.orchestration.checkpoint.update(bb.model_dump(mode="json"))
+        next_sequence = (
+            max((event.seq for event in detail.events if event.seq is not None), default=-1) + 1
+        )
         detail.events.extend(
-            event.model_copy(update={"elapsed": event.elapsed + detail.elapsed})
-            for event in tracer.events
+            event.model_copy(
+                update={"elapsed": event.elapsed + detail.elapsed, "seq": next_sequence + index}
+            )
+            for index, event in enumerate(tracer.events)
         )
         detail.total_tokens += tracer.total_tokens
         detail.elapsed += tracer.elapsed
