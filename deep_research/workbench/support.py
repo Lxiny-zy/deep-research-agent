@@ -245,15 +245,9 @@ class SupportReviewer:
                 )
             else:
                 pending.append(unit)
-        batch: list[SupportUnit] = []
         system_size = len(structured_system_prompt(self.system, SupportDecisions))
+        fitting: list[SupportUnit] = []
         for unit in pending:
-            trial = [*batch, unit]
-            if batch and (
-                len(trial) > 16 or system_size + len(self._prompt(trial)) > self.capacity
-            ):
-                results.update(await self._judge(batch))
-                batch = []
             if system_size + len(self._prompt([unit])) > self.capacity:
                 results[unit.id] = SupportDecision(
                     unit_id=unit.id,
@@ -261,14 +255,75 @@ class SupportReviewer:
                     reason="完整证据超过核验模型输入容量，未截断核验",
                 )
             else:
-                batch.append(unit)
-        if batch:
+                fitting.append(unit)
+        for batch in self._batches(fitting, system_size):
             results.update(await self._judge(batch))
         for unit in units:
             decision = results[unit.id]
             if decision.verdict != "uncertain":
                 self.cache[keys[unit.id]] = decision
         return [results[unit.id] for unit in units]
+
+    def _batches(self, units: list[SupportUnit], system_size: int) -> list[list[SupportUnit]]:
+        """Group shared evidence without changing units, scope or output order.
+
+        A heading can reference the entire corpus. Interleaving such headings
+        with paragraphs used to resend that corpus in nearly every batch.
+        Compare both complete plans before calling the model: regrouping must
+        neither add requests nor increase their combined input size.
+        """
+
+        def partition(ordered: list[SupportUnit]) -> list[list[SupportUnit]]:
+            batches: list[list[SupportUnit]] = []
+            batch: list[SupportUnit] = []
+            for unit in ordered:
+                trial = [*batch, unit]
+                if batch and (
+                    len(trial) > 16 or system_size + len(self._prompt(trial)) > self.capacity
+                ):
+                    batches.append(batch)
+                    batch = []
+                batch.append(unit)
+            if batch:
+                batches.append(batch)
+            return batches
+
+        sequential = partition(units)
+        if len(sequential) < 2:
+            return sequential
+        weights: Counter[int] = Counter()
+        for item in compact_evidence(self.evidence):
+            weights[item["citation"]] += len(json.dumps(item, ensure_ascii=False)) + 2
+        scopes = [set(unit.citations) for unit in units]
+
+        def weight(scope: set[int]) -> int:
+            return sum(weights[citation] for citation in scope)
+
+        remaining = list(range(len(units)))
+        ordered: list[SupportUnit] = []
+        while remaining:
+            first = max(remaining, key=lambda index: weight(scopes[index]))
+            remaining.remove(first)
+            group = [first]
+            scope = set(scopes[first])
+            while remaining and len(group) < 16:
+                chosen = min(
+                    remaining,
+                    key=lambda index: (
+                        weight(scopes[index] - scope),
+                        -weight(scopes[index] & scope),
+                    ),
+                )
+                remaining.remove(chosen)
+                group.append(chosen)
+                scope.update(scopes[chosen])
+            ordered.extend(units[index] for index in group)
+        grouped = partition(ordered)
+        if len(grouped) <= len(sequential) and sum(
+            system_size + len(self._prompt(batch)) for batch in grouped
+        ) < sum(system_size + len(self._prompt(batch)) for batch in sequential):
+            return grouped
+        return sequential
 
     def _prompt(self, units: list[SupportUnit], repair_issues: dict[str, str] | None = None) -> str:
         cited = {index for unit in units for index in unit.citations}

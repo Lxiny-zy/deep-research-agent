@@ -182,13 +182,54 @@ def replace_citations(text: str, replace: Callable[[re.Match[str]], str]) -> str
 
 
 def validation_paragraphs(text: str) -> list[str]:
-    """Keep blank lines inside display equations within the same check unit."""
+    """Keep equations and their continued sentence within the same check unit."""
     lines = text.splitlines(keepends=True)
-    for start, (end, _) in math_blocks(text).items():
+    ranges = {start: end for start, (end, _) in math_blocks(text).items()}
+    ranges.update(equation_prose_spans(text))
+    for start, end in ranges.items():
         for index in range(start + 1, end - 1):
             if not lines[index].strip():
                 lines[index] = ""
     return re.split(r"\n\s*\n", "".join(lines))
+
+
+def equation_prose_spans(text: str) -> dict[int, int]:
+    """Join an unfinished sentence, display math and its cited continuation.
+
+    This changes the unit boundary, never exempts its facts or numbers. Only
+    adjacent top-level blocks qualify; a heading, list, table, code block or
+    completed sentence cannot borrow the next paragraph's citation.
+    """
+    from .markdown import _parser
+
+    blocks = [token for token in _parser().parse(text) if token.level == 0 and token.map]
+    lines = text.splitlines()
+    spans: dict[int, int] = {}
+    covered_until = -1
+    for index, lead in enumerate(blocks):
+        if lead.type != "paragraph_open" or not lead.map or lead.map[0] < covered_until:
+            continue
+        after = index + 1
+        while after < len(blocks) and blocks[after].type == "math_block":
+            after += 1
+        if after == index + 1 or after >= len(blocks):
+            continue
+        tail = blocks[after]
+        if tail.type != "paragraph_open" or not tail.map:
+            continue
+        before = replace_citations(
+            "\n".join(lines[lead.map[0] : lead.map[1]]), lambda _: ""
+        ).rstrip()
+        continuation = "\n".join(lines[tail.map[0] : tail.map[1]]).lstrip()
+        if re.search(r"[。.!?！？；;][\"'”’）)*_~]*$", before) or not re.match(
+            r"(?:其中|式中|这里|进行(?:优化|训练|估计|计算)|where\b|with\b)", continuation, re.I
+        ):
+            continue
+        if not re.search(r"\[\d+(?:\s*[,，]\s*\d+)*\]", citation_text(continuation)):
+            continue
+        spans[lead.map[0]] = tail.map[1]
+        covered_until = tail.map[1]
+    return spans
 
 
 def only_math(text: str) -> bool:

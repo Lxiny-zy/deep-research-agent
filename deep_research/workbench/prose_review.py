@@ -14,7 +14,7 @@ from typing import Any
 
 from ..models import ResearchResult
 from .delivery.markdown import _parser, framing_paragraphs
-from .delivery.math_markdown import citation_text, only_math
+from .delivery.math_markdown import citation_text, equation_prose_spans, only_math
 from .gates import _body_without_references
 from .support import (
     SUPPORT_POLICY_VERSION,
@@ -58,6 +58,7 @@ def prose_units(
     in_header = False
     tokens = _parser().parse(body)
     framing_lines = framing_paragraphs(body)
+    equation_spans = equation_prose_spans(body)
     translation_ranges: dict[int, int] = {}
     if translation_citations is not None:
         from .paper_abstract import translation_title
@@ -86,6 +87,8 @@ def prose_units(
             translation_segments.append((start, end))
     first_translation = translation_segments[0][0] if translation_segments else None
     for index, token in enumerate(tokens):
+        if token.map and any(start < token.map[0] < end for start, end in equation_spans.items()):
+            continue
         if (
             token.map
             and any(start <= token.map[0] < end for start, end in translation_segments)
@@ -116,6 +119,8 @@ def prose_units(
         ):
             continue
         start, end = token.map
+        if token.type == "paragraph_open":
+            end = equation_spans.get(start, end)
         is_translation = token.type == "heading_open" and start == first_translation
         if is_translation:
             end = translation_segments[-1][1]
