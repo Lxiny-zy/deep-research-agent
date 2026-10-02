@@ -208,6 +208,7 @@ class TemplateWriter:
         last_body = ""
         last_audit: dict[str, Any] | None = None
         local_revision = False
+        local_problems: list[tuple[str, str]] = []
         if reviewer is None and url_to_idx:
             reviewer = ProseReviewer.research(
                 ctx.llm_for("evidence_verifier"),
@@ -234,7 +235,11 @@ class TemplateWriter:
 
                 ctx.tracer.emit("SYNTHESIZER", "info", "仅修订未通过核验的段落，保留其余正文…")
                 body = await repair_paragraphs(
-                    ctx.llm_for(self.name), reviewer, last_body, last_audit
+                    ctx.llm_for(self.name),
+                    reviewer,
+                    last_body,
+                    last_audit,
+                    local_problems=local_problems,
                 )
                 if body is not None:
                     ctx.tracer.emit("SYNTHESIZER", "token", data={"delta": body, "replace": True})
@@ -246,7 +251,7 @@ class TemplateWriter:
             return body
 
         async def assess(body: str) -> Assessment:
-            nonlocal last_body, last_audit, local_revision
+            nonlocal last_body, last_audit, local_revision, local_problems
             assessment = assess_draft(
                 body,
                 template=template,
@@ -262,7 +267,11 @@ class TemplateWriter:
                 if template.key == "paperRead"
                 else None,
             )
-            local_revision = not assessment.hard and template.key not in {"slides", "mindmap"}
+            local_revision = assessment.local_problems is not None and template.key not in {
+                "slides",
+                "mindmap",
+            }
+            local_problems = assessment.local_problems or []
             if reviewer is not None:
                 ctx.tracer.emit("SYNTHESIZER", "info", "核对终稿结论与引用的支持关系…")
                 audit = await reviewer.review(body)

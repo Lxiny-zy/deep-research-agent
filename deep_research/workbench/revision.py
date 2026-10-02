@@ -42,6 +42,8 @@ class Assessment:
     soft: list[str] = field(default_factory=list)
     brief: str = ""
     can_revise: bool = True
+    # None means at least one issue needs a structural/full-document revision.
+    local_problems: list[tuple[str, str]] | None = None
 
     @property
     def clean(self) -> bool:
@@ -102,6 +104,7 @@ def assess_draft(
     """对一版草稿做全部确定性检查，并写成交给写作者的返工说明。"""
     hard: list[str] = []
     soft: list[str] = []
+    local_problems: list[tuple[str, str]] | None = []
     if check_citations and url_to_idx:
         check = validate_body(
             body,
@@ -113,7 +116,21 @@ def assess_draft(
             section_support=section_support,
         )
         hard += describe_problems(check)
-    hard += _missing_sections(body, template)
+        for code, excerpt, message in check.problems:
+            if (
+                code not in {"uncited_paragraph", "unsupported_number", "invalid_calculation"}
+                or not excerpt
+            ):
+                local_problems = None
+                break
+            if local_problems is not None:
+                local_problems.append((excerpt, message))
+        if check.issues and not check.problems:
+            local_problems = None
+    missing_sections = _missing_sections(body, template)
+    hard += missing_sections
+    if missing_sections:
+        local_problems = None
     from ..bibliography import build_bibliography, work_keys
 
     document_keys = work_keys(
@@ -130,7 +147,10 @@ def assess_draft(
     if scratch is not None:
         from .corpus import corpus_issues
 
-        hard += corpus_issues(scratch, results, cited_urls, writable_only=True)
+        missing_inputs = corpus_issues(scratch, results, cited_urls, writable_only=True)
+        hard += missing_inputs
+        if missing_inputs:
+            local_problems = None
         soft += corpus_issues(scratch, results)
         from .review_coverage import coverage_issues
 
@@ -147,13 +167,26 @@ def assess_draft(
         document_keys=document_keys,
     )
     hard += [finding.render() for finding in report.errors]
+    if local_problems is not None:
+        for finding in report.errors:
+            if (
+                finding.code not in {"paired-frame", "colloquial", "production-narration"}
+                or not finding.excerpt
+            ):
+                local_problems = None
+                break
+            local_problems.append((finding.excerpt, finding.message))
     soft += [finding.render() for finding in report.warnings]
     if effective_minimum < min_citations:
         soft.append(
             f"可用已核验来源只有 {available} 个，低于下限 {min_citations} 个"
             "（检索不足，需扩大检索而非改写）"
         )
-    assessment = Assessment(hard=list(dict.fromkeys(hard)), soft=list(dict.fromkeys(soft)))
+    assessment = Assessment(
+        hard=list(dict.fromkeys(hard)),
+        soft=list(dict.fromkeys(soft)),
+        local_problems=local_problems,
+    )
     if assessment.hard:
         assessment.brief = revision_brief(report, extra=[*hard[: len(hard) - len(report.errors)]])
     return assessment
