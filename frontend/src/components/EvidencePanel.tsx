@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useDialogFocus } from '../hooks/useDialogFocus'
+import { useEvidenceFocus } from '../hooks/useEvidenceFocus'
 import { findingByClaimId, shortHash } from '../lib/evidence'
+import { verificationText } from '../lib/verificationText'
 import type { Finding } from '../types'
 import { AppIcon } from './AppIcon'
 
@@ -58,36 +59,36 @@ function corroborationExplanation(v: Finding['verification']): string {
   ) {
     return fallback
   }
-  return reason
+  return verificationText(reason, fallback)
 }
 
 function VerificationBadges({ v }: { v: Finding['verification'] }) {
-  const semantic = SEMANTIC_BADGE[v.semantic_status]
+  const semantic = SEMANTIC_BADGE[v.semantic_status] ?? SEMANTIC_BADGE.not_checked
   const corroborationStatus = v.corroboration_status ?? 'not_checked'
-  const corroboration = CORROBORATION_BADGE[corroborationStatus]
+  const corroboration = CORROBORATION_BADGE[corroborationStatus] ?? CORROBORATION_BADGE.not_checked
   const sourceCount = Math.max(0, v.independent_source_count ?? 0)
   return (
     <div className="evidence-badges">
       {v.status === 'verified' ? (
         <span
           className="badge success"
-          title={v.reason || '摘录已在检索快照中通过归一化比对，不等同事实已证实'}
+          title={verificationText(v.reason, '摘录已在检索快照中通过归一化比对，不等同事实已证实')}
         >
           <AppIcon name="shield" size={12} aria-hidden="true" /> 原文匹配
         </span>
       ) : (
-        <span className="badge warning" title={v.reason || '未通过程序验证'}>
+        <span className="badge warning" title={verificationText(v.reason, '未通过原文核对')}>
           未验证
         </span>
       )}
       <span
         className={`badge ${semantic.cls}`}
-        title={
-          v.semantic_reason ||
-          (v.semantic_status === 'not_checked'
+        title={verificationText(
+          v.semantic_reason,
+          v.semantic_status === 'not_checked'
             ? '尚未执行语义支持判断'
-            : `模型判定置信度 ${Math.round(v.semantic_confidence * 100)}%`)
-        }
+            : `模型判定置信度 ${Math.round(v.semantic_confidence * 100)}%`,
+        )}
       >
         {semantic.label}
       </span>
@@ -101,14 +102,20 @@ function VerificationBadges({ v }: { v: Finding['verification'] }) {
         {corroborationStatus !== 'not_checked' && ` · ${sourceCount} 个独立来源`}
       </span>
       {v.consistency_status === 'conflicted' && (
-        <span className="badge error" title={v.contradiction_reason || undefined}>
+        <span
+          className="badge error"
+          title={verificationText(v.contradiction_reason, '来源之间存在分歧')}
+        >
           存在冲突
           <span className="sr-only">conflicted</span>
         </span>
       )}
       {v.consistency_status === 'clear' && <span className="badge info">未检测到冲突</span>}
       {v.consistency_status === 'not_checked' && (
-        <span className="badge warning" title={v.contradiction_reason || '尚未执行一致性检查'}>
+        <span
+          className="badge warning"
+          title={verificationText(v.contradiction_reason, '尚未执行一致性检查')}
+        >
           一致性未检查
         </span>
       )}
@@ -133,7 +140,7 @@ function CorroborationLinks({
     <div className={`evidence-corroboration ${status}`}>
       <span className="evidence-corroboration-title">
         <AppIcon name={status === 'disputed' ? 'alert' : 'merge'} size={13} aria-hidden="true" />
-        {status === 'disputed' ? '争议来源关联' : '佐证来源关联'}
+        {status === 'disputed' ? '存在分歧的来源' : '其他来源的支持情况'}
       </span>
       <span>{corroborationExplanation(v)}</span>
       {claimIds.map((claimId) => {
@@ -141,7 +148,7 @@ function CorroborationLinks({
         if (!other) {
           return (
             <div className="evidence-corroboration-claim" key={claimId}>
-              <span className="muted small">claim {claimId}（不在本次报告素材内）</span>
+              <span className="muted small">关联论断未包含在当前报告中。</span>
             </div>
           )
         }
@@ -179,7 +186,7 @@ function ConflictLinks({ finding, allFindings }: { finding: Finding; allFindings
         <AppIcon name="alert" size={13} aria-hidden="true" />
         与以下论断矛盾
       </span>
-      {v.contradiction_reason && <span>{v.contradiction_reason}</span>}
+      {v.contradiction_reason && <span>{verificationText(v.contradiction_reason)}</span>}
       {v.contradicts_claim_ids.map((claimId) => {
         const other = findingByClaimId(allFindings, claimId)
         return (
@@ -199,7 +206,7 @@ function ConflictLinks({ finding, allFindings }: { finding: Finding; allFindings
                 </a>
               </>
             ) : (
-              <span className="muted small">claim {claimId}（不在本次报告素材内）</span>
+              <span className="muted small">关联论断未包含在当前报告中。</span>
             )}
           </div>
         )
@@ -288,7 +295,8 @@ function EvidenceCard({
             <p className="muted small">
               <strong>数值校验：</strong>
               {verification.quantity_status === 'verified' ? '已在原文中核对' : '未通过原文核对'}
-              {verification.quantity_reason && `（${verification.quantity_reason}）`}
+              {verification.quantity_reason &&
+                `（${verificationText(verification.quantity_reason)}）`}
             </p>
           )}
         </div>
@@ -302,15 +310,20 @@ function EvidenceCard({
         <dl>
           <dt>原文核对</dt>
           <dd>
-            {verification.reason ||
-              (verification.status === 'verified'
+            {verificationText(
+              verification.reason,
+              verification.status === 'verified'
                 ? '摘录已匹配检索快照，不等同事实已证实。'
-                : '未通过原文核对。')}
+                : '未通过原文核对。',
+            )}
           </dd>
           <dt>语义判断</dt>
           <dd>
             模型结果：
-            {verification.semantic_reason || SEMANTIC_BADGE[verification.semantic_status].label}
+            {verificationText(
+              verification.semantic_reason,
+              (SEMANTIC_BADGE[verification.semantic_status] ?? SEMANTIC_BADGE.not_checked).label,
+            )}
           </dd>
           {verification.semantic_status !== 'not_checked' && (
             <>
@@ -323,7 +336,7 @@ function EvidenceCard({
           {verification.contradiction_reason && (
             <>
               <dt>一致性说明</dt>
-              <dd>详情：{verification.contradiction_reason}</dd>
+              <dd>详情：{verificationText(verification.contradiction_reason)}</dd>
             </>
           )}
           {hash && (
@@ -372,6 +385,7 @@ export default function EvidencePanel({
   findings,
   allFindings,
   onClose,
+  returnFocus,
   sources,
   onSelect,
 }: {
@@ -387,11 +401,12 @@ export default function EvidencePanel({
   findings: Finding[]
   allFindings: Finding[]
   onClose: () => void
+  returnFocus?: () => HTMLElement | null
   sources: { n: number; url: string; label?: string }[]
   onSelect: (citation: number) => void
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
-  const dialogRef = useDialogFocus(onClose)
+  const dialogRef = useEvidenceFocus(onClose, returnFocus)
   const sourceIndex = sources.findIndex((source) => source.n === citation)
   const sourceTitle = findings.find((finding) => finding.verification.source_title)?.verification
     .source_title
@@ -402,14 +417,13 @@ export default function EvidencePanel({
 
   return createPortal(
     <div className="evidence-overlay">
-      <div className="evidence-backdrop" onClick={onClose} aria-hidden="true" />
       <aside
         ref={dialogRef}
         tabIndex={-1}
         id={id}
         className="evidence-drawer"
         role="dialog"
-        aria-modal="true"
+        aria-modal="false"
         aria-label={`引用 ${displayCitation ?? citation} 的证据`}
       >
         <div className="evidence-drawer-inner">

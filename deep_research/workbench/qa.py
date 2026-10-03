@@ -60,6 +60,7 @@ _PAPER_SYSTEM = (
     "区分公式的直接变换、作者报告的观察与机制解释；不要从参数变化推导未获支持的必要性。"
     "回答是否证明普遍结论时，说明已核验推导和实验的具体范围，不据局部片段断言全文没有其他实验。"
     "不要要求重新上传或提供已读取的全文，也不要例行罗列与当前问题无关的缺口清单。"
+    "待确认项简洁列出，不重复已解释的事实；若其中提到已知数值或实验条件，仍须附本次引用。"
     + MEASUREMENT_SCOPE_RULES
 )
 _PAPER_EXTRACTION = (
@@ -91,6 +92,7 @@ class QaAnswer:
     findings: list[Finding]
     thoughts: list[dict[str, Any]] = field(default_factory=list)
     fallback: bool = False
+    unresolved_topics: list[str] = field(default_factory=list)
     # 每个引用的出处：paper（本论文）/ library（资料库）/ web（联网检索）
     origins: dict[str, str] = field(default_factory=dict)
 
@@ -183,6 +185,7 @@ async def answer_question(
 
     origins: dict[str, str] = {}
     findings: list[Finding] = []
+    unresolved_topics: list[str] = []
     if paper_sources is not None:
         from .intake import _FixedSources
         from .paper_context import paper_context
@@ -235,11 +238,12 @@ async def answer_question(
             if paper_cache
             else ""
         )
-        cached = paper_cache.get(cache_key) if paper_cache is not None else None
+        cached = paper_cache.get_entry(cache_key) if paper_cache is not None else None
         reused = False
         read_urls: set[str] = set()
         if cached is not None:
-            paper_findings, raw = cached
+            paper_findings, raw = cached.findings, cached.raw_count
+            unresolved_topics = cached.unresolved_topics
         else:
             from .paper_evidence import current_findings, merge_findings, plan_findings
 
@@ -259,11 +263,32 @@ async def answer_question(
             raw = 0
             paper_findings = []
             while not selection.sufficient:
+                if selection.next_step == "answer_with_gaps":
+                    paper_findings = selection.findings
+                    unresolved_topics = selection.missing_topics
+                    break
                 remaining = [s for s in paper_sources if s.url not in read_urls]
                 if not remaining:
                     paper_findings = collected
+                    unresolved_topics = selection.missing_topics or [question]
                     break
-                chosen = [s for s in remaining if s.url in selection.source_urls] or remaining
+                chosen = (
+                    remaining
+                    if selection.next_step == "scan_remaining"
+                    else [s for s in remaining if s.url in selection.source_urls]
+                )
+                if not chosen:
+                    raise ValueError("补读没有可执行的新目标，未自动扩大为全篇读取")
+                thoughts.append(
+                    {
+                        "tool": "paper_read_plan",
+                        "input": selection.next_step,
+                        "observation": selection.reading_reason
+                        or f"补读 {len(chosen)} 个相关原文片段",
+                        "sources": [s.url for s in chosen],
+                        "missing_topics": selection.missing_topics,
+                    }
+                )
                 if on_event is not None:
                     on_event(
                         {"type": "status", "message": f"正在补读 {len(chosen)} 个相关原文片段…"}
@@ -281,9 +306,6 @@ async def answer_question(
                 collected = merge_findings(collected, selection.findings, other)
                 if paper_cache is not None:
                     paper_cache.put(pool_key, candidates, len(candidates))
-                if not any(s.url not in read_urls for s in paper_sources):
-                    paper_findings = collected
-                    break
                 selection = await plan_findings(
                     candidates, question, history, researcher, paper_sources, read_urls
                 )
@@ -292,7 +314,7 @@ async def answer_question(
                 reused = not read_urls
                 raw = raw or len(paper_findings)
             if paper_cache is not None:
-                paper_cache.put(cache_key, paper_findings, raw)
+                paper_cache.put(cache_key, paper_findings, raw, unresolved_topics=unresolved_topics)
                 merged = merge_findings(candidates, paper_findings)
                 paper_cache.put(pool_key, merged, len(merged))
         cache_event = {
@@ -322,6 +344,18 @@ async def answer_question(
                 ),
             }
         )
+        if unresolved_topics:
+            thoughts.append(
+                {
+                    "tool": "evidence_coverage",
+                    "input": question,
+                    "observation": "已有核验材料仍不能确认以下方面；回答保留明确边界",
+                    "status": "partial",
+                    "unresolved_topics": unresolved_topics,
+                }
+            )
+            if on_event is not None:
+                on_event({"type": "status", "message": "正在整理已核验结论，并说明仍待确认的细节…"})
     backends: list[SearchTool] = []
     if include_web:
         backends.append(await ctx.search_for("researcher"))
@@ -386,6 +420,7 @@ async def answer_question(
             findings=[],
             thoughts=thoughts,
             fallback=True,
+            unresolved_topics=unresolved_topics,
         )
 
     url_to_idx: dict[str, int] = {}
@@ -405,12 +440,21 @@ async def answer_question(
         history,
         capacity - len(ctx.system_prompt(system)) - sum(map(len, lines)) - len(question) - 8192,
     )
+    coverage = (
+        "\n\n【读取后仍待确认的方面】\n"
+        + json.dumps(unresolved_topics, ensure_ascii=False)
+        + "\n这些是核验范围的限制，不是原文事实；回答可确认部分，并逐项说明仍未确认的细节。"
+        "不能把未确认写成全文未报告，也不能据此断言实验条件不同。不要用未知条件得出肯定比较。"
+        if unresolved_topics
+        else ""
+    )
     # Stable evidence precedes changing dialogue and the current question.
     user = PrefixPrompt(
         "【已核验素材】\n" + "\n".join(lines),
         f"\n\n{context}\n\n【用户问题】\n{question}\n\n本次可用引用编号："
         + " ".join(f"[{index}]" for index in url_to_idx.values())
-        + "。引用只选这些编号，不复制引句中原论文的文献编号。",
+        + "。引用只选这些编号，不复制引句中原论文的文献编号。"
+        + coverage,
     )
     system = _SYSTEM + (_PAPER_SYSTEM if paper_sources is not None else "")
     if on_event is not None:
@@ -431,7 +475,7 @@ async def answer_question(
         results,
         url_to_idx,
         ctx.settings.llm_max_input_chars,
-        query=f"{context}\n\n本轮问题：{question}",
+        query=f"{context}\n\n本轮问题：{question}" + coverage,
     )
 
     async def assess_answer(text: str) -> tuple[ReportCheck, dict[str, Any] | None]:
@@ -570,6 +614,7 @@ async def answer_question(
         findings=findings,
         thoughts=thoughts,
         fallback=bool(check.issues) or semantic_failed,
+        unresolved_topics=unresolved_topics,
         origins={url: origins.get(url, "web") for url in citations},
     )
 

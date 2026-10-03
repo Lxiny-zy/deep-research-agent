@@ -947,6 +947,7 @@ export interface QaThought {
   call_id?: string
   usage?: Record<string, unknown>
   binding?: ReportBibliography
+  unresolved_topics?: string[]
 }
 
 export interface QaActivity {

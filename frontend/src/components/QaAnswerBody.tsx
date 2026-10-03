@@ -3,7 +3,7 @@ import remarkGfm from 'remark-gfm'
 import { mathRemarkPlugins, mathRehypePlugins, normalizeMathMarkdown } from '../lib/scientificMath'
 import { CITE_HREF_PREFIX, remarkCitations } from '../lib/evidence'
 import { catalogForReport, citationLocations, citationOccurrence } from '../lib/bibliography'
-import { useDialogFocus } from '../hooks/useDialogFocus'
+import { useEvidenceFocus } from '../hooks/useEvidenceFocus'
 import { createPortal } from 'react-dom'
 import type { QaEvidence, ReportBibliography } from '../types'
 
@@ -201,14 +201,13 @@ function EvidenceChoice({
   onClose: () => void
   onLocate: (item: QaEvidence) => void
 }) {
-  const ref = useDialogFocus(onClose)
+  const ref = useEvidenceFocus(onClose)
   return createPortal(
     <div className="evidence-overlay">
-      <div className="evidence-backdrop" onClick={onClose} aria-hidden="true" />
       <aside
         className="evidence-drawer"
         role="dialog"
-        aria-modal="true"
+        aria-modal="false"
         aria-label="选择论文依据"
         tabIndex={-1}
         ref={ref}

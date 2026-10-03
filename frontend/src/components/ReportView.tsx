@@ -22,6 +22,7 @@ import {
 } from '../lib/bibliography'
 import { AppIcon } from './AppIcon'
 import EvidencePanel from './EvidencePanel'
+import { verificationText } from '../lib/verificationText'
 
 // 可审计报告视图：
 // - [n] 引用渲染为可点击角标（有匹配 findings 时），点击打开证据侧栏；
@@ -81,7 +82,6 @@ export default function ReportView({
   )
   const closeEvidence = useCallback(() => {
     setActiveCitation(null)
-    citationTriggerRef.current?.focus()
   }, [setActiveCitation])
   const selectedOccurrence = selectedOccurrenceId
     ? citationOccurrence(`#cite-o-${selectedOccurrenceId}`, catalog)
@@ -176,7 +176,7 @@ export default function ReportView({
               <summary>查看未通过的内容</summary>
               <ul>
                 {finalReview.issues.map((issue, index) => (
-                  <li key={index}>{issue}</li>
+                  <li key={index}>{verificationText(issue, '本段核验尚未完成，请稍后重试。')}</li>
                 ))}
               </ul>
             </details>
@@ -327,6 +327,7 @@ export default function ReportView({
             findings={activeFindings}
             allFindings={findings}
             onClose={closeEvidence}
+            returnFocus={() => citationTriggerRef.current}
             sources={cited.map((source) => ({
               ...source,
               label: catalog

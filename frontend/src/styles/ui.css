@@ -764,7 +764,6 @@ div.badge.error {
 
 /* ---- 弹窗 ---- */
 .modal-backdrop,
-.evidence-backdrop,
 .welcome-tour-backdrop {
   align-items: center;
   animation: fade-in 120ms var(--ease);

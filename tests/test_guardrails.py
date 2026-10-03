@@ -622,3 +622,30 @@ async def test_model_backed_guardrails_include_global_rules() -> None:
     rules = load_global_rules()
     assert len(llm.system_prompts) == 2
     assert all(rules in prompt for prompt in llm.system_prompts)
+
+
+@pytest.mark.parametrize("lease_lost", [False, True])
+async def test_consistency_failure_does_not_hide_a_lost_execution_lease(lease_lost):
+    from deep_research.persistence.repository import LeaseLostError
+    from tests.fakes import verified_finding
+
+    findings = [verified_finding(source_url=f"https://source{i}.example") for i in range(2)]
+    before = [f.model_dump() for f in findings]
+
+    class Failure:
+        async def parse(self, *args, **kwargs):
+            raise (
+                LeaseLostError("ownership changed") if lease_lost else ValueError("invalid mapping")
+            )
+
+    if lease_lost:
+        with pytest.raises(LeaseLostError):
+            await ClaimConsistencyVerifier().verify_batch(findings, Failure())
+    else:
+        checked = await ClaimConsistencyVerifier().verify_batch(findings, Failure())
+        assert all(f.verification.consistency_status == "not_checked" for f in checked)
+        assert all(
+            f.verification.corroboration_reason == "consistency_verifier_failed:ValueError"
+            for f in checked
+        )
+    assert [f.model_dump() for f in findings] == before

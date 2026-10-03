@@ -563,6 +563,8 @@ class ClaimConsistencyVerifier:
                 ClaimConsistencyReport,
                 temperature=0.0,
             )
+        except LeaseLostError:
+            raise
         except Exception as exc:
             reason = f"consistency_verifier_failed:{type(exc).__name__}"
             failed_findings: list[Finding] = []

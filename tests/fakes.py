@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 
 from deep_research.guardrails import ClaimConsistencyReport, SemanticEvidenceDecisionList
@@ -21,6 +22,7 @@ from deep_research.models import (
     SubQuestion,
 )
 from deep_research.tools.base import SearchTool
+from deep_research.workbench.paper_evidence import PaperEvidenceSelection
 from deep_research.workbench.support import SupportDecisions
 
 
@@ -72,9 +74,10 @@ class FakeLLM:
         self, system: str, user: str, schema, *, temperature: float = 0.2, retries: int = 2
     ):
         self.parse_calls += 1
+        if schema is PaperEvidenceSelection:
+            records, _ = json.JSONDecoder().raw_decode(user.split("【已核验论文候选】\n", 1)[1])
+            return PaperEvidenceSelection(sufficient=True, finding_ids=[r["id"] for r in records])
         if schema is SupportDecisions:
-            import json
-
             data = json.loads(user)
             return SupportDecisions(
                 decisions=[

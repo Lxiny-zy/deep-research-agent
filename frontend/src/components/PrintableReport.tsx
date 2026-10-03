@@ -13,6 +13,7 @@ import {
   summarizeEvidence,
 } from '../lib/evidence'
 import { displayReportTitle } from '../lib/reportTitle'
+import { verificationText } from '../lib/verificationText'
 import { catalogForReport, documentNumber } from '../lib/bibliography'
 import type { Finding, ReportDocument } from '../types'
 
@@ -137,7 +138,7 @@ function EvidenceCard({ finding }: { finding: Finding }) {
             <p>
               <strong>数值校验：</strong>
               {v.quantity_status === 'verified' ? '已在原文中核对' : '未通过原文核对'}
-              {v.quantity_reason && `（${v.quantity_reason}）`}
+              {v.quantity_reason && `（${verificationText(v.quantity_reason)}）`}
             </p>
           )}
         </div>
@@ -148,25 +149,25 @@ function EvidenceCard({ finding }: { finding: Finding }) {
       {v.reason?.trim() && (
         <p className="print-reason">
           <strong>验证说明：</strong>
-          {v.reason}
+          {verificationText(v.reason)}
         </p>
       )}
       {v.semantic_reason?.trim() && (
         <p className="print-reason">
           <strong>语义判定理由：</strong>
-          {v.semantic_reason}
+          {verificationText(v.semantic_reason)}
         </p>
       )}
       {v.corroboration_reason?.trim() && (
         <p className="print-reason">
           <strong>印证说明：</strong>
-          {v.corroboration_reason}
+          {verificationText(v.corroboration_reason)}
         </p>
       )}
       {v.consistency_status === 'conflicted' && (
         <p className="print-reason">
           <strong>冲突：</strong>
-          {v.contradiction_reason || '与其他论断矛盾'}
+          {verificationText(v.contradiction_reason, '与其他论断矛盾')}
           {v.contradicts_claim_ids.length > 0 && `（参见 ${v.contradicts_claim_ids.join('、')}）`}
         </p>
       )}

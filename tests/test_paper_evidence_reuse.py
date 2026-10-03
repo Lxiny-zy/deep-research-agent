@@ -86,7 +86,7 @@ async def test_changed_or_unverified_source_cannot_seed_reuse(settings):
     await answer_question(
         "论文贡献是什么", history=[], ctx=ctx, paper_sources=sources, paper_evidence=[finding]
     )
-    assert llm.extractions == 1 and not llm.selection_prompts
+    assert llm.extractions == 1 and len(llm.selection_prompts) == 1
 
 
 @pytest.mark.parametrize("invalid", ["retracted", "quantity", "unverified", "quote", "policy"])
@@ -134,7 +134,7 @@ async def test_cross_question_cache_accumulates_only_within_scope(settings):
         paper_cache=cache,
         cache_scope="alice/paper",
     )
-    assert llm.extractions == 1 and len(llm.selection_prompts) == 1
+    assert llm.extractions == 1 and len(llm.selection_prompts) == 2
     await answer_question(
         "研究方法是什么",
         history=[],
@@ -147,14 +147,25 @@ async def test_cross_question_cache_accumulates_only_within_scope(settings):
 
 
 async def test_incomplete_coverage_reads_original_paper_instead_of_assuming_absence(settings):
-    sources, finding, llm, ctx = await setup(settings)
-    llm.selection = PaperEvidenceSelection(
-        sufficient=False, finding_ids=["e1"], missing_topics=["实验设置"]
+    sources, finding, _, _ = await setup(settings)
+    llm = ScopedLLM(
+        sources,
+        [
+            PaperEvidenceSelection(
+                sufficient=False,
+                finding_ids=["e1"],
+                missing_topics=["实验设置"],
+                next_step="scan_remaining",
+                reading_reason="实验条件分布在正文和附录，需查阅其余来源",
+            ),
+            PaperEvidenceSelection(sufficient=True, finding_ids=["e1"]),
+        ],
     )
+    ctx = RunContext(llm=llm, search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
     await answer_question(
         "实验设置是什么", history=[], ctx=ctx, paper_sources=sources, paper_evidence=[finding]
     )
-    assert llm.extractions == 1
+    assert llm.reads == [[s.url for s in sources]]
 
 
 @pytest.mark.parametrize("invalid", [True, False])

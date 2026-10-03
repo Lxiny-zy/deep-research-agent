@@ -1,6 +1,7 @@
 import QaAnswerBody from './QaAnswerBody'
 import QaActivityView from './QaActivityView'
 import { savedQaActivity } from '../lib/qaActivity'
+import { verificationText } from '../lib/verificationText'
 import { AppIcon } from './AppIcon'
 import type { QaEvidence, QaMessage } from '../types'
 
@@ -9,6 +10,8 @@ const THOUGHT_LABEL: Record<string, string> = {
   model_knowledge: '模型知识',
   skip_search: '跳过检索',
   paper_read: '查阅本论文',
+  paper_read_plan: '补读安排',
+  evidence_coverage: '待确认内容',
   search_and_verify: '检索与逐字核验',
   citation_check: '引用复核',
   claim_check: '结论依据核对',
@@ -27,6 +30,9 @@ export default function QaMessageView({
   onLocate?: (evidence: QaEvidence) => void
   onReconnect?: () => void
 }) {
+  const unresolved = message.thoughts
+    .filter((thought) => thought.tool === 'evidence_coverage')
+    .flatMap((thought) => thought.unresolved_topics ?? [])
   const steps = message.thoughts.filter(
     (thought) =>
       ![
@@ -67,6 +73,11 @@ export default function QaMessageView({
             </p>
           )}
           <QaActivityView items={savedQaActivity(message.thoughts)} />
+          {unresolved.length > 0 && (
+            <p className="muted" role="note">
+              仍待确认：{unresolved.join('；')}
+            </p>
+          )}
           <div className="markdown-body qa-answer-body">
             <QaAnswerBody
               text={message.answer}
@@ -88,7 +99,7 @@ export default function QaMessageView({
                 {steps.map((thought, index) => (
                   <li key={index}>
                     <strong>{THOUGHT_LABEL[thought.tool] ?? thought.tool}</strong>
-                    <span>{thought.observation}</span>
+                    <span>{verificationText(thought.observation, '暂无进一步说明。')}</span>
                   </li>
                 ))}
               </ol>

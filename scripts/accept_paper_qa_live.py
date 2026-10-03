@@ -244,6 +244,7 @@ async def main() -> None:
                 {
                     "question": question,
                     "fallback": result.fallback,
+                    "unresolved_topics": result.unresolved_topics,
                     "tokens": tracer.total_tokens - tokens_before,
                     "schemas": {
                         name: count - schemas_before.get(name, 0) for name, count in schemas.items()

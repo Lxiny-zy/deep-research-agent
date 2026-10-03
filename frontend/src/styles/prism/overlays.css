@@ -1,14 +1,12 @@
 /* 浮层：遮罩、侧边抽屉、证据抽屉 */
 
 /* 遮罩统一加一点模糊，浮层与底下的光谱背景分得开 */
-.modal-backdrop,
-.evidence-overlay > .evidence-backdrop {
+.modal-backdrop {
   -webkit-backdrop-filter: blur(6px) saturate(0.9);
   backdrop-filter: blur(6px) saturate(0.9);
 }
 
-:root[data-theme='dark'] .modal-backdrop,
-:root[data-theme='dark'] .evidence-overlay > .evidence-backdrop {
+:root[data-theme='dark'] .modal-backdrop {
   background: rgba(3, 3, 8, 0.66);
 }
 

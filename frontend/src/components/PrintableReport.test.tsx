@@ -166,7 +166,7 @@ describe('PrintableReport：屏幕侧栏在纸上的等价物', () => {
       <PrintableReport markdown={MARKDOWN} query="q" findings={[finding()]} citations={[URL_B]} />,
     )
 
-    expect(screen.getByText(/quote_found_in_source/)).toBeInTheDocument()
+    expect(screen.getByText(/已在来源原文中找到对应摘录/)).toBeInTheDocument()
     expect(screen.getByText(/原文数值与论断一致/)).toBeInTheDocument()
     expect(screen.getByText(/两个独立发布方报告同一数值/)).toBeInTheDocument()
     expect(screen.getByText(/PSNR = 38.36 dB/)).toBeInTheDocument()

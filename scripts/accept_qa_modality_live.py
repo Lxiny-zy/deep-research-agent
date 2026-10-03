@@ -30,6 +30,11 @@ async def main() -> None:
     parser.add_argument("--history", required=True, type=Path)
     parser.add_argument("--question", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--saved-draft",
+        action="store_true",
+        help="Recheck and repair a failed saved draft without repeating modality calibration",
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     logging.disable(logging.CRITICAL)
@@ -39,6 +44,10 @@ async def main() -> None:
     mapping = {url: i for i, url in enumerate(original["citations"], 1)}
     results = [ResearchResult(sub_question=args.question, findings=findings)]
     context = args.history.read_text(encoding="utf-8") + "\n本轮问题：" + args.question
+    if original.get("unresolved_topics"):
+        context += "\n本轮仍待确认的方面（读取状态，不表示全文未报告）：" + json.dumps(
+            original["unresolved_topics"], ensure_ascii=False
+        )
     profile, tracer = remote_profile(args.authorized_ssh), Tracer()
     calls = []
 
@@ -83,38 +92,50 @@ async def main() -> None:
 
     beat, started = asyncio.create_task(heartbeat()), time.monotonic()
     try:
-        evidence = evidence_records(results, mapping)
-        last = original["answer"].split("\n\n")[-1]
-        calibration = [
-            SupportUnit("original-necessity", last, kind="prose", citations=list(mapping.values())),
-            SupportUnit(
-                "optional-evaluation",
-                "建议在新的噪声条件下评估泛化表现，并核查是否需要调整模型或训练流程。",
-                kind="prose",
-            ),
-            SupportUnit(
-                "reported-retraining",
-                "真实重建实验用真实掩膜在 CAVE 与 KAIST 上联合重训 DAUHST-3stg，"
-                "并向训练样本注入 11-bit 散粒噪声 [3]。",
-                kind="prose",
-                citations=[3],
-            ),
-        ]
-        reviewer = SupportReviewer(llm, evidence, 200000, context=context)
-        decisions = await reviewer.review(calibration)
-        checks = {
-            "unsupported_necessity_rejected": decisions[0].verdict in {"unsupported", "uncertain"},
-            "optional_evaluation_allowed": decisions[1].verdict == "non_factual",
-            "reported_retraining_supported": decisions[2].verdict == "supported",
-        }
-        save(
-            "calibration.json", {"checks": checks, "decisions": [d.model_dump() for d in decisions]}
-        )
-        if not all(checks.values()):
-            raise ValueError("Necessity calibration did not pass")
-        print("Necessity/suggestion/source-operation calibration passed", flush=True)
+        checks = {}
+        if not args.saved_draft:
+            evidence = evidence_records(results, mapping)
+            last = original["answer"].split("\n\n")[-1]
+            calibration = [
+                SupportUnit(
+                    "original-necessity", last, kind="prose", citations=list(mapping.values())
+                ),
+                SupportUnit(
+                    "optional-evaluation",
+                    "建议在新的噪声条件下评估泛化表现，并核查是否需要调整模型或训练流程。",
+                    kind="prose",
+                ),
+                SupportUnit(
+                    "reported-retraining",
+                    "真实重建实验用真实掩膜在 CAVE 与 KAIST 上联合重训 DAUHST-3stg，"
+                    "并向训练样本注入 11-bit 散粒噪声 [3]。",
+                    kind="prose",
+                    citations=[3],
+                ),
+            ]
+            reviewer = SupportReviewer(llm, evidence, 200000, context=context)
+            decisions = await reviewer.review(calibration)
+            checks = {
+                "unsupported_necessity_rejected": decisions[0].verdict
+                in {"unsupported", "uncertain"},
+                "optional_evaluation_allowed": decisions[1].verdict == "non_factual",
+                "reported_retraining_supported": decisions[2].verdict == "supported",
+            }
+            save(
+                "calibration.json",
+                {"checks": checks, "decisions": [d.model_dump() for d in decisions]},
+            )
+            if not all(checks.values()):
+                raise ValueError("Necessity calibration did not pass")
+            print("Necessity/suggestion/source-operation calibration passed", flush=True)
         checker = ProseReviewer.research(llm, results, mapping, 200000, query=context)
         body = original["answer"]
+        if args.saved_draft:
+            body = next(
+                t["unapproved_draft"]
+                for t in original["thoughts"]
+                if t["tool"] == "claim_check" and t.get("unapproved_draft")
+            )
         before_review = await checker.review(body)
         save("initial-review.json", before_review)
         review = before_review
@@ -131,7 +152,13 @@ async def main() -> None:
         mechanical = validate_body(body, results, mapping, fallback=False)
         save(
             "answer.json",
-            {**original, "answer": body, "review": review, "mechanical_issues": mechanical.issues},
+            {
+                **original,
+                "answer": body,
+                "review": review,
+                "mechanical_issues": mechanical.issues,
+                "fallback": review["status"] != "pass" or bool(mechanical.issues),
+            },
         )
         assert args.answer.read_bytes() == original_bytes
         save(

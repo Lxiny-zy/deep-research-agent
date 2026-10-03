@@ -1086,16 +1086,8 @@
   inset: 0;
   isolation: isolate;
   position: fixed;
+  pointer-events: none;
   z-index: 60;
-}
-
-.evidence-overlay > .evidence-backdrop {
-  animation: fade-in 120ms var(--ease);
-  background: rgba(15, 18, 25, 0.36);
-  inset: 0;
-  padding: 0;
-  position: absolute;
-  z-index: 0;
 }
 
 .evidence-drawer {
@@ -1108,10 +1100,48 @@
   max-width: 100vw;
   outline: none;
   position: absolute;
+  pointer-events: auto;
   right: 0;
-  top: 0;
-  width: min(520px, 100vw);
+  top: var(--topbar-height);
+  width: min(420px, 32vw);
   z-index: 1;
+}
+
+@media screen and (min-width: 1200px) {
+  :root:has(.evidence-overlay) .main-content {
+    margin-right: min(420px, 32vw);
+  }
+  :root:has(.evidence-overlay) .run-workbench-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  :root:has(.evidence-overlay) .run-report-column {
+    grid-row: 1;
+  }
+  :root:has(.evidence-overlay) .run-left-pane,
+  :root:has(.evidence-overlay) .run-right-pane {
+    position: static;
+  }
+}
+
+@media screen and (max-width: 1199px) {
+  .evidence-drawer {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+    top: auto;
+    height: 46vh;
+    height: 46dvh;
+    width: 100%;
+  }
+  :root:has(.evidence-overlay) .main-content {
+    padding-bottom: calc(46vh + var(--space-6));
+    padding-bottom: calc(46dvh + var(--space-6));
+  }
+}
+
+@media print {
+  .evidence-overlay {
+    display: none;
+  }
 }
 
 @keyframes run-drawer-in {

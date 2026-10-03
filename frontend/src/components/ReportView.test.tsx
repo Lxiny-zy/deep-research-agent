@@ -146,6 +146,85 @@ const MARKDOWN = [
 
 const CITATIONS = ['https://a.example.com/report', 'https://b.example.com/power']
 
+it('lets readers interact outside the evidence panel without locking scroll or restoring old focus', async () => {
+  const bodyOverflow = document.body.style.overflow
+  const rootOverflow = document.documentElement.style.overflow
+  document.body.style.overflow = 'auto'
+  document.documentElement.style.overflow = 'scroll'
+  try {
+    const action = vi.fn()
+    render(
+      <>
+        <button onClick={action}>正文旁的操作</button>
+        <ReportView
+          markdown={MARKDOWN}
+          streaming={false}
+          findings={FINDINGS}
+          citations={CITATIONS}
+        />
+      </>,
+    )
+    const user = userEvent.setup()
+    const cite = screen.getAllByRole('button', { name: '查看引用 1 的证据' })[0]
+    await user.click(cite)
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'false')
+    expect(document.querySelector('.evidence-backdrop')).toBeNull()
+    expect(document.body.style.overflow).toBe('auto')
+    expect(document.documentElement.style.overflow).toBe('scroll')
+    const focus = vi.spyOn(cite, 'focus')
+    await user.click(screen.getByRole('button', { name: '正文旁的操作' }))
+    expect(action).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('button', { name: '正文旁的操作' })).toHaveFocus()
+    expect(focus).not.toHaveBeenCalled()
+    focus.mockRestore()
+  } finally {
+    document.body.style.overflow = bodyOverflow
+    document.documentElement.style.overflow = rootOverflow
+  }
+})
+
+it('returns keyboard focus on close without scrolling back to the citation', async () => {
+  render(
+    <ReportView markdown={MARKDOWN} streaming={false} findings={FINDINGS} citations={CITATIONS} />,
+  )
+  const user = userEvent.setup()
+  const cite = screen.getAllByRole('button', { name: '查看引用 1 的证据' })[0]
+  await user.click(cite)
+  const focus = vi.spyOn(cite, 'focus')
+  await user.keyboard('{Escape}')
+  expect(focus).toHaveBeenCalledWith({ preventScroll: true })
+  expect(cite).toHaveFocus()
+  focus.mockRestore()
+})
+
+it('shows a readable explanation for failed source checks while preserving raw diagnostic data', async () => {
+  const finding = makeFinding({
+    statement: '当前结论',
+    source_url: CITATIONS[0],
+    evidence_quote: 'Quoted evidence.',
+    claim_id: 'c1',
+    consistency_status: 'not_checked',
+    corroboration_status: 'not_checked',
+    contradiction_reason: 'consistency_verifier_failed:ValueError',
+    corroboration_reason: 'consistency_verifier_failed:ValueError',
+  })
+  render(
+    <ReportView
+      markdown="当前结论 [1]。"
+      streaming={false}
+      findings={[finding]}
+      citations={CITATIONS}
+    />,
+  )
+  await userEvent.click(screen.getByRole('button', { name: '查看引用 1 的证据' }))
+  const panel = screen.getByRole('dialog')
+  expect(panel).toHaveTextContent('来源之间的一致性核对未完成')
+  expect(panel).toHaveTextContent('其他来源的支持情况')
+  expect(panel.innerHTML).not.toMatch(/consistency_verifier_failed|ValueError/)
+  expect(finding.verification.corroboration_reason).toBe('consistency_verifier_failed:ValueError')
+})
+
 it('uses the selected evidence for each occurrence, allows explicit browsing and closes stale selection', async () => {
   const url = 'https://example.org/paper'
   const markdown = 'CLAIM-A [1].\n\nCLAIM-B [1].'
