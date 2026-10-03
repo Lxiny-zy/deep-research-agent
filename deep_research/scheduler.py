@@ -14,6 +14,8 @@ from collections.abc import Awaitable, Callable
 from .dag import build_dag, detect_cycle, topo_layers
 from .models import Finding, ResearchResult, SubQuestion
 from .observability import Tracer
+from .persistence.repository import LeaseLostError
+from .research_progress import ResearchProgressError
 
 # 研究单个子问题：给定问题与（可选）前驱发现作上下文，返回结果或 None
 ResearchOne = Callable[[str, "list[Finding] | None"], Awaitable["ResearchResult | None"]]
@@ -70,17 +72,23 @@ async def research_dag(
         return i, res
 
     for layer in layers:
-        layer_out = await asyncio.gather(*[_run_idx(i) for i in layer], return_exceptions=True)
-        for item in layer_out:
-            if isinstance(item, asyncio.CancelledError):
-                raise item  # 取消必须向上传播，不可吞
-            if isinstance(item, BaseException):
-                # research_one 内部已兜底常规失败，落到这里的是未预期异常：
-                # 记录而非静默丢弃，否则该子问题会"无痕消失"，极难排查
-                tracer.emit("RESEARCHER", "error", f"子问题执行出现未预期异常：{item}")
-                continue
-            idx, res = item
-            if isinstance(res, ResearchResult) and (res.findings or res.extraction_audit):
-                collected[idx] = res
+        tasks = [asyncio.create_task(_run_idx(i)) for i in layer]
+        try:
+            for completed in asyncio.as_completed(tasks):
+                try:
+                    idx, res = await completed
+                except (LeaseLostError, ResearchProgressError):
+                    raise
+                except Exception as exc:
+                    tracer.emit("RESEARCHER", "error", f"子问题执行出现未预期异常：{exc}")
+                    continue
+                if isinstance(res, ResearchResult) and (res.findings or res.extraction_audit):
+                    collected[idx] = res
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     return [collected[i] for i in sorted(collected)]

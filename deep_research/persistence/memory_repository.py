@@ -10,6 +10,7 @@ from uuid import uuid4
 from ..models import Report, ResearchPlan, ResearchResult, Source, SubQuestion
 from ..observability import Event
 from ..orchestration import WorkflowRun
+from ..resume_window import renewed_checkpoint
 from .repository import (
     RUN_ACTIVE_STATUSES,
     ClaimedRun,
@@ -196,13 +197,22 @@ class InMemoryRepository:
         self._assert_lease(run_id, lease_owner)
         self._runs[run_id].status = status
 
-    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> int:
+    async def prepare_resume(
+        self, run_id: str, *, lease_owner: str, restart_seconds: int | None = None
+    ) -> int:
         self._assert_lease(run_id, lease_owner)
         rec = self._runs[run_id]
+        renewed = (
+            renewed_checkpoint(rec.orchestration.checkpoint, restart_seconds)
+            if rec.orchestration is not None and restart_seconds is not None
+            else None
+        )
         rec.status = "running"
         rec.attempt += 1
         if rec.orchestration is not None:
             rec.orchestration.attempt = rec.attempt
+            if renewed is not None:
+                rec.orchestration.checkpoint = renewed
         return rec.attempt
 
     async def request_cancel(self, run_id: str) -> str | None:
@@ -347,7 +357,9 @@ class InMemoryRepository:
         rec.claimable_at = datetime.now(UTC)
         return True
 
-    async def requeue_failed_run(self, run_id: str, *, max_inflight: int | None = None) -> bool:
+    async def requeue_failed_run(
+        self, run_id: str, *, max_inflight: int | None = None, restart_seconds: int | None = None
+    ) -> bool:
         rec = self._runs.get(run_id)
         if rec is None or rec.status != "error" or rec.orchestration is None:
             return False
@@ -358,6 +370,10 @@ class InMemoryRepository:
         if rec.lease_owner is not None and lease_active:
             return False
         self._check_capacity(max_inflight)
+        if restart_seconds is not None:
+            rec.orchestration.checkpoint = renewed_checkpoint(
+                rec.orchestration.checkpoint, restart_seconds
+            )
         rec.status = "running"
         rec.claimable_at = now
         rec.lease_owner = None

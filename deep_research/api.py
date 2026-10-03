@@ -2078,7 +2078,9 @@ async def resume_run(run_id: str, request: Request) -> CreateRunResponse:
             if detail.status == "error":
                 settings = request.app.state.settings
                 requeued = await request.app.state.repo.requeue_failed_run(
-                    run_id, max_inflight=settings.max_active_runs + settings.max_queued_runs
+                    run_id,
+                    max_inflight=settings.max_active_runs + settings.max_queued_runs,
+                    restart_seconds=_settings_for_resume(settings, execution).max_run_seconds,
                 )
             else:
                 requeued = await request.app.state.repo.enqueue_run(run_id)
@@ -2111,7 +2113,14 @@ async def resume_run(run_id: str, request: Request) -> CreateRunResponse:
         resume_settings = _settings_for_resume(request.app.state.settings, execution)
         # Publish the new attempt before returning 202 so clients cannot keep
         # treating the previous attempt's terminal status as authoritative.
-        execution.attempt = await request.app.state.repo.prepare_resume(run_id, lease_owner=owner)
+        execution.attempt = await request.app.state.repo.prepare_resume(
+            run_id,
+            lease_owner=owner,
+            restart_seconds=resume_settings.max_run_seconds if detail.status == "error" else None,
+        )
+        refreshed = await request.app.state.repo.get_run(run_id)
+        if refreshed is not None and refreshed.orchestration is not None:
+            execution = refreshed.orchestration
         request.app.state.live[run_id] = EventHub()
         execution_coro = _execute_with_admission(
             admission,

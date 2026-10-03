@@ -171,13 +171,17 @@ class ResearchRepository(Protocol):
         """
         ...
 
-    async def requeue_failed_run(self, run_id: str, *, max_inflight: int | None = None) -> bool:
+    async def requeue_failed_run(
+        self, run_id: str, *, max_inflight: int | None = None, restart_seconds: int | None = None
+    ) -> bool:
         """Atomically requeue a failed checkpointed run for worker recovery.
 
         Implementations must reject runs without a checkpoint and runs whose
         workflow lease is still active.  Success changes the run back to
         ``running`` and marks it claimable without broadening the global set of
         active statuses.
+        ``restart_seconds`` renews the deadline only for an explicit user retry;
+        ordinary recovery must leave it unset.
         """
         ...
 
@@ -204,8 +208,10 @@ class ResearchRepository(Protocol):
         self, run_id: str, status: str, *, lease_owner: str | None = None
     ) -> None: ...
 
-    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> int:
-        """Atomically mark a new attempt active and return its number."""
+    async def prepare_resume(
+        self, run_id: str, *, lease_owner: str, restart_seconds: int | None = None
+    ) -> int:
+        """Mark an attempt active; optionally renew its explicitly authorized time window."""
         ...
 
     async def save_plan(

@@ -35,6 +35,7 @@ from ..models import (
 )
 from ..observability import Event
 from ..orchestration import StepRun, WorkflowRun
+from ..resume_window import renewed_checkpoint
 from . import orm
 from .coordination import transaction_lock
 from .repository import (
@@ -427,7 +428,9 @@ class SqlRepository:
                 )
             return "cancelling"
 
-    async def prepare_resume(self, run_id: str, *, lease_owner: str) -> int:
+    async def prepare_resume(
+        self, run_id: str, *, lease_owner: str, restart_seconds: int | None = None
+    ) -> int:
         async with self._sm() as s, s.begin():
             workflow = await self._owned_workflow_row(s, run_id, lease_owner)
             run = await s.get(orm.ResearchRun, run_id)
@@ -442,6 +445,8 @@ class SqlRepository:
             if workflow is None:
                 raise ValueError(f"run {run_id} has no workflow row")
             workflow.attempt = max(1, workflow.attempt or 1) + 1
+            if restart_seconds is not None:
+                workflow.checkpoint = renewed_checkpoint(workflow.checkpoint, restart_seconds)
             return workflow.attempt
 
     async def save_plan(
@@ -858,7 +863,9 @@ class SqlRepository:
             )
             return bool(cast("CursorResult[Any]", result).rowcount)
 
-    async def requeue_failed_run(self, run_id: str, *, max_inflight: int | None = None) -> bool:
+    async def requeue_failed_run(
+        self, run_id: str, *, max_inflight: int | None = None, restart_seconds: int | None = None
+    ) -> bool:
         now = datetime.now(UTC)
         owner = f"resume-{uuid4().hex}"
         async with self._sm() as s, s.begin():
@@ -902,6 +909,8 @@ class SqlRepository:
                 workflow.lease_owner = None
                 workflow.lease_expires_at = None
                 return False
+            if restart_seconds is not None:
+                workflow.checkpoint = renewed_checkpoint(workflow.checkpoint, restart_seconds)
             workflow.lease_owner = None
             workflow.lease_expires_at = None
             return True

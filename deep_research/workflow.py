@@ -34,6 +34,7 @@ from .orchestration import (
 from .persistence.repository import LeaseLostError
 from .prompting import load_global_rules
 from .registry import available, create
+from .research_progress import ResearchProgressError
 from .workbench.roles import WORKBENCH_WRITER_ROLES
 
 if TYPE_CHECKING:
@@ -563,6 +564,8 @@ class WorkflowEngine:
                 candidate = bb.model_copy(deep=True)
                 try:
                     candidate = await self._invoke_with_timeout(step, candidate)
+                except (LeaseLostError, ResearchProgressError):
+                    raise
                 except Exception as exc:
                     last_error = exc
                     _carry_replan_ledger(bb, candidate)
@@ -584,6 +587,8 @@ class WorkflowEngine:
                     candidate = await self._invoke_with_timeout(
                         step, candidate, agent_override=step.fallback_agent
                     )
+                except (LeaseLostError, ResearchProgressError):
+                    raise
                 except Exception as exc:
                     last_error = exc
                 else:
@@ -747,6 +752,8 @@ class WorkflowEngine:
                     bb = await self._execute_with_policy(step, bb, step_run)
                 except Exception as e:  # 单步失败隔离，但进入明确 FAILED 状态
                     self.runtime.fail_step(step_run, e)
+                    if isinstance(e, (LeaseLostError, ResearchProgressError)):
+                        raise
                     self.ctx.tracer.emit(
                         self._stage_for(step),
                         "error",
@@ -915,6 +922,8 @@ class WorkflowEngine:
                         child = await self._execute_with_policy(step, child, step_run)
                     except Exception as exc:
                         self.runtime.fail_step(step_run, exc)
+                        if isinstance(exc, (LeaseLostError, ResearchProgressError)):
+                            raise
                         self.ctx.tracer.emit(
                             self._stage_for(step),
                             "error",
@@ -1117,11 +1126,21 @@ class WorkflowEngine:
             try:
                 await self.run(Workflow(name=f"team-{idx}", steps=list(team_steps)), child)
                 return child
+            except (LeaseLostError, ResearchProgressError):
+                raise
             except Exception as e:  # 单团队失败隔离：记一条 error，返回 None 不拖垮其余团队
                 self.ctx.tracer.emit("AGGREGATOR", "error", f"子团队 {idx} 失败，已隔离：{e}")
                 return None
 
-        children = await asyncio.gather(*[_run_team(i, t) for i, t in enumerate(subtasks)])
+        tasks = [asyncio.create_task(_run_team(i, t)) for i, t in enumerate(subtasks)]
+        try:
+            children = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         for child in children:  # 串行合并，避免并发写父黑板的竞态
             if child is not None:
                 bb.results += child.results
@@ -1153,7 +1172,7 @@ class WorkflowEngine:
             candidate = bb.model_copy(deep=True)
             try:
                 candidate = await reflector.step(candidate, self.ctx)
-            except LeaseLostError:
+            except (LeaseLostError, ResearchProgressError):
                 raise  # 租约已被接管：本 worker 必须立刻停手，不能当作普通失败继续付费调用
             except Exception as exc:
                 self.ctx.tracer.emit(
@@ -1181,7 +1200,7 @@ class WorkflowEngine:
             candidate.scratch["pending_sub_questions"] = new_subs
             try:
                 candidate = await researcher.step(candidate, self.ctx)
-            except LeaseLostError:
+            except (LeaseLostError, ResearchProgressError):
                 raise
             except Exception as exc:
                 self.ctx.tracer.emit(

@@ -40,14 +40,22 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--authorized-ssh", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--sources", type=Path, nargs="+", required=True)
-    parser.add_argument("--query-file", type=Path, required=True)
+    parser.add_argument("--sources", type=Path, nargs="+")
+    parser.add_argument("--query-file", type=Path)
+    parser.add_argument("--resume", action="store_true", help="Resume a verified local replay copy")
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
     target = args.output.resolve()
-    target.mkdir(parents=True, exist_ok=False)
+    if args.resume:
+        replay = json.loads((target / "replay.json").read_text(encoding="utf-8"))
+        if replay.get("status") != "pass" or not replay.get("completion_audits_match"):
+            raise ValueError("A verified replay copy is required")
+    else:
+        if not args.sources or not args.query_file:
+            parser.error("New acceptance requires --sources and --query-file")
+        target.mkdir(parents=True, exist_ok=False)
     profile = remote_profile(args.authorized_ssh)
-    query = args.query_file.read_text(encoding="utf-8-sig")
+    query = args.query_file.read_text(encoding="utf-8-sig") if args.query_file else ""
     settings = Settings(
         api_key="",
         api_credentials=(),
@@ -68,7 +76,9 @@ async def main() -> None:
     await create_all(engine)
     sessions = make_sessionmaker(engine)
     repo, library = SqlRepository(sessions), SqlLibraryRepository(sessions)
-    response_count = 0
+    response_count = max(
+        (int(path.stem.split("-")[-1]) for path in target.glob("response-*.json")), default=0
+    )
     agents = []
 
     def save(name, value):
@@ -116,6 +126,7 @@ async def main() -> None:
                         "status": status,
                         "seconds": time.monotonic() - started,
                         "input_chars": len(system) + len(user),
+                        "input_sha256": hashlib.sha256((system + "\0" + user).encode()).hexdigest(),
                         "output": "".join(chunks),
                     },
                 )
@@ -175,46 +186,52 @@ async def main() -> None:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=api.app), base_url="http://local"
         ) as client:
-            created = await client.post(
-                "/api/projects", json={"name": "Local task-path acceptance"}
-            )
-            created.raise_for_status()
-            project_id = created.json()["id"]
-            corpus = (await client.get(f"/api/projects/{project_id}/corpora")).json()[0]
-            inputs = []
-            for path in args.sources:
-                raw = path.read_bytes()
-                response = await client.post(
-                    f"/api/projects/{project_id}/sources/import",
+            if args.resume:
+                identity = json.loads((target / "run.json").read_text(encoding="utf-8"))
+                run_id, project_id = identity["run_id"], identity["project_id"]
+                resumed = await client.post(f"/api/runs/{run_id}/resume")
+                resumed.raise_for_status()
+            else:
+                created = await client.post(
+                    "/api/projects", json={"name": "Local task-path acceptance"}
+                )
+                created.raise_for_status()
+                project_id = created.json()["id"]
+                corpus = (await client.get(f"/api/projects/{project_id}/corpora")).json()[0]
+                inputs = []
+                for path in args.sources:
+                    raw = path.read_bytes()
+                    response = await client.post(
+                        f"/api/projects/{project_id}/sources/import",
+                        json={
+                            "corpus_id": corpus["id"],
+                            "title": path.stem,
+                            "kind": "markdown",
+                            "text": raw.decode("utf-8-sig"),
+                        },
+                    )
+                    response.raise_for_status()
+                    inputs.append(
+                        {
+                            "filename": path.name,
+                            "sha256": hashlib.sha256(raw).hexdigest(),
+                            "source_id": response.json()["id"],
+                        }
+                    )
+                save("inputs.json", {"query": query, "sources": inputs, "model": profile["model"]})
+                created = await client.post(
+                    "/api/runs",
                     json={
-                        "corpus_id": corpus["id"],
-                        "title": path.stem,
-                        "kind": "markdown",
-                        "text": raw.decode("utf-8-sig"),
+                        "query": query,
+                        "template": "autoResearch",
+                        "strategy": "quick",
+                        "project_id": project_id,
+                        "clarified": True,
                     },
                 )
-                response.raise_for_status()
-                inputs.append(
-                    {
-                        "filename": path.name,
-                        "sha256": hashlib.sha256(raw).hexdigest(),
-                        "source_id": response.json()["id"],
-                    }
-                )
-            save("inputs.json", {"query": query, "sources": inputs, "model": profile["model"]})
-            created = await client.post(
-                "/api/runs",
-                json={
-                    "query": query,
-                    "template": "autoResearch",
-                    "strategy": "quick",
-                    "project_id": project_id,
-                    "clarified": True,
-                },
-            )
-            created.raise_for_status()
-            run_id = created.json()["run_id"]
-            save("run.json", {"run_id": run_id, "project_id": project_id})
+                created.raise_for_status()
+                run_id = created.json()["run_id"]
+                save("run.json", {"run_id": run_id, "project_id": project_id})
             while await repo.get_run_status(run_id) in {"pending", "running"}:
                 await asyncio.sleep(10)
                 print(

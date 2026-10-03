@@ -130,10 +130,56 @@ class Researcher:
         # 下一轮很可能原样再提一遍，白白重跑检索与抽取。
         attempted: dict[str, int] = bb.scratch.setdefault(ATTEMPTED_SCRATCH_KEY, {})
 
+        from ..artifacts import ArtifactStore
+        from ..blocking import run_blocking
+        from ..research_progress import ResearchProgress, ResearchProgressError
+
+        progress = (
+            ResearchProgress(
+                ctx.artifact_store,
+                {
+                    "run_id": ctx.run_id,
+                    "role": self.name,
+                    "system": self.system,
+                    "pending": [item.model_dump(mode="json") for item in pending],
+                    "previous_results": [result.material_data() for result in bb.results],
+                    "reflection_round": len(bb.reflections),
+                    "corroboration": require_corroboration,
+                },
+            )
+            if isinstance(ctx.artifact_store, ArtifactStore) and ctx.run_id
+            else None
+        )
+        progress_failed = asyncio.Event()
+
+        async def progress_io(operation, *args):  # type: ignore[no-untyped-def]
+            try:
+                return await run_blocking(operation, *args)
+            except ResearchProgressError:
+                progress_failed.set()
+                raise
+
         async def _one(
             question: str, context_findings: list[Finding] | None
         ) -> ResearchResult | None:
             async with sem:  # 限流，避免打爆检索 API
+                if progress_failed.is_set():
+                    raise ResearchProgressError("子问题进度不可用，已停止后续研究")
+                key = progress.key(question, context_findings) if progress is not None else ""
+                saved = await progress_io(progress.load, key, question) if progress else None
+                if saved is not None:
+                    from ..reproducibility import RecordingSearchTool
+
+                    if isinstance(ctx.search_tool, RecordingSearchTool) and saved.extraction_audit:
+                        await ctx.search_tool.record(saved.extraction_audit.sources)
+                    attempted[question] = len(saved.findings)
+                    ctx.tracer.emit(
+                        "RESEARCHER",
+                        "info",
+                        "复用已保存的子问题结果：" + question,
+                        data={"category": "research_progress", "reused": True},
+                    )
+                    return saved
                 result = await self.run(
                     question,
                     context_findings=context_findings,
@@ -144,6 +190,8 @@ class Researcher:
                         else {}
                     ),
                 )
+                if progress is not None and result is not None:
+                    await progress_io(progress.save, key, result)
             attempted[question] = len(result.findings) if result is not None else 0
             return result
 

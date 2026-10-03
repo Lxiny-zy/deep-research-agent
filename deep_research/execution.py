@@ -462,20 +462,18 @@ class RunExecutor:
             artifact_store: ArtifactStore | None = self.ctx.artifact_store
             command_runner: CommandRunner | None = self.ctx.command_runner
             skill_resolver: SkillResolver | None = self.ctx.skill_resolver
+            if artifact_store is None:
+                scratch = source_execution.checkpoint.get("scratch", {}) if source_execution else {}
+                root = Path(settings.artifact_root)
+                if isinstance(scratch, dict) and scratch.get("_artifact_run_scoped"):
+                    root = root / "runs" / run_id
+                artifact_store = ArtifactStore(
+                    root,
+                    max_bytes=settings.artifact_max_bytes,
+                    max_total_bytes=settings.artifact_total_bytes,
+                    quota_root=settings.artifact_root,
+                )
             if settings.orchestration_mode != "legacy":
-                if artifact_store is None:
-                    scratch = (
-                        source_execution.checkpoint.get("scratch", {}) if source_execution else {}
-                    )
-                    root = Path(settings.artifact_root)
-                    if isinstance(scratch, dict) and scratch.get("_artifact_run_scoped"):
-                        root = root / "runs" / run_id
-                    artifact_store = ArtifactStore(
-                        root,
-                        max_bytes=settings.artifact_max_bytes,
-                        max_total_bytes=settings.artifact_total_bytes,
-                        quota_root=settings.artifact_root,
-                    )
                 if settings.runner_enabled and command_runner is None:
                     command_runner = CommandRunner(
                         workspace_root=artifact_store.workspace_root,
@@ -599,12 +597,10 @@ class RunExecutor:
                 for historical_event in replayable:
                     hub.publish(historical_event)
             agent.tracer.add_sink(hub.publish)
-            remaining = settings.max_run_seconds - agent.tracer.elapsed
-            if source_execution is not None:
-                scratch = source_execution.checkpoint.get("scratch", {})
-                deadline = scratch.get("_deadline_at") if isinstance(scratch, dict) else None
-                if isinstance(deadline, (float, int)):
-                    remaining = min(remaining, deadline - time.time())
+            from .resume_window import remaining_seconds
+
+            scratch = source_execution.checkpoint.get("scratch", {}) if source_execution else {}
+            remaining = remaining_seconds(settings.max_run_seconds, agent.tracer.elapsed, scratch)
             async with asyncio.timeout(max(0, remaining)):
                 await agent.run(query)
             status_reader = getattr(ctx.repo, "get_run_status", None)
