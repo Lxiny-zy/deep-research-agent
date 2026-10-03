@@ -26,6 +26,23 @@ ABSTRACT = "The method uses 17 samples. It improves the metric by 0.8 dB but onl
 BODY = "Body-only result: the method uses 900 samples."
 
 
+@pytest.mark.parametrize("heading", ["## Methods", "# 正文", "## Experimental Results"])
+def test_markdown_abstract_ends_at_explicit_peer_or_parent_heading(heading):
+    text = f"# Paper\n\n## Abstract\n\n{ABSTRACT}\n\n{heading}\n\n{BODY}"
+    span = abstract_span(Source(url="https://example.org/paper.md", content=text))
+    assert span is not None and text[slice(*span)] == ABSTRACT
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+def test_abstract_boundary_ignores_code_headings_and_child_subsections(fence):
+    abstract = f"{ABSTRACT}\n{fence}\n## Example\n{fence}\n### Details\nMore abstract text."
+    text = f"## Abstract\n{abstract}\n## Results\n{BODY}"
+    span = abstract_span(Source(url="https://example.org/paper.md", content=text))
+    assert span is not None and text[slice(*span)] == abstract
+    unclosed = text.split("\n## Results", 1)[0]
+    assert abstract_span(Source(url="https://example.org/paper.md", content=unclosed)) is None
+
+
 def scratch(content=None):
     source = Source(
         title="Paper",

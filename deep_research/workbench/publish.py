@@ -187,7 +187,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 46,
+        "format_version": 47,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -402,7 +402,16 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 markdown = _insert_analysis_figures(markdown, figure_md)
                 display_markdown = _insert_analysis_figures(display_markdown, figure_md)
             statistics = {
-                key: getattr(result, key) for key in ("describe", "tests", "correlations", "issues")
+                key: getattr(result, key)
+                for key in (
+                    "describe",
+                    "tests",
+                    "correlations",
+                    "issues",
+                    "scope",
+                    "composition",
+                    "columns",
+                )
             }
 
     from .quality import coerce_policy
@@ -692,6 +701,29 @@ def _stats_xlsx(result: Any) -> bytes:
     corr.append(["a", "b", "r", "p_value", "n"])
     for row in result.correlations:
         corr.append([row.get(key) for key in ("a", "b", "r", "p_value", "n")])
+    if getattr(result, "scope", None) is not None:
+        scope = workbook.create_sheet("分析范围")
+        scope.append(["列名", "用途"])
+        for role, label in (
+            ("measures", "测量变量"),
+            ("groups", "比较分组"),
+            ("background", "样本背景（不自动检验）"),
+        ):
+            for column in result.scope[role]:
+                scope.append([column, label])
+        selected = set(
+            result.scope["measures"] + result.scope["groups"] + result.scope["background"]
+        )
+        for column in result.columns:
+            if column not in selected:
+                scope.append([column, "保留在原始数据，本次未分析"])
+        composition = workbook.create_sheet("样本构成")
+        composition.append(["按每列本身计数，不代表每项测量的有效分组样本量"])
+        composition.append(["列名", "有效数", "缺失数", "不同取值数", "取值", "构成数"])
+        for item in result.composition:
+            totals = [item[k] for k in ("column", "n", "missing", "distinct")]
+            for level in item["levels"] or [{"label": None, "n": None}]:
+                composition.append([*totals, level["label"], level["n"]])
     if result.issues:
         notices = workbook.create_sheet("未完成分析")
         notices.append(["说明"])

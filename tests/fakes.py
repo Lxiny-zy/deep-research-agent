@@ -22,6 +22,7 @@ from deep_research.models import (
     SubQuestion,
 )
 from deep_research.tools.base import SearchTool
+from deep_research.workbench.analysis_scope import AnalysisScope
 from deep_research.workbench.paper_evidence import PaperEvidenceSelection
 from deep_research.workbench.support import SupportDecisions
 
@@ -74,6 +75,39 @@ class FakeLLM:
         self, system: str, user: str, schema, *, temperature: float = 0.2, retries: int = 2
     ):
         self.parse_calls += 1
+        if schema is AnalysisScope:
+            data, _ = json.JSONDecoder().raw_decode(user.split("【完整数据列概况】\n", 1)[1])
+            identifiers = {
+                "id",
+                "index",
+                "idx",
+                "scene",
+                "subject",
+                "participant",
+                "sample",
+                "trial",
+            }
+            measures = [
+                c["name"]
+                for c in data["columns"]
+                if c["dtype"].startswith(("int", "float"))
+                and c["name"] not in identifiers
+                and not c["name"].endswith("_id")
+            ]
+            groups = [
+                c["name"]
+                for c in data["columns"]
+                if c["dtype"] == "object"
+                and 1 < c["distinct"] <= min(20, max(2, data["rows"] // 2))
+                and c["name"] not in identifiers
+            ]
+            return AnalysisScope(
+                measures=measures,
+                groups=groups,
+                background=[
+                    c["name"] for c in data["columns"] if c["name"] not in measures + groups
+                ],
+            )
         if schema is PaperEvidenceSelection:
             records, _ = json.JSONDecoder().raw_decode(user.split("【已核验论文候选】\n", 1)[1])
             return PaperEvidenceSelection(sufficient=True, finding_ids=[r["id"] for r in records])

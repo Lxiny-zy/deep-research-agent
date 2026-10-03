@@ -35,6 +35,31 @@ def translation_title(title: str) -> bool:
     return any(key in title.casefold() for key in TRANSLATION_TITLES)
 
 
+def _markdown_section_end(text: str, start: re.Match[str]) -> int | None:
+    """An explicit peer/parent heading closes a Markdown abstract section."""
+    heading = re.search(r"(?:^|\n)[ \t]*(#{1,6})[ \t]+", start.group())
+    if heading is None:
+        return None
+    level = len(heading[1])
+    fence = ""
+    offset = start.end()
+    for line in text[offset:].splitlines(keepends=True):
+        stripped = line.lstrip(" \t")
+        marker = re.match(r"(`{3,}|~{3,})", stripped)
+        if fence:
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence):
+                if not stripped[len(marker[1]) :].strip():
+                    fence = ""
+        elif marker:
+            fence = marker[1]
+        else:
+            following = re.match(r"(#{1,6})[ \t]+\S", stripped)
+            if following and len(following[1]) <= level:
+                return offset
+        offset += len(line)
+    return None
+
+
 def abstract_span(source: Source) -> tuple[int, int] | None:
     text = source.content
     start = _START.search(text)
@@ -51,11 +76,12 @@ def abstract_span(source: Source) -> tuple[int, int] | None:
         return None
     begin = start.end() if start else 0
     end = _END.search(text, begin)
+    markdown_end = _markdown_section_end(text, start) if start else None
     # Unstructured chunks can end halfway through an abstract. Never silently
     # call that the complete source just because a byte/chunk boundary was met.
-    if end is None and not declared:
+    if end is None and markdown_end is None and not declared:
         return None
-    finish = end.start() if end else len(text)
+    finish = min(end.start() if end else len(text), markdown_end or len(text))
     while begin < finish and text[begin].isspace():
         begin += 1
     while finish > begin and text[finish - 1].isspace():

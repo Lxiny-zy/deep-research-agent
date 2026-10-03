@@ -65,12 +65,19 @@ class AnalysisResult:
     issues: list[str] = field(default_factory=list)
     input_sha256: str = ""
     figure_policy: int = 2
+    scope: dict[str, Any] | None = None
+    composition: list[dict[str, Any]] = field(default_factory=list)
 
     def snapshot(self) -> dict[str, Any]:
         """Freeze computed values; plots can be redrawn from these and the same input."""
         return {
-            "version": 4,
+            "version": 5 if self.scope is not None else 4,
             "facts": self.facts(),
+            **(
+                {"scope": self.scope, "composition": self.composition}
+                if self.scope is not None
+                else {}
+            ),
             **{
                 name: getattr(self, name)
                 for name in (
@@ -124,6 +131,17 @@ class AnalysisResult:
             lines.append("- 注意：用户未提供数据，以下为演示用合成数据")
         missing = {k: v for k, v in self.missing.items() if v}
         lines.append(f"- 缺失值：{missing or '无'}")
+        if self.scope is not None:
+            lines.append("- 本次统计仅覆盖所选测量与比较分组，其他列仍完整保留在输入数据中。")
+            lines.append("- 仅作样本背景的列：" + (", ".join(self.scope["background"]) or "无"))
+            if self.composition:
+                lines.append("\n### 分组与背景构成（每列分别计数，不代表每项测量的有效样本量）")
+                for item in self.composition:
+                    lines.append(
+                        f"- {item['column']}: 有效 n={item['n']}，缺失={item['missing']}，"
+                        f"不同取值数={item['distinct']}；构成="
+                        + ", ".join(f"{level['label']}: n={level['n']}" for level in item["levels"])
+                    )
         if self.tests or self.correlations:
             lines.append("- 多重比较校正：本次统计未执行，台账 p 值为未经校正的结果。")
         lines.append("\n### 描述统计")
@@ -248,6 +266,8 @@ def ledger_facts(snapshot: dict[str, Any]) -> str:
         synthetic=bool(snapshot.get("synthetic")),
         source=dict(snapshot.get("source", {})),
         issues=list(snapshot.get("issues", [])),
+        scope=snapshot.get("scope"),
+        composition=list(snapshot.get("composition", [])),
     )
     result.figures = [
         Figure(name=f["name"], title=f["title"], caption=f["caption"], png=b"")
@@ -338,6 +358,7 @@ def analyse(
     allow_synthetic: bool = False,
     source: dict[str, Any] | None = None,
     frozen: dict[str, Any] | None = None,
+    scope: dict[str, Any] | None = None,
 ) -> AnalysisResult:
     """对一张表做确定性分析。
 
@@ -369,6 +390,19 @@ def analyse(
         and not pd.api.types.is_numeric_dtype(frame[c])
         and 1 < frame[c].nunique(dropna=True) <= min(20, max(2, len(frame) // 2))
     ]
+    if frozen is not None:
+        if scope is not None and scope != frozen.get("scope"):
+            raise DatasetError("分析范围与冻结统计不一致，不能混用")
+        scope = frozen.get("scope")
+    composition = []
+    if scope is not None:
+        from .analysis_scope import AnalysisScope, background_summary, validate_scope
+
+        selected = AnalysisScope.model_validate(scope)
+        validate_scope(frame, selected)
+        numeric, categorical = list(selected.measures), list(selected.groups)
+        composition = background_summary(frame, selected.groups + selected.background)
+        scope = selected.model_dump(mode="json")
     describe: list[dict[str, Any]] = []
     for column in numeric:
         series = frame[column].dropna()
@@ -553,6 +587,10 @@ def analyse(
         numeric = frozen.get("numeric", [row["variable"] for row in describe])
         categorical = frozen.get("categorical", categorical)
         issues = list(frozen.get("issues", []))
+        if scope is not None:
+            if numeric != scope["measures"] or categorical != scope["groups"]:
+                raise DatasetError("冻结统计的变量与分析范围不一致，不能混用")
+            composition = list(frozen.get("composition", []))
 
     _chart_font()
     import matplotlib.pyplot as plt
@@ -672,6 +710,8 @@ def analyse(
         issues=issues,
         input_sha256=input_sha256,
         figure_policy=figure_policy,
+        scope=scope,
+        composition=composition,
     )
 
 
@@ -793,12 +833,23 @@ class DataAnalyst:
         csv_text = contract.dataset_csv if contract is not None else ""
         ctx.tracer.emit("RESEARCHER", "start", "解析数据并执行统计分析…")
         try:
+            from .analysis_scope import plan_scope
+
+            frozen = bb.scratch.get(ANALYSIS_SCRATCH_KEY)
+            selected_scope = None
+            if csv_text.strip() and not isinstance(frozen, dict):
+                ctx.tracer.emit("RESEARCHER", "info", "根据问题确定测量变量、比较分组与背景字段…")
+                selected_scope = (
+                    await plan_scope(ctx.llm_for(self.name), csv_text, question, bb.scratch)
+                ).model_dump(mode="json")
             result = await run_blocking(
                 analyse,
                 csv_text,
                 question,
                 allow_synthetic=allows_synthetic(contract),
                 source=contract.dataset_source if contract is not None else None,
+                scope=selected_scope,
+                frozen=frozen if isinstance(frozen, dict) else None,
             )
         except DatasetError as exc:
             bb.report = Report(query=bb.query, markdown=f"## 分析计划\n\n数据无法分析：{exc}\n")
@@ -828,6 +879,8 @@ class DataAnalyst:
             "效应量按台账数值及样本含义解释，不引用台账未提供的经验阈值作大小分级。"
             "总体有效样本量、单个分组样本量和变量对样本量必须分别陈述，"
             "‘各组、均、其余及其分组’等概括不能把总样本量分配给每一组。"
+            "分组与背景构成按该列本身计数，不能替代删除测量缺失值后的分组有效样本量。"
+            "明确区分所选测量、比较分组和仅作背景的列；未参与检验不表示原始数据未提供。"
         )
         user = f"分析问题：{question or '对数据做探索性分析'}\n\n## 统计台账\n{facts}\n"
         from .gates import structure_gate

@@ -12,6 +12,7 @@ STATISTICS_RULES = (
     "严格区分整表行数、各变量有效总样本量、单个分组样本量和变量对有效样本量；"
     "同一句把总样本量用于各分组、把合并统计用于组内统计，即使句中其他数字正确也不支持。"
     "对‘均、每组、各组、其余及其分组’等全称描述，逐项对照所涵盖分组，不能只看整表总数。"
+    "样本构成按分类列本身计数，不自动等于删除测量缺失值后的有效分组样本量。"
 )
 
 
@@ -38,6 +39,16 @@ def sample_size_scopes(ledger: dict[str, Any]) -> list[dict[str, Any]]:
         for row in ledger.get("correlations", [])
         if "n" in row
     )
+    scopes.extend(
+        {
+            "scope": "composition_group",
+            "group_column": item["column"],
+            "group": level["label"],
+            "n": level["n"],
+        }
+        for item in ledger.get("composition", [])
+        for level in item.get("levels", [])
+    )
     return scopes
 
 
@@ -48,7 +59,11 @@ def count_scope_issues(markdown: str, ledger: dict[str, Any]) -> list[str]:
     regardless of which variable the sentence refers to. Ambiguous counts,
     subgroup comparisons and other statistics remain subject to model review.
     """
-    counts = [row["n"] for row in sample_size_scopes(ledger) if row["scope"] == "single_group"]
+    counts = [
+        row["n"]
+        for row in sample_size_scopes(ledger)
+        if row["scope"] in {"single_group", "composition_group"}
+    ]
     if not counts:
         return []
     largest = max(counts)
