@@ -74,6 +74,7 @@ h1{font-size:20pt;margin:0 0 8pt 0;color:#111}
 h2{font-size:14pt;margin:16pt 0 6pt 0;color:#111;page-break-after:avoid}
 h3{font-size:12pt;margin:12pt 0 4pt 0;page-break-after:avoid}
 p{margin:6pt 0;orphans:2;widows:2}
+.reference{font-size:9.5pt;line-height:1.4;margin:4pt 0 4pt 16pt;text-indent:-16pt}
 li{margin:2pt 0}
 table{border-collapse:collapse;width:100%;margin:8pt 0}
 th,td{border:0;padding:4pt 5pt;font-size:9.5pt;vertical-align:top;text-align:left}
@@ -157,12 +158,19 @@ def blocks_html(
     images = images or {}
     parts: list[str] = []
     heading_index = 0
+    references = False
 
     def inline(items: list[Inline]) -> str:
         return _inline_html(items, pdf=pdf, math_assets=math_assets)
 
     for block in blocks:
         if block.kind == "heading":
+            references = plain(block.inlines).strip().casefold() in {
+                "参考文献",
+                "参考来源",
+                "references",
+                "bibliography",
+            }
             level = min(max(block.level, 1), 4)
             heading_index += 1
             anchor = f' id="h-{heading_index}"' if anchors and not pdf else ""
@@ -186,7 +194,12 @@ def blocks_html(
                     )
                 )
             else:
-                parts.append(f"<p>{inline(block.inlines)}</p>")
+                style = (
+                    ' class="reference"'
+                    if references and re.match(r"^\[\d+\]\s", plain(block.inlines))
+                    else ""
+                )
+                parts.append(f"<p{style}>{inline(block.inlines)}</p>")
         elif block.kind == "quote":
             parts.append(f"<blockquote>{inline(block.inlines)}</blockquote>")
         elif block.kind == "list":

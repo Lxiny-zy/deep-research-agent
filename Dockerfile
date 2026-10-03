@@ -30,6 +30,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         fonts-noto-cjk \
+        graphviz \
         libpango-1.0-0 \
         libpangoft2-1.0-0 \
     && if [ "$INSTALL_TEX" = "true" ]; then \
@@ -76,7 +77,8 @@ USER appuser
 
 # Fontconfig may need a per-user cache when the container root is read-only.
 # Keep it in the bounded /tmp tmpfs instead of the immutable home directory.
-ENV XDG_CACHE_HOME=/tmp/.cache
+ENV XDG_CACHE_HOME=/tmp/.cache \
+    MPLCONFIGDIR=/tmp/.config/matplotlib
 
 EXPOSE 8000
 

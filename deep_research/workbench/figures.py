@@ -149,6 +149,11 @@ def _levels(figure: ConceptFigure) -> list[list[ConceptNode]]:
 
 def render_concept_png(figure: ConceptFigure) -> bytes:
     """Draw at a fixed report width so embedding never shrinks labels to tiny text."""
+    if figure.evidence_mode == "scoped" and len(figure.nodes) >= 8:
+        from .graphviz_figure import render_grouped_png
+
+        if png := render_grouped_png(figure):
+            return png
     import math
 
     import matplotlib

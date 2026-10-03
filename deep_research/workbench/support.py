@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from ..guardrails import report_eligible
 from ..models import Finding, ResearchResult
 from ..persistence.repository import LeaseLostError
-from ..prompting import MEASUREMENT_SCOPE_RULES, structured_system_prompt
+from ..prompting import EVIDENCE_MODALITY_RULES, MEASUREMENT_SCOPE_RULES, structured_system_prompt
 
 
 class SupportDecision(BaseModel):
@@ -99,7 +99,8 @@ _SYSTEM = (
     "‘全部方法都……’以及缩写/指标的实质定义，都是须核对的来源事实；"
     "只有‘表中列出哪些字段’、‘空白符号如何表示’等报告自身编排才可判 non_factual。"
     "同一段同时含编排说明与事实时，按全部事实核验；不可把‘谨慎比较’当理由放行错误的任务分组。"
-    "正文明确列出的加减乘除算式可以由所引原始数值推导，程序另行复核运算；"
+    + EVIDENCE_MODALITY_RULES
+    + "正文明确列出的加减乘除算式可以由所引原始数值推导，程序另行复核运算；"
     "仍须核对运算项的指标、量纲、方法归属与实验条件是否可比。"
     "正确的显式计算结果不必本来就在原论文中，但不能被表述为作者原文报告的结果。"
     "不要将来源时间范围内的‘目前’扩大为今天的状态，或将特定条件下结果扩大为所有场景。"

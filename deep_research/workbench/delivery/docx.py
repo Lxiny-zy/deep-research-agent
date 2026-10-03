@@ -172,8 +172,15 @@ def render_docx(
         run = paragraph.add_run(meta)
         run.font.size = Pt(9)
         run.font.color.rgb = _MUTED
+    references = False
     for block in blocks:
         if block.kind == "heading":
+            references = plain(block.inlines).strip().casefold() in {
+                "参考文献",
+                "参考来源",
+                "references",
+                "bibliography",
+            }
             _add_runs(document.add_heading(level=min(max(block.level, 2), 4)), block.inlines)
         elif block.kind == "math":
             paragraph = document.add_paragraph()
@@ -184,6 +191,13 @@ def render_docx(
             if len(block.inlines) == 1 and block.inlines[0].math:
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             _add_runs(paragraph, block.inlines)
+            if references and re.match(r"^\[\d+\]\s", plain(block.inlines)):
+                paragraph.paragraph_format.keep_together = True
+                paragraph.paragraph_format.left_indent = Pt(16)
+                paragraph.paragraph_format.first_line_indent = Pt(-16)
+                paragraph.paragraph_format.line_spacing = 1.25
+                for run in paragraph.runs:
+                    run.font.size = Pt(9.5)
         elif block.kind == "quote":
             paragraph = document.add_paragraph()
             paragraph.paragraph_format.left_indent = Cm(0.8)

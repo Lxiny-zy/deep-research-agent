@@ -15,6 +15,7 @@ import base64
 import io
 import math
 import re
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from html import unescape
@@ -68,11 +69,11 @@ def _archive_fonts(pymupdf):  # type: ignore[no-untyped-def]
         for name in wanted:
             path = by_name.get(name)
             if path and path.lower().endswith((".ttf", ".otf", ".ttc")):
-                with open(path, "rb") as handle:
-                    archive.add(handle.read(), "cjk" + path[path.rfind(".") :].lower())
-                css = (
-                    f"@font-face{{font-family:cjk;src:url(cjk{path[path.rfind('.') :].lower()});}}"
-                )
+                from .pdf_fonts import story_font
+
+                data, extension = story_font(path, name)
+                archive.add(data, "cjk" + extension)
+                css = f"@font-face{{font-family:cjk;src:url(cjk{extension});}}"
                 break
     except Exception:  # 字体探测失败不影响出 PDF：退回 PyMuPDF 内置字体
         css = ""
@@ -95,14 +96,14 @@ def _tail_sentinel(markdown: str) -> str:
         # extraction order need not match their visual position in a sentence.
         # Formula completeness is checked independently during vector placement.
         prose = "".join(inline.text for inline in inlines if not inline.math)
-        text = re.sub(r"[\s\[\]\d.,，。:：;；|*`#>-]+", "", prose)
+        text = re.sub(r"[\s\[\]\d.,，。:：;；|*`#>-]+", "", unicodedata.normalize("NFC", prose))
         if len(text) >= 4:
             return text[-6:]
     return ""
 
 
 def _squash(text: str) -> str:
-    return re.sub(r"[\s\[\]\d.,，。:：;；|*`#>-]+", "", text)
+    return re.sub(r"[\s\[\]\d.,，。:：;；|*`#>-]+", "", unicodedata.normalize("NFC", text))
 
 
 def render_pdf(
@@ -241,6 +242,16 @@ def render_pdf(
                 figure_widths.append(part.figure_width)
             if device is None or where.y1 - cursor < max(part.minimum_height, 36):
                 next_page()
+            if part.keep_together and fit(part.html, where.y0)[1]:
+                story, fits_here, rect = fit(part.html, cursor)
+                if not fits_here:
+                    next_page()
+                    story, fits_here, rect = fit(part.html, cursor)
+                if not fits_here:
+                    raise PdfRenderError("参考文献条目无法完整放入页面")
+                story.draw(device)
+                cursor = rect.y1
+                continue
             story = pymupdf.Story(html=part.html, user_css=user_css, archive=archive)
             while True:
                 more, filled = story.place(pymupdf.Rect(where.x0, cursor, where.x1, where.y1))
@@ -287,6 +298,7 @@ class LayoutPart:
     minimum_height: float = 0.0
     figure_width: float | None = None
     table: PdfTable | None = None
+    keep_together: bool = False
 
 
 def _layout_parts(
@@ -298,6 +310,7 @@ def _layout_parts(
     parts: list[LayoutPart] = []
     pattern = (
         r'(<div class="figure">.*?</div>|<div class="equation">.*?</div>|<table>.*?</table>'
+        r'|<p class="reference">.*?</p>'
         r'|<p[^>]*>(?:(?!</p>).)*class="math-image"(?:(?!</p>).)*</p>)'
     )
     for part in re.split(pattern, body, flags=re.S):
@@ -305,6 +318,14 @@ def _layout_parts(
             continue
         minimum = 0.0
         figure_width = None
+        if part.startswith('<p class="reference">'):
+            lead = ""
+            if parts and parts[-1].table is None and parts[-1].figure_width is None:
+                parts[-1].html, lead = take_trailing_heading(parts[-1].html)
+                if not parts[-1].html.strip():
+                    parts.pop()
+            parts.append(LayoutPart(lead + part, keep_together=True))
+            continue
         if (
             part.startswith('<div class="equation">')
             or 'class="math-image"' in part
@@ -357,7 +378,12 @@ def _layout_parts(
     flowed: list[LayoutPart] = []
     heading = r"<h[1-6](?:\s[^>]*)?>.*?</h[1-6]>\s*"
     for item in parts:
-        if item.table is not None or item.figure_width is not None or item.minimum_height:
+        if (
+            item.table is not None
+            or item.figure_width is not None
+            or item.minimum_height
+            or item.keep_together
+        ):
             flowed.append(item)
             continue
         pending = ""
@@ -409,9 +435,12 @@ def verify_pdf(
         with _fitz().open(stream=data, filetype="pdf") as document:
             for page_number, header, top, bottom in table_fragments:
                 page = document[page_number]
-                page_text = re.sub(r"\s+", "", page.get_text())
+                page_text = re.sub(r"\s+", "", unicodedata.normalize("NFC", page.get_text()))
                 for cell in re.findall(r"<th[^>]*>(.*?)</th>", header, re.S):
-                    if re.sub(r"\s+", "", plain_html(cell)) not in page_text:
+                    if (
+                        re.sub(r"\s+", "", unicodedata.normalize("NFC", plain_html(cell)))
+                        not in page_text
+                    ):
                         raise PdfRenderError("PDF 表格续页缺少完整表头")
                 for word in page.get_text("words"):
                     if top <= (word[1] + word[3]) / 2 <= bottom and (
