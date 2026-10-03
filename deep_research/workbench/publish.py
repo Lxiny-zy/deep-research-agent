@@ -187,7 +187,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 43,
+        "format_version": 45,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -308,7 +308,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     if isinstance(raw_figure, dict):
         from ..report.service import requires_corroboration
         from .figure_review import FIGURE_REVIEW_KEY, check_figure
-        from .figures import ConceptFigure, render_concept_png
+        from .figures import ConceptFigure, present_figure, render_concept_png
         from .support import evidence_records
 
         concept: ConceptFigure | None = None
@@ -328,7 +328,8 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 )
                 concept = None
             else:
-                png = render_concept_png(concept)
+                shown_concept = present_figure(concept, catalog)
+                png = render_concept_png(shown_concept)
                 input_gates.append(GateResult("figure_evidence", "pass"))
         except Exception as exc:
             input_gates.append(
@@ -344,7 +345,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             caption = concept.caption or concept.title
             block = f"\n\n![{concept.title}（{caption}）]({name})\n\n"
             markdown = _insert_concept(markdown, block)
-            display_markdown = _insert_concept(display_markdown, block)
+            shown_caption = shown_concept.caption or shown_concept.title
+            shown_block = f"\n\n![{shown_concept.title}（{shown_caption}）]({name})\n\n"
+            display_markdown = _insert_concept(display_markdown, shown_block)
 
     computed_fallback = False
     # 数据分析：确定性地重算图表（与运行时同一函数、同一数据），把图挂进正文

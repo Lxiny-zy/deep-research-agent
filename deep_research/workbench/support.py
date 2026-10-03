@@ -408,8 +408,18 @@ class SupportReviewer:
                         not decision.evidence_ids
                         or not set(decision.evidence_ids).issubset(valid_ids)
                     )
-                ) or (decision.verdict == "non_factual" and unit.kind in {"claim", "translation"})
-                if invalid:
+                ) or (decision.verdict == "non_factual" and unit.kind == "translation")
+                if decision.verdict == "non_factual" and unit.kind == "claim":
+                    # A writer labelled a topic as a claim. This is a content
+                    # defect to rewrite, not a missing model response to retry.
+                    # It still fails the same gate and never becomes supported.
+                    decision = SupportDecision(
+                        unit_id=unit.id,
+                        verdict="unsupported",
+                        reason="事实单元被判为非事实标签，须改为有证据的具体陈述或不预设结论的问题；"
+                        "不能只改 kind 免检。核验说明：" + decision.reason,
+                    )
+                elif invalid:
                     decision = SupportDecision(
                         unit_id=unit.id,
                         verdict="uncertain",

@@ -24,6 +24,7 @@ from typing import Any
 from ..agents.researcher import Researcher
 from ..guardrails import report_eligible
 from ..models import ExtractedFindingList, Finding, ResearchResult, Source
+from ..persistence.repository import LeaseLostError
 from ..prompting import (
     MEASUREMENT_SCOPE_RULES,
     SCIENTIFIC_MARKDOWN,
@@ -55,6 +56,8 @@ _PAPER_SYSTEM = (
     "回答创新或贡献时，区分作者明确提出的新贡献与采用的已有方法、常规预处理；"
     "不把使用某个已有算法说成作者发明了该算法。先直接回答问题，再解释原文依据。"
     "论文已经读取；本轮核验素材未覆盖的细节，不等于论文中没有。"
+    "区分公式的直接变换、作者报告的观察与机制解释；不要从参数变化推导未获支持的必要性。"
+    "回答是否证明普遍结论时，说明已核验推导和实验的具体范围，不据局部片段断言全文没有其他实验。"
     "不要要求重新上传或提供已读取的全文，也不要例行罗列与当前问题无关的缺口清单。"
     + MEASUREMENT_SCOPE_RULES
 )
@@ -455,6 +458,25 @@ async def answer_question(
                 "observation": "按核验问题修订回答：" + "、".join([*check.issues, *support_issues]),
             }
         )
+        if audit and support_issues and not check.issues:
+            from .prose_edit import repair_paragraphs
+
+            if on_event is not None:
+                on_event({"type": "status", "message": "正在修订未通过的段落，保留其余回答…"})
+            try:
+                patched = await repair_paragraphs(model, reviewer, check.body, audit)
+            except LeaseLostError:
+                raise
+            except Exception:
+                patched = None
+            if patched is not None:
+                body = patched
+                if on_event is not None:
+                    on_event({"type": "reset", "message": "局部修订完成，继续核对依据…"})
+                if on_delta is not None:
+                    on_delta(body)
+                check, audit = await assess_answer(body)
+                continue
         if on_event is not None:
             on_event({"type": "reset", "message": "正在核对引用并修订回答…"})
         repair = (
@@ -475,6 +497,8 @@ async def answer_question(
                 if on_delta is not None:
                     on_delta(delta)
             body = "".join(repaired).strip()
+        except LeaseLostError:
+            raise
         except Exception:
             thoughts.append(
                 {

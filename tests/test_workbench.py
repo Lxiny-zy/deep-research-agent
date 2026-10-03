@@ -1715,7 +1715,7 @@ class FigureLLM(WorkbenchLLM):
                 title="方法分类",
                 layout="taxonomy",
                 nodes=[{"id": i, "label": f"方法{i}"} for i in "abcd"],
-                edges=[{"source": "a", "target": t} for t in "bcd"],
+                edges=[{"source": "a", "target": t, "citations": [1]} for t in "bcd"],
             )
         return await super().parse(system, user, schema, temperature=temperature, retries=retries)
 

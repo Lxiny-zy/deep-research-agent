@@ -17,23 +17,36 @@ import base64
 import io
 import os
 import re
-from typing import Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+if TYPE_CHECKING:
+    from ..bibliography import Bibliography
+
 Layout = Literal["flow", "taxonomy"]
+FigureCitation = Annotated[int, Field(ge=1)]
 
 
 class ConceptNode(BaseModel):
     id: str = Field(max_length=40)
     label: str = Field(max_length=40)
     group: str = Field("", max_length=30)
+    kind: Literal["concept", "claim", "question"] = "concept"
+    citations: list[FigureCitation] = Field(
+        default_factory=list, description="支撑本节点及其分组的本次素材编号"
+    )
 
 
 class ConceptEdge(BaseModel):
     source: str = Field(max_length=40)
     target: str = Field(max_length=40)
     label: str = Field("", max_length=24)
+    kind: Literal["concept", "claim", "question"] = "claim"
+    citations: list[FigureCitation] = Field(
+        default_factory=list,
+        description="支撑源节点、方向关系、目标节点完整陈述（含分组、公式）的本次素材编号；关系须有直接依据",
+    )
 
 
 class ConceptFigure(BaseModel):
@@ -42,6 +55,32 @@ class ConceptFigure(BaseModel):
     layout: Layout = "flow"
     nodes: list[ConceptNode] = Field(default_factory=list, max_length=24)
     edges: list[ConceptEdge] = Field(default_factory=list, max_length=40)
+    citations: list[FigureCitation] = Field(
+        default_factory=list, description="支撑图题、图注中事实的本次素材编号；纯主题或图例可留空"
+    )
+    evidence_mode: Literal["legacy", "scoped"] = "legacy"
+
+
+def present_figure(figure: ConceptFigure, catalog: Bibliography) -> ConceptFigure:
+    """Project printed references only after verifying the unchanged source diagram."""
+    from ..bibliography import project_citations
+
+    def shown(text: str) -> str:
+        return project_citations(text, catalog, links=False)
+
+    return figure.model_copy(
+        update={
+            "title": shown(figure.title),
+            "caption": shown(figure.caption),
+            "nodes": [
+                node.model_copy(update={"label": shown(node.label), "group": shown(node.group)})
+                for node in figure.nodes
+            ],
+            "edges": [
+                edge.model_copy(update={"label": shown(edge.label)}) for edge in figure.edges
+            ],
+        }
+    )
 
 
 def _levels(figure: ConceptFigure) -> list[list[ConceptNode]]:
