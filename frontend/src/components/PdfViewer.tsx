@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { GlobalWorkerOptions, Util, getDocument } from 'pdfjs-dist'
+import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
+import type { TextContent } from 'pdfjs-dist/types/src/display/api'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { fetchReaderPdf } from '../api/client'
 import { findQuote } from '../lib/pdfMatch'
+import { quoteRects, type PdfRect as Rect } from '../lib/pdfHighlight'
 import { AppIcon } from './AppIcon'
 
 GlobalWorkerOptions.workerSrc = workerUrl
@@ -14,13 +16,6 @@ const ZOOM_STEPS = [0.6, 0.8, 1, 1.25, 1.5, 2]
 export const PDF_PARSE_TIMEOUT_MS = 45_000
 
 interface PageSize {
-  width: number
-  height: number
-}
-
-interface Rect {
-  x: number
-  y: number
   width: number
   height: number
 }
@@ -174,14 +169,14 @@ export default function PdfViewer({
 }) {
   const scroller = useRef<HTMLDivElement>(null)
   const pageRefs = useRef<(HTMLDivElement | null)[]>([])
-  const texts = useRef(new Map<number, TextRun[]>())
+  const texts = useRef(new Map<number, TextContent>())
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null)
   const [sizes, setSizes] = useState<PageSize[]>([])
   const [error, setError] = useState<string | null>(null)
   const [zoom, setZoom] = useState<number | 'fit'>('fit')
   const [width, setWidth] = useState(0)
-  const [marks, setMarks] = useState<{ page: number; rects: Rect[] } | null>(null)
-  const [missed, setMissed] = useState(false)
+  const [marks, setMarks] = useState<Map<number, Rect[]> | null>(null)
+  const [locateStatus, setLocateStatus] = useState('')
   const [attempt, setAttempt] = useState(0)
   const [phase, setPhase] = useState<'download' | 'parse'>('download')
   const [download, setDownload] = useState({ loaded: 0, total: null as number | null })
@@ -194,7 +189,7 @@ export default function PdfViewer({
     setSizes([])
     setError(null)
     setMarks(null)
-    setMissed(false)
+    setLocateStatus('')
     setPhase('download')
     setDownload({ loaded: 0, total: null })
     texts.current = new Map()
@@ -266,43 +261,57 @@ export default function PdfViewer({
   const quote = highlight?.quote
   const token = highlight?.token
   useEffect(() => {
+    setMarks(null)
+    setLocateStatus('')
     if (!doc || !quote) return
-    let cancelled = false
+    const controller = new AbortController()
+    const { signal } = controller
+    setLocateStatus('正在定位引文…')
+    const timer = window.setTimeout(() => {
+      setLocateStatus('引文定位超时，请重新点击定位')
+      controller.abort()
+    }, PDF_PARSE_TIMEOUT_MS)
     const textCache = texts.current
     void (async () => {
       const pages: string[][] = []
       for (let number = 1; number <= doc.numPages; number += 1) {
-        if (cancelled) return
+        signal.throwIfAborted()
         if (!textCache.has(number)) {
           const content = await (await doc.getPage(number)).getTextContent()
-          if (cancelled) return
-          textCache.set(number, textRuns(content.items))
+          signal.throwIfAborted()
+          textCache.set(number, content)
         }
-        pages.push((textCache.get(number) ?? []).map((run) => run.str))
+        pages.push(textRuns(textCache.get(number)!.items).map((run) => run.str))
       }
       const match = findQuote(pages, quote)
-      if (cancelled) return
+      signal.throwIfAborted()
       if (!match) {
-        setMarks(null)
-        setMissed(true)
+        setLocateStatus('未找到唯一的完整引文，无法准确定位')
         return
       }
-      const viewport = (await doc.getPage(match.page + 1)).getViewport({ scale: 1 })
-      const runs = textCache.get(match.page + 1) ?? []
-      const rects = match.items.map((index) => {
-        const run = runs[index]
-        const box = Util.transform(viewport.transform, run.transform)
-        const height = Math.hypot(box[2], box[3])
-        return { x: box[4], y: box[5] - height, width: run.width, height: height * 1.15 }
-      })
-      if (cancelled) return
-      setMissed(false)
-      setMarks({ page: match.page, rects })
+      const located = new Map<number, Rect[]>()
+      for (const pageIndex of new Set(match.ranges.map((range) => range.page))) {
+        const pdfPage = await doc.getPage(pageIndex + 1)
+        const rects = await quoteRects(
+          pdfPage,
+          textCache.get(pageIndex + 1)!,
+          match.ranges.filter((range) => range.page === pageIndex),
+          signal,
+        )
+        signal.throwIfAborted()
+        located.set(pageIndex, rects)
+      }
+      setLocateStatus(
+        `已定位完整引文 · 第 ${[...located.keys()].map((page) => page + 1).join('、')} 页`,
+      )
+      setMarks(located)
+      const rects = located.get(match.page)!
       const page = pageRefs.current[match.page]
       const container = scroller.current
       if (page && container && rects.length) {
-        const top = Math.min(...rects.map((rect) => rect.y))
-        const bottom = Math.max(...rects.map((rect) => rect.y + rect.height))
+        // Center the beginning, not the midpoint of a long multi-column quote.
+        const top = rects[0].y
+        const bottom = top + rects[0].height
         const pageTop =
           page.getBoundingClientRect().top -
           container.getBoundingClientRect().top +
@@ -316,8 +325,13 @@ export default function PdfViewer({
         })
       }
     })()
+      .catch(() => {
+        if (!signal.aborted) setLocateStatus('引文定位失败，请重新点击定位')
+      })
+      .finally(() => window.clearTimeout(timer))
     return () => {
-      cancelled = true
+      window.clearTimeout(timer)
+      controller.abort()
     }
   }, [doc, quote, token])
 
@@ -330,9 +344,9 @@ export default function PdfViewer({
     <div className="pdf-viewer">
       <div className="pdf-toolbar" role="toolbar" aria-label="原文工具栏">
         <span className="pdf-toolbar-count">{doc ? `共 ${doc.numPages} 页` : '原版 PDF'}</span>
-        {missed && (
+        {locateStatus && (
           <span className="pdf-toolbar-note" role="status">
-            原文中没有找到这段话，可能跨页或排版不同
+            {locateStatus}
           </span>
         )}
         <div className="pdf-toolbar-zoom">
@@ -395,7 +409,7 @@ export default function PdfViewer({
               number={number}
               size={size}
               scale={scale}
-              rects={marks?.page === number - 1 ? marks.rects : []}
+              rects={marks?.get(number - 1) ?? []}
               pageRef={(element) => {
                 pageRefs.current[number - 1] = element
               }}

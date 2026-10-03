@@ -295,40 +295,72 @@ export default function QaPage() {
             submit()
           }}
         >
-          <fieldset className="reader-scope">
-            <legend>本轮参考</legend>
-            <label className="reader-scope-item">
-              <input
-                type="checkbox"
-                checked={withLibrary}
-                onChange={(event) => setWithLibrary(event.target.checked)}
-              />
-              私有知识库
-            </label>
+          <fieldset className="qa-scope" aria-describedby="qa-scope-hint">
+            <legend className="visually-hidden">本轮参考</legend>
+            <div className="qa-scope-options">
+              <span className="qa-scope-title" aria-hidden="true">
+                本轮参考
+              </span>
+              <label className="qa-scope-toggle">
+                <input
+                  className="visually-hidden"
+                  type="checkbox"
+                  checked={withLibrary}
+                  onChange={(event) => setWithLibrary(event.target.checked)}
+                />
+                <span className="qa-scope-option">
+                  <AppIcon name="library" size={15} aria-hidden="true" />
+                  私有知识库
+                  <AppIcon
+                    name={withLibrary ? 'check' : 'plus'}
+                    size={13}
+                    className="qa-scope-indicator"
+                    aria-hidden="true"
+                  />
+                </span>
+              </label>
+              <label className="qa-scope-toggle">
+                <input
+                  className="visually-hidden"
+                  type="checkbox"
+                  checked={withWeb}
+                  onChange={(event) => setWithWeb(event.target.checked)}
+                />
+                <span className="qa-scope-option">
+                  <AppIcon name="search" size={15} aria-hidden="true" />
+                  联网检索
+                  <AppIcon
+                    name={withWeb ? 'check' : 'plus'}
+                    size={13}
+                    className="qa-scope-indicator"
+                    aria-hidden="true"
+                  />
+                </span>
+              </label>
+            </div>
             {withLibrary && (
-              <select
-                className="reader-scope-project"
-                aria-label="选择知识库项目"
-                value={projectId}
-                onChange={(event) => setProjectId(event.target.value)}
-              >
-                <option value="">{projects.data?.length ? '选择项目' : '还没有知识库项目'}</option>
-                {(projects.data ?? []).map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
+              <div className="qa-scope-project">
+                <label htmlFor="qa-scope-project">知识库项目</label>
+                <select
+                  id="qa-scope-project"
+                  aria-label="选择知识库项目"
+                  value={projectId}
+                  onChange={(event) => setProjectId(event.target.value)}
+                >
+                  <option value="">
+                    {projects.data?.length ? '选择项目' : '还没有知识库项目'}
                   </option>
-                ))}
-              </select>
+                  {(projects.data ?? []).map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
-            <label className="reader-scope-item">
-              <input
-                type="checkbox"
-                checked={withWeb}
-                onChange={(event) => setWithWeb(event.target.checked)}
-              />
-              联网检索
-            </label>
-            <span className="hint">默认使用模型自身知识；勾选后才会调用对应来源。</span>
+            <p id="qa-scope-hint" className="qa-scope-hint">
+              按需添加参考来源；未选择时，使用模型自身知识回答。
+            </p>
           </fieldset>
           <label className="visually-hidden" htmlFor="qa-input">
             输入问题

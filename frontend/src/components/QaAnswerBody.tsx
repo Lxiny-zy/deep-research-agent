@@ -1,3 +1,4 @@
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { mathRemarkPlugins, mathRehypePlugins, normalizeMathMarkdown } from '../lib/scientificMath'
@@ -190,7 +191,6 @@ export default function QaAnswerBody({
     </CitationContext.Provider>
   )
 }
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 
 function EvidenceChoice({
   items,

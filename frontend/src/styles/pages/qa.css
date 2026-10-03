@@ -476,6 +476,115 @@
   box-shadow: var(--focus-ring);
 }
 
+/* 来源选择独立成栏，保留原生复选框的键盘与读屏语义。 */
+.qa-scope {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 14px;
+  min-width: 0;
+  padding: 12px 0;
+}
+
+.qa-scope-options {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.qa-scope-title {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  margin-right: var(--space-1);
+}
+
+.qa-scope-toggle {
+  cursor: pointer;
+  position: relative;
+}
+
+.qa-scope-option {
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--text-2);
+  display: inline-flex;
+  font-size: var(--text-xs);
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 10px;
+  transition:
+    background var(--duration) var(--ease),
+    border-color var(--duration) var(--ease),
+    color var(--duration) var(--ease);
+  white-space: nowrap;
+}
+
+.qa-scope-toggle:hover .qa-scope-option {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.qa-scope-toggle input:checked + .qa-scope-option {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary-text);
+}
+
+.qa-scope-toggle input:focus-visible + .qa-scope-option {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
+.qa-scope-indicator {
+  opacity: 0.7;
+}
+
+.qa-scope-toggle input:checked + .qa-scope-option .qa-scope-indicator {
+  opacity: 1;
+}
+
+.qa-scope-project {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.qa-scope-project label,
+.qa-scope-hint {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.qa-scope-project select {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-2);
+  flex: 1 1 160px;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  max-width: 280px;
+  min-height: 34px;
+  min-width: 0;
+  padding: 6px 10px;
+}
+
+.qa-scope-project select:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.qa-scope-hint {
+  line-height: 1.6;
+  margin: 0;
+}
+
 .qa-input {
   background: transparent;
   border: 0;
