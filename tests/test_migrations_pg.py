@@ -37,6 +37,63 @@ def _postgres_url() -> str:
 
 
 @pytest.mark.pg
+@pytest.mark.parametrize("mode", ["inline", "worker"])
+async def test_postgres_explicit_resume_renews_time_atomically_and_preserves_usage(mode):
+    import time
+
+    from deep_research.config import Settings
+    from deep_research.orchestrator import create_initial_execution
+    from deep_research.persistence.db import make_sessionmaker
+    from deep_research.persistence.repository import LeaseLostError
+    from deep_research.persistence.sql_repository import SqlRepository
+
+    async with _isolated_database(_postgres_url()) as database_url:
+        await _run_migration(database_url, "head")
+        engine = make_engine(database_url)
+        repo = SqlRepository(make_sessionmaker(engine))
+        execution = create_initial_execution("resume", "research_quick", Settings())
+        execution.checkpoint["scratch"].update(
+            {
+                "_deadline_at": time.time() - 10,
+                "_runtime_metrics": {"elapsed": 90, "total_tokens": 1234, "estimated_tokens": 10},
+            }
+        )
+        try:
+            run_id = await repo.create_run("resume", execution=execution)
+            await repo.set_status(run_id, "error")
+            started = time.time()
+            if mode == "inline":
+                assert await repo.acquire_lease(run_id, "owner")
+                await repo.prepare_resume(run_id, lease_owner="owner", restart_seconds=30)
+                with pytest.raises(LeaseLostError):
+                    await repo.prepare_resume(run_id, lease_owner="stale", restart_seconds=300)
+                expected_seconds = 30
+            else:
+                accepted = await asyncio.gather(
+                    repo.requeue_failed_run(run_id, restart_seconds=30),
+                    repo.requeue_failed_run(run_id, restart_seconds=300),
+                )
+                assert sorted(accepted) == [False, True]
+                expected_seconds = [30, 300][accepted.index(True)]
+                claimed = await repo.claim_next_run("worker")
+                assert claimed is not None and claimed.run_id == run_id
+            saved = await repo.get_run(run_id)
+            assert saved.status == "running"
+            scratch = saved.orchestration.checkpoint["scratch"]
+            assert scratch["_attempt_elapsed_origin"] == 90
+            assert (
+                scratch["_runtime_metrics"] == execution.checkpoint["scratch"]["_runtime_metrics"]
+            )
+            assert (
+                started + expected_seconds
+                <= scratch["_deadline_at"]
+                <= time.time() + expected_seconds
+            )
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.pg
 async def test_postgres_search_reference_races_cannot_create_dangling_references():
     from sqlalchemy.ext.asyncio import async_sessionmaker
 

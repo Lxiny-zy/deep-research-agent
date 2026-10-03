@@ -1,4 +1,4 @@
-"""Independently check saved library HTTP acceptance without calling a model."""
+"""Check saved library or public-search HTTP acceptance without a model call."""
 
 from __future__ import annotations
 
@@ -22,13 +22,32 @@ def verify(directory: Path) -> dict:
     )
     identity = read("run.json")
     source_ids = {item["source_id"] for item in inputs["sources"]}
+    public_search = bool(inputs.get("public_search"))
+    retrieved_urls = (
+        {
+            source["url"]
+            for path in directory.glob("retrieval-*.json")
+            for source in json.loads(path.read_text(encoding="utf-8")).get("sources", [])
+        }
+        if public_search
+        else set()
+    )
     issues = []
 
-    def citations_are_local(citations):
+    def citations_match_retrieval(citations):
         if not citations:
             return False
         for citation in citations:
             url = urlsplit(citation)
+            if public_search:
+                if (
+                    url.scheme not in {"http", "https"}
+                    or not url.hostname
+                    or url.hostname == "workspace.invalid"
+                    or citation not in retrieved_urls
+                ):
+                    return False
+                continue
             if url.hostname != "workspace.invalid" or url.path not in {
                 f"/sources/{source_id}" for source_id in source_ids
             }:
@@ -40,8 +59,10 @@ def verify(directory: Path) -> dict:
     if run.get("project_id") != identity["project_id"]:
         issues.append("研究任务未绑定本次资料库项目")
     report = run.get("report") or {}
-    if not report.get("markdown", "").strip() or not citations_are_local(report.get("citations")):
-        issues.append("研究报告为空或引用不属于本次导入资料")
+    if not report.get("markdown", "").strip() or not citations_match_retrieval(
+        report.get("citations")
+    ):
+        issues.append("研究报告为空或引用不属于本次检索/导入记录")
     if registry["status"] == "fail":
         issues.append("交付登记未通过")
     required = {"md", "html", "docx", "pdf"}
@@ -74,13 +95,14 @@ def verify(directory: Path) -> dict:
             issues.append("问答未正常完成")
         if message.get("request_payload", {}).get("project_id") != identity["project_id"]:
             issues.append("问答未使用同一个资料库项目")
-        if not citations_are_local(message.get("citations")):
-            issues.append("问答引用为空或不属于本次导入资料")
+        if not citations_match_retrieval(message.get("citations")):
+            issues.append("问答引用为空或不属于本次检索/导入记录")
     return {
         "status": "pass" if not issues else "fail",
         "issues": issues,
         "run_id": run["id"],
-        "source_count": len(source_ids),
+        "source_count": len(retrieved_urls) if public_search else len(source_ids),
+        "source_mode": "public_search" if public_search else "library",
         "downloaded_files": len(registry["items"]),
         "qa_messages": len(messages),
         "scope": "Saved HTTP state, source ownership, file hashes and formats; no model call",

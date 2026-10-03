@@ -1,8 +1,8 @@
-"""Opt-in local HTTP/library acceptance with the authorized server's model.
+"""Opt-in local HTTP research acceptance with the authorized server's model.
 
 No server mutation. Credentials stay in memory; SQLite, source records and
-downloaded deliverables are local. Public search returns no results so every
-retrieved fact must come from the selected library project.
+downloaded deliverables are local. Public search is disabled by default; enable
+--public-search for a separate real arXiv/OpenAlex acceptance scenario.
 """
 
 from __future__ import annotations
@@ -42,20 +42,33 @@ async def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sources", type=Path, nargs="+")
     parser.add_argument("--query-file", type=Path)
-    parser.add_argument("--resume", action="store_true", help="Resume a verified local replay copy")
+    parser.add_argument("--qa-query-file", type=Path)
+    parser.add_argument("--public-search", action="store_true")
+    parser.add_argument("--tier", choices=["light", "standard", "deep"])
+    parser.add_argument(
+        "--resume", action="store_true", help="Resume this script's saved local run"
+    )
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
     target = args.output.resolve()
     if args.resume:
-        replay = json.loads((target / "replay.json").read_text(encoding="utf-8"))
-        if replay.get("status") != "pass" or not replay.get("completion_audits_match"):
-            raise ValueError("A verified replay copy is required")
+        if not (target / "run.json").is_file() or not (target / "acceptance.db").is_file():
+            raise ValueError("A saved local run is required")
+        if (target / "replay.json").is_file():
+            replay = json.loads((target / "replay.json").read_text(encoding="utf-8"))
+            if replay.get("status") != "pass" or not replay.get("completion_audits_match"):
+                raise ValueError("The replay copy has not passed verification")
+        previous_input = json.loads((target / "inputs.json").read_text(encoding="utf-8"))
+        if bool(previous_input.get("public_search")) != args.public_search:
+            raise ValueError("Keep the original public/library search mode when resuming")
     else:
-        if not args.sources or not args.query_file:
-            parser.error("New acceptance requires --sources and --query-file")
+        if not args.query_file or (not args.public_search and not args.sources):
+            parser.error("New acceptance requires a query and either sources or --public-search")
         target.mkdir(parents=True, exist_ok=False)
     profile = remote_profile(args.authorized_ssh)
     query = args.query_file.read_text(encoding="utf-8-sig") if args.query_file else ""
+    if args.resume and not query:
+        query = previous_input["query"]
     settings = Settings(
         api_key="",
         api_credentials=(),
@@ -80,6 +93,9 @@ async def main() -> None:
         (int(path.stem.split("-")[-1]) for path in target.glob("response-*.json")), default=0
     )
     agents = []
+    retrieval_count = max(
+        (int(path.stem.split("-")[-1]) for path in target.glob("retrieval-*.json")), default=0
+    )
 
     def save(name, value):
         serialized = json.dumps(value, ensure_ascii=False, indent=2)
@@ -135,9 +151,38 @@ async def main() -> None:
         async def search(self, query, *, max_results=5):
             return []
 
+    class PublicSearch(SearchTool):
+        def __init__(self, current_settings):
+            from deep_research.tools.arxiv_search import ArxivSearch
+            from deep_research.tools.composite import MultiBackendSearch
+            from deep_research.tools.openalex import OpenAlexSearch
+
+            options = {
+                "fulltext": current_settings.fulltext_enabled,
+                "timeout": current_settings.request_timeout,
+                "fulltext_max_chars": current_settings.fulltext_max_chars,
+            }
+            self.delegate = MultiBackendSearch([OpenAlexSearch(**options), ArxivSearch(**options)])
+
+        async def search(self, query, *, max_results=5):
+            nonlocal retrieval_count
+            rows = await self.delegate.search(query, max_results=max_results)
+            retrieval_count += 1
+            save(
+                f"retrieval-{retrieval_count}.json",
+                {
+                    "query": query,
+                    "sources": [source.model_dump(mode="json") for source in rows],
+                },
+            )
+            return rows
+
+        async def aclose(self):
+            await self.delegate.aclose()
+
     class Executor(RunExecutor):
         async def build_agent(self, settings, **kwargs):
-            search = EmptyPublicSearch()
+            search = PublicSearch(settings) if args.public_search else EmptyPublicSearch()
             agent = DeepResearchAgent(settings, search_tool=search, **kwargs)
             llm = CaptureLLM.from_params(
                 agent.tracer,
@@ -191,6 +236,31 @@ async def main() -> None:
                 run_id, project_id = identity["run_id"], identity["project_id"]
                 resumed = await client.post(f"/api/runs/{run_id}/resume")
                 resumed.raise_for_status()
+            elif args.public_search:
+                project_id = None
+                save(
+                    "inputs.json",
+                    {
+                        "query": query,
+                        "sources": [],
+                        "model": profile["model"],
+                        "public_search": True,
+                        "tier": args.tier,
+                    },
+                )
+                created = await client.post(
+                    "/api/runs",
+                    json={
+                        "query": query,
+                        "template": "autoResearch",
+                        "strategy": "quick",
+                        "tier": args.tier,
+                        "clarified": True,
+                    },
+                )
+                created.raise_for_status()
+                run_id = created.json()["run_id"]
+                save("run.json", {"run_id": run_id, "project_id": None})
             else:
                 created = await client.post(
                     "/api/projects", json={"name": "Local task-path acceptance"}
@@ -255,25 +325,31 @@ async def main() -> None:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(download.content)
             created = await client.post(
-                "/api/qa/conversations", json={"title": "Library follow-up"}
+                "/api/qa/conversations", json={"title": "Research follow-up"}
             )
             created.raise_for_status()
             cid = created.json()["id"]
             answer = await client.post(
                 f"/api/qa/conversations/{cid}/messages/stream",
                 json={
-                    "query": (
-                        "根据资料库，目前任务场景通路的验证还缺哪些内容？请区分已验证与待验证。"
-                    ),
-                    "sources": ["library"],
+                    "query": args.qa_query_file.read_text(encoding="utf-8-sig")
+                    if args.qa_query_file
+                    else query
+                    if args.public_search
+                    else ("根据资料库，目前任务场景通路的验证还缺哪些内容？请区分已验证与待验证。"),
+                    "sources": ["web"] if args.public_search else ["library"],
                     "project_id": project_id,
-                    "request_id": "library-live-followup",
+                    "request_id": "research-live-followup",
                 },
             )
             answer.raise_for_status()
             history = (await client.get(f"/api/qa/conversations/{cid}")).json()
             save("qa.json", history)
-            complete = "event: complete" in answer.text
+            complete = (
+                "event: complete" in answer.text
+                and bool(history.get("messages"))
+                and all(message["status"] == "done" for message in history["messages"])
+            )
             result = {
                 "status": "pass" if registry["status"] != "fail" and complete else "fail",
                 "run_id": run_id,
@@ -282,9 +358,11 @@ async def main() -> None:
                 "downloaded_files": len(registry["items"]),
                 "qa_complete": complete,
                 "calls": response_count,
+                "public_search_calls": retrieval_count,
                 "tokens": sum(a.tracer.total_tokens for a in agents),
                 "seconds": time.monotonic() - started,
-                "scope": "Local ASGI HTTP, SQLite, real model; public search disabled",
+                "scope": "Local ASGI HTTP, SQLite, real model; "
+                + ("live arXiv/OpenAlex" if args.public_search else "public search disabled"),
             }
             save("acceptance.json", result)
             print(
