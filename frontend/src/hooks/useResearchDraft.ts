@@ -6,10 +6,11 @@ import {
   type DraftContent,
 } from '../lib/researchDraft'
 
-export function useResearchDraft(defaultQuery: string, context: string) {
+export function useResearchDraft(defaultQuery: string, context: string, initialProjectId = '') {
   const [initial] = useState(() => loadResearchDraft(context))
   const [draft, setDraft] = useState<DraftContent>(
-    () => initial ?? { query: defaultQuery, workflow: '', project_id: '', params: {} },
+    () =>
+      initial ?? { query: defaultQuery, workflow: '', project_id: initialProjectId, params: {} },
   )
   const [status, setStatus] = useState<
     'idle' | 'restored' | 'saving' | 'saved' | 'unavailable' | 'cleared'

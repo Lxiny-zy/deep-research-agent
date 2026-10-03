@@ -402,6 +402,7 @@ export interface IntentDecision {
 }
 
 export interface RunDetail extends RunSummary {
+  project_id?: string | null
   interpretation: string
   sub_questions: SubQuestion[]
   results: ResearchResult[]

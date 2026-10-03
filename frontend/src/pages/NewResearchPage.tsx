@@ -36,7 +36,15 @@ const SAMPLES = [
 
 export default function NewResearchPage() {
   const [searchParams] = useSearchParams()
-  return <ResearchComposer key={searchParams.get('followup') === '1' ? 'followup' : 'new'} />
+  return (
+    <ResearchComposer
+      key={
+        searchParams.get('followup') === '1'
+          ? `followup:${searchParams.get('project') || ''}`
+          : 'new'
+      }
+    />
+  )
 }
 
 function ResearchComposer() {
@@ -44,9 +52,14 @@ function ResearchComposer() {
   const { data: config } = useConfig()
   const [searchParams] = useSearchParams()
   const isFollowUp = searchParams.get('followup') === '1'
+  const initialProjectId = isFollowUp ? searchParams.get('project') || '' : ''
   const [thread, setThread] = useState<ConversationTurn[]>(() => loadThread())
-  const [draftContext] = useState(() => (isFollowUp ? JSON.stringify(thread) : ''))
-  const draft = useResearchDraft(isFollowUp ? '' : DEFAULT_QUERY, draftContext)
+  const [draftContext] = useState(() =>
+    isFollowUp
+      ? JSON.stringify(initialProjectId ? { thread, projectId: initialProjectId } : thread)
+      : '',
+  )
+  const draft = useResearchDraft(isFollowUp ? '' : DEFAULT_QUERY, draftContext, initialProjectId)
   const { query, params, workflow, project_id: projectId } = draft
   const projects = useProjects()
   const templates = useTemplates()
@@ -212,6 +225,14 @@ function ResearchComposer() {
   async function start() {
     const value = query.trim()
     if (!value || busy || attachments.uploading) return
+    if (
+      effectiveProjectId &&
+      projects.data &&
+      !projects.data.some((project) => project.id === effectiveProjectId)
+    ) {
+      setError('所选资料库项目已不可用，请重新选择，或明确选择不使用项目资料库')
+      return
+    }
     if (attachments.selectionError || attachments.items.some((item) => item.status === 'error')) {
       setError(attachments.selectionError || '有附件未成功解析，请重新上传或明确移除后再开始任务')
       return
@@ -556,7 +577,7 @@ function ResearchComposer() {
               disabled={busy}
             />
           )}
-          {supportsLibrary && projects.data && projects.data.length > 0 && (
+          {supportsLibrary && projects.data && (projects.data.length > 0 || projectId) && (
             <label className="field-label" htmlFor="research-project">
               资料库项目
               <span className="select-with-icon">
@@ -568,6 +589,9 @@ function ResearchComposer() {
                   onChange={(event) => draft.update({ project_id: event.target.value })}
                 >
                   <option value="">不使用项目资料库</option>
+                  {projectId && !projects.data.some((project) => project.id === projectId) && (
+                    <option value={projectId}>原资料库项目暂不可用，请重新选择</option>
+                  )}
                   {projects.data.map((project) => (
                     <option key={project.id} value={project.id}>
                       {project.name}（{project.included_source_count} 个来源）

@@ -249,7 +249,9 @@ export default function RunPage() {
     if (!runDetail) return
     const turn = turnFromRun(runDetail)
     if (turn) appendTurn(turn)
-    navigate('/?followup=1')
+    const params = new URLSearchParams({ followup: '1' })
+    if (runDetail.project_id) params.set('project', runDetail.project_id)
+    navigate(`/?${params.toString()}`)
   }
 
   function resumeRun() {

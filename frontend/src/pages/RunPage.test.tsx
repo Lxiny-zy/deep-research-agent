@@ -537,6 +537,19 @@ describe('RunPage follow-up', () => {
     expect(navigateMock).toHaveBeenCalledWith('/?followup=1')
   })
 
+  it('carries the original library project into the follow-up composer', () => {
+    useResearchStreamMock.mockReturnValue(makeStream('done'))
+    useRunDetailMock.mockReturnValue({
+      data: { ...makeDetail('done', 'complete'), project_id: 'private-project' },
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+    renderRunPage()
+    fireEvent.click(screen.getByRole('button', { name: '继续追问' }))
+    expect(navigateMock).toHaveBeenCalledWith('/?followup=1&project=private-project')
+  })
+
   it('hides the follow-up action while the run is still going', () => {
     // 半截的运行没有可供下一轮指代的结论，把它塞进历史只会误导消解器。
     useResearchStreamMock.mockReturnValue(makeStream('streaming'))

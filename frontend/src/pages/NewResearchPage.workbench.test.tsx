@@ -233,6 +233,44 @@ describe('NewResearchPage task templates', () => {
     expect(mocks.assessIntent).not.toHaveBeenCalled()
   })
 
+  it('submits a follow-up with the source run library project', async () => {
+    render(
+      <MemoryRouter initialEntries={['/?followup=1&project=p1']}>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByLabelText(/资料库项目/)).toHaveValue('p1')
+    fireEvent.click(screen.getByLabelText(/文献综述/))
+    fireEvent.change(screen.getByLabelText('文献综述输入'), {
+      target: { value: '进一步比较这些方法的局限' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '开始文献综述' }))
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
+    expect(mocks.createRun.mock.calls[0][0]).toMatchObject({ project_id: 'p1' })
+  })
+
+  it('shows an unavailable inherited library and allows explicitly clearing it', async () => {
+    render(
+      <MemoryRouter initialEntries={['/?followup=1&project=removed-project']}>
+        <NewResearchPage />
+      </MemoryRouter>,
+    )
+    const project = await screen.findByLabelText(/资料库项目/)
+    expect(project).toHaveValue('removed-project')
+    expect(screen.getByRole('option', { name: /原资料库项目暂不可用/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText(/文献综述/))
+    fireEvent.change(screen.getByLabelText('文献综述输入'), {
+      target: { value: '改用公开资料继续比较' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '开始文献综述' }))
+    expect(await screen.findByText(/所选资料库项目已不可用/)).toBeInTheDocument()
+    expect(mocks.createRun).not.toHaveBeenCalled()
+    fireEvent.change(project, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '开始文献综述' }))
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
+    expect(mocks.createRun.mock.calls[0][0]).toMatchObject({ project_id: null })
+  })
+
   it('restores the library project when switching back to an open review', async () => {
     render(
       <MemoryRouter>
