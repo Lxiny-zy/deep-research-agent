@@ -187,9 +187,12 @@ def build_or_load(
             return _load(store, slug, current, previous)
         if current != version:
             raise ValueError("当前交付版本不存在")
-        bundle = build(detail)
-        bundle.content_version = bundle.input_version = version
-        _commit(store, slug, index, bundle)
+        from .render_progress import checkpoint_rendering
+
+        with checkpoint_rendering(store, slug, version, index):
+            bundle = build(detail)
+            bundle.content_version = bundle.input_version = version
+            _commit(store, slug, index, bundle)
         return bundle
 
 
@@ -205,13 +208,26 @@ def _commit(store: ArtifactStore, slug: str, index: dict, bundle: DeliveryBundle
         registry["_render_context"] = bundle.render_context
         registry["render_context_sha256"] = _digest(bundle.render_context)
     used = {_stage(v, entry) for v, entry in index["versions"].items()}
-    stage = f"d-{version[:16]}"
-    suffix = 0
-    while stage in used:
-        suffix += 1
-        stage = f"d-{version[:16]}-{suffix}"
+    pending = index.get("pending", {}).get(version)
+    if pending is not None:
+        stage = _stage(version, pending)
+        if pending.get("input_version") != version or stage in used:
+            raise ValueError("未完成交付的目录与已登记版本冲突")
+    else:
+        stage = f"d-{version[:16]}"
+        suffix = 0
+        while stage in used:
+            suffix += 1
+            stage = f"d-{version[:16]}-{suffix}"
     registry["storage_stage"] = stage
     for file, item in zip(bundle.files, registry["items"], strict=True):
+        if pending and pending.get("files", {}).get(file.name, {}).get("sha256") == file.sha256:
+            path = store.path_for(slug, stage, file.name, area="output")
+            try:
+                if store.read_bytes(path) == file.data:
+                    continue
+            except FileNotFoundError:
+                pass
         store.write(
             slug,
             stage,
@@ -223,6 +239,7 @@ def _commit(store: ArtifactStore, slug: str, index: dict, bundle: DeliveryBundle
         )
     index["versions"][version] = registry
     index.setdefault("current", {})[bundle.input_version] = version
+    index.get("pending", {}).pop(version, None)
     store.write_control_json(INDEX, index)
 
 

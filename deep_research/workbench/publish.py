@@ -24,6 +24,7 @@ import logging
 import re
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, cast
 
 from ..persistence.repository import RunDetail
@@ -275,6 +276,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     )
     extras = workbench.get("extras", {}) if isinstance(workbench, dict) else {}
     report = detail.report
+    from .render_progress import RenderProgressError, current_progress, render_file
+
+    render_progress = current_progress()
     markdown = report.markdown if report is not None else "（本次运行没有生成正文）"
     # 地名规范在生成任何格式之前统一改写一次：所有格式派生自同一份定稿，
     # 改写只做一次就能保证 DOCX / PDF / HTML 一致；地名门随后逐格式把关。
@@ -402,8 +406,17 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 concept = None
             else:
                 shown_concept = present_figure(concept, catalog)
-                png = render_concept_png(shown_concept)
+                concept_file = render_file(
+                    "figures/fig_concept.png",
+                    "png",
+                    f"概念图：{concept.title}",
+                    "figure",
+                    lambda: render_concept_png(shown_concept),
+                )
+                png = concept_file.data
                 input_gates.append(GateResult("figure_evidence", "pass"))
+        except RenderProgressError:
+            raise
         except Exception as exc:
             input_gates.append(
                 GateResult("figure_evidence", "warn", [f"图示生成未完成：{type(exc).__name__}"])
@@ -412,9 +425,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         if concept is not None:
             name = "fig_concept.png"
             images[name] = png
-            files.append(
-                DeliveryFile(f"figures/{name}", "png", f"概念图：{concept.title}", "figure", png)
-            )
+            files.append(concept_file)
             caption = concept.caption or concept.title
             block = f"\n\n![{concept.title}（{caption}）]({name})\n\n"
             markdown = _insert_concept(markdown, block)
@@ -427,24 +438,64 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     if template.key == "dataAnalysis":
         from .analysis import (
             ANALYSIS_SCRATCH_KEY,
+            AnalysisResult,
             DatasetError,
+            Figure,
             allows_synthetic,
             analyse,
             fallback_report,
         )
 
+        cached_pngs = render_progress.assets("png", "figure") if render_progress else {}
+        saved_analysis = render_progress.load_state("analysis") if render_progress else None
+        result = None
+        if saved_analysis is not None:
+            from dataclasses import fields
+
+            try:
+                figure_specs = saved_analysis["figures"]
+                if all("figures/" + spec["name"] in cached_pngs for spec in figure_specs):
+                    result = AnalysisResult(
+                        question=contract.focus if contract else "",
+                        **{
+                            f.name: saved_analysis[f.name]
+                            for f in fields(AnalysisResult)
+                            if f.name not in {"question", "figures"} and f.name in saved_analysis
+                        },
+                        figures=[
+                            Figure(**spec, png=cached_pngs["figures/" + spec["name"]].data)
+                            for spec in figure_specs
+                        ],
+                    )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RenderProgressError("统计交付检查点无法恢复") from exc
+
+        def checkpoint_figure(figure: Any) -> None:
+            render_file(f"figures/{figure.name}", "png", figure.title, "figure", lambda: figure.png)
+
         try:
-            result = analyse(
-                contract.dataset_csv if contract else "",
-                contract.focus if contract else "",
-                allow_synthetic=allows_synthetic(contract),
-                source=contract.dataset_source if contract else None,
-                frozen=scratch.get(ANALYSIS_SCRATCH_KEY),
-            )
+            if result is None:
+                result = analyse(
+                    contract.dataset_csv if contract else "",
+                    contract.focus if contract else "",
+                    allow_synthetic=allows_synthetic(contract),
+                    source=contract.dataset_source if contract else None,
+                    frozen=scratch.get(ANALYSIS_SCRATCH_KEY),
+                    png_cache={
+                        name.removeprefix("figures/"): file.data
+                        for name, file in cached_pngs.items()
+                    },
+                    on_figure=checkpoint_figure if render_progress else None,
+                )
         except DatasetError as exc:
             result = None
             input_gates.append(GateResult("analysis", "fail", [str(exc)]))
         if result is not None:
+            if render_progress:
+                render_progress.save_state(
+                    "analysis",
+                    {key: value for key, value in result.snapshot().items() if key != "facts"},
+                )
             computed_fallback = (
                 report is not None
                 and normalize_territory(report.markdown).strip()
@@ -464,8 +515,12 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             for figure in result.figures:
                 images[figure.name] = figure.png
                 files.append(
-                    DeliveryFile(
-                        f"figures/{figure.name}", "png", figure.title, "figure", figure.png
+                    render_file(
+                        f"figures/{figure.name}",
+                        "png",
+                        figure.title,
+                        "figure",
+                        partial(bytes, figure.png),
                     )
                 )
             if result.figures and "![" not in markdown:

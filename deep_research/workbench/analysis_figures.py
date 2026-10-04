@@ -8,11 +8,18 @@ if TYPE_CHECKING:
     from .analysis import Figure
 
 
-def distribution_figures(frame: Any, numeric: list[str], categorical: list[str]) -> list[Figure]:
+def distribution_figures(
+    frame: Any,
+    numeric: list[str],
+    categorical: list[str],
+    *,
+    png_cache: dict[str, bytes] | None = None,
+    on_figure: Any = None,
+) -> list[Figure]:
     """Paginate four panels per image; never discard the remaining variables."""
     import matplotlib.pyplot as plt
 
-    from .analysis import Figure, _png, _safe
+    from .analysis import Figure, _png_cached, _safe
 
     figures: list[Figure] = []
     groups: list[str | None] = [*categorical] if categorical else [None]
@@ -63,9 +70,10 @@ def distribution_figures(frame: Any, numeric: list[str], categorical: list[str])
             title = f"按 {group} 分组的测量分布" if group else "测量变量分布"
             if len(numeric) > 4:
                 title += f"（{start // 4 + 1}）"
+            name = f"fig_{len(figures) + 1:02d}_distributions_{_safe(group or 'all')}.png"
             figures.append(
                 Figure(
-                    name=f"fig_{len(figures) + 1:02d}_distributions_{_safe(group or 'all')}.png",
+                    name=name,
                     title=title,
                     caption=(
                         "各面板采用各变量的有效观测，未插补；坐标范围分别设置，测量单位同输入列。"
@@ -78,7 +86,9 @@ def distribution_figures(frame: Any, numeric: list[str], categorical: list[str])
                         + "有效样本量："
                         + "；".join(counts)
                     ),
-                    png=_png(fig),
+                    png=_png_cached(fig, name, png_cache),
                 )
             )
+            if on_figure is not None:
+                on_figure(figures[-1])
     return figures

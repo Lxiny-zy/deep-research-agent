@@ -98,7 +98,7 @@ def test_failed_commit_does_not_advertise_partial_files(tmp_path, monkeypatch):
     original = ArtifactStore.write_control_json
 
     def fail(self, name, *args, **kwargs):
-        if name == INDEX:
+        if name == INDEX and args and args[0].get("versions"):
             raise OSError("simulated commit failure")
         return original(self, name, *args, **kwargs)
 

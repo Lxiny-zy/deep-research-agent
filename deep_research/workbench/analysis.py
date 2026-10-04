@@ -351,6 +351,15 @@ def _png(fig: Any) -> bytes:
     return buffer.getvalue()
 
 
+def _png_cached(fig: Any, name: str, cache: dict[str, bytes] | None) -> bytes:
+    if cache is not None and name in cache:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+        return cache[name]
+    return _png(fig)
+
+
 def analyse(
     csv_text: str,
     question: str = "",
@@ -359,6 +368,8 @@ def analyse(
     source: dict[str, Any] | None = None,
     frozen: dict[str, Any] | None = None,
     scope: dict[str, Any] | None = None,
+    png_cache: dict[str, bytes] | None = None,
+    on_figure: Any = None,
 ) -> AnalysisResult:
     """对一张表做确定性分析。
 
@@ -596,6 +607,12 @@ def analyse(
     import matplotlib.pyplot as plt
 
     figures: list[Figure] = []
+
+    def add_figure(figure: Figure) -> None:
+        figures.append(figure)
+        if on_figure is not None:
+            on_figure(figure)
+
     # Old reports refer to specific plots. Preserve their recorded policy when
     # redrawing a download; expanded coverage applies to new analyses only.
     figure_policy = int(frozen.get("figure_policy", 1)) if frozen else 2
@@ -603,7 +620,13 @@ def analyse(
         from .analysis_figures import distribution_figures
 
         figures.extend(
-            distribution_figures(frame, numeric, [] if paired_requested else categorical)
+            distribution_figures(
+                frame,
+                numeric,
+                [] if paired_requested else categorical,
+                png_cache=png_cache,
+                on_figure=on_figure,
+            )
         )
     legacy_tests = (
         [item for item in tests if not item.get("paired")][:3] if figure_policy == 1 else []
@@ -617,15 +640,15 @@ def analyse(
         ax.set_xlabel(test["group"])
         ax.set_ylabel(test["variable"])
         ax.grid(axis="y", alpha=0.3)
-        figures.append(
+        name = (
+            f"fig_{len(figures) + 1:02d}_box_{_safe(test['variable'])}_{_safe(test['group'])}.png"
+        )
+        add_figure(
             Figure(
-                name=(
-                    f"fig_{len(figures) + 1:02d}_box_"
-                    f"{_safe(test['variable'])}_{_safe(test['group'])}.png"
-                ),
+                name=name,
                 title=f"{test['variable']} 按 {test['group']} 分组箱线图",
                 caption=f"统计口径：每组有效样本；{test['method']} p={test['p_value']}",
-                png=_png(fig),
+                png=_png_cached(fig, name, png_cache),
             )
         )
     for test in [item for item in tests if item.get("paired")]:
@@ -648,16 +671,17 @@ def analyse(
         ax.set_title("测量分布与逐对连线")
         ax.set_ylabel("测量值（单位同输入）")
         ax.grid(axis="y", alpha=0.3)
-        figures.append(
+        name = f"fig_{len(figures) + 1:02d}_paired.png"
+        add_figure(
             Figure(
-                name=f"fig_{len(figures) + 1:02d}_paired.png",
+                name=name,
                 title="测量分布与逐对连线",
                 caption=(
                     f"同一行配对；n={test['n_pairs']}；差值方向 {test['right']} − {test['left']}；"
                     f"配对 t 检验 p={test['p_value']}。箱线图用全部完整配对，连线展示 {shown} 对；"
                     "纵轴单位同输入测量值，不表示差值分布"
                 ),
-                png=_png(fig),
+                png=_png_cached(fig, name, png_cache),
             )
         )
     if figure_policy == 1 and not tests and numeric:
@@ -667,12 +691,13 @@ def analyse(
         ax.set_title(f"{column} 分布")
         ax.set_xlabel(column)
         ax.set_ylabel("频数")
-        figures.append(
+        name = f"fig_01_hist_{_safe(column)}.png"
+        add_figure(
             Figure(
-                name=f"fig_01_hist_{_safe(column)}.png",
+                name=name,
                 title=f"{column} 分布直方图",
                 caption=f"统计口径：{column} 的全部非缺失值（n={int(frame[column].count())}）",
-                png=_png(fig),
+                png=_png_cached(fig, name, png_cache),
             )
         )
     if len(numeric) >= 2:
@@ -685,12 +710,13 @@ def analyse(
             ax.text(col, row, f"{value:.2f}", ha="center", va="center", fontsize=8)
         fig.colorbar(image, ax=ax, shrink=0.8)
         ax.set_title("数值变量 Pearson 相关矩阵")
-        figures.append(
+        name = f"fig_{len(figures) + 1:02d}_correlation.png"
+        add_figure(
             Figure(
-                name=f"fig_{len(figures) + 1:02d}_correlation.png",
+                name=name,
                 title="数值变量相关矩阵",
                 caption="两两成对删除缺失值后的 Pearson r；色标与格内数值均无量纲，不是测量单位",
-                png=_png(fig),
+                png=_png_cached(fig, name, png_cache),
             )
         )
 

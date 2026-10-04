@@ -11,6 +11,7 @@ from typing import Any
 
 from .gates import HARD_GATES, GateResult, consistency_gate, slides_gate, territory_gate
 from .publish import DeliveryBundle, DeliveryFile, _deck_from_markdown, _stats_xlsx
+from .render_progress import RenderProgressError, render_file
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +71,11 @@ def render_bundle(
         if retry_format is not None and fmt != retry_format:
             return
         try:
-            data = build()
-            files.append(DeliveryFile(name, fmt, label, role, data))
+            files.append(
+                render_file(name, fmt, label, role, build, checkpoint=retry_format is None)
+            )
+        except RenderProgressError:
+            raise
         except Exception as exc:
             logger.exception("delivery format %s failed", fmt)
             failed(fmt, label, [f"生成失败：{type(exc).__name__}: {exc}"[:300]])
@@ -84,7 +88,14 @@ def render_bundle(
         )
         files.insert(
             0,
-            DeliveryFile(f"{stem}.md", "md", f"{title}（Markdown 源）", "source", source.encode()),
+            render_file(
+                f"{stem}.md",
+                "md",
+                f"{title}（Markdown 源）",
+                "source",
+                source.encode,
+                checkpoint=retry_format is None,
+            ),
         )
 
     from .titles import without_repeated_title
