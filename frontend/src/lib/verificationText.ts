@@ -5,6 +5,7 @@ const MESSAGES: Record<string, string> = {
   quote_found_in_source: '已在来源原文中找到对应摘录。',
   evidence_quote_not_found: '未能在当前来源中找到对应摘录。',
   evidence_quote_too_short: '摘录过短，尚不足以核对这条论断。',
+  evidence_quote_too_long: '摘录超过长度上限，需要从原文重新选择能支持该论断的连续短引文。',
   source_url_mismatch: '摘录的来源地址与当前来源不一致。',
   source_retracted: '来源已标记为撤稿，不能用于支持正式结论。',
   semantic_indices_invalid: '核验返回的证据对应关系不完整，本项判断暂不可用。',

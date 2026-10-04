@@ -94,7 +94,12 @@ class Researcher:
         self.tracer = cast(Tracer, tracer)
         self.settings = cast(Settings, settings)
         self.source_policy = source_policy or SourcePolicy()
-        self.evidence_verifier = evidence_verifier or EvidenceVerifier()
+        from ..workbench.quality import policy_from
+
+        self._custom_evidence_verifier = evidence_verifier is not None
+        self.evidence_verifier = evidence_verifier or EvidenceVerifier(
+            max_quote_chars=policy_from(settings).max_evidence_quote_chars
+        )
         self.semantic_verifier = semantic_verifier or SemanticEvidenceVerifier()
         self.consistency_verifier = consistency_verifier or ClaimConsistencyVerifier()
         self.system = SYSTEM  # 可被角色卡片覆盖
@@ -115,6 +120,12 @@ class Researcher:
             ctx.settings,
         )
         self.verification_llm = ctx.llm_for("evidence_verifier")
+        if not self._custom_evidence_verifier:
+            from ..workbench.quality import policy_from
+
+            self.evidence_verifier = EvidenceVerifier(
+                max_quote_chars=policy_from(ctx.settings).max_evidence_quote_chars
+            )
         require_corroboration = effective_require_corroboration(bb, ctx.settings)
         self.system = ctx.system_prompt(self.system)
         pending = bb.scratch.pop("pending_sub_questions", None)
@@ -184,6 +195,13 @@ class Researcher:
                 key = progress.key(question, context_findings) if progress is not None else ""
                 saved = await progress_io(progress.load, key, question) if progress else None
                 if saved is not None:
+                    from ..workbench.quote_recovery import repair_long_quotes
+
+                    recovered = await repair_long_quotes(saved, self, ctx.evidence_sources)
+                    if recovered is not saved:
+                        assert progress is not None
+                        await progress_io(progress.save, key, recovered)
+                        saved = recovered
                     mark_committed(key, saved)
                     from ..reproducibility import RecordingSearchTool
 
@@ -335,7 +353,13 @@ class Researcher:
                 )
         user_parts.append(f"\n子问题：{sub_question}")
 
-        system = direct_system_prompt(self.system)
+        from ..workbench.quality import policy_from
+
+        system = direct_system_prompt(self.system) + (
+            f"\n每条 evidence_quote 最多 {policy_from(self.settings).max_evidence_quote_chars} 字；"
+            "选择足以支持该发现的最短连续原文，保留必要条件、归属及表头。"
+            "无法在上限内支持复合结论时拆为有各自依据的事实，不能直接引用整份长来源。"
+        )
         prompt = fixed + "\n" + "\n".join(user_parts)
         try:
             extracted = await self.llm.parse(

@@ -241,14 +241,19 @@ def _local_reference(source: Source) -> str:
 class EvidenceVerifier:
     """Verify that a candidate quote occurs in the selected source content."""
 
-    def __init__(self, *, min_quote_chars: int = 6) -> None:
+    def __init__(self, *, min_quote_chars: int = 6, max_quote_chars: int = 600) -> None:
+        if max_quote_chars < min_quote_chars:
+            raise ValueError("max_quote_chars must be at least min_quote_chars")
         self.min_quote_chars = min_quote_chars
+        self.max_quote_chars = max_quote_chars
 
     def verify(self, finding: Finding, source: Source) -> EvidenceCheck:
         if finding.source_url != source.url:
             return EvidenceCheck(False, "source_url_mismatch")
 
         quote = finding.evidence_quote.strip()
+        if len(quote) > self.max_quote_chars:
+            return EvidenceCheck(False, "evidence_quote_too_long")
         normalized_quote = _normalize_text(quote)
         if len(normalized_quote) < self.min_quote_chars:
             return EvidenceCheck(False, "evidence_quote_too_short")
@@ -259,6 +264,8 @@ class EvidenceVerifier:
 
         quote_start, quote_end = quote_span
         matched_quote = source.content[quote_start:quote_end].strip()
+        if len(matched_quote) > self.max_quote_chars:
+            return EvidenceCheck(False, "evidence_quote_too_long")
         content_hash = hashlib.sha256(source.content.encode("utf-8")).hexdigest()
         quantity_status, quantity_reason = self._verify_quantity(
             finding,

@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings
 from ..llm import LLM
-from ..models import Reflection, Report, ResearchPlan, ResearchResult
+from ..models import Reflection, Report, ResearchPlan, ResearchResult, Source
 from ..observability import Tracer
 from ..prompting import compose_system_prompt, load_global_rules
 from ..tools.base import SearchTool
@@ -82,6 +82,7 @@ class RunContext:
         run_id: str | None = None,
         artifact_slug: str | None = None,
         global_rules: str | None = None,
+        evidence_sources: list[Source] | None = None,
     ) -> None:
         self.llm = llm
         self.search_tool = search_tool
@@ -100,6 +101,7 @@ class RunContext:
         # and integrations. The orchestrator supplies the repository-wide
         # Vela rules for real runs.
         self.global_rules = global_rules
+        self.evidence_sources = evidence_sources or []
 
     def llm_for(self, agent_name: str) -> LLM:
         """取某角色应使用的 LLM：有专属档案则用之，否则回退默认。"""

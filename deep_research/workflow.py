@@ -703,6 +703,9 @@ class WorkflowEngine:
         # keeps direct WorkflowEngine integrations consistent as well.
         if getattr(self.ctx, "global_rules", None) is None:
             self.ctx.global_rules = load_global_rules()
+        from .workbench.quote_recovery import recover_blackboard_quotes
+
+        await recover_blackboard_quotes(bb, self.ctx)
         # run 级共享限流：并行图的 K 个检索型节点 / 多团队并行若各自建
         # Semaphore(max_concurrency)，总并发会被放大为 K×max_concurrency。
         # 引擎在 run 入口把信号量挂到 ctx 上（已存在则沿用，嵌套子流程共用同一把），

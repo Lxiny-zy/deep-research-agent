@@ -241,7 +241,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 49,
+        "format_version": 50,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -489,6 +489,12 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         markdown_gate(markdown),
         length_gate(markdown, template),
     ]
+    from .quote_recovery import quote_length_issues
+
+    quote_issues = quote_length_issues(detail.results, policy.max_evidence_quote_chars)
+    gates.append(
+        GateResult("evidence_quote_length", "fail" if quote_issues else "pass", quote_issues)
+    )
     from .extraction import processing_failures
 
     incomplete = processing_failures(detail.results)
@@ -599,6 +605,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             "task_content",
             "review_coverage",
             "source_processing",
+            "evidence_quote_length",
         }
         and g.status == "fail"
         for g in gates

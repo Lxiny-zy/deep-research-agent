@@ -39,6 +39,7 @@ class QualityPolicy(BaseModel):
     survey_min_citations: int = Field(20, ge=1, le=200)
     research_min_citations: int = Field(3, ge=0, le=100)
     max_citation_cluster: int = Field(7, ge=2, le=20)
+    max_evidence_quote_chars: int = Field(600, ge=60, le=2000)
     forbid_abstract_citations: bool = True
     recency_check: bool = True
     # ---- 文体与结构 ----
@@ -62,6 +63,17 @@ class QualityPolicy(BaseModel):
 
 
 QUALITY_FIELDS: tuple[QualityField, ...] = (
+    QualityField(
+        "max_evidence_quote_chars",
+        "证据引文长度上限",
+        "引用与来源",
+        "int",
+        "每条事实只保留足以支持它的最短连续原文，默认最多 600 字。超长引文须从原文重新选择，"
+        "保留必要的归属、条件和表头；不能通过截掉限定条件或拼接片段来缩短。",
+        60,
+        2000,
+        "字",
+    ),
     QualityField(
         "survey_min_citations",
         "综述引用下限",

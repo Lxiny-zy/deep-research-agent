@@ -37,14 +37,15 @@ class Judge:
         )
 
 
-def test_complete_long_quote_survives_source_matching_and_serialization():
+def test_allowed_long_quote_survives_source_matching_and_serialization():
     quote = "Table 1. Comparison on CAVE.\nMethod,PSNR,SSIM\n" + "Baseline,30.1,0.921\n" * 90
     quote += "Alpha,38.4,0.948\nThe measurements use the held-out split."
     source = Source(url="https://example.org/paper", content="Introduction\n" + quote + "\nEnd.")
     finding = candidate(quote)
-    # The model and stored representation must both accept the necessary full block.
+    # An explicitly permitted block must not be truncated during serialization.
     finding = FindingContent.model_validate(finding.model_dump()).as_unverified()
-    check = EvidenceVerifier().verify(finding, source)
+    verifier = EvidenceVerifier(max_quote_chars=2000)
+    check = verifier.verify(finding, source)
     assert check.accepted and check.finding
     restored = Finding.model_validate_json(check.finding.model_dump_json())
     span = restored.verification
@@ -53,7 +54,7 @@ def test_complete_long_quote_survives_source_matching_and_serialization():
     assert len(span.evidence_context) <= 1200
     assert "PSNR" in span.evidence_context
     assert (
-        not EvidenceVerifier()
+        not verifier
         .verify(
             finding.model_copy(update={"evidence_quote": quote.replace("Baseline", "Altered", 1)}),
             source,

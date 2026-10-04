@@ -765,6 +765,18 @@ class DeepResearchAgent:
         if self._owns_llm and (cr is None or not cr.has_default_profile):
             self.settings.validate_llm()
 
+        recovery_sources = []
+        if existing_execution is not None and self.repo is not None and run_id is not None:
+            from .workbench.quality import policy_from
+            from .workbench.quote_recovery import needs_quote_repair
+
+            if any(
+                needs_quote_repair(result, policy_from(self.settings).max_evidence_quote_chars)
+                for result in bb.results
+            ):
+                saved_detail = await self.repo.get_run(run_id)
+                if saved_detail is not None:
+                    recovery_sources = saved_detail.sources
         ctx = RunContext(
             llm=self.llm,
             search_tool=self.search_tool,
@@ -783,6 +795,7 @@ class DeepResearchAgent:
             run_id=run_id,
             artifact_slug=artifact_slug,
             global_rules=load_global_rules(),
+            evidence_sources=recovery_sources,
         )
         budget = self.tracer.budget or TokenBudget()
 

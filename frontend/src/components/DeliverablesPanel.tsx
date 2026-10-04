@@ -28,6 +28,7 @@ const GATE_LABEL: Record<string, string> = {
   structured_content: '定稿一致性',
   node_evidence: '节点证据与关系',
   prose_evidence: '终稿结论依据',
+  evidence_quote_length: '证据引文长度',
   provided_corpus: '指定文献覆盖',
   review_coverage: '关键证据覆盖',
   task_content: '任务正文完整性',
@@ -41,6 +42,7 @@ const GATE_HELP: Record<string, string> = {
   task_content: '检查是否形成所要求的任务正文。证据摘录仅用于诊断未完成的任务。',
   figure_evidence: '核对节点、关系方向与图注是否有依据；未通过的可选图示不进入报告。',
   prose_evidence: '逐段核对最终表述是否得到所引证据支持；记录绑定最终正文，模型判断仍需人工复核。',
+  evidence_quote_length: '每条依据须在长度上限内保留必要条件与归属；超长历史摘录需重新选择并核验。',
   citation: '正文引用编号必须全部指向已核验来源，并达到本任务的引用下限。',
   scholarly:
     '学术文体（口语化、套话句式、生产过程描述）、摘要不带引用、引用堆砌、重复来源、时效覆盖与局限说明。',
