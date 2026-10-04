@@ -129,7 +129,55 @@ class FakeLLM:
                     for unit in data["units"]
                 ]
             )
+        from deep_research.workbench.formula_review import FormulaDecisions
         from deep_research.workbench.fulltext_review import FullTextChecks, FullTextTarget
+
+        if schema is FormulaDecisions:
+            from deep_research.workbench.formula_structure import compare_formulas
+
+            data = json.loads(user)
+            rows = []
+            for formula in data["formulas"]:
+                source = next(
+                    (
+                        source
+                        for source in data["sources"]
+                        if source["citation"] in formula["citations"]
+                    ),
+                    None,
+                )
+                reference = next(
+                    (
+                        ref
+                        for ref in data["reference_formulas"]
+                        if source
+                        and ref["source_id"] == source["id"]
+                        and compare_formulas(formula["tex"], ref["tex"])[0] == "equal"
+                    ),
+                    None,
+                )
+                rows.append(
+                    dict(
+                        formula_id=formula["id"],
+                        verdict="matched" if source else "not_source_claim",
+                        source_id=source["id"] if source else "",
+                        reference_id=reference["id"] if reference else "",
+                        source_quote=source["quote"][:600] if source else "",
+                        checks={
+                            key: "same"
+                            for key in (
+                                "symbols",
+                                "coefficients",
+                                "subscripts",
+                                "superscripts",
+                                "bounds",
+                            )
+                        },
+                        equivalence_explanation="fixture judgement; not a formula accuracy test",
+                        reason="fixture judgement; not a formula accuracy test",
+                    )
+                )
+            return FormulaDecisions(decisions=rows)
 
         if schema is FullTextTarget:
             return FullTextTarget(

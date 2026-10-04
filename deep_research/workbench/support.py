@@ -31,6 +31,7 @@ class SupportDecision(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
     reason: str
     fulltext_review: SkipJsonSchema[dict[str, Any] | None] = None
+    formula_review: SkipJsonSchema[dict[str, Any] | None] = None
 
 
 class SupportDecisions(BaseModel):
@@ -46,7 +47,7 @@ class SupportUnit:
     citations: list[int] = field(default_factory=list)
 
 
-SUPPORT_POLICY_VERSION = 5
+SUPPORT_POLICY_VERSION = 6
 
 
 def asserted_comparison(text: str) -> bool:
@@ -83,6 +84,9 @@ _SYSTEM = (
     "fulltext_checks 是程序另行完成的全文回查，不是逐字引文；它只支持所查的缺失或缺陷命题。"
     "absence_confirmed 的结论必须明确限定为本次取得的全文文本中未见，不能推广到其他版本。"
     "仅有这类全文核查命题时 supported 可以不填 evidence_ids；混合单元中的其他事实仍须摘录支持。"
+    "formula_checks 是独立的公式核验记录。supported 必须包含其中 matched 公式使用的 source_id；"
+    "source_quote 是该来源原文段落中的公式依据，可与原始摘录一起使用。"
+    "公式核验不代替其他事实的核对。"
     "证据条目若有 quote_from，其原文与该批中对应 id 条目的 quote 完全相同；"
     "请解引用完整原文后核对。quote_from 只复用原文，不借用另一条的论断、方法或实验条件；"
     "evidence_ids 仍填写实际支持当前论断的证据条目 id。"
@@ -144,6 +148,7 @@ def evidence_records(
                     **({"entity": finding.entity} if finding.entity else {}),
                     "quote": finding.evidence_quote,
                     "source": finding.source_url,
+                    "source_hash": finding.verification.source_content_hash,
                     "reference": finding.verification.source_reference
                     or finding.verification.source_title,
                 }
@@ -202,6 +207,7 @@ class SupportReviewer:
         system_rules: str = "",
         fulltext_corpus: FullTextCorpus | None = None,
         check_fulltext: bool = True,
+        check_formulas: bool = True,
     ) -> None:
         self.llm, self.evidence = llm, evidence
         self.capacity = getattr(llm, "input_capacity_chars", capacity)
@@ -213,6 +219,120 @@ class SupportReviewer:
         self.fulltext_corpus = fulltext_corpus or FullTextCorpus([], {})
         self.check_fulltext = check_fulltext
         self.fulltext_records: dict[str, dict[str, Any]] = {}
+        self.check_formulas = check_formulas
+        self.formula_records: dict[str, dict[str, Any]] = {}
+
+    def formula_scope_hash(self, unit: SupportUnit) -> str | None:
+        from .formula_review import input_hash, requires_formula, source_packets
+
+        if not self.check_formulas or not requires_formula(unit):
+            return None
+        return input_hash(unit, source_packets(unit, self.evidence, self.fulltext_corpus))
+
+    def formula_issue(self, unit: SupportUnit, decision: SupportDecision) -> str | None:
+        from .formula_review import requires_formula, validate_formula_record
+
+        if not self.check_formulas or not requires_formula(unit):
+            return None
+        issue = validate_formula_record(
+            unit, decision.formula_review, self.evidence, self.fulltext_corpus
+        )
+        if issue:
+            return issue
+        assert decision.formula_review is not None
+        source_ids = {
+            row["source_id"]
+            for row in decision.formula_review["decisions"]
+            if row["verdict"] == "matched"
+        }
+        if source_ids and decision.verdict == "non_factual":
+            return "引用公式不能作为纯编排说明免检"
+        if decision.verdict == "supported" and not source_ids.issubset(decision.evidence_ids):
+            return "公式核验使用的原文未绑定到当前证据决定"
+        return None
+
+    def record_issue(self, unit: SupportUnit, decision: SupportDecision) -> str | None:
+        return self.fulltext_issue(unit, decision) or self.formula_issue(unit, decision)
+
+    def alignment_issue(self, unit: SupportUnit, decision: SupportDecision) -> str | None:
+        from .formula_review import formulas, validate_formula_record
+
+        evidence = self.evidence
+        if (
+            decision.formula_review
+            and validate_formula_record(
+                unit, decision.formula_review, self.evidence, self.fulltext_corpus
+            )
+            is None
+        ):
+            quotes: dict[str, list[str]] = {}
+            for row in decision.formula_review["decisions"]:
+                if row["verdict"] == "matched":
+                    quotes.setdefault(row["source_id"], []).append(row["source_quote"])
+            evidence = [
+                {
+                    **item,
+                    "quote": str(item.get("quote", ""))
+                    + "\n"
+                    + "\n".join(quotes.get(item["id"], [])),
+                }
+                for item in self.evidence
+            ]
+            matched = {
+                row["formula_id"]
+                for row in decision.formula_review["decisions"]
+                if row["verdict"] == "matched"
+            }
+            masked = list(unit.text)
+            for formula in formulas(unit.text):
+                if formula["id"] in matched:
+                    for index in range(formula["start"], formula["end"]):
+                        if masked[index] not in "\r\n":
+                            masked[index] = " "
+            issue = alignment_issue(
+                "".join(masked),
+                unit.citations,
+                decision.evidence_ids,
+                evidence,
+                anchored_ids=set(quotes),
+            )
+            if issue:
+                return issue
+            # Do not lend a verified formula conversion to unrelated prose.
+            return alignment_issue(
+                unit.text,
+                unit.citations,
+                decision.evidence_ids,
+                evidence,
+                check_numbers=False,
+                anchored_ids=set(quotes),
+            )
+        return alignment_issue(unit.text, unit.citations, decision.evidence_ids, evidence)
+
+    async def _check_formula(self, unit: SupportUnit, key: str) -> SupportDecision | None:
+        from .formula_review import FormulaReviewer
+
+        current = self.formula_scope_hash(unit)
+        if current is None:
+            return None
+        record = self.formula_records.get(unit.id)
+        if record is None and key in self.cache:
+            record = self.cache[key].formula_review
+        if not record or record.get("input_hash") != current:
+            record = await FormulaReviewer(
+                self.llm, self.evidence, self.fulltext_corpus, self.capacity
+            ).review(unit)
+        self.formula_records[unit.id] = record
+        if record["status"] != "pass":
+            mismatch = any(row["verdict"] == "mismatch" for row in record["decisions"])
+            mismatch = mismatch or record["reason"].startswith("公式结构不一致")
+            return SupportDecision(
+                unit_id=unit.id,
+                verdict="unsupported" if mismatch else "uncertain",
+                reason=record["reason"] if mismatch else "公式专门核验未完成：" + record["reason"],
+                formula_review=record,
+            )
+        return None
 
     def fulltext_issue(self, unit: SupportUnit, decision: SupportDecision) -> str | None:
         from .fulltext_review import fulltext_supports, requires_fulltext, validate_fulltext_record
@@ -296,20 +416,22 @@ class SupportReviewer:
                 if fulltext_failure is not None:
                     results[unit.id] = fulltext_failure
                     continue
+                formula_failure = await self._check_formula(unit, key)
+                if formula_failure is not None:
+                    results[unit.id] = formula_failure
+                    continue
             if key in self.cache:
                 cached = self.cache[key]
                 invalid_fact = cached.verdict == "non_factual" and numeric_fact(unit.text)
                 invalid_support = (
                     cached.verdict == "supported"
                     and not (not cached.evidence_ids and self.fulltext_supports(unit, cached))
-                    and alignment_issue(
-                        unit.text, unit.citations, cached.evidence_ids, self.evidence
-                    )
+                    and self.alignment_issue(unit, cached)
                 )
                 invalid_fulltext = cached.verdict in {
                     "supported",
                     "non_factual",
-                } and self.fulltext_issue(unit, cached)
+                } and self.record_issue(unit, cached)
                 if not invalid_fact and not invalid_support and not invalid_fulltext:
                     results[unit.id] = cached
                     continue
@@ -432,6 +554,17 @@ class SupportReviewer:
                 "units": [asdict(u) for u in units],
                 **(
                     {
+                        "formula_checks": {
+                            unit.id: self.formula_records[unit.id]["decisions"]
+                            for unit in units
+                            if unit.id in self.formula_records
+                        }
+                    }
+                    if any(unit.id in self.formula_records for unit in units)
+                    else {}
+                ),
+                **(
+                    {
                         "fulltext_checks": {
                             unit.id: {
                                 "status": self.fulltext_records[unit.id]["status"],
@@ -517,7 +650,10 @@ class SupportReviewer:
                 )
             else:
                 decision = matched[0].model_copy(
-                    update={"fulltext_review": self.fulltext_records.get(unit.id)}
+                    update={
+                        "fulltext_review": self.fulltext_records.get(unit.id),
+                        "formula_review": self.formula_records.get(unit.id),
+                    }
                 )
                 valid_ids = {e["id"] for e in self.evidence if e["citation"] in unit.citations}
                 invalid = (
@@ -553,9 +689,7 @@ class SupportReviewer:
                     issue = (
                         None
                         if not decision.evidence_ids and self.fulltext_supports(unit, decision)
-                        else alignment_issue(
-                            unit.text, unit.citations, decision.evidence_ids, self.evidence
-                        )
+                        else self.alignment_issue(unit, decision)
                     )
                     if issue:
                         decision = SupportDecision(
@@ -568,13 +702,14 @@ class SupportReviewer:
                         reason="带引用的数值事实不能作为纯编排说明免检",
                     )
                 if decision.verdict in {"supported", "non_factual"}:
-                    issue = self.fulltext_issue(unit, decision)
+                    issue = self.record_issue(unit, decision)
                     if issue:
                         decision = SupportDecision(
                             unit_id=unit.id,
                             verdict="unsupported",
                             reason=issue,
                             fulltext_review=self.fulltext_records.get(unit.id),
+                            formula_review=self.formula_records.get(unit.id),
                         )
             output[unit.id] = decision
         return output

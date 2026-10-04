@@ -503,7 +503,7 @@ export default function EvidencePanel({
             </span>
           </div>
           <div className="evidence-drawer-body" ref={bodyRef}>
-            {selectionScope === 'fulltext_review' && <p className="muted small">{reviewNote}</p>}
+            {reviewNote && <p className="muted small">{reviewNote}</p>}
             {selectionScope === 'unbound' && (
               <p className="muted small">未绑定依据：本句没有可用的核验绑定记录。</p>
             )}

@@ -49,7 +49,7 @@ def _numeric_text(text: str) -> str:
     # Additional document-position labels, not observations or measured values.
     labels = r"\b(?:paragraph|section|chapter|slide|page)\s+\d+(?:\.\d+)*\b|第\s*\d+\s*页"
     for match in reversed(list(re.finditer(labels, _citation_text(text), re.I))):
-        text = text[:match.start()] + " " * len(match[0]) + text[match.end():]
+        text = text[: match.start()] + " " * len(match[0]) + text[match.end() :]
     return text
 
 
@@ -60,7 +60,8 @@ def _segments(text: str) -> list[str]:
     # assertion borrow it merely because a conjunction replaced punctuation.
     boundaries = [0, *(m.end() for m in _CITATION_GROUP.finditer(_citation_text(text))), len(text)]
     parts = [
-        part for start, end in zip(boundaries, boundaries[1:], strict=False)
+        part
+        for start, end in zip(boundaries, boundaries[1:], strict=False)
         for part in re.split(r"[。！？；\n]|(?<!\d)\.(?=\s|$)", text[start:end])
         if part.strip(" ,，.;；")
     ]
@@ -93,7 +94,8 @@ def numeric_fact(text: str) -> bool:
             if re.search(
                 r"是否|能否|建议|考虑|主观|评分\s*[:：]|如果|假设"
                 r"|\b(?:whether|should|recommend|suggest|if|assuming)\b",
-                _citation_text(clause), re.I,
+                _citation_text(clause),
+                re.I,
             ):
                 continue
             if _numbers(_numeric_text(clause)):
@@ -102,7 +104,13 @@ def numeric_fact(text: str) -> bool:
 
 
 def alignment_issue(
-    text: str, citations: list[int], ids: list[str], evidence: list[dict[str, Any]]
+    text: str,
+    citations: list[int],
+    ids: list[str],
+    evidence: list[dict[str, Any]],
+    *,
+    check_numbers: bool = True,
+    anchored_ids: set[str] | None = None,
 ) -> str | None:
     """Check actual selected quotes, never other findings or the proposed statement.
 
@@ -118,23 +126,24 @@ def alignment_issue(
         return "核验未提供本单元引用范围内的有效依据"
     selected = [record for record in evidence if record["id"] in ids]
     sentences = _segments(text)
-    anchored: set[str] = set()
+    anchored: set[str] = set(anchored_ids or ())
     requires_anchor: set[str] = set()
     for sentence in sentences:
         explicit = {
-            int(n) for match in _CITATIONS.finditer(sentence)
-            for n in re.findall(r"\d+", match[1])
+            int(n) for match in _CITATIONS.finditer(sentence) for n in re.findall(r"\d+", match[1])
         }
         scope = explicit or set(citations)
         records = [record for record in selected if record["citation"] in scope]
         numeric_sentence = _numeric_text(sentence)
         names, numbers = _names(sentence, evidence), _numbers(numeric_sentence)
         support_numbers = set().union(
-            *(_numbers(normalize_scientific_numbers(str(record.get("quote", ""))))
-              for record in records)
+            *(
+                _numbers(normalize_scientific_numbers(str(record.get("quote", ""))))
+                for record in records
+            )
         )
         missing, calculations = _computed_numbers(numeric_sentence, support_numbers)
-        if missing or calculations:
+        if (check_numbers and missing) or calculations:
             values = "、".join(str(n) for n in sorted(missing))
             return "所选依据不支持句中数值或显式计算" + (f"：{values}" if values else "")
         for record in records:

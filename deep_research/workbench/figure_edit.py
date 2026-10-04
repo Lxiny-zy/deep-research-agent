@@ -66,7 +66,9 @@ def prime_figure(reviewer: SupportReviewer, figure: ConceptFigure, record: Any) 
         decision = by_id[unit.id]
         if decision.verdict == "uncertain":
             continue
-        if reviewer.fulltext_issue(unit, decision):
+        if decision.verdict in {"supported", "non_factual"} and reviewer.record_issue(
+            unit, decision
+        ):
             continue
         selected = [e for e in reviewer.evidence if e["citation"] in unit.citations]
         if decision.verdict == "supported" and (
@@ -81,6 +83,8 @@ def prime_figure(reviewer: SupportReviewer, figure: ConceptFigure, record: Any) 
         reviewer.cache[digest([asdict(unit), selected])] = decision
         if decision.fulltext_review:
             reviewer.fulltext_records[unit.id] = decision.fulltext_review
+        if decision.formula_review:
+            reviewer.formula_records[unit.id] = decision.formula_review
     return True
 
 

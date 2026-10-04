@@ -324,6 +324,7 @@ it('uses the selected evidence for each occurrence, allows explicit browsing and
       unit_id: `unit-${run}`,
       scope: 'reviewed_unit',
       evidence_ids: [`e-${run}`],
+      review_note: '公式核查原文：已核对系数与上下标。',
     })),
   }
   const findings = [0, 1, 2].map((index) => ({
@@ -348,6 +349,7 @@ it('uses the selected evidence for each occurrence, allows explicit browsing and
   await userEvent.click(buttons[0])
   let panel = screen.getByRole('dialog')
   expect(within(panel).getByText('Record 0')).toBeVisible()
+  expect(within(panel).getByText('公式核查原文：已核对系数与上下标。')).toBeVisible()
   expect(within(panel).queryByText('Record 1')).toBeNull()
   expect(within(panel).queryByText('Record 2')).toBeNull()
   expect(buttons[0]).toHaveAttribute('aria-pressed', 'true')

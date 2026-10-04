@@ -238,6 +238,6 @@ def check_figure(
                 d.verdict == "non_factual"
                 and (by_id[d.unit_id].kind == "claim" or asserted_comparison(by_id[d.unit_id].text))
             )
-            or checker.fulltext_issue(by_id[d.unit_id], d)
+            or checker.record_issue(by_id[d.unit_id], d)
         )
     ]

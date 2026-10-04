@@ -26,7 +26,7 @@ from .support import (
     digest,
     evidence_records,
 )
-from .support_alignment import alignment_issue, numeric_fact
+from .support_alignment import numeric_fact
 
 PROSE_REVIEW_KEY = "prose_review"
 _CITE = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
@@ -251,6 +251,7 @@ def can_revise(decisions: list[SupportDecision]) -> bool:
                 "核验节点缺失或重复",
                 "核验未提供本节点可用的证据映射",
                 "缺少完整摘要原文",
+                "公式专门核验未完成",
             )
         )
         for d in decisions
@@ -292,6 +293,7 @@ class ProseReviewer:
             system_rules=STATISTICS_RULES if statistics is not None else "",
             fulltext_corpus=fulltext_corpus,
             check_fulltext=statistics is None,
+            check_formulas=statistics is None,
         )
         self.records: dict[str, dict[str, Any]] = {}
 
@@ -312,7 +314,9 @@ class ProseReviewer:
             allowed = {e["id"] for e in selected}
             if decision.verdict == "uncertain":
                 continue
-            if self.reviewer.fulltext_issue(unit, decision):
+            if decision.verdict in {"supported", "non_factual"} and self.reviewer.record_issue(
+                unit, decision
+            ):
                 continue
             fulltext_only = not decision.evidence_ids and self.reviewer.fulltext_supports(
                 unit, decision
@@ -320,12 +324,7 @@ class ProseReviewer:
             if decision.verdict == "supported" and (
                 (not decision.evidence_ids and not fulltext_only)
                 or not set(decision.evidence_ids).issubset(allowed)
-                or (
-                    not fulltext_only
-                    and alignment_issue(
-                        unit.text, unit.citations, decision.evidence_ids, self.evidence
-                    )
-                )
+                or (not fulltext_only and self.reviewer.alignment_issue(unit, decision))
             ):
                 continue
             if decision.verdict == "non_factual" and unit.kind in {"claim", "translation"}:
@@ -337,6 +336,8 @@ class ProseReviewer:
             self.reviewer.cache[digest([asdict(unit), selected])] = decision
             if decision.fulltext_review:
                 self.reviewer.fulltext_records[unit.id] = decision.fulltext_review
+            if decision.formula_review:
+                self.reviewer.formula_records[unit.id] = decision.formula_review
         return True
 
     @classmethod
@@ -395,6 +396,11 @@ class ProseReviewer:
                 "body": body_text(markdown, strip_references=False),
                 "evidence": self.evidence,
                 "source_version": self.source_version,
+                "formula_scopes": [
+                    scope
+                    for unit in self.units(markdown)[0]
+                    if (scope := self.reviewer.formula_scope_hash(unit)) is not None
+                ],
                 "fulltext_corpus": self.reviewer.fulltext_corpus.fingerprint
                 if uses_fulltext
                 else None,
@@ -548,11 +554,11 @@ class ProseReviewer:
             ):
                 problems.append(f"第 {positions[d.unit_id]} 行：终稿证据映射超出该单元引用范围")
             elif d.verdict == "supported" and not fulltext_only:
-                issue = alignment_issue(unit.text, unit.citations, d.evidence_ids, self.evidence)
+                issue = self.reviewer.alignment_issue(unit, d)
                 if issue:
                     problems.append(f"第 {positions[d.unit_id]} 行：{issue}")
             if d.verdict in {"supported", "non_factual"}:
-                if issue := self.reviewer.fulltext_issue(unit, d):
+                if issue := self.reviewer.record_issue(unit, d):
                     problems.append(f"第 {positions[d.unit_id]} 行：{issue}")
         return True, problems
 

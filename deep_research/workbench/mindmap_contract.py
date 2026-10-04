@@ -161,6 +161,6 @@ def checked_review(
         ):
             problems.append(f"节点 {unit.id}：事实节点不能免于证据核对")
         if decision.verdict in {"supported", "non_factual"}:
-            if issue := checker.fulltext_issue(unit, decision):
+            if issue := checker.record_issue(unit, decision):
                 problems.append(f"节点 {unit.id}：{issue}")
     return True, problems

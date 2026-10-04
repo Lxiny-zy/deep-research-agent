@@ -382,6 +382,8 @@ def _citation_evidence_html(
                 if selected
                 else "当前引用没有有效的核验摘录绑定。"
             )
+            if not fulltext and occurrence and occurrence.review_note and selected:
+                explanation += escape(occurrence.review_note)
             note = f'<p>{explanation}<a href="#cite-source-{broad}">查看这些位置的全部摘录</a></p>'
         entries.append(
             f'<aside class="citation-location" id="cite-{target}">'

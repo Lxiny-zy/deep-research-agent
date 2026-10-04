@@ -97,7 +97,9 @@ def prime_review(
         allowed = {e["id"] for e in selected}
         if decision.verdict == "uncertain":
             continue
-        if reviewer.fulltext_issue(unit, decision):
+        if decision.verdict in {"supported", "non_factual"} and reviewer.record_issue(
+            unit, decision
+        ):
             continue
         if decision.verdict == "supported" and (
             (not decision.evidence_ids and not reviewer.fulltext_supports(unit, decision))
@@ -111,6 +113,8 @@ def prime_review(
         reviewer.cache[digest([asdict(unit), selected])] = decision
         if decision.fulltext_review:
             reviewer.fulltext_records[unit.id] = decision.fulltext_review
+        if decision.formula_review:
+            reviewer.formula_records[unit.id] = decision.formula_review
     return True
 
 

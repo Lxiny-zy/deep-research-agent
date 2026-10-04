@@ -88,6 +88,31 @@ def bind_review(
                     )
                     if passages:
                         review_note += "；" + "；".join(passages)
+            formula_review = decision.get("formula_review") if decision else None
+            if isinstance(formula_review, dict) and formula_review.get("status") == "pass":
+                passages = list(
+                    dict.fromkeys(
+                        str(evidence[row["source_id"]]["source"])
+                        + "「"
+                        + row["source_quote"]
+                        + "」"
+                        + (
+                            "（条件等价："
+                            + row["condition_quote"]
+                            + "；"
+                            + row["equivalence_explanation"]
+                            + "）"
+                            if row.get("relation") == "conditional"
+                            else ""
+                        )
+                        for row in formula_review["decisions"]
+                        if row["verdict"] == "matched" and row["source_id"] in selected
+                    )
+                )
+                if passages:
+                    review_note += (
+                        ("；" if review_note else "") + "公式核查原文：" + "；".join(passages)
+                    )
             catalog.occurrences.append(
                 CitationOccurrence(
                     id=digest(
