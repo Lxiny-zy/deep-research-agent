@@ -1,6 +1,6 @@
 # 参考产品功能覆盖清单
 
-本清单主要核对实现入口与相关测试，不能等同于完整业务或科研质量验收。最新已修复缺陷、真实任务验证及未解决设计问题以 [当前进度](NEXT_STEPS.md) 和 [跨模块设计审查](DESIGN_AUDIT_20261001.md) 为准；累计 token 预算和每日 token 配额已取消。
+本清单主要核对实现入口与相关测试，不能等同于完整业务或科研质量验收。最新已修复缺陷、真实任务验证及未解决设计问题以 [后续改进计划](IMPROVEMENT_PLAN.md) 和 [跨模块设计审查](DESIGN_AUDIT_20261001.md) 为准；累计 token 预算和每日 token 配额已取消。
 
 > **机械核对**：`python scripts/check_workbench_coverage.py` 直接从资料包的原始文件中抽取功能清单，逐项核对本项目中的实体（模板、路由、门函数、模块、计划字段、步骤状态），当前结果为 **66/66 项覆盖或已说明不适用**（其中 6 项不适用：积分计费、订阅计费、实验套件/GPU、运行期装包、品牌样式门、外部进程等待），退出码为 0。抽取范围包括：任务清单里出现过的全部 `template_key`、设计文档架构图列出的全部平台端点、`_shared/scripts` 下的全部门脚本、`.claude/skills` 下的全部技能目录、真实 `vela-steps.json` 中的全部步骤字段与状态值。资料包新增条目而映射表未跟上时，脚本会报「未映射」并失败。下表是这份结果的可读版本。
 
@@ -16,7 +16,7 @@
 | 数据分析 dataAnalysis（计划→统计→图→中文报告） | ✅ | `data_analysis` / `DataAnalyst`（pandas/scipy/matplotlib） | `test_analysis_*`, `test_data_analysis_run_*` |
 | 论文精读 paperRead（6 节 + 摘要翻译 + LaTeX 公式） | ✅ | `paper_read` / `paper_intake` + `PaperReader` | `test_paper_intake_isolates_failures`，模板章节门 |
 | 幻灯片 slides（PPTX + 备注） | ✅ | `slides` / `SlideWriter` + `delivery/pptx.py` | `test_slides_and_mindmap_runs_deliver_binary_formats` |
-| 思维导图 mindmap（≥6 分支 × ≥5 节点，HTML/PNG） | ✅ | `mindmap` / `MindmapWriter` + `delivery/mindmap.py` | 同上、`test_mindmap_*` |
+| 思维导图 mindmap（按主题组织分支，节点绑定证据；HTML/PNG/Markdown） | ✅ | `mindmap` / `MindmapWriter` + `delivery/mindmap.py` | 同上、`test_mindmap_*` |
 | 学术问答（多轮、带引用、思考过程） | ✅ | `workbench/qa.py`、`qa_store.py`、`/api/qa/*`、前端 `/qa` | `test_answer_question_*`, `test_qa_endpoints_*`, `QaPage.test` |
 
 ## 二、任务输入与规划

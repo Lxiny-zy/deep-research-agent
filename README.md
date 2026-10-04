@@ -1,8 +1,8 @@
 # Science Research · 科研工作台
 
 部署与一致备份步骤见 [运行指南](docs/OPERATIONS.md)。
-当前维护状态见 [待办与验证记录](docs/NEXT_STEPS.md)，依赖文件说明见 [供应链指南](docs/SUPPLY_CHAIN.md)。
-早期面试题库、简历说明和阶段日志统一保留在 [历史资料归档](docs/archive/README.md)，不作为当前验收依据。
+当前计划与进度见 [后续改进计划](docs/IMPROVEMENT_PLAN.md)，依赖文件说明见 [供应链指南](docs/SUPPLY_CHAIN.md)。
+早期面试题库和简历说明保留在 [历史资料归档](docs/archive/README.md)，不作为当前验收依据。
 
 面向技术调研与科学文献审查的证据研究工作台：把「一个问题」自动**拆解 →
 检索项目资料与外部来源 → 验证原文证据 → 反思补洞 → 综合成可追溯报告**。
@@ -34,7 +34,7 @@
 - **流式可观测**：SSE 把每个 Agent 的动作实时推到浏览器；内置 Tracer 统计耗时 / token。
 - **持久化与回放**：每次研究全过程落库（计划 / 结果 / 报告 / 事件）；提供历史列表、详情、SSE 事件回放。仓储接口双实现（内存 / async SQLAlchemy），本地 SQLite 零配置并在启动时准备 schema，生产切 PostgreSQL，Alembic 管 schema 版本。
 - **多检索后端**：`DR_SEARCH_BACKENDS=tavily,brave,serper,grok` 并发查询多个索引并按归一化 URL 去重（剥离跟踪参数、大小写与默认端口），合并发生在来源策略门禁**之前**，独立发布方仍按 registrable domain 判定，不会凭空造出伪双源。Serper 使用 `SERPER_API_KEY`，Grok 使用 `XAI_API_KEY` 和 Responses API 的 `web_search` 工具。单后端失败只记审计事件不阻断，全部失败才向上抛。run manifest 记录后端组合，便于复现实验。
-- **学术来源与 DOI 级出处**：`DR_SEARCH_BACKENDS=openalex,arxiv` 接入学术索引（均不需要 API Key）。它们额外带回通用网页检索拿不到的字段：DOI、作者、**作者机构**、期刊、发表年份、预印本版本、引用数、**撤稿标记**与开放全文位置。参考来源列表因此从裸 URL 升级为 `作者. 标题. 期刊, 年. <DOI>`，撤稿与预印本状态直接标在引用里而不是只进审计事件。引用文本由 `EvidenceVerifier` 在**验证时刻**渲染并随 Finding 落库（只有那一刻同时握有 Finding 与 Source），因此历史回放与 worker 跨进程执行拿到的引用完全一致；`Report.citations` 仍是纯 URL 列表，前端 [n] 跳转与快照覆盖率指标的契约不变。OpenAlex 的倒排索引摘要会被还原成连续文本，且**还原结果就是逐字证据校验匹配的那一份**——模型看到的、被哈希留证的、被校验的是同一份文本。注意 OpenAlex 有每日免费配额（约 1000 次/日、按出口 IP 计、UTC 午夜重置），耗尽时抛出带重置时间的 `OpenAlexQuotaExceeded` 而非裸 429；多后端下该失败被隔离，其余后端照常产出。详见 [docs/AI4S_STATUS.md](docs/AI4S_STATUS.md)。
+- **学术来源与 DOI 级出处**：`DR_SEARCH_BACKENDS=openalex,arxiv` 接入学术索引（均不需要 API Key）。它们额外带回通用网页检索拿不到的字段：DOI、作者、**作者机构**、期刊、发表年份、预印本版本、引用数、**撤稿标记**与开放全文位置。参考来源列表因此从裸 URL 升级为 `作者. 标题. 期刊, 年. <DOI>`，撤稿与预印本状态直接标在引用里而不是只进审计事件。引用文本由 `EvidenceVerifier` 在**验证时刻**渲染并随 Finding 落库（只有那一刻同时握有 Finding 与 Source），因此历史回放与 worker 跨进程执行拿到的引用完全一致；`Report.citations` 仍是纯 URL 列表，前端 [n] 跳转与快照覆盖率指标的契约不变。OpenAlex 的倒排索引摘要会被还原成连续文本，且**还原结果就是逐字证据校验匹配的那一份**——模型看到的、被哈希留证的、被校验的是同一份文本。注意 OpenAlex 有每日免费配额（约 1000 次/日、按出口 IP 计、UTC 午夜重置），耗尽时抛出带重置时间的 `OpenAlexQuotaExceeded` 而非裸 429；多后端下该失败被隔离，其余后端照常产出。
 - **provider 无关**：任意 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / GLM / Moonshot …）。
 - **可测试**：依赖注入（LLM / 检索后端可替换为假实现），单测无需密钥与网络。
 - **自动化评估**：内置 LLM-as-judge，从覆盖度/可靠性/深度/可读性四维给报告打分。
@@ -196,11 +196,15 @@ DR_EXECUTION_MODE=worker docker compose --profile worker up --build --scale work
 两种拓扑共用租约 fencing、数据库配置和 checkpoint 续跑规则。切换时应先停止旧拓扑的
 所有执行者，统一配置后再启动，避免混用不同版本或不同产物根目录。
 
-- **谁执行**：worker 轮询 `(status, claimable_at)` 索引挑候选，用条件租约更新做最终仲裁。
-  候选选择只是优化，租约才是跨进程的唯一裁决者——与崩溃恢复完全同源。
+- **谁执行**：inline 与 worker 都先把任务写入持久队列，inline 由 API 内嵌的队列消费者领取。
+  领取按任务所有者公平轮转，入队时冻结任务成本和轻/重类别，执行上限 ≥ 2 时为轻任务保留
+  一个槽；最终仍由条件租约更新仲裁。调度只决定顺序，租约才是跨进程的唯一裁决者——与崩溃
+  恢复完全同源。详见 [公平调度记录](docs/FAIR_SCHEDULING_20261004.md)。
 - **取消与 SSE**：取消经数据库状态生效（执行侧看到 `cancelling` 后收尾）；合并后的 token
-  增量与计数落库，SSE 使用稳定事件序号续传。`cancelled` 为终态，不能恢复；修复故障后可
-  对 `error` 运行请求 `/resume`，原始总截止时间仍然有效。
+  增量与计数落库，SSE 使用稳定事件序号续传。`cancelled`、`done`、`needs_review` 为终态，
+  不能 `/resume`；`needs_review` 表示结果已保留但未通过交付验收，应使用内容修订或格式重试。
+  修复故障后可对 `error` 运行请求 `/resume`，它授权新的有界执行窗口，累计耗时、token、
+  证据和原始输入保留。
 - **毒任务熔断**：同一 run 被领取超过 `DR_MAX_CLAIM_ATTEMPTS`（默认 3）次仍失败即置终态，
   原因 `poison_run` 入审计，避免必然崩溃的任务在 worker 之间无限传递。
 - **优雅退出**：worker 收到 SIGTERM 后停止领取但**不打断**在跑的研究；被强杀也无妨，
@@ -317,7 +321,7 @@ API 由环境变量 `DATABASE_URL` 选择 SqlRepository 后端（缺省 `sqlite+
 | `GET`  | `/api/runs/{id}/document.bundle.zip` | Markdown、LaTeX、BibTeX、manifest 和来源快照复现包 |
 | `GET`  | `/api/runs/{id}/document.paper.pdf?profile=academic` | 学术版 PDF（latexmk + XeLaTeX，可选运行时） |
 | `POST` | `/api/runs/{id}/cancel` | 幂等请求取消运行，进入 `cancelling` / `cancelled` |
-| `POST` | `/api/runs/{id}/resume` | 从 checkpoint 恢复可重试故障；`cancelled`/`done` 返回 409 |
+| `POST` | `/api/runs/{id}/resume` | 从 checkpoint 恢复可重试故障；`cancelled`/`cancelling`/`done`/`needs_review` 返回 409 |
 | `GET` / `POST` | `/api/projects` | 列出或创建研究项目；普通身份仅能看到自己的项目 |
 | `GET` / `POST` | `/api/projects/{id}/corpora` | 列出或创建项目资料库 |
 | `GET` / `POST` | `/api/projects/{id}/sources*` | 列出来源，导入 URL / DOI / 文本 / Markdown / PDF |
@@ -440,7 +444,7 @@ make intent-eval     # 离线评测：准确率 / 混淆矩阵 / 拒识率 / 误
 - [x] 学术检索源与 DOI 级出处（OpenAlex / arXiv，含机构与撤稿标记）
 - [x] 研究项目资料库（来源导入、正文分块、定位信息、人工纳入/排除、运行绑定）
 - [ ] AI4S（高光谱计算成像）：全文分节证据、数值+协议校验、同一 work 聚类判独立性、
-      对照表由代码渲染、系统综述工作流（分期见 [docs/AI4S_STATUS.md](docs/AI4S_STATUS.md)）
+      对照表由代码渲染、系统综述工作流（后续见 [后续改进计划](docs/IMPROVEMENT_PLAN.md)）
 - [ ] 检索后端增加 Bing / SerpAPI / 自建向量库
 - [ ] 评估接入 LangSmith / Phoenix 做 tracing 看板
 - [x] 身份与角色权限、run 归属隔离；报告 PDF / CSV / XLSX 导出与能力发现
