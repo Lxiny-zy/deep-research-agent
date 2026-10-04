@@ -831,6 +831,35 @@ class DataAnalyst:
         contract = contract_from_scratch(bb.scratch)
         question = contract.focus if contract is not None else bb.query
         csv_text = contract.dataset_csv if contract is not None else ""
+        from .quality import coerce_policy
+        from .writing_progress import (
+            WritingProgressError,
+            finish,
+            for_writer,
+            restore_finished,
+            restore_prose,
+        )
+
+        policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
+        progress = for_writer(
+            bb,
+            ctx,
+            self.name,
+            _BASE_SYSTEM + _skeleton(template),
+            inputs={
+                "csv": csv_text,
+                "question": question,
+                "analysis": bb.scratch.get(ANALYSIS_SCRATCH_KEY),
+                "scope": bb.scratch.get("analysis_scope"),
+            },
+        )
+        if await restore_finished(progress, bb, policy.max_revisions):
+            return bb
+        writing_state = await progress.load(policy.max_revisions) if progress else None
+        if writing_state:
+            if not set(writing_state.preparation) <= {ANALYSIS_SCRATCH_KEY, "analysis_scope"}:
+                raise WritingProgressError("统计准备进度包含未知字段")
+            bb.scratch.update(writing_state.preparation)
         ctx.tracer.emit("RESEARCHER", "start", "解析数据并执行统计分析…")
         try:
             from .analysis_scope import plan_scope
@@ -842,6 +871,9 @@ class DataAnalyst:
                 selected_scope = (
                     await plan_scope(ctx.llm_for(self.name), csv_text, question, bb.scratch)
                 ).model_dump(mode="json")
+                if progress and writing_state:
+                    writing_state.preparation["analysis_scope"] = bb.scratch["analysis_scope"]
+                    await progress.save(writing_state)
             result = await run_blocking(
                 analyse,
                 csv_text,
@@ -851,6 +883,9 @@ class DataAnalyst:
                 scope=selected_scope,
                 frozen=frozen if isinstance(frozen, dict) else None,
             )
+            if progress and writing_state:
+                writing_state.preparation[ANALYSIS_SCRATCH_KEY] = result.snapshot()
+                await progress.save(writing_state)
         except DatasetError as exc:
             bb.report = Report(query=bb.query, markdown=f"## 分析计划\n\n数据无法分析：{exc}\n")
             bb.scratch[WORKBENCH_SCRATCH_KEY] = WriterState(
@@ -894,12 +929,9 @@ class DataAnalyst:
         )
         table_records: dict[str, dict[str, Any]] = {}
         from .gates import structure_gate
-        from .quality import coerce_policy
+        from .prose_review import PROSE_REVIEW_KEY, reviewer_for_report
         from .revision import Assessment, write_with_revisions
         from .scholarly import check_register
-
-        policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
-        from .prose_review import PROSE_REVIEW_KEY, reviewer_for_report
 
         review_scratch = {
             **bb.scratch,
@@ -915,6 +947,7 @@ class DataAnalyst:
             ctx.settings.llm_max_input_chars,
         )
         assert reviewer is not None
+        current_body = ""
 
         from .content_revision import revision_seed
 
@@ -922,12 +955,14 @@ class DataAnalyst:
         seed_pending = seed is not None
 
         async def write(revision: str | None) -> str:
-            nonlocal seed_pending
+            nonlocal seed_pending, current_body
             if seed_pending and seed is not None:
                 seed_pending = False
                 reviewer.prime(seed.markdown, seed_review)
                 initial = await assess(seed.markdown)
                 if initial.clean or not initial.can_revise:
+                    current_body = seed.markdown
+                    table_records.setdefault(current_body, bb.scratch.get(TABLES_KEY) or {})
                     return seed.markdown
                 from .revision import revision_prompt
 
@@ -960,9 +995,12 @@ class DataAnalyst:
             bb.scratch[TABLES_KEY] = table_record
             if body != "".join(chunks).strip():
                 ctx.tracer.emit("SYNTHESIZER", "token", data={"delta": body, "replace": True})
+            current_body = body
             return body
 
         async def assess(draft: str) -> Assessment:
+            nonlocal current_body
+            current_body = draft
             # 数字与章节是硬性要求；文体问题同样要求修订。三者都是确定性检查。
             hard = [
                 f"数字「{n}」不在统计台账中"
@@ -978,6 +1016,8 @@ class DataAnalyst:
             else:
                 soft = []
             audit = await reviewer.review(draft)
+            if progress:
+                await progress.save_context()
             hard.extend(audit["issues"])
             coverage = audit.get("requirements_review", {})
             hard.extend(coverage.get("issues", []))
@@ -1002,13 +1042,30 @@ class DataAnalyst:
                 can_revise=audit["can_revise"] and coverage.get("can_revise", True),
             )
 
+        def capture() -> dict[str, Any]:
+            return {
+                "body": current_body,
+                "audit": reviewer.cached_review(current_body),
+                "table_record": table_records.get(current_body, {}),
+            }
+
+        def restore(value: dict[str, Any]) -> bool:
+            nonlocal current_body, seed_pending
+            current_body = value["body"]
+            seed_pending = False
+            table_records[current_body] = value["table_record"]
+            bb.scratch[TABLES_KEY] = table_records[current_body]
+            return restore_prose(reviewer, current_body, value.get("audit"))
+
+        if progress:
+            progress.capture, progress.restore = capture, restore
         body = ""
         revision_log = None
         try:
             body, revision_log = await write_with_revisions(
-                write, assess, max_revisions=policy.max_revisions
+                write, assess, max_revisions=policy.max_revisions, progress=progress
             )
-        except LeaseLostError:
+        except (LeaseLostError, WritingProgressError):
             raise
         except Exception as exc:  # 写作失败不影响统计结果交付
             ctx.tracer.emit("SYNTHESIZER", "error", f"分析报告撰写失败，交付统计摘要：{exc}")
@@ -1062,6 +1119,7 @@ class DataAnalyst:
         bb.scratch[WORKBENCH_SCRATCH_KEY] = WriterState(
             template=template.key, extras=extras
         ).model_dump(mode="json")
+        await finish(progress, bb, policy.max_revisions)
         return bb
 
 

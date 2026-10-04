@@ -38,6 +38,14 @@ from .scholarly import abstract_sections
 from .support import SupportReviewer, evidence_records
 from .tables import TABLE_INSTRUCTIONS, TABLES_KEY, render_specs, review_tables, table_preview
 from .templates import TaskTemplate, get_template
+from .writing_progress import (
+    WritingProgress,
+    WritingProgressError,
+    finish,
+    for_writer,
+    restore_finished,
+    restore_prose,
+)
 
 WORKBENCH_SCRATCH_KEY = "workbench"
 
@@ -280,6 +288,7 @@ class TemplateWriter:
         min_citations: int,
         require_corroboration: bool,
         reviewer: ProseReviewer | None = None,
+        progress: WritingProgress | None = None,
     ) -> tuple[str, RevisionLog]:
         """写作 + 确定性检查 + 按问题清单返工（见 ``revision.py``）。"""
         versions: dict[str, dict[str, Any]] = {}
@@ -288,6 +297,7 @@ class TemplateWriter:
         local_revision = False
         local_problems: list[tuple[str, str]] = []
         table_records: dict[str, dict[str, Any]] = {}
+        current_body = ""
         if reviewer is None and url_to_idx:
             reviewer = ProseReviewer.research(
                 ctx.llm_for("evidence_verifier"),
@@ -312,7 +322,7 @@ class TemplateWriter:
         seed_pending = seed is not None
 
         async def write(revision: str | None) -> str:
-            nonlocal seed_pending
+            nonlocal seed_pending, current_body
             body = None
             if seed_pending and seed is not None and reviewer is not None:
                 seed_pending = False
@@ -365,10 +375,12 @@ class TemplateWriter:
             versions[body] = {
                 key: deepcopy(bb.scratch[key]) for key in self.output_keys if key in bb.scratch
             }
+            current_body = body
             return body
 
         async def assess(body: str) -> Assessment:
-            nonlocal last_body, last_audit, local_revision, local_problems
+            nonlocal last_body, last_audit, local_revision, local_problems, current_body
+            current_body = body
             assessment = assess_draft(
                 body,
                 template=template,
@@ -405,6 +417,8 @@ class TemplateWriter:
             if table_problems:
                 local_revision = False
                 assessment.local_problems = None
+            if progress:
+                await progress.save_context()
             if reviewer is not None:
                 ctx.tracer.emit("SYNTHESIZER", "info", "核对终稿结论与引用的支持关系…")
                 audit = await reviewer.review(body)
@@ -431,8 +445,41 @@ class TemplateWriter:
             )
             ctx.tracer.emit("SYNTHESIZER", "info", message, data={"event_name": name, **data})
 
+        def capture() -> dict[str, Any]:
+            return {
+                "body": current_body,
+                "outputs": versions.get(current_body, {}),
+                "table_record": table_records.get(current_body, {}),
+                "audit": last_audit if last_body == current_body else None,
+                "local_revision": local_revision,
+                "local_problems": local_problems,
+            }
+
+        def restore(value: dict[str, Any]) -> bool:
+            nonlocal \
+                current_body, \
+                last_body, \
+                last_audit, \
+                local_revision, \
+                local_problems, \
+                seed_pending
+            current_body = value["body"]
+            seed_pending = False
+            versions[current_body] = deepcopy(value["outputs"])
+            for key in self.output_keys:
+                bb.scratch.pop(key, None)
+            bb.scratch.update(versions[current_body])
+            table_records[current_body] = deepcopy(value["table_record"])
+            bb.scratch[TABLES_KEY] = table_records[current_body]
+            last_body, last_audit = current_body, value.get("audit")
+            local_revision = value.get("local_revision", False)
+            local_problems = [(row[0], row[1]) for row in value.get("local_problems", [])]
+            return restore_prose(reviewer, current_body, last_audit)
+
+        if progress:
+            progress.capture, progress.restore = capture, restore
         body, log = await write_with_revisions(
-            write, assess, max_revisions=policy.max_revisions, on_event=on_event
+            write, assess, max_revisions=policy.max_revisions, on_event=on_event, progress=progress
         )
         # A later revision can be worse. Its deck/map must not survive when the
         # revision loop selects an earlier Markdown draft as the best result.
@@ -452,6 +499,15 @@ class TemplateWriter:
         material, url_to_idx = eligible_material(bb.results, require_corroboration=corroboration)
         ctx.tracer.emit("SYNTHESIZER", "start", f"撰写{template.title}…")
         policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
+        progress = for_writer(
+            bb,
+            ctx,
+            self.name,
+            self.system_prompt(template, contract),
+            inputs={"material": material, "citations": url_to_idx},
+        )
+        if await restore_finished(progress, bb, policy.max_revisions):
+            return bb
         min_citations = (
             contract.min_citations
             if contract is not None and (contract.min_citations or provided_review(contract))
@@ -492,6 +548,7 @@ class TemplateWriter:
                     min_citations=min_citations,
                     require_corroboration=corroboration,
                     reviewer=reviewer,
+                    progress=progress,
                 )
             except TokenBudgetExceeded:
                 ctx.tracer.emit("SYNTHESIZER", "info", "预算不足，使用已核验素材摘要交付")
@@ -589,9 +646,39 @@ class TemplateWriter:
         figure_reviewer = None
         previous = bb.scratch.get("workbench", {}).get("extras", {})
         figure_enabled = concept_figure_enabled(bb.query)
+        from .support import digest
+
+        writing_state = await progress.load(policy.max_revisions) if progress else None
+        figure_scope = digest(report.model_dump(mode="json"))
+        figure_versions: list[dict[str, Any]] = []
+        if writing_state and content_ready and figure_enabled:
+            saved = writing_state.preparation.get("figure")
+            if isinstance(saved, dict) and saved.get("body_hash") == figure_scope:
+                try:
+                    figure_versions = saved["versions"]
+                    if (
+                        not isinstance(figure_versions, list)
+                        or not 1 <= len(figure_versions) <= policy.max_revisions + 1
+                    ):
+                        raise ValueError("invalid figure progress length")
+                    for version in figure_versions:
+                        ConceptFigure.model_validate(version["model"])
+                    figure = figure_versions[-1]["model"]
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise WritingProgressError("配套图示进度无法恢复") from exc
+
+        async def save_figure_progress() -> None:
+            if progress and writing_state:
+                writing_state.preparation["figure"] = {
+                    "body_hash": figure_scope,
+                    "versions": figure_versions,
+                }
+                await progress.save(writing_state)
+
         if (
             content_ready
             and figure_enabled
+            and figure is None
             and REVISION_KEY in bb.scratch
             and previous.get("concept_figure")
         ):
@@ -623,11 +710,23 @@ class TemplateWriter:
             current = ConceptFigure.model_validate(figure).model_copy(
                 update={"evidence_mode": "scoped"}
             )
-            for attempt in range(policy.max_revisions + 1):
+            if not figure_versions:
+                figure_versions.append({"model": current.model_dump(mode="json"), "record": None})
+                await save_figure_progress()
+            for version in figure_versions:
+                if isinstance(version.get("record"), dict):
+                    prime_figure(
+                        figure_reviewer,
+                        ConceptFigure.model_validate(version["model"]),
+                        version["record"],
+                    )
+            for attempt in range(len(figure_versions) - 1, policy.max_revisions + 1):
                 ctx.tracer.emit(
                     "SYNTHESIZER", "info", "核对图示节点与关系…", data={"category": "figure_review"}
                 )
                 figure_record = await review_figure(current, figure_reviewer)
+                figure_versions[-1]["record"] = figure_record
+                await save_figure_progress()
                 if (
                     figure_record["status"] == "pass"
                     or not figure_record["can_revise"]
@@ -644,33 +743,35 @@ class TemplateWriter:
                         ctx.tracer.emit(
                             "SYNTHESIZER", "info", "仅修订未通过的图示单元，保留其余结构"
                         )
-                        continue
-                    current = await ctx.llm_for(self.name).parse(
-                        ctx.system_prompt(
-                            "仅修正图示，不改正文。箭头 A --优于--> B 表示 A 优于 B，不能反向。"
-                            "只用已核验素材。"
-                            "保持 scoped 逐单元引用；事实节点、方向关系及事实性图注"
-                            "都要有本次 citations。"
-                        ),
-                        PrefixPrompt(
-                            "已核验素材：\n" + material,
-                            "\n\n研究问题："
-                            + bb.query
-                            + "\n已定稿报告（限定图示范围，不代替原文证据）：\n"
-                            + source_body(report.markdown)
-                            + "\n\n当前图示："
-                            + current.model_dump_json()
-                            + "\n需要修正："
-                            + str(figure_record["issues"]),
-                        ),
-                        ConceptFigure,
-                        temperature=0.2,
-                    )
-                    current = current.model_copy(update={"evidence_mode": "scoped"})
+                    else:
+                        current = await ctx.llm_for(self.name).parse(
+                            ctx.system_prompt(
+                                "仅修正图示，不改正文。箭头 A --优于--> B 表示 A 优于 B，不能反向。"
+                                "只用已核验素材。"
+                                "保持 scoped 逐单元引用；事实节点、方向关系及事实性图注"
+                                "都要有本次 citations。"
+                            ),
+                            PrefixPrompt(
+                                "已核验素材：\n" + material,
+                                "\n\n研究问题："
+                                + bb.query
+                                + "\n已定稿报告（限定图示范围，不代替原文证据）：\n"
+                                + source_body(report.markdown)
+                                + "\n\n当前图示："
+                                + current.model_dump_json()
+                                + "\n需要修正："
+                                + str(figure_record["issues"]),
+                            ),
+                            ConceptFigure,
+                            temperature=0.2,
+                        )
+                        current = current.model_copy(update={"evidence_mode": "scoped"})
                 except LeaseLostError:
                     raise
                 except Exception:
                     break
+                figure_versions.append({"model": current.model_dump(mode="json"), "record": None})
+                await save_figure_progress()
             extras["concept_figure"] = current.model_dump(mode="json")
             extras[FIGURE_REVIEW_KEY] = figure_record
         bb.scratch[WORKBENCH_SCRATCH_KEY] = WriterState(
@@ -683,6 +784,7 @@ class TemplateWriter:
             if content_ready
             else f"{template.title}处理结束，正文尚未通过交付检查",
         )
+        await finish(progress, bb, policy.max_revisions)
         return bb
 
 
@@ -1000,6 +1102,18 @@ class MindmapWriter(TemplateWriter):
         material, url_to_idx = eligible_material(bb.results, require_corroboration=corroboration)
         ctx.tracer.emit("SYNTHESIZER", "start", "整理思维导图…")
         policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
+        progress = for_writer(
+            bb,
+            ctx,
+            self.name,
+            self.system_prompt(template, contract),
+            inputs={"material": material, "citations": url_to_idx},
+        )
+        if await restore_finished(progress, bb, policy.max_revisions):
+            return bb
+        saved_drafts = (
+            bool((await progress.load(policy.max_revisions)).drafts) if progress else False
+        )
         versions: dict[str, Any] = {}
         reviews: dict[str, dict[str, Any]] = {}
         citations = [url for url, _ in sorted(url_to_idx.items(), key=lambda item: item[1])]
@@ -1029,6 +1143,7 @@ class MindmapWriter(TemplateWriter):
             else None
         )
         requires_coverage_rewrite = False
+        current_body = ""
 
         from .content_revision import REVISION_KEY
         from .mindmap_edit import prime_review
@@ -1036,6 +1151,7 @@ class MindmapWriter(TemplateWriter):
         seed_model: Mindmap | None = None
         if (
             REVISION_KEY in bb.scratch
+            and not saved_drafts
             and bb.report is not None
             and bb.report.citations == citations
         ):
@@ -1062,12 +1178,13 @@ class MindmapWriter(TemplateWriter):
                     seed_model = prior_model
 
         async def write(revision: str | None) -> str:
-            nonlocal seed_model
+            nonlocal seed_model, current_body
             if seed_model is not None:
                 model, seed_model = seed_model, None
                 bb.scratch["_mindmap"] = model.model_dump(mode="json")
                 body = mindmap_to_markdown(model)
                 versions[body] = deepcopy(bb.scratch["_mindmap"])
+                current_body = body
                 return body
             if revision is None and last_model is not None:
                 revision = "继续修订原图未通过的节点"
@@ -1102,10 +1219,12 @@ class MindmapWriter(TemplateWriter):
             else:
                 body = await self.write(bb, ctx, template, contract, material, revision)
             versions[body] = deepcopy(bb.scratch.get("_mindmap"))
+            current_body = body
             return body
 
         async def assess(body: str) -> Assessment:
-            nonlocal last_model, last_record, requires_coverage_rewrite
+            nonlocal last_model, last_record, requires_coverage_rewrite, current_body
+            current_body = body
             raw = bb.scratch.get("_mindmap") or {}
             model = Mindmap.model_validate(raw)
             hard = structural_issues(model, len(citations))
@@ -1113,6 +1232,10 @@ class MindmapWriter(TemplateWriter):
             decisions = await reviewer.review(review_units(model, bb.query))
             record = review_record(raw, citations, bb.results, decisions)
             record["reviewer"] = reviewer.provenance
+            reviews[body] = record
+            last_model, last_record = model, record
+            if progress:
+                await progress.save_context()
             if coverage_reviewer:
                 coverage = await coverage_reviewer.review(
                     body, material_bases(bb.scratch, record, review_units(model, bb.query))
@@ -1132,8 +1255,34 @@ class MindmapWriter(TemplateWriter):
                 ),
             )
 
+        def capture() -> dict[str, Any]:
+            return {
+                "body": current_body,
+                "model": versions.get(current_body),
+                "record": reviews.get(current_body),
+                "repairs": repairs,
+                "coverage_rewrite": requires_coverage_rewrite,
+            }
+
+        def restore(value: dict[str, Any]) -> bool:
+            nonlocal current_body, last_model, last_record, requires_coverage_rewrite, seed_model
+            current_body = value["body"]
+            last_model = Mindmap.model_validate(value["model"])
+            seed_model = None
+            versions[current_body] = last_model.model_dump(mode="json")
+            bb.scratch["_mindmap"] = versions[current_body]
+            last_record = value.get("record")
+            repairs[:] = value.get("repairs", [])
+            requires_coverage_rewrite = value.get("coverage_rewrite", False)
+            if last_record is None:
+                return True
+            reviews[current_body] = last_record
+            return prime_review(reviewer, last_model, bb.query, citations, bb.results, last_record)
+
+        if progress:
+            progress.capture, progress.restore = capture, restore
         body, revision_log = await write_with_revisions(
-            write, assess, max_revisions=policy.max_revisions
+            write, assess, max_revisions=policy.max_revisions, progress=progress
         )
         bb.scratch["_mindmap"] = versions[body]
         report = Report(query=bb.query, markdown=body, citations=citations)
@@ -1149,6 +1298,7 @@ class MindmapWriter(TemplateWriter):
         ctx.tracer.emit(
             "SYNTHESIZER", "info", f"思维导图完成：{json.dumps(stats, ensure_ascii=False)}"
         )
+        await finish(progress, bb, policy.max_revisions)
         return bb
 
 

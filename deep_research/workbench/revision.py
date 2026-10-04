@@ -220,6 +220,7 @@ async def write_with_revisions(
     *,
     max_revisions: int,
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
+    progress: Any | None = None,
 ) -> tuple[str, RevisionLog]:
     """执行返工循环，返回问题最少的一版正文与返工记录。
 
@@ -227,25 +228,76 @@ async def write_with_revisions(
     写作本身抛出的异常（预算耗尽等）向上传播给调用方，已有的最好版本不会丢失——
     调用方在首稿之后失败时，本函数返回已有最好版本。
     """
+    from .writing_progress import SavedAssessment, SavedDraft, WritingState
+
+    state = (
+        await progress.load(max_revisions)
+        if progress
+        else WritingState(max_revisions=max_revisions)
+    )
+    # A stopped verifier can be retried after restart without rewriting its draft.
+    if state.drafts and state.drafts[-1].assessment is not None:
+        previous = state.drafts[-1].assessment
+        if previous.hard and not previous.can_revise and state.final is None:
+            state.drafts[-1].assessment = None
+            state.complete = False
     log = RevisionLog()
     best: tuple[int, str, Assessment] | None = None
+    best_index = 0
     revision: str | None = None
-    for attempt in range(max_revisions + 1):
-        try:
-            body = await write(revision)
-        except LeaseLostError:
-            raise  # 租约被接管不是写作失败：交回已有版本会让失去租约的 worker 继续写盘
-        except Exception:
-            if best is None:
+    for index, draft in enumerate(state.drafts):
+        if progress:
+            valid = await progress.restore_draft(draft)
+            if not valid:
+                if index != len(state.drafts) - 1:
+                    from .writing_progress import WritingProgressError
+
+                    raise WritingProgressError("较早草稿的核验记录无法恢复，未重复生成正文")
+                draft.assessment = None
+                state.complete = False
+        if draft.assessment is None:
+            continue
+        assessment = draft.assessment.restore()
+        log.attempts = index + 1
+        log.history.append({"attempt": index + 1, "hard": len(assessment.hard)})
+        if best is None or len(assessment.hard) <= best[0]:
+            best = (len(assessment.hard), draft.body, assessment)
+            best_index, log.chosen = index, index + 1
+        revision = revision_prompt(draft.body, assessment)
+    start = len(state.drafts)
+    if state.drafts and state.drafts[-1].assessment is None:
+        start -= 1
+    for attempt in range(start, max_revisions + 1) if not state.complete else ():
+        if attempt < len(state.drafts):
+            draft = state.drafts[attempt]
+            body = draft.body
+        else:
+            try:
+                body = await write(revision)
+            except LeaseLostError:
                 raise
-            break
+            except Exception:
+                if best is None:
+                    raise
+                break
+            draft = SavedDraft(body=body, context=progress.snapshot() if progress else {})
+            state.drafts.append(draft)
+            if progress:
+                await progress.save(state)
         result = assess(body)
         assessment = await result if inspect.isawaitable(result) else result
+        draft.assessment = SavedAssessment.capture(assessment)
+        if progress:
+            draft.context = progress.snapshot()
         log.attempts = attempt + 1
         log.history.append({"attempt": attempt + 1, "hard": len(assessment.hard)})
         if best is None or len(assessment.hard) <= best[0]:
             best = (len(assessment.hard), body, assessment)
+            best_index = attempt
             log.chosen = attempt + 1
+        state.complete = assessment.clean or not assessment.can_revise or attempt == max_revisions
+        if progress:
+            await progress.save(state)
         if on_event is not None:
             on_event(
                 "quality.check",
@@ -255,10 +307,12 @@ async def write_with_revisions(
                     "soft": assessment.soft[:5],
                 },
             )
-        if assessment.clean or not assessment.can_revise or attempt == max_revisions:
+        if state.complete:
             break
         revision = revision_prompt(body, assessment)
     assert best is not None
+    if progress:
+        await progress.restore_draft(state.drafts[best_index])
     log.remaining = best[2].hard
     log.advisories = best[2].soft
     return best[1], log
