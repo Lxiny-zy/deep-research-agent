@@ -315,14 +315,16 @@ class TemplateWriter:
         from .content_revision import revision_seed
 
         seed, seed_review = revision_seed(bb)
-        if template.key not in {"autoResearch", "litReview", "paperRead"} or (
+        if template.key not in {"autoResearch", "litReview", "paperRead", "peerReview"} or (
             seed is not None and seed.citations != list(url_to_idx)
         ):
             seed = None
         seed_pending = seed is not None
+        if seed is not None and template.key == "peerReview":
+            bb.scratch["_review_score"] = extract_review_score(seed.markdown)
 
         async def write(revision: str | None) -> str:
-            nonlocal seed_pending, current_body
+            nonlocal seed_pending, current_body, local_revision
             body = None
             if seed_pending and seed is not None and reviewer is not None:
                 seed_pending = False
@@ -349,17 +351,36 @@ class TemplateWriter:
                 from .prose_edit import repair_paragraphs
 
                 ctx.tracer.emit("SYNTHESIZER", "info", "仅修订未通过核验的段落，保留其余正文…")
-                body = await repair_paragraphs(
-                    ctx.llm_for(self.name),
-                    reviewer,
-                    last_body,
-                    last_audit,
-                    local_problems=local_problems,
-                )
+                try:
+                    body = await repair_paragraphs(
+                        ctx.llm_for(self.name),
+                        reviewer,
+                        last_body,
+                        last_audit,
+                        local_problems=local_problems,
+                    )
+                except (LeaseLostError, TokenBudgetExceeded, WritingProgressError):
+                    raise
+                except Exception as exc:
+                    local_revision = False
+                    ctx.tracer.emit(
+                        "SYNTHESIZER",
+                        "info",
+                        "局部修订未完成，改用完整草稿修订并重新核验。",
+                        data={
+                            "category": "local_revision_fallback",
+                            "error_type": type(exc).__name__,
+                        },
+                    )
                 if body is not None:
                     ctx.tracer.emit("SYNTHESIZER", "token", data={"delta": body, "replace": True})
             if body is None:
                 body = await self.write(bb, ctx, template, contract, material, revision)
+            if template.key == "peerReview":
+                score = extract_review_score(body)
+                if score is not None:
+                    bb.scratch["_review_score"] = score
+                body = peer_scored_body(body, bb.scratch.get("_review_score"))
             unrendered = body
             body, table_record = render_specs(
                 body,
@@ -382,7 +403,7 @@ class TemplateWriter:
             nonlocal last_body, last_audit, local_revision, local_problems, current_body
             current_body = body
             assessment = assess_draft(
-                body,
+                peer_factual_body(body) if template.key == "peerReview" else body,
                 template=template,
                 query=bb.query,
                 results=bb.results,
@@ -554,7 +575,11 @@ class TemplateWriter:
                 ctx.tracer.emit("SYNTHESIZER", "info", "预算不足，使用已核验素材摘要交付")
                 body = "预算不足，以下仅提供已核验素材摘要。"
         citations = [url for url, _ in sorted(url_to_idx.items(), key=lambda item: item[1])]
-        report = Report(query=bb.query, markdown=body.strip(), citations=citations)
+        report = Report(
+            query=bb.query,
+            markdown=peer_factual_body(body) if template.key == "peerReview" else body.strip(),
+            citations=citations,
+        )
         body_replaced = False
         if url_to_idx:
             report, check = finalize_report(
@@ -803,6 +828,22 @@ def extract_review_score(markdown: str) -> int | None:
     return None
 
 
+def peer_factual_body(markdown: str) -> str:
+    """Remove the reviewer's subjective rating before source-number validation."""
+    from ..bibliography import source_body
+
+    body = _SCORE_LINE_RE.sub("", source_body(markdown))
+    body = re.sub(r"(?m)^##[ \t]+审稿结论[ \t]*(?:\r?\n[ \t]*)*(?=^#{1,2}[ \t]+|\Z)", "", body)
+    return body.strip()
+
+
+def peer_scored_body(markdown: str, score: Any) -> str:
+    body = peer_factual_body(markdown)
+    if isinstance(score, int) and not isinstance(score, bool) and 1 <= score <= 10:
+        body += f"\n\n## 审稿结论\n\n评分：{score}/10"
+    return body
+
+
 @register("research_writer")
 class ResearchWriter(TemplateWriter):
     """课题调研写作者：与综述共用质量管线（章节契约、返工循环、学术检查）。"""
@@ -838,12 +879,18 @@ class PeerReviewer(TemplateWriter):
 
     评分是审稿人的**判断**，不是关于论文的事实断言：它不应该、也无法由来源
     原文支持。若让「评分：7/10」进入引用/数值复核，数字 7 和 10 都找不到证据，
-    整篇评审会被回退成素材摘要，评分也随之丢失。因此评分行在复核之前取出，
-    复核只作用于事实性正文，评分作为独立的「审稿结论」段落追加回去。
+    整篇评审会被回退成素材摘要。评分参与完整内容覆盖检查，机械数值校验只处理
+    事实性正文；定稿仍保留独立的「审稿结论」。退化为诊断摘要时不追加评分。
     """
 
     template_key = "peerReview"
     output_keys = ("_review_score",)
+
+    def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
+        return super().system_prompt(template, contract) + (
+            "\n总体评分单独写成‘评分：N/10’一行，不在这一行混入论文事实或评分理由；"
+            "评分是审稿人的主观结论，不能代替有出处的事实评价。"
+        )
 
     async def write(
         self,
@@ -861,11 +908,15 @@ class PeerReviewer(TemplateWriter):
 
     def postprocess(self, bb: Blackboard, report: Report, template: TaskTemplate) -> dict[str, Any]:
         score = bb.scratch.pop("_review_score", None)
-        if isinstance(score, int):
-            verdict = f"\n\n## 审稿结论\n\n评分：{score}/10\n"
+        validation = bb.scratch.get("_report_validation", {})
+        if isinstance(validation, dict) and validation.get("fallback"):
+            score = None
+        if isinstance(score, int) and not isinstance(score, bool) and 1 <= score <= 10:
             body, sep, refs = report.markdown.partition("\n## 参考来源")
-            report.markdown = body.rstrip() + verdict + (sep + refs if sep else "")
+            report.markdown = peer_scored_body(body, score) + "\n" + (sep + refs if sep else "")
             bb.report = report
+        else:
+            score = None
         return {"score": score}
 
 

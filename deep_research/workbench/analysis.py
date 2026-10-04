@@ -1036,9 +1036,17 @@ class DataAnalyst:
                 hard.append("正文为空")
             hard += list(structure_gate(draft, template).issues)
             if policy.register_check:
+                from .gate_classification import STYLE_CODES
+
                 findings = check_register(draft, policy)
-                hard += [f.render() for f in findings if f.severity == "error"]
-                soft = [f.render() for f in findings if f.severity == "warning"]
+                hard += [
+                    f.render()
+                    for f in findings
+                    if f.severity == "error" and f.code not in STYLE_CODES
+                ]
+                soft = [
+                    f.render() for f in findings if f.severity == "warning" or f.code in STYLE_CODES
+                ]
             else:
                 soft = []
             audit = await reviewer.review(draft)

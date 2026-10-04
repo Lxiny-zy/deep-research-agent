@@ -22,7 +22,7 @@ from __future__ import annotations
 import inspect
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..models import ResearchResult
@@ -174,6 +174,15 @@ def assess_draft(
         source_texts=None,  # 时效覆盖是检索问题，不在写作返工里判
         document_keys=document_keys,
     )
+    from .gate_classification import STYLE_CODES
+
+    # Completion already treats these as advice. Do not spend the repair
+    # budget or rewrite verified paragraphs solely to remove stylistic hints.
+    report.findings = [
+        replace(finding, severity="warning") if finding.code in STYLE_CODES else finding
+        for finding in report.findings
+    ]
+    report.metrics.update(errors=len(report.errors), warnings=len(report.warnings))
     hard += [finding.render() for finding in report.errors]
     if local_problems is not None:
         for finding in report.errors:
@@ -228,7 +237,7 @@ async def write_with_revisions(
     写作本身抛出的异常（预算耗尽等）向上传播给调用方，已有的最好版本不会丢失——
     调用方在首稿之后失败时，本函数返回已有最好版本。
     """
-    from .writing_progress import SavedAssessment, SavedDraft, WritingState
+    from .writing_progress import SavedAssessment, SavedDraft, WritingProgressError, WritingState
 
     state = (
         await progress.load(max_revisions)
@@ -250,8 +259,6 @@ async def write_with_revisions(
             valid = await progress.restore_draft(draft)
             if not valid:
                 if index != len(state.drafts) - 1:
-                    from .writing_progress import WritingProgressError
-
                     raise WritingProgressError("较早草稿的核验记录无法恢复，未重复生成正文")
                 draft.assessment = None
                 state.complete = False
@@ -274,7 +281,7 @@ async def write_with_revisions(
         else:
             try:
                 body = await write(revision)
-            except LeaseLostError:
+            except (LeaseLostError, WritingProgressError):
                 raise
             except Exception:
                 if best is None:

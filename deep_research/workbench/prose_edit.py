@@ -50,6 +50,22 @@ _SYSTEM = (
 
 def _shape(unit: SupportUnit, text: str) -> tuple[str, ...] | None:
     blocks = parse_blocks(text)
+    if unit.kind == "translation":
+        if (
+            not blocks
+            or blocks[0].kind != "heading"
+            or not any(
+                block.kind not in {"heading", "rule"} and block.plain().strip() for block in blocks
+            )
+        ):
+            return None
+        lines = text.splitlines()
+        headings = [
+            "\n".join(lines[token.map[0] : token.map[1]])
+            for token in _parser().parse(text)
+            if token.type == "heading_open" and token.map
+        ]
+        return ("translation", *headings)
     if len(blocks) != 1:
         return None
     if "\n表头：" in unit.context:
@@ -152,25 +168,29 @@ async def repair_paragraphs(
     spans = {}
     payload = []
     known = {item["citation"] for item in reviewer.evidence if item["citation"] >= 0}
-    needed: set[int] = set()
+    abstract_known = {item["citation"] for item in reviewer.evidence if item["citation"] < 0}
+    needed: dict[bool, set[int]] = {}
     shapes = {}
     for unit in targets:
         shape = _shape(unit, unit.text)
-        if unit.kind == "translation" or shape is None:
+        if shape is None:
             return None
         shapes[unit.id] = shape
-        if not set(unit.citations).issubset(known):
+        translation = unit.kind == "translation"
+        allowed = abstract_known if translation else known
+        if not set(unit.citations).issubset(allowed) or (translation and not unit.citations):
             return None
         # Missing printed citations can be repaired against existing admitted
         # evidence; the replacement still undergoes full semantic/numeric checks.
-        needed.update(unit.citations or known)
+        group_needed = needed.setdefault(translation, set())
+        group_needed.update(unit.citations or allowed)
         # A checker may point to a specific existing source missing from the
         # paragraph. Include it without resending unrelated parts of the paper.
-        needed.update(
+        group_needed.update(
             int(n)
             for group in re.findall(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]", "\n".join(problems[unit.id]))
             for n in re.split(r"\s*[,，]\s*", group)
-            if int(n) in known
+            if not translation and int(n) in known
         )
         location = by_id[unit.id]
         start, end = location["start_line"] - 1, location["end_line"]
@@ -189,25 +209,40 @@ async def repair_paragraphs(
                 "structure": shape[0],
             }
         )
-    # Abstract material is deliberately absent: paragraph edits cannot use
-    # translation-only evidence to justify new body claims.
-    evidence = [item for item in reviewer.evidence if item["citation"] in needed]
-    fixed = "【已核验证据】\n" + json.dumps(evidence, ensure_ascii=False)
-    dynamic = "\n\n【只修订以下段落】\n" + json.dumps(
-        {"query": reviewer.query, "paragraphs": payload}, ensure_ascii=False
-    )
+    # Translation-only evidence never enters the request that edits body claims.
+    requests = []
     capacity = getattr(llm, "input_capacity_chars", reviewer.capacity)
-    system = direct_system_prompt(_SYSTEM)
-    if len(structured_system_prompt(system, ProseEdits)) + len(fixed) + len(dynamic) > capacity:
-        return None
-    response = await llm.parse(system, PrefixPrompt(fixed, dynamic), ProseEdits, temperature=0.2)
-    if len(response.edits) != len(targets) or {edit.unit_id for edit in response.edits} != set(
-        spans
-    ):
-        raise ValueError("局部修订缺少段落或包含未知段落，未替换原文")
+    allowed_edits = {}
+    for translation, group_needed in needed.items():
+        group = [part for part in payload if (part["structure"] == "translation") == translation]
+        evidence = [item for item in reviewer.evidence if item["citation"] in group_needed]
+        fixed = "【已核验证据】\n" + json.dumps(evidence, ensure_ascii=False)
+        dynamic = "\n\n【只修订以下段落】\n" + json.dumps(
+            {"query": reviewer.query, "paragraphs": group}, ensure_ascii=False
+        )
+        rules = _SYSTEM
+        if translation:
+            rules += (
+                "translation 是完整摘要翻译章节，replacement 包含原有标题与全部修订译文。"
+                "标题逐字保留，译文段落可调整；只能逐句依据给定完整原摘要，不得概述或省略限定条件。"
+                "负号 citation 是内部摘要标识，不是文献编号，不得输出这些编号或添加正文引用。"
+                "修订后仍会对照完整原文重新检查译文。"
+            )
+        system = direct_system_prompt(rules)
+        if len(structured_system_prompt(system, ProseEdits)) + len(fixed) + len(dynamic) > capacity:
+            return None
+        ids = {part["unit_id"] for part in group}
+        requests.append((system, PrefixPrompt(fixed, dynamic), ids))
+        allowed_edits.update({uid: group_needed for uid in ids})
+    proposals = []
+    for system, prompt, ids in requests:
+        response = await llm.parse(system, prompt, ProseEdits, temperature=0.2)
+        if len(response.edits) != len(ids) or {edit.unit_id for edit in response.edits} != ids:
+            raise ValueError("局部修订缺少段落或包含未知段落，未替换原文")
+        proposals.extend(response.edits)
     edits = []
     by_unit = {unit.id: unit for unit in targets}
-    for edit in response.edits:
+    for edit in proposals:
         replacement = edit.replacement.strip()
         start, end, original = spans[edit.unit_id]
         if not replacement or _shape(by_unit[edit.unit_id], replacement) != shapes[edit.unit_id]:
@@ -219,14 +254,19 @@ async def repair_paragraphs(
             for group in re.findall(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]", citation_text(replacement))
             for n in re.split(r"\s*[,，]\s*", group)
         }
-        if not cited.issubset(needed):
+        if not cited.issubset(allowed_edits[edit.unit_id]):
             raise ValueError("局部修订使用了未提供的来源编号，未替换原文")
+        if by_unit[edit.unit_id].kind == "translation" and re.search(
+            r"\[\s*-\d+(?:\s*[,，]\s*-\d+)*\s*\]", citation_text(replacement)
+        ):
+            raise ValueError("摘要译文不能输出内部来源编号，未替换原文")
         indent = (
             original[: len(original) - len(original.lstrip(" \t"))]
             if shapes[edit.unit_id][0] == "list"
             else ""
         )
-        edits.append((start, end, indent + replacement + ("\n" if original.endswith("\n") else "")))
+        trailing = original[len(original.rstrip()) :]
+        edits.append((start, end, indent + replacement + trailing))
     for start, end, replacement in sorted(edits, reverse=True):
         lines[start:end] = [replacement]
     return "".join(lines)
