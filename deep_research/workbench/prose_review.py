@@ -341,6 +341,8 @@ class ProseReviewer:
             item["unit_id"]: SupportDecision.model_validate(item) for item in record["decisions"]
         }
         for unit in units:
+            if unit.id in record.get("deferred_units", []):
+                continue
             decision = decisions[unit.id]
             selected = [e for e in self.evidence if e["citation"] in unit.citations]
             allowed = {e["id"] for e in selected}
@@ -486,15 +488,27 @@ class ProseReviewer:
             "uncited_sections": list(self.uncited_sections),
         }
 
-    async def review(self, markdown: str) -> dict[str, Any]:
+    async def review(
+        self, markdown: str, *, deferred: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        deferred = deferred or {}
         signature = self.signature(markdown)
         content_key = self.signature(body_text(markdown, strip_references=not self.implicit))
-        if cached := self.cached_review(markdown):
+        if not deferred and (cached := self.cached_review(markdown)):
             # Adding code-owned bibliography text does not require rejudging
             # the same prose. The public record still binds the complete file.
             return await self._with_requirements(markdown, cached)
         units, locations = self.units(markdown)
-        decisions = await self.reviewer.review(units)
+        if not set(deferred).issubset(unit.id for unit in units):
+            raise ValueError("机械问题定位包含未知正文单元")
+        checked = await self.reviewer.review([unit for unit in units if unit.id not in deferred])
+        by_unit = {decision.unit_id: decision for decision in checked}
+        decisions = [
+            SupportDecision(unit_id=unit.id, verdict="unsupported", reason=deferred[unit.id])
+            if unit.id in deferred
+            else by_unit[unit.id]
+            for unit in units
+        ]
         problems = [d for d in decisions if d.verdict not in {"supported", "non_factual"}]
         by_id = {unit.id: unit for unit in units}
         positions = {loc["id"]: loc["start_line"] for loc in locations}
@@ -502,7 +516,9 @@ class ProseReviewer:
             "version": 4 if self.translation_citations is not None else 3,
             "input_hash": signature,
             "status": "fail" if problems or not units else "pass",
-            "scope": "model_assessed_final_prose_support",
+            "scope": "model_assessed_partial_prose_support"
+            if deferred
+            else "model_assessed_final_prose_support",
             "reviewer": self.reviewer.provenance,
             "units": locations,
             "decisions": [d.model_dump(mode="json") for d in decisions],
@@ -514,6 +530,7 @@ class ProseReviewer:
             "require_corroboration": self.corroboration,
             "uncited_sections": list(self.uncited_sections),
             "protocol_repairs": list(self.reviewer.protocol_repairs),
+            **({"deferred_units": list(deferred)} if deferred else {}),
         }
         if not units:
             record["issues"] = ["正文没有可核对内容"]
@@ -537,7 +554,8 @@ class ProseReviewer:
         # This memo exists only for one revision loop. Unknown remains unknown;
         # do not reroll a judgement just because finalization added references.
         record = await self._with_requirements(markdown, record)
-        self.records[content_key] = record
+        if not deferred:
+            self.records[content_key] = record
         return record
 
     def check(self, markdown: str, record: Any) -> tuple[bool, list[str]]:
@@ -551,6 +569,11 @@ class ProseReviewer:
         except ValueError:
             return False, ["终稿核验记录无法解析"]
         expected = {u.id: u for u in units}
+        deferred = record.get("deferred_units", [])
+        if not isinstance(deferred, list) or any(
+            not isinstance(uid, str) or uid not in expected for uid in deferred
+        ):
+            return False, ["机械问题定位与正文不一致"]
         if (
             not units
             or len(decisions) != len(expected)
@@ -573,6 +596,9 @@ class ProseReviewer:
         positions = {location["id"]: location["start_line"] for location in locations}
         for d in decisions:
             unit = expected[d.unit_id]
+            if d.unit_id in deferred and d.verdict in {"supported", "non_factual"}:
+                problems.append(f"第 {positions[d.unit_id]} 行：此单元仍待机械修订后的断言核验")
+                continue
             fulltext_only = not d.evidence_ids and self.reviewer.fulltext_supports(unit, d)
             allowed = {
                 e["id"] for e in self.evidence if e["citation"] in expected[d.unit_id].citations

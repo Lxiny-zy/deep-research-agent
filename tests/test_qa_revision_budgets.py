@@ -20,6 +20,7 @@ class BudgetWriter(Judge):
         self.missing_citation = missing_citation
         self.repair_on = repair_on
         self.local_edits = 0
+        self.citation_edits = 0
 
     async def stream(self, *args, **kwargs):
         self.stream_calls += 1
@@ -27,13 +28,19 @@ class BudgetWriter(Judge):
 
     async def parse(self, system, user, schema, **kwargs):
         if schema is ProseEdits:
-            self.local_edits += 1
             payload = json.loads(user.split("【只修订以下段落】\n", 1)[1])
+            missing = any("[1]" not in part["text"] for part in payload["paragraphs"])
+            if missing:
+                self.citation_edits += 1
+            else:
+                self.local_edits += 1
             return ProseEdits(
                 edits=[
                     {
                         "unit_id": part["unit_id"],
-                        "replacement": GOOD if self.local_edits >= self.repair_on else "现有" + BAD,
+                        "replacement": BAD
+                        if missing
+                        else (GOOD if self.local_edits >= self.repair_on else "现有" + BAD),
                     }
                     for part in payload["paragraphs"]
                 ]
@@ -51,7 +58,7 @@ async def test_citation_repair_leaves_the_full_claim_budget_available(settings):
     model = BudgetWriter()
     result = await ask(settings, model)
     assert not result.fallback and result.answer == GOOD
-    assert model.stream_calls == 2 and model.local_edits == 2
+    assert model.stream_calls == 1 and model.local_edits == 2 and model.citation_edits == 1
     attempts = [row for row in result.thoughts if row["tool"] == "answer_revision"]
     assert [row["category"] for row in attempts] == ["mechanical", "claim", "claim"]
     assert [row["attempt"] for row in attempts] == [1, 1, 2]
@@ -71,6 +78,11 @@ async def test_claim_budget_does_not_extend_repeated_citation_repairs(settings):
         async def stream(self, *args, **kwargs):
             self.stream_calls += 1
             yield BAD.replace(" [1]", "")
+
+        async def parse(self, system, user, schema, **kwargs):
+            if schema is ProseEdits:
+                raise ValueError("local repair unavailable")
+            return await super().parse(system, user, schema, **kwargs)
 
     settings.quality = {"max_revisions": 1, "qa_claim_max_revisions": 4}
     model = Uncited()

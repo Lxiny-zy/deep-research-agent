@@ -138,6 +138,7 @@ async def repair_paragraphs(
     record: dict[str, Any],
     *,
     local_problems: list[tuple[str, str]] | None = None,
+    only_units: set[str] | None = None,
 ) -> str | None:
     bound, _ = reviewer.check(markdown, record)
     if not bound or not record.get("can_revise", True):
@@ -155,7 +156,11 @@ async def repair_paragraphs(
         return None
     for uid, decision in decisions.items():
         problems.setdefault(uid, []).append(decision["reason"])
-    targets = [unit for unit in units if unit.id in problems]
+    targets = [
+        unit
+        for unit in units
+        if unit.id in problems and (only_units is None or unit.id in only_units)
+    ]
     if not targets:
         return None
     by_id = {loc["id"]: loc for loc in locations}

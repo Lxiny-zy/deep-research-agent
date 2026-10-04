@@ -486,48 +486,70 @@ async def answer_question(
         sources=fulltext_sources,
     )
 
-    async def assess_answer(text: str) -> tuple[ReportCheck, dict[str, Any] | None]:
-        mechanical = validate_body(text, results, url_to_idx, fallback=False)
-        audit = None
-        if not mechanical.issues:
-            if on_event is not None:
-                on_event({"type": "status", "message": "正在核对结论是否得到引用支持…"})
-            audit = await reviewer.review(mechanical.body)
+    from .prose_review import body_text
+    from .qa_revision import claim_problems, draft_rank, mechanical_deferrals, partial_answer
+
+    async def assess_answer(text: str) -> tuple[ReportCheck, dict[str, Any]]:
+        mechanical = validate_body(body_text(text), results, url_to_idx, fallback=False)
+        units, locations = reviewer.units(mechanical.body)
+        deferred = mechanical_deferrals(mechanical, units, locations)
+        if on_event is not None:
+            on_event({"type": "status", "message": "正在核对结论是否得到引用支持…"})
+        audit = await reviewer.review(mechanical.body, deferred=deferred)
         return mechanical, audit
 
     check, audit = await assess_answer(body)
+    best_check, best_audit = check, audit
     from .quality import coerce_policy
 
     policy = coerce_policy(ctx.settings.quality)
     revision_limits = {"mechanical": policy.max_revisions, "claim": policy.qa_claim_max_revisions}
     revision_counts = {"mechanical": 0, "claim": 0}
     while True:
-        support_issues = audit["issues"] if audit and audit["status"] != "pass" else []
+        if draft_rank(check, audit) < draft_rank(best_check, best_audit):
+            best_check, best_audit = check, audit
+        support = claim_problems(audit)
+        support_issues = list(support.values())
         if (not check.issues and not support_issues) or (audit and not audit["can_revise"]):
             break
-        category = "mechanical" if check.issues else "claim"
-        if revision_counts[category] >= revision_limits[category]:
+        pending = {"mechanical"} if check.issues else set()
+        if support_issues:
+            pending.add("claim")
+        active = {
+            category
+            for category in pending
+            if revision_counts[category] < revision_limits[category]
+        }
+        if not active:
             break
-        revision_counts[category] += 1
+        for category in active:
+            revision_counts[category] += 1
+        category = next(iter(active)) if len(active) == 1 else "mechanical+claim"
         # Repair citation/number problems against the same frozen evidence
         # before falling back to a generic extractive summary.
         thoughts.append(
             {
                 "tool": "answer_revision",
                 "category": category,
-                "attempt": revision_counts[category],
-                "limit": revision_limits[category],
+                "attempt": revision_counts.get(category),
+                "limit": revision_limits.get(category),
+                "counts": dict(revision_counts),
                 "input": "",
                 "observation": "按核验问题修订回答：" + "、".join([*check.issues, *support_issues]),
             }
         )
-        if audit and support_issues and not check.issues:
+        if audit:
             from .prose_edit import repair_paragraphs
 
             if on_event is not None:
                 on_event({"type": "status", "message": "正在修订未通过的段落，保留其余回答…"})
             try:
-                patched = await repair_paragraphs(model, reviewer, check.body, audit)
+                targets = set(audit.get("deferred_units", [])) if "mechanical" in active else set()
+                if "claim" in active:
+                    targets.update(support)
+                patched = await repair_paragraphs(
+                    model, reviewer, check.body, audit, only_units=targets
+                )
             except LeaseLostError:
                 raise
             except TokenBudgetExceeded:
@@ -549,6 +571,9 @@ async def answer_question(
                     on_delta(body)
                 check, audit = await assess_answer(body)
                 continue
+        if pending != active:
+            # A full rewrite would also spend the disabled/exhausted category.
+            break
         if on_event is not None:
             on_event({"type": "reset", "message": "正在核对引用并修订回答…"})
         repair = (
@@ -581,14 +606,33 @@ async def answer_question(
             )
             break
         check, audit = await assess_answer(body)
-    check = validate_body(body, results, url_to_idx)
-    semantic_failed = bool(audit and audit["status"] != "pass")
+    check, audit = best_check, best_audit
+    body = check.body
+    semantic_failed = audit["status"] != "pass"
     answer = check.body
-    if semantic_failed and audit is not None:
-        reason = "本轮结论核验未完成" if not audit["can_revise"] else "部分表述未通过结论核验"
-        answer = (
-            reason + "，以下仅保留已核验素材。\n\n" + validate_body("", results, url_to_idx).body
-        )
+    incomplete = bool(check.issues) or semantic_failed
+    if incomplete:
+        partial = partial_answer(check, audit, reviewer)
+        if (
+            partial is not None
+            and not validate_body(partial[0], results, url_to_idx, fallback=False).issues
+        ):
+            answer, partial_record = partial
+            thoughts.append(
+                {
+                    "tool": "partial_answer",
+                    "input": "",
+                    "observation": "保留已通过的段落，仅标注尚未通过的部分",
+                    "review": partial_record,
+                }
+            )
+        else:
+            reason = "本轮结论核验未完成" if not audit["can_revise"] else "部分表述未通过结论核验"
+            answer = (
+                reason
+                + "，以下仅保留已核验素材。\n\n"
+                + validate_body("", results, url_to_idx).body
+            )
     if audit:
         thoughts.append(
             {
@@ -598,7 +642,7 @@ async def answer_question(
                 if not semantic_failed
                 else "；".join(audit["issues"]),
                 "review": audit,
-                **({"unapproved_draft": body} if semantic_failed else {}),
+                **({"unapproved_draft": body} if incomplete else {}),
             }
         )
     thoughts.append(
@@ -640,7 +684,7 @@ async def answer_question(
         citations=citations,
         findings=findings,
         thoughts=thoughts,
-        fallback=bool(check.issues) or semantic_failed,
+        fallback=incomplete,
         unresolved_topics=unresolved_topics,
         origins={url: origins.get(url, "web") for url in citations},
     )
