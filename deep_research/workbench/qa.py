@@ -176,7 +176,7 @@ async def answer_question(
     query = _contextual_query(question, history)
     thoughts.append({"tool": "rewrite", "input": question, "observation": query})
 
-    researcher = Researcher()
+    researcher = Researcher(settings=ctx.settings)
     researcher.llm = ctx.llm_for("researcher")
     researcher.verification_llm = ctx.llm_for("evidence_verifier")
     researcher.tracer = ctx.tracer

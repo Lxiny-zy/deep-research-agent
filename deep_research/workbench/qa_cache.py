@@ -28,13 +28,18 @@ def evidence_cache_key(scope: str, query: str, sources: list[Source], researcher
         }
 
     payload = {
-        "version": 10,
+        "version": 11,
         "scope": scope,
         "query": query,
         "sources": [source.model_dump(mode="json") for source in sources],
         "prompt": researcher.system,
         "extractor": model(researcher.llm),
         "verifier": model(researcher.verification_llm),
+        "finding_verification": {
+            "semantic_policy": researcher.semantic_verifier.policy_signature(),
+            "min_quote_chars": researcher.evidence_verifier.min_quote_chars,
+            "max_quote_chars": researcher.evidence_verifier.max_quote_chars,
+        },
         "source_screening": researcher.settings.intent_source_screening,
         "results_per_search": researcher.settings.results_per_search,
         "input_limit": researcher.settings.llm_max_input_chars,

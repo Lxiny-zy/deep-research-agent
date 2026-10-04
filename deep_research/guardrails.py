@@ -372,6 +372,12 @@ class SemanticEvidenceVerifier:
         + MEASUREMENT_SCOPE_RULES
     )
 
+    def policy_signature(self) -> str:
+        """Bind process-local evidence caches to the actual verification rules."""
+        system = compose_system_prompt(self._SYSTEM, load_global_rules())
+        payload = structured_system_prompt(system, SemanticEvidenceDecisionList)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     async def verify_batch(
         self, findings: list[Finding], llm: Any, *, raise_errors: bool = False
     ) -> list[Finding]:

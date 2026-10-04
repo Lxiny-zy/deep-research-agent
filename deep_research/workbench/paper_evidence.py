@@ -88,7 +88,7 @@ def merge_findings(*groups: list[Finding]) -> list[Finding]:
 async def current_findings(
     candidates: list[Finding], sources: list[Source], researcher: Any
 ) -> list[Finding]:
-    """Require the same source bytes, current source policy and a matching quote."""
+    """Re-admit historical claims against current source, quote and semantic rules."""
     if not candidates:
         return []
     wanted = {finding.source_url for finding in candidates}
@@ -116,8 +116,13 @@ async def current_findings(
             or verification.reason == "source_retracted"
         ):
             continue
-        result.append(finding.model_copy(deep=True))
-    return result
+        # The deterministic verifier refreshes anchors/metadata and resets old
+        # semantic verdicts. Never return the historical supported flag instead.
+        result.append(checked.finding)
+    checked_findings = await researcher.semantic_verifier.verify_batch(
+        result, researcher.verification_llm, raise_errors=True
+    )
+    return [finding for finding in checked_findings if report_eligible(finding)]
 
 
 async def select_findings(
