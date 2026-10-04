@@ -141,7 +141,8 @@ class InMemoryRepository:
             record.lease_owner = lease_owner
             record.lease_expires_at = (
                 datetime.now(UTC) + timedelta(seconds=EXECUTION_LEASE_SECONDS)
-                if lease_owner is not None else None
+                if lease_owner is not None
+                else None
             )
         self._runs[run_id] = record
         self._order.append(run_id)
@@ -440,8 +441,11 @@ class InMemoryRepository:
         return True
 
     async def claim_next_run(
-        self, owner: str, *, lease_seconds: int = EXECUTION_LEASE_SECONDS,
-        max_active_runs: int | None = None
+        self,
+        owner: str,
+        *,
+        lease_seconds: int = EXECUTION_LEASE_SECONDS,
+        max_active_runs: int | None = None,
     ) -> ClaimedRun | None:
         """Reference implementation of the claim protocol.
 
@@ -576,11 +580,16 @@ class InMemoryRepository:
             self._artifact_cleanup[run_id] = (
                 f"runs/{run_id}" if scratch.get("_artifact_run_scoped") else slug
             )
+        else:
+            self._artifact_cleanup[run_id] = f"runs/{run_id}"
         del self._runs[run_id]
         self._order.remove(run_id)
         for key, (stored_id, _hash) in list(self._idempotency.items()):
             if stored_id == run_id:
                 del self._idempotency[key]
+        for service in getattr(self, "_render_services", {}).values():
+            await service.queue.remove_run(run_id)
+            service._notify()
         return True
 
     async def set_tags(self, run_id: str, tags: list[str]) -> None:

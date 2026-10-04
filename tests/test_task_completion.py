@@ -14,7 +14,7 @@ from deep_research.persistence.db import create_all, make_engine, make_sessionma
 from deep_research.persistence.memory_repository import InMemoryRepository
 from deep_research.persistence.repository import RunDetail
 from deep_research.persistence.sql_repository import SqlRepository
-from deep_research.workbench import completion
+from deep_research.workbench import completion, publish
 from deep_research.workbench.contract import TaskContract
 from deep_research.workbench.delivery_store import build_or_load, current_version, load_version
 from deep_research.workbench.gates import GateResult
@@ -159,7 +159,7 @@ async def test_terminal_state_waits_for_durable_delivery_and_survives_restart(
         search = FakeSearch()
         return Agent(settings, llm=FakeLLM(), search_tool=search, **kwargs), search
 
-    monkeypatch.setattr(completion, "build_bundle", render)
+    monkeypatch.setattr(publish, "build_bundle", render)
     monkeypatch.setattr(RunExecutor, "build_agent", build_agent)
     hub = EventHub()
     executor = RunExecutor(ExecutionContext(repo=repo, live={run_id: hub}))

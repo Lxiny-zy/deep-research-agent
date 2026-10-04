@@ -13,9 +13,8 @@ from ..execution_policy import transient_failure
 from ..persistence.repository import LeaseLostError, RunDetail
 from .completion import assess_completion
 from .content_revision import _CONTENT_GATES, revision_offer
-from .delivery_store import build_or_load, retry_format
 from .prose_review import stored_review
-from .publish import DeliveryBundle, build_bundle, delivery_fingerprint
+from .publish import DeliveryBundle, delivery_fingerprint
 from .support import digest
 from .writing_progress import WritingProgressError
 
@@ -50,6 +49,7 @@ async def repair_completion(
     persist: Persist,
     emit: Callable[[str], Any],
     recover_transient: bool = False,
+    repo: Any = None,
 ) -> tuple[RunDetail, dict[str, Any]]:
     if detail.orchestration is None:
         return detail, completion
@@ -80,16 +80,12 @@ async def repair_completion(
     await save()
 
     async def bundle_for() -> DeliveryBundle:
-        return await run_rendering(
-            build_or_load,
-            working,
-            settings.artifact_root,
-            settings.artifact_total_bytes,
-            build_bundle,
-        )
+        from ..render_service import service_for
+
+        return await service_for(repo, settings).build(working, automatic=True)
 
     bundle = await bundle_for()
-    await run_rendering(assess_completion, working, bundle)
+    await run_rendering(assess_completion, working, bundle, render_root=settings.artifact_root)
     content = state["content"]
     if content["status"] in {"pending", "running"}:
         # Use the existing eligibility rules without changing the actual run's status.
@@ -153,17 +149,15 @@ async def repair_completion(
         if attempt["status"] != "running":
             continue
         emit(f"自动重试 {target.upper()} 交付文件…")
-        bundle = await run_rendering(
-            retry_format,
-            working,
-            settings.artifact_root,
-            settings.artifact_total_bytes,
-            attempt["base_version"],
-            target,
-            attempt["request_id"],
+        from ..render_service import service_for
+
+        bundle = await service_for(repo, settings).retry(
+            working, attempt["base_version"], target, attempt["request_id"], automatic=True
         )
         attempt.update(status="complete", content_version=bundle.content_version)
         await save()
     state["status"] = "complete"
     await save()
-    return working, await run_rendering(assess_completion, working, bundle)
+    return working, await run_rendering(
+        assess_completion, working, bundle, render_root=settings.artifact_root
+    )

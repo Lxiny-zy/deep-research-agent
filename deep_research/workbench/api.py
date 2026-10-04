@@ -19,12 +19,11 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..artifacts import ArtifactError
-from ..blocking import run_blocking, run_rendering
+from ..blocking import run_blocking
 from ..upload_limits import DOCUMENT_LIMIT_LABEL, DOCUMENT_MAX_BASE64_CHARS, DOCUMENT_MAX_BYTES
 from .contract import build_contract, pasted_paper_text
-from .delivery_store import DeliveryConflict, build_or_load, current_version, load_version
-from .delivery_store import retry_format as retry_delivery_format
-from .publish import DeliveryBundle, build_bundle, delivery_fingerprint, resolve_template
+from .delivery_store import DeliveryConflict, current_version, load_version
+from .publish import DeliveryBundle, delivery_fingerprint, resolve_template
 from .templates import get_template, public_templates
 
 logger = logging.getLogger(__name__)
@@ -120,8 +119,14 @@ async def preview_contract(req: ContractPreviewRequest, request: Request) -> dic
 
 
 async def _bundle(request: Request, run_id: str, version: str | None = None) -> DeliveryBundle:
+    from ..render_queue import RenderFailed
+
     try:
         return await _stored_bundle(request, run_id, version)
+    except RenderFailed as exc:
+        raise HTTPException(
+            502, {"code": "render_failed", "message": str(exc), "job_id": exc.job_id}
+        ) from exc
     except (ArtifactError, ValueError) as exc:
         raise HTTPException(
             409,
@@ -182,12 +187,11 @@ async def _stored_bundle(
 
     async def generate() -> DeliveryBundle:
         try:
-            generated = await run_rendering(
-                build_or_load,
-                detail,
-                settings.artifact_root,
-                settings.artifact_total_bytes,
-                build_bundle,
+            from ..api import _render_retry_token
+            from ..render_service import service_for
+
+            generated = await service_for(repo, settings).build(
+                detail, retry_token=_render_retry_token(request)
             )
             if len(cache) >= 32:
                 cache.pop(next(iter(cache)))
@@ -335,14 +339,10 @@ async def retry_deliverable(
     async def generate() -> DeliveryBundle:
         try:
             settings = request.app.state.settings
-            generated = await run_rendering(
-                retry_delivery_format,
-                detail,
-                settings.artifact_root,
-                settings.artifact_total_bytes,
-                body.version,
-                body.format,
-                body.request_id,
+            from ..render_service import service_for
+
+            generated = await service_for(request.app.state.repo, settings).retry(
+                detail, body.version, body.format, body.request_id
             )
             from .completion import synchronize_completion
 

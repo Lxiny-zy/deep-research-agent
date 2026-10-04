@@ -272,6 +272,7 @@ def test_delivery_cache_fingerprint_covers_non_markdown_inputs(settings):
 
 
 async def test_delivery_generation_survives_first_waiter_disconnect(settings, monkeypatch):
+    from deep_research import render_service
     from deep_research.workbench import api as workbench_api
 
     detail = _detail(settings)
@@ -282,18 +283,20 @@ async def test_delivery_generation_survives_first_waiter_disconnect(settings, mo
     async def get_run(_):
         return detail
 
-    async def render(*args):
+    async def render(*args, **kwargs):
         nonlocal calls
-        if args[0] is workbench_api.current_version:
-            return None
         calls += 1
         entered.set()
         await release.wait()
         return bundle
 
-    monkeypatch.setattr(workbench_api, "run_blocking", render)
-    monkeypatch.setattr(workbench_api, "run_rendering", render)
+    async def current(*args):
+        return None
+
+    monkeypatch.setattr(workbench_api, "run_blocking", current)
+    monkeypatch.setattr(render_service, "service_for", lambda *args: SimpleNamespace(build=render))
     request = SimpleNamespace(
+        headers={},
         app=SimpleNamespace(
             state=SimpleNamespace(repo=SimpleNamespace(get_run=get_run), settings=settings)
         )

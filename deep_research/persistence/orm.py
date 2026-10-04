@@ -48,6 +48,45 @@ class CoordinationRow(Base):
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
 
 
+class RenderJobRow(Base):
+    __tablename__ = "render_job"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','running','done','error','cancelled')",
+            name="ck_render_job_status",
+        ),
+        CheckConstraint("attempts >= 0 AND stalls >= 0", name="ck_render_job_attempts"),
+        CheckConstraint(
+            "(status = 'running' AND lease_owner IS NOT NULL AND lease_until IS NOT NULL) "
+            "OR (status <> 'running' AND lease_owner IS NULL AND lease_until IS NULL)",
+            name="ck_render_job_lease",
+        ),
+        Index("ix_render_job_queue", "pool", "status", "available_at", "queued_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    key: Mapped[str] = mapped_column(String(64), unique=True)
+    pool: Mapped[str] = mapped_column(String(64))
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("research_run.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32))
+    payload: Mapped[dict] = mapped_column(JSON)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    created_at: Mapped[float] = mapped_column(Float)
+    queued_at: Mapped[float] = mapped_column(Float)
+    available_at: Mapped[float] = mapped_column(Float)
+    lease_owner: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    lease_until: Mapped[float | None] = mapped_column(Float, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    stalls: Mapped[int] = mapped_column(Integer, default=0)
+    interrupted: Mapped[bool] = mapped_column(Boolean, default=False)
+    progress_token: Mapped[str] = mapped_column(String(64), default="")
+    request_tokens: Mapped[list] = mapped_column(JSON, default=list)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
 class SchedulerStateRow(Base):
     __tablename__ = "scheduler_state"
     name: Mapped[str] = mapped_column(String(32), primary_key=True)

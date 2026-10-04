@@ -573,6 +573,7 @@ export async function downloadRunDocument(
     {
       headers: {
         Accept: 'application/octet-stream',
+        'X-Render-Retry': crypto.randomUUID(),
         ...(key ? { Authorization: `Bearer ${key}` } : {}),
       },
       signal: options.signal,
@@ -885,9 +886,14 @@ export function previewContract(
   })
 }
 
-export function getDeliverables(id: string, signal?: AbortSignal): Promise<DeliverableRegistry> {
+export function getDeliverables(
+  id: string,
+  signal?: AbortSignal,
+  retryToken?: string,
+): Promise<DeliverableRegistry> {
   return request<DeliverableRegistry>(`/api/runs/${encodeURIComponent(id)}/deliverables`, {
     signal,
+    ...(retryToken ? { headers: { 'X-Render-Retry': retryToken } } : {}),
   })
 }
 

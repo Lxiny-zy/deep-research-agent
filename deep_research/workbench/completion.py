@@ -11,10 +11,10 @@ from ..blocking import run_blocking, run_rendering
 from ..config import Settings
 from ..persistence.repository import RUN_TERMINAL_STATUSES, ResearchRepository, RunDetail
 from .contract import contract_from_scratch
-from .delivery_store import build_or_load, current_version, load_version
+from .delivery_store import current_version, load_version
 from .gate_classification import COMPLETION_POLICY_VERSION, classify_gates
 from .gates import GateResult
-from .publish import DeliveryBundle, build_bundle, delivery_fingerprint, resolve_template
+from .publish import DeliveryBundle, delivery_fingerprint, resolve_template
 
 COMPLETION_KEY = "_completion"
 
@@ -204,13 +204,17 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
     }
 
 
-async def prepare_completion(detail: RunDetail, settings: Settings) -> dict[str, Any] | None:
+async def prepare_completion(
+    detail: RunDetail, settings: Settings, *, repo: Any = None
+) -> dict[str, Any] | None:
     if promised_formats(detail) is None:
         return None
-    bundle = await run_rendering(
-        build_or_load, detail, settings.artifact_root, settings.artifact_total_bytes, build_bundle
+    from ..render_service import service_for
+
+    bundle = await service_for(repo, settings).build(detail, automatic=True)
+    return await run_rendering(
+        assess_completion, detail, bundle, render_root=settings.artifact_root
     )
-    return await run_rendering(assess_completion, detail, bundle)
 
 
 async def synchronize_completion(repo: ResearchRepository, run_id: str, settings: Settings) -> bool:
@@ -231,8 +235,16 @@ async def synchronize_completion(repo: ResearchRepository, run_id: str, settings
             return False
         if previous.get("content_version") == version:
             return True
-        bundle = await run_rendering(load_version, detail, settings.artifact_root, version)
-        record = await run_rendering(assess_completion, detail, bundle)
+        bundle = await run_rendering(
+            load_version,
+            detail,
+            settings.artifact_root,
+            version,
+            render_root=settings.artifact_root,
+        )
+        record = await run_rendering(
+            assess_completion, detail, bundle, render_root=settings.artifact_root
+        )
         if await repo.update_completion(
             run_id, record, expected_version=previous["content_version"]
         ):

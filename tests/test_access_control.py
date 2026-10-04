@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from deep_research import api
+from deep_research import report as report_renderers
 from deep_research.access import ApiCredential, Principal, authenticate, load_api_credentials
 from deep_research.config import Settings
 from deep_research.persistence.memory_repository import InMemoryRepository
@@ -248,8 +249,8 @@ async def test_known_failed_or_stale_prose_review_blocks_both_pdf_routes(
     def forbidden(*args, **kwargs):
         raise AssertionError("failed report must not reach a PDF renderer")
 
-    monkeypatch.setattr(api, "render_pdf", forbidden)
-    monkeypatch.setattr(api, "render_latex_pdf", forbidden)
+    monkeypatch.setattr(report_renderers, "render_pdf", forbidden)
+    monkeypatch.setattr(report_renderers, "render_latex_pdf", forbidden)
     for endpoint in ("document.pdf", "document.paper.pdf"):
         response = await client.get(f"/api/runs/{run_id}/{endpoint}", headers=_headers(ALICE))
         assert (

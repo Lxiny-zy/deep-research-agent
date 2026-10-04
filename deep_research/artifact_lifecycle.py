@@ -157,8 +157,10 @@ def _remove_contained(root: Path, path: Path) -> None:
 
 
 def _remove_run(root: Path, run_id: str, target: str) -> None:
+    from .render_capacity import render_run_lock
+
     root = root.resolve()
-    with _quota_lock(root):
+    with render_run_lock(root, run_id), _quota_lock(root):
         # Removing a whole tree can touch arbitrary files. Invalidate before
         # deletion so interruption or a partial failure cannot leave stale usage.
         _write_usage(root, 0, 0, dirty=True)
@@ -181,6 +183,8 @@ def _remove_run_unlocked(root: Path, run_id: str, target: str) -> None:
             root / ".framework" / "plans" / f"{target}.json",
         ):
             _remove_contained(root, path)
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", run_id):
+            _remove_contained(root, root / "runs" / run_id)
 
 
 async def cleanup_artifacts(repo: ResearchRepository, settings: Settings) -> None:
@@ -188,6 +192,9 @@ async def cleanup_artifacts(repo: ResearchRepository, settings: Settings) -> Non
         try:
             if not target.startswith("runs/") and await repo.artifact_slug_in_use(target):
                 # Legacy releases shared a topic folder; its last reference owns cleanup.
+                await run_blocking(
+                    _remove_run, Path(settings.artifact_root), run_id, f"runs/{run_id}"
+                )
                 await repo.finish_artifact_cleanup(run_id)
                 continue
             await run_blocking(_remove_run, Path(settings.artifact_root), run_id, target)

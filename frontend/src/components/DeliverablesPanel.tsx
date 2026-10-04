@@ -46,7 +46,8 @@ const GATE_HELP: Record<string, string> = {
   figure_evidence: '核对节点、关系方向与图注是否有依据；未通过的可选图示不进入报告。',
   prose_evidence: '逐段核对最终表述是否得到所引证据支持；记录绑定最终正文，模型判断仍需人工复核。',
   evidence_quote_length: '每条依据须在长度上限内保留必要条件与归属；超长历史摘录需重新选择并核验。',
-  user_requirements: '逐项核对用户明确要求的章节、比较对象、表格字段和问题；材料限制必须有依据并在正文说明。',
+  user_requirements:
+    '逐项核对用户明确要求的章节、比较对象、表格字段和问题；材料限制必须有依据并在正文说明。',
   table_scope: '检查表格是否完整呈现其声明的分组范围，避免遗漏四分位等必需类别。',
   table_evidence: '表格从已核验发现或统计台账生成，逐格检查数值、单位、实验条件和来源。',
   citation: '正文引用编号必须全部指向已核验来源，并达到本任务的引用下限。',
@@ -221,6 +222,19 @@ export default function DeliverablesPanel({
   const [actionError, setActionError] = useState<string | null>(null)
   const requests = useRef(new Map<string, string>())
 
+  async function rebuild() {
+    if (busy !== null) return
+    setBusy('build')
+    setActionError(null)
+    try {
+      onUpdated?.(await getDeliverables(runId, undefined, crypto.randomUUID()))
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : '交付生成失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function revise() {
     if (!registry?.content_revision?.available || busy !== null) return
     setBusy('content-revision')
@@ -307,6 +321,21 @@ export default function DeliverablesPanel({
         <p className="hint">
           交付物暂不可用：{error instanceof Error ? error.message : '研究尚未完成'}
         </p>
+        {Boolean(error) && onUpdated && (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={busy !== null}
+            onClick={rebuild}
+          >
+            {busy === 'build' ? '正在生成…' : '重新尝试生成'}
+          </button>
+        )}
+        {actionError && (
+          <p className="error-text" role="alert">
+            {actionError}
+          </p>
+        )}
       </section>
     )
   }

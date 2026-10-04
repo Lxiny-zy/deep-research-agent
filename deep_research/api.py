@@ -47,7 +47,7 @@ from .agents.intent_router import (
     INTENT_SUB_QUESTION_KEY,
 )
 from .artifact_lifecycle import cleanup_artifacts
-from .blocking import run_blocking, run_rendering
+from .blocking import run_blocking
 from .catalog.repository import CatalogRepository
 from .config import Settings
 from .config_service import ConfigConflictError, ConfigStore, effective_settings
@@ -120,14 +120,6 @@ from .report import (
     XlsxTableNotFoundError,
     XlsxTableSelectionError,
     assemble_document,
-    render_bibtex,
-    render_csv,
-    render_latex,
-    render_latex_pdf,
-    render_markdown,
-    render_pdf,
-    render_reproducibility_bundle,
-    render_xlsx,
 )
 from .report.service import ReportNotFoundError, ReportService
 from .report.service import requires_corroboration as _run_requires_corroboration
@@ -788,6 +780,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     recovery_task: asyncio.Task[None] | None = None
     inline_task: asyncio.Task[None] | None = None
     inline_worker = None
+    render_dispatcher: asyncio.Task[None] | None = None
+    render_service = None
     try:
         # SQLite 本地启动也准备 schema，避免旧 create_all 库升级后缺列；
         # PostgreSQL 由 entrypoint 迁移。
@@ -819,6 +813,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             migrated = await encrypt_legacy()
             if migrated:
                 logger.info("encrypted %s legacy catalog credentials", migrated)
+        from .render_service import service_for
+
+        render_service = service_for(app.state.repo, settings)
+        app.state.repo._render_dispatcher_managed = True
+        render_dispatcher = asyncio.create_task(render_service.poll_pending())
         app.state.live = {}  # run_id -> EventHub：进行中 run 的实时事件中枢（向多端 SSE 扇出）
         app.state.tasks = set()  # 持有后台任务引用，避免被 GC 提前回收
         app.state.cleanup_tasks = set()  # 任务 done callback 派生的异步资源收尾
@@ -852,6 +851,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         qa_dispatcher.add_done_callback(app.state.tasks.discard)
         yield
     finally:
+        if render_dispatcher is not None:
+            render_dispatcher.cancel()
+            await asyncio.gather(render_dispatcher, return_exceptions=True)
         if inline_worker is not None:
             inline_worker.request_stop(reason="api_shutdown")
         # Stop the producer of background work first. Otherwise a recovery
@@ -892,6 +894,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             task.cancel()
         if qa_tasks:
             await asyncio.gather(*qa_tasks, return_exceptions=True)
+        if render_service is not None:
+            await render_service.close()
         await engine.dispose()
 
 
@@ -2362,6 +2366,33 @@ async def get_run_document(
     return await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
 
 
+def _render_retry_token(request: Request) -> str | None:
+    token = request.headers.get("x-render-retry")
+    if token is not None and not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", token):
+        raise HTTPException(422, "渲染重试标识无效")
+    return token
+
+
+async def _queued_document_render(
+    request: Request, run_id: str, document: ReportDocument, format: str, **options: Any
+) -> Any:
+    from .render_service import service_for
+
+    detail = await request.app.state.repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(404, "run not found")
+    try:
+        return await service_for(request.app.state.repo, request.app.state.settings).export(
+            detail, document, format, retry_token=_render_retry_token(request), **options
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "渲染任务或文件已删除") from exc
+    except TimeoutError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(503, "导出文件读写失败，请稍后重试") from exc
+
+
 @app.get("/api/runs/{run_id}/document.md", dependencies=[Depends(require_api_key)])
 async def get_run_document_markdown(
     run_id: str,
@@ -2379,7 +2410,7 @@ async def get_run_document_markdown(
     """
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     try:
-        markdown_text = await run_rendering(render_markdown, document)
+        markdown_text = await _queued_document_render(request, run_id, document, "md")
     except ChartDataError as exc:
         # A chart whose source table is missing means assembly produced an
         # inconsistent document.  Surface it rather than shipping a file with
@@ -2407,7 +2438,9 @@ async def get_run_document_csv(
     """
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     try:
-        csv_text = await run_rendering(render_csv, document, table_id=table_id)
+        csv_text = await _queued_document_render(
+            request, run_id, document, "csv", table_id=table_id
+        )
     except CsvTableNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except CsvTableSelectionError as exc:
@@ -2438,7 +2471,9 @@ async def get_run_document_xlsx(
     """
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     try:
-        xlsx_bytes = await run_rendering(render_xlsx, document, table_id=table_id)
+        xlsx_bytes = await _queued_document_render(
+            request, run_id, document, "xlsx", table_id=table_id
+        )
     except XlsxDependencyError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     except XlsxTableNotFoundError as exc:
@@ -2463,7 +2498,7 @@ async def get_run_document_pdf(
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     _require_supported_report(document)
     try:
-        pdf_bytes = await run_rendering(render_pdf, document)
+        pdf_bytes = await _queued_document_render(request, run_id, document, "pdf")
     except PdfExportUnavailable as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     except PdfRenderError as exc:
@@ -2488,7 +2523,7 @@ async def get_run_document_latex(
     latex_options: dict[str, object] = {"profile": cast(ExportProfile, profile)}
     if template != "ctexart":
         latex_options["template"] = cast(LatexTemplateName, template)
-    source = await run_rendering(render_latex, document, **latex_options)
+    source = await _queued_document_render(request, run_id, document, "tex", **latex_options)
     return PlainTextResponse(
         source,
         media_type="application/x-tex; charset=utf-8",
@@ -2507,7 +2542,7 @@ async def get_run_document_bib(
     detail = await request.app.state.repo.get_run(run_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="run not found")
-    bibtex = await run_rendering(render_bibtex, document, sources=detail.sources)
+    bibtex = await _queued_document_render(request, run_id, document, "bib", sources=detail.sources)
     return PlainTextResponse(
         bibtex,
         media_type="application/x-bibtex; charset=utf-8",
@@ -2528,10 +2563,11 @@ async def get_run_document_bundle(
     if detail is None:
         raise HTTPException(status_code=404, detail="run not found")
     detail = await _enrich_run_detail(request.app.state.repo, detail)
-    bundle = await run_rendering(
-        render_reproducibility_bundle,
+    bundle = await _queued_document_render(
+        request,
+        run_id,
         document,
-        run_id=run_id,
+        "bundle",
         manifest=detail.manifest,
         sources=detail.sources,
         profile=cast(ExportProfile, profile),
@@ -2556,9 +2592,11 @@ async def get_run_document_paper_pdf(
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     _require_supported_report(document)
     try:
-        pdf_bytes = await run_rendering(
-            render_latex_pdf,
+        pdf_bytes = await _queued_document_render(
+            request,
+            run_id,
             document,
+            "paper-pdf",
             profile=cast(ExportProfile, profile),
             template=cast(LatexTemplateName, template),
         )

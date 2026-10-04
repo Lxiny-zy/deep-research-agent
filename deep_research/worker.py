@@ -120,6 +120,21 @@ class Worker:
         return max(0, self.settings.max_active_runs - len(self._running))
 
     async def run_forever(self) -> None:
+        if getattr(self.repo, "_render_dispatcher_managed", False):
+            await self._run_execution_loop()
+            return
+        from .render_service import service_for
+
+        rendering = service_for(self.repo, self.settings)
+        dispatcher = asyncio.create_task(rendering.poll_pending())
+        try:
+            await self._run_execution_loop()
+        finally:
+            dispatcher.cancel()
+            await asyncio.gather(dispatcher, return_exceptions=True)
+            await rendering.close()
+
+    async def _run_execution_loop(self) -> None:
         logger.info(
             "worker %s started (max_active_runs=%s, poll=%ss)",
             self.name,
@@ -489,8 +504,7 @@ async def main_async(argv: list[str] | None = None) -> int:
         "--name",
         default=os.getenv("DR_WORKER_NAME") or socket.gethostname(),
         help=(
-            "worker 心跳与日志标识，默认主机名；各副本应使用不同标识。"
-            "执行租约由每次领取独立生成。"
+            "worker 心跳与日志标识，默认主机名；各副本应使用不同标识。执行租约由每次领取独立生成。"
         ),
     )
     parser.add_argument("--check", action="store_true", help="检查本 worker 的持久化心跳后退出")

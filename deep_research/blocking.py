@@ -24,7 +24,9 @@ async def run_blocking(function: Callable[..., T], *args: Any, **kwargs: Any) ->
     return await to_thread.run_sync(partial(function, *args, **kwargs), limiter=limiter)
 
 
-async def run_rendering(function: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+async def run_rendering(
+    function: Callable[..., T], *args: Any, render_root: str | None = None, **kwargs: Any
+) -> T:
     """Limit heavy document builds separately from reads and other API work.
 
     Each process admits at most two renders at once. Waiting renders do not
@@ -33,4 +35,12 @@ async def run_rendering(function: Callable[..., T], *args: Any, **kwargs: Any) -
     """
     loop = asyncio.get_running_loop()
     limiter = _render_limiters.setdefault(loop, CapacityLimiter(2))
-    return await to_thread.run_sync(partial(function, *args, **kwargs), limiter=limiter)
+    if render_root is None:
+        return await to_thread.run_sync(partial(function, *args, **kwargs), limiter=limiter)
+    from .render_capacity import rendering_capacity
+
+    def shared() -> T:
+        with rendering_capacity(render_root):
+            return function(*args, **kwargs)
+
+    return await to_thread.run_sync(shared, limiter=limiter)

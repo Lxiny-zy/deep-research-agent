@@ -253,6 +253,8 @@ def test_retry_conflicts_do_not_rewrite_changed_inputs_or_successful_formats(tmp
 
 
 def test_failed_retry_commit_keeps_current_version_and_can_repeat_request(tmp_path, monkeypatch):
+    from deep_research.workbench.render_progress import RenderProgressError
+
     first = _failed_pdf(tmp_path, monkeypatch)
     write = ArtifactStore.write_control_json
 
@@ -260,8 +262,9 @@ def test_failed_retry_commit_keeps_current_version_and_can_repeat_request(tmp_pa
         raise OSError("commit unavailable")
 
     monkeypatch.setattr(ArtifactStore, "write_control_json", fail_commit)
-    with pytest.raises(OSError):
+    with pytest.raises(RenderProgressError) as failed:
         retry_format(detail(), str(tmp_path), None, first.content_version, "pdf", "retry-request")
+    assert isinstance(failed.value.__cause__, OSError)
     assert (
         build_or_load(detail(), str(tmp_path), None, build_bundle).content_version
         == first.content_version

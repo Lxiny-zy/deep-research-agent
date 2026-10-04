@@ -15,6 +15,7 @@ from httpx import ASGITransport
 
 from deep_research import api
 from deep_research import execution as execution_module
+from deep_research import report as report_renderers
 from deep_research.config import Settings
 from deep_research.http import sse as sse_module
 from deep_research.models import Report, ResearchPlan, SubQuestion
@@ -2300,7 +2301,9 @@ async def test_report_csv_endpoint_returns_an_empty_download_before_a_table_exis
 async def test_report_csv_download_starts_with_a_utf8_bom(repo, monkeypatch):
     """落盘后没有 HTTP 头，中文 Windows 的 Excel 要靠 BOM 才按 UTF-8 打开。"""
     run_id = await repo.create_run("含表格")
-    monkeypatch.setattr(api, "render_csv", lambda *args, **kwargs: "对象,PSNR\r\nA,38.36\r\n")
+    monkeypatch.setattr(
+        report_renderers, "render_csv", lambda *args, **kwargs: "对象,PSNR\r\nA,38.36\r\n"
+    )
 
     async with _client() as c:
         resp = await c.get(f"/api/runs/{run_id}/document.csv")
@@ -2350,7 +2353,7 @@ async def test_report_xlsx_endpoint_returns_501_when_optional_dependency_is_miss
     def _missing_dependency(*args, **kwargs):
         raise api.XlsxDependencyError("install the xlsx extra")
 
-    monkeypatch.setattr(api, "render_xlsx", _missing_dependency)
+    monkeypatch.setattr(report_renderers, "render_xlsx", _missing_dependency)
     async with _client() as c:
         resp = await c.get(f"/api/runs/{run_id}/document.xlsx")
 
@@ -2374,7 +2377,7 @@ async def test_report_pdf_endpoint_returns_optional_dependency_status(repo, monk
 async def test_report_pdf_endpoint_returns_renderer_failure(repo, monkeypatch):
     run_id = await repo.create_run("server pdf renderer failure")
     monkeypatch.setattr(
-        api,
+        report_renderers,
         "render_pdf",
         lambda *args, **kwargs: (_ for _ in ()).throw(api.PdfRenderError("font failure")),
     )
@@ -2387,6 +2390,28 @@ async def test_report_pdf_endpoint_returns_renderer_failure(repo, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_explicit_download_retry_is_distinct_from_a_repeated_read(repo, monkeypatch):
+    run_id = await repo.create_run("explicit download retry")
+    calls = []
+
+    def broken(*args, **kwargs):
+        calls.append("failed")
+        raise api.PdfRenderError("temporary renderer failure")
+
+    monkeypatch.setattr(report_renderers, "render_pdf", broken)
+    async with _client() as client:
+        path = f"/api/runs/{run_id}/document.pdf"
+        first = await client.get(path, headers={"X-Render-Retry": "click-one"})
+        assert first.status_code == 502
+        monkeypatch.setattr(report_renderers, "render_pdf", lambda *args, **kwargs: b"%PDF fixed")
+        assert (await client.get(path, headers={"X-Render-Retry": "click-one"})).status_code == 502
+        assert (await client.get(path)).status_code == 502
+        retried = await client.get(path, headers={"X-Render-Retry": "click-two"})
+        assert retried.status_code == 200 and retried.content == b"%PDF fixed"
+        assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_report_pdf_endpoint_404s_for_an_unknown_run(repo):
     async with _client() as c:
         resp = await c.get("/api/runs/does-not-exist/document.pdf")
@@ -2396,7 +2421,9 @@ async def test_report_pdf_endpoint_404s_for_an_unknown_run(repo):
 @pytest.mark.asyncio
 async def test_report_latex_source_endpoint_returns_academic_source(repo, monkeypatch):
     run_id = await repo.create_run("academic source")
-    monkeypatch.setattr(api, "render_latex", lambda document, *, profile: "% academic source")
+    monkeypatch.setattr(
+        report_renderers, "render_latex", lambda document, *, profile: "% academic source"
+    )
 
     async with _client() as c:
         response = await c.get(f"/api/runs/{run_id}/document.tex?profile=academic")
@@ -2410,7 +2437,9 @@ async def test_report_latex_source_endpoint_returns_academic_source(repo, monkey
 @pytest.mark.asyncio
 async def test_report_bib_endpoint_returns_references(repo, monkeypatch):
     run_id = await repo.create_run("academic bib")
-    monkeypatch.setattr(api, "render_bibtex", lambda document, *, sources: "@misc{ref1}\n")
+    monkeypatch.setattr(
+        report_renderers, "render_bibtex", lambda document, *, sources: "@misc{ref1}\n"
+    )
 
     async with _client() as c:
         response = await c.get(f"/api/runs/{run_id}/document.bib")
@@ -2423,7 +2452,9 @@ async def test_report_bib_endpoint_returns_references(repo, monkeypatch):
 @pytest.mark.asyncio
 async def test_report_bundle_endpoint_returns_zip(repo, monkeypatch):
     run_id = await repo.create_run("academic bundle")
-    monkeypatch.setattr(api, "render_reproducibility_bundle", lambda *args, **kwargs: b"PK bundle")
+    monkeypatch.setattr(
+        report_renderers, "render_reproducibility_bundle", lambda *args, **kwargs: b"PK bundle"
+    )
 
     async with _client() as c:
         response = await c.get(f"/api/runs/{run_id}/document.bundle.zip")
@@ -2439,7 +2470,7 @@ async def test_report_bundle_endpoint_returns_zip(repo, monkeypatch):
 async def test_report_paper_pdf_endpoint_exposes_missing_tex_runtime(repo, monkeypatch):
     run_id = await repo.create_run("academic pdf")
     monkeypatch.setattr(
-        api,
+        report_renderers,
         "render_latex_pdf",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             api.LatexExportUnavailable("latexmk is not installed")
@@ -2475,12 +2506,14 @@ async def test_report_export_endpoints_forward_hsi_and_table_selection(repo, mon
     pdf_calls: list[ReportDocument] = []
 
     def fake_csv(value, *, table_id=None):  # type: ignore[no-untyped-def]
-        assert value is document
+        assert value.model_dump() == document.model_dump()
+        assert value._bibliography_presented == document._bibliography_presented
         csv_calls.append(table_id)
         return "object\r\n"
 
     def fake_xlsx(value, *, table_id=None):  # type: ignore[no-untyped-def]
-        assert value is document
+        assert value.model_dump() == document.model_dump()
+        assert value._bibliography_presented == document._bibliography_presented
         xlsx_calls.append(table_id)
         return b"xlsx"
 
@@ -2488,9 +2521,9 @@ async def test_report_export_endpoints_forward_hsi_and_table_selection(repo, mon
         pdf_calls.append(value)
         return b"%PDF"
 
-    monkeypatch.setattr(api, "render_csv", fake_csv)
-    monkeypatch.setattr(api, "render_xlsx", fake_xlsx)
-    monkeypatch.setattr(api, "render_pdf", fake_pdf)
+    monkeypatch.setattr(report_renderers, "render_csv", fake_csv)
+    monkeypatch.setattr(report_renderers, "render_xlsx", fake_xlsx)
+    monkeypatch.setattr(report_renderers, "render_pdf", fake_pdf)
 
     async with _client() as c:
         document_response = await c.get(f"/api/runs/{run_id}/document?include_hsi_tables=true")
@@ -2531,9 +2564,9 @@ async def test_report_exports_forward_persisted_corroboration_gate(repo, monkeyp
         return ReportDocument(query="strict export")
 
     monkeypatch.setattr(api, "assemble_document", fake_assemble)
-    monkeypatch.setattr(api, "render_csv", lambda *args, **kwargs: "")
-    monkeypatch.setattr(api, "render_xlsx", lambda *args, **kwargs: b"xlsx")
-    monkeypatch.setattr(api, "render_pdf", lambda *args, **kwargs: b"%PDF")
+    monkeypatch.setattr(report_renderers, "render_csv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(report_renderers, "render_xlsx", lambda *args, **kwargs: b"xlsx")
+    monkeypatch.setattr(report_renderers, "render_pdf", lambda *args, **kwargs: b"%PDF")
 
     async with _client() as c:
         responses = await asyncio.gather(
@@ -2561,7 +2594,7 @@ async def test_report_table_export_maps_selection_errors(repo, monkeypatch):
 
     async with _client() as c:
         monkeypatch.setattr(
-            api,
+            report_renderers,
             "render_csv",
             lambda *args, **kwargs: (_ for _ in ()).throw(
                 CsvTableSelectionError("table_id is required")
@@ -2570,7 +2603,7 @@ async def test_report_table_export_maps_selection_errors(repo, monkeypatch):
         csv_ambiguous = await c.get(f"/api/runs/{run_id}/document.csv")
 
         monkeypatch.setattr(
-            api,
+            report_renderers,
             "render_csv",
             lambda *args, **kwargs: (_ for _ in ()).throw(
                 CsvTableNotFoundError("table not found: missing")
@@ -2579,7 +2612,7 @@ async def test_report_table_export_maps_selection_errors(repo, monkeypatch):
         csv_missing = await c.get(f"/api/runs/{run_id}/document.csv?table_id=missing")
 
         monkeypatch.setattr(
-            api,
+            report_renderers,
             "render_xlsx",
             lambda *args, **kwargs: (_ for _ in ()).throw(
                 XlsxTableSelectionError("table_id is required")
@@ -2588,7 +2621,7 @@ async def test_report_table_export_maps_selection_errors(repo, monkeypatch):
         xlsx_ambiguous = await c.get(f"/api/runs/{run_id}/document.xlsx")
 
         monkeypatch.setattr(
-            api,
+            report_renderers,
             "render_xlsx",
             lambda *args, **kwargs: (_ for _ in ()).throw(
                 XlsxTableNotFoundError("table not found: missing")

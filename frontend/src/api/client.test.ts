@@ -11,6 +11,7 @@ import {
   uploadAttachment,
   reviseRunContent,
   askQuestion,
+  getDeliverables,
 } from './client'
 
 describe('answer revision request identity', () => {
@@ -26,14 +27,12 @@ describe('answer revision request identity', () => {
       evidence: [],
       thoughts: [],
     }
-    const fetcher = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(
-        new Response(`event: complete\ndata: ${JSON.stringify(answer)}\n\n`, {
-          status: 200,
-          headers: { 'Content-Type': 'text/event-stream' },
-        }),
-      )
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(`event: complete\ndata: ${JSON.stringify(answer)}\n\n`, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    )
     expect(
       await askQuestion('cid', '原问题', undefined, {
         sources: [],
@@ -45,6 +44,20 @@ describe('answer revision request identity', () => {
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
       request_id: 'revision-one',
     })
+  })
+})
+
+describe('delivery generation retry identity', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('keeps ordinary reads passive and sends a token for an explicit retry', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'))
+    await getDeliverables('run-1')
+    await getDeliverables('run-1', undefined, 'manual-retry-one')
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).has('X-Render-Retry')).toBe(false)
+    expect(new Headers(fetcher.mock.calls[1][1]?.headers).get('X-Render-Retry')).toBe(
+      'manual-retry-one',
+    )
   })
 })
 
@@ -363,7 +376,11 @@ describe('run document downloads', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/runs/run%2Fid/document.csv?include_hsi_tables=true&table_id=table%2Fone',
       expect.objectContaining({
-        headers: { Accept: 'application/octet-stream', Authorization: 'Bearer secret' },
+        headers: {
+          Accept: 'application/octet-stream',
+          Authorization: 'Bearer secret',
+          'X-Render-Retry': expect.any(String),
+        },
       }),
     )
   })

@@ -521,7 +521,7 @@ class DeepResearchAgent:
             completion = None
             if detail is not None and promised_formats(detail) is not None:
                 self.tracer.emit("DELIVERY", "info", "正在生成并检查任务承诺的交付文件…")
-                completion = await prepare_completion(detail, self.settings)
+                completion = await prepare_completion(detail, self.settings, repo=self.repo)
                 if completion is not None and self._completion_repair_runner is not None:
                     old_report = report.model_dump(mode="json")
                     detail, completion = await self._completion_repair_runner(detail, completion)
@@ -1467,6 +1467,7 @@ class DeepResearchAgent:
                 persist=save_repair,
                 emit=lambda text: self.tracer.emit("DELIVERY", "info", text),
                 recover_transient=self.managed_recovery,
+                repo=self.repo,
             )
 
         self._completion_repair_runner = run_completion_repair

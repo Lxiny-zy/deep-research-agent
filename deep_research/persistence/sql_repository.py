@@ -1267,9 +1267,13 @@ class SqlRepository:
             slug = scratch.get("_artifact_slug") if isinstance(scratch, dict) else None
             if isinstance(slug, str) and slug:
                 target = f"runs/{run_id}" if scratch.get("_artifact_run_scoped") else slug
-                s.add(orm.ArtifactCleanupRow(run_id=run_id, slug=target))
+            else:
+                target = f"runs/{run_id}"
             result = await s.execute(sa_delete(orm.ResearchRun).where(orm.ResearchRun.id == run_id))
-            return bool(cast("CursorResult[Any]", result).rowcount)
+            deleted = bool(cast("CursorResult[Any]", result).rowcount)
+            if deleted:
+                s.add(orm.ArtifactCleanupRow(run_id=run_id, slug=target))
+            return deleted
 
     async def set_tags(self, run_id: str, tags: list[str]) -> None:
         # 替换语义：先清旧标签再写新（去重 + 去空白）

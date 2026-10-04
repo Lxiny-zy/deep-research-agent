@@ -11,7 +11,10 @@ import pytest
 from deep_research.blocking import run_blocking, run_rendering
 from deep_research.models import Report
 from deep_research.persistence.repository import RunDetail
+from deep_research.render_service import service_for
 from deep_research.workbench import api as workbench_api
+from deep_research.workbench import delivery_render, publish
+from deep_research.workbench.delivery_store import build_or_load
 from deep_research.workbench.publish import DeliveryBundle
 
 
@@ -63,7 +66,6 @@ async def test_delivery_endpoints_leave_capacity_for_interactive_reads(
     loop = asyncio.get_running_loop()
     entered = [asyncio.Event(), asyncio.Event()]
     release = threading.Event()
-    bundle = DeliveryBundle("autoResearch", "report", [], [], "pass", "")
 
     async def get_run(run_id):
         return RunDetail(
@@ -73,19 +75,39 @@ async def test_delivery_endpoints_leave_capacity_for_interactive_reads(
             report=Report(query="q", markdown="Finished report", citations=[]),
         )
 
-    def render(detail, *_args):
-        loop.call_soon_threadsafe(entered[int(detail.id)].set)
-        assert release.wait(10), "test did not release delivery generation"
-        return bundle
+    async def get_run_status(_run_id):
+        return "done"
 
-    monkeypatch.setattr(workbench_api, "current_version", lambda *_: None)
-    monkeypatch.setattr(workbench_api, "build_or_load", render)
-    monkeypatch.setattr(workbench_api, "retry_delivery_format", render)
-    monkeypatch.setattr(auth, "principal_for", lambda _: SimpleNamespace(can_research=True))
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(repo=SimpleNamespace(get_run=get_run), settings=settings)
+    def bundle(run_id):
+        return DeliveryBundle(
+            "autoResearch", "report", [], [], "pass", "", render_context={"id": run_id}
         )
+
+    def render(detail, *_args, **_kwargs):
+        run_id = detail["id"] if isinstance(detail, dict) else detail.id
+        loop.call_soon_threadsafe(entered[int(run_id)].set)
+        assert release.wait(10), "test did not release delivery generation"
+        return bundle(run_id)
+
+    versions = {}
+    if operation == "format_retry":
+        for run_id in ("0", "1"):
+            initial = bundle(run_id)
+            initial.failures = [{"format": "pdf", "retryable": True, "message": "temporary"}]
+            saved = await run_blocking(
+                build_or_load,
+                await get_run(run_id),
+                settings.artifact_root,
+                None,
+                lambda _, initial=initial: initial,
+            )
+            versions[run_id] = saved.content_version
+    monkeypatch.setattr(publish, "build_bundle", render)
+    monkeypatch.setattr(delivery_render, "render_bundle", render)
+    monkeypatch.setattr(auth, "principal_for", lambda _: SimpleNamespace(can_research=True))
+    repo = SimpleNamespace(get_run=get_run, get_run_status=get_run_status)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(repo=repo, settings=settings)), headers={}
     )
     ordinary_file = tmp_path / "source.txt"
     ordinary_file.write_text("source remains readable", encoding="utf-8")
@@ -94,7 +116,7 @@ async def test_delivery_endpoints_leave_capacity_for_interactive_reads(
         if operation == "cold_build":
             return await workbench_api._stored_bundle(request, run_id)
         body = workbench_api.DeliveryRetryRequest(
-            version="a" * 64, format="pdf", request_id=f"retry-run-{run_id}"
+            version=versions[run_id], format="pdf", request_id=f"retry-run-{run_id}"
         )
         return await workbench_api.retry_deliverable(run_id, body, request)
 
@@ -107,5 +129,8 @@ async def test_delivery_endpoints_leave_capacity_for_interactive_reads(
             assert not any(task.done() for task in tasks)
     finally:
         release.set()
-        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+        try:
+            results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+        finally:
+            await service_for(repo, settings).close()
     assert len(results) == 2

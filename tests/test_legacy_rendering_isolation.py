@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from deep_research import api
+from deep_research import report as report_renderers
 from deep_research.blocking import run_blocking
 from deep_research.persistence.memory_repository import InMemoryRepository
 from deep_research.report import capabilities
@@ -47,7 +48,7 @@ async def test_legacy_exports_leave_capacity_for_reads_and_capabilities(
         assert release.wait(10), "test did not release report rendering"
         return payload
 
-    monkeypatch.setattr(api, renderer, render)
+    monkeypatch.setattr(report_renderers, renderer, render)
     ordinary_file = tmp_path / "source.txt"
     ordinary_file.write_text("source remains readable", encoding="utf-8")
     async with httpx.AsyncClient(

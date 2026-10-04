@@ -22,6 +22,7 @@ def render_bundle(
     *,
     retry_format: str | None = None,
     previous_failures: list[dict[str, Any]] | None = None,
+    checkpoint_retry: bool = False,
 ) -> DeliveryBundle:
     title, markdown, stem = context["title"], context["markdown"], context["stem"]
     extras, citations = context["extras"], context["citations"]
@@ -72,7 +73,14 @@ def render_bundle(
             return
         try:
             files.append(
-                render_file(name, fmt, label, role, build, checkpoint=retry_format is None)
+                render_file(
+                    name,
+                    fmt,
+                    label,
+                    role,
+                    build,
+                    checkpoint=retry_format is None or checkpoint_retry,
+                )
             )
         except RenderProgressError:
             raise

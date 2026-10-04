@@ -522,7 +522,8 @@ async def test_closed_visual_workflow_reads_each_file_once_and_requires_every_in
                     # The slide-wide citations expose both inputs, but each
                     # bullet's reviewed selection must match its actual text.
                     matching = [
-                        evidence["id"] for evidence in data["evidence"]
+                        evidence["id"]
+                        for evidence in data["evidence"]
                         if evidence["citation"] in unit["citations"]
                         and evidence["statement"] in unit["text"]
                     ]
@@ -1040,16 +1041,16 @@ async def test_concurrent_cold_deliverable_requests_build_once(api_repo, monkeyp
     run_id = await repo.create_run("研究问题", execution=execution)
     await repo.save_report(run_id, Report(query="q", markdown="## 摘要\n正文", citations=[]))
     await repo.set_status(run_id, "done")
-    from deep_research.workbench import api as workbench_api
+    from deep_research.workbench import publish as delivery_publish
 
     calls: list[str] = []
-    real_build = workbench_api.build_bundle
+    real_build = delivery_publish.build_bundle
 
     def counting_build(detail):  # type: ignore[no-untyped-def]
         calls.append(detail.id)
         return real_build(detail)
 
-    monkeypatch.setattr(workbench_api, "build_bundle", counting_build)
+    monkeypatch.setattr(delivery_publish, "build_bundle", counting_build)
     async with _client(api.app) as client:
         responses = await asyncio.gather(
             *(client.get(f"/api/runs/{run_id}/deliverables") for _ in range(3))

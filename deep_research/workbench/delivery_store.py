@@ -197,8 +197,10 @@ def build_or_load(
 
 
 def _commit(store: ArtifactStore, slug: str, index: dict, bundle: DeliveryBundle) -> None:
+    from ..render_capacity import check_render_authority
     from .completion import validate_bundle_files
 
+    check_render_authority()
     validate_bundle_files(bundle)
     version = bundle.content_version
     if version in index["versions"]:
@@ -240,6 +242,7 @@ def _commit(store: ArtifactStore, slug: str, index: dict, bundle: DeliveryBundle
     index["versions"][version] = registry
     index.setdefault("current", {})[bundle.input_version] = version
     index.get("pending", {}).pop(version, None)
+    check_render_authority()
     store.write_control_json(INDEX, index)
 
 
@@ -294,19 +297,28 @@ def retry_format(
             raise DeliveryConflict(
                 "delivery_not_retryable", "该格式未生成失败，或需要先修订研究内容"
             )
-        bundle = render_bundle(
-            previous.render_context,
-            previous.files,
-            retry_format=target,
-            previous_failures=previous.failures,
-        )
-        bundle.input_version = source
-        bundle.parent_version = version
-        bundle.content_version = _digest([source, version, target, request_id])
-        bundle.attempt = previous.attempt + 1
-        bundle.generated_at = datetime.now(UTC).isoformat()
-        requests[request_id] = {"base": version, "format": target, "result": bundle.content_version}
-        _commit(store, slug, index, bundle)
+        from .render_progress import checkpoint_rendering
+
+        result_version = _digest([source, version, target, request_id])
+        with checkpoint_rendering(store, slug, result_version, index):
+            bundle = render_bundle(
+                previous.render_context,
+                previous.files,
+                retry_format=target,
+                previous_failures=previous.failures,
+                checkpoint_retry=True,
+            )
+            bundle.input_version = source
+            bundle.parent_version = version
+            bundle.content_version = result_version
+            bundle.attempt = previous.attempt + 1
+            bundle.generated_at = datetime.now(UTC).isoformat()
+            requests[request_id] = {
+                "base": version,
+                "format": target,
+                "result": bundle.content_version,
+            }
+            _commit(store, slug, index, bundle)
         return bundle
 
 

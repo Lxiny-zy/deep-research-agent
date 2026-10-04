@@ -674,7 +674,14 @@ class ArtifactStore:
 
         if not isinstance(data, str):
             raise TypeError("control data must be text")
-        payload = data.encode(encoding)
+        return self.write_control_bytes(name, data.encode(encoding), max_bytes=max_bytes)
+
+    def write_control_bytes(
+        self, name: str | os.PathLike[str], payload: bytes, *, max_bytes: int | None = None
+    ) -> Path:
+        """Atomically persist private binary state with the same quota and path checks."""
+        if not isinstance(payload, bytes):
+            raise TypeError("control data must be bytes")
         limit = self.max_bytes if max_bytes is None else max_bytes
         if limit is not None and len(payload) > limit:
             raise ArtifactValidationError(f"control file exceeds maximum size of {limit} bytes")
