@@ -34,8 +34,6 @@ async def test_upgrade_head_initializes_sqlite(tmp_path) -> None:
 
 async def test_search_queries_migration_preserves_existing_questions_and_roundtrips(tmp_path):
     from alembic import command
-    from deep_research.persistence.db import make_sessionmaker
-    from deep_research.persistence.sql_repository import SqlRepository
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'queries-upgrade.db'}"
     config = AlembicConfig("alembic.ini")
@@ -43,8 +41,16 @@ async def test_search_queries_migration_preserves_existing_questions_and_roundtr
     await asyncio.to_thread(command.upgrade, config, "0036")
     engine = make_engine(url)
     try:
-        run_id = await SqlRepository(make_sessionmaker(engine)).create_run("完整研究目标")
+        run_id = "legacy-search-run"
         async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO research_run "
+                    "(id, query, status, interpretation, elapsed, total_tokens) "
+                    "VALUES (:run, :query, 'pending', '', 0, 0)"
+                ),
+                {"run": run_id, "query": "完整研究目标"},
+            )
             await connection.execute(
                 text(
                     "INSERT INTO sub_question "
@@ -58,24 +64,30 @@ async def test_search_queries_migration_preserves_existing_questions_and_roundtr
     await asyncio.to_thread(command.upgrade, config, "0037")
     engine = make_engine(url)
     try:
-        detail = await SqlRepository(make_sessionmaker(engine)).get_run(run_id)
-        assert detail.sub_questions[0].question == "旧版完整问题"
-        assert detail.sub_questions[0].search_queries == []
         async with engine.begin() as connection:
+            row = (await connection.execute(
+                text("SELECT question, search_queries FROM sub_question WHERE id = 'old'")
+            )).one()
+            assert row.question == "旧版完整问题"
+            assert row.search_queries == "[]"
             await connection.execute(
                 text("UPDATE sub_question SET search_queries = '[\"CASSI unfolding\"]'")
             )
-        detail = await SqlRepository(make_sessionmaker(engine)).get_run(run_id)
-        assert detail.sub_questions[0].search_queries == ["CASSI unfolding"]
+            assert await connection.scalar(
+                text("SELECT search_queries FROM sub_question WHERE id = 'old'")
+            ) == '["CASSI unfolding"]'
     finally:
         await engine.dispose()
     await asyncio.to_thread(command.downgrade, config, "0036")
     await asyncio.to_thread(command.upgrade, config, "0037")
     engine = make_engine(url)
     try:
-        detail = await SqlRepository(make_sessionmaker(engine)).get_run(run_id)
-        assert detail.sub_questions[0].question == "旧版完整问题"
-        assert detail.sub_questions[0].search_queries == []
+        async with engine.connect() as connection:
+            row = (await connection.execute(
+                text("SELECT question, search_queries FROM sub_question WHERE id = 'old'")
+            )).one()
+            assert row.question == "旧版完整问题"
+            assert row.search_queries == "[]"
     finally:
         await engine.dispose()
 

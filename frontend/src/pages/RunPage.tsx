@@ -375,6 +375,13 @@ export default function RunPage() {
         </div>
       </header>
 
+      {status === 'cancelling' && detail.data?.status_notice && (
+        <div className="run-validation-note is-warning" role="status">
+          <AppIcon name="alert" size={16} aria-hidden="true" />
+          <p>{detail.data.status_notice}</p>
+        </div>
+      )}
+
       {status === 'needs_review' && (
         <div className="run-validation-note is-warning" role="status">
           <AppIcon name="alert" size={16} aria-hidden="true" />

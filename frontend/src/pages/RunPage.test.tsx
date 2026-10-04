@@ -224,6 +224,27 @@ function renderRunPage() {
 }
 
 describe('RunPage database synchronization', () => {
+  it('shows delayed cancellation guidance and removes it after settlement', () => {
+    useResearchStreamMock.mockReturnValue(makeStream('disconnected'))
+    const notice = '取消请求已保存，仍在等待执行服务完成取消。'
+    const delayed = { ...makeDetail('cancelling'), status_notice: notice }
+    useRunDetailMock.mockReturnValue({
+      data: delayed, isError: false, error: null, refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+    const view = renderRunPage()
+    expect(screen.getByText(notice)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '取消中' })).toBeDisabled()
+    useRunDetailMock.mockReturnValue({
+      data: { ...delayed, status: 'cancelled' }, isError: false, error: null, refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+    view.rerender(
+      <MemoryRouter initialEntries={['/runs/run-1']}>
+        <Routes><Route path="/runs/:id" element={<RunPage />} /></Routes>
+      </MemoryRouter>,
+    )
+    expect(screen.queryByText(notice)).not.toBeInTheDocument()
+  })
+
   beforeEach(() => {
     useRunDocumentMock.mockReturnValue({
       data: undefined,

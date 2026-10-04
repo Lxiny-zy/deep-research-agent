@@ -148,7 +148,7 @@ async def test_model_role_search_and_global_configuration_reach_a_complete_task(
         await asyncio.wait_for(worker._drain(), 45)
         await repo.remove_worker(worker.name)
     else:
-        await drain_inline(api.app, timeout=45)
+        await drain_inline(api.app, seconds=45)
     detail = await repo.get_run(run_id)
     assert detail is not None
     assert any(

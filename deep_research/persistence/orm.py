@@ -229,6 +229,9 @@ class ResearchRun(Base):
         ForeignKey("research_project.id", ondelete="SET NULL"), nullable=True, index=True
     )
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/running/done/error
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # 队列语义（``execution_mode=worker``）：
     #   status=pending 且 claimable_at 非空  → 待领取，**不是孤儿**
     #   status=running 且租约过期            → 执行者崩溃，走恢复路径续跑

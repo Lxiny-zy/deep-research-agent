@@ -70,12 +70,6 @@ async def submit(client, who, query, workflow="research_quick", **extra):
     return response.json()["run_id"]
 
 
-async def wait_for(check, *, seconds=5):
-    async with asyncio.timeout(seconds):
-        while not await check():
-            await asyncio.sleep(0.01)
-
-
 async def test_both_topologies_queue_without_lease_and_reserve_light_execution(
     service, monkeypatch
 ):
@@ -92,6 +86,8 @@ async def test_both_topologies_queue_without_lease_and_reserve_light_execution(
         assert await repo.acquire_lease(run_id, "probe")
         await repo.release_lease(run_id, "probe")
     released = {query: asyncio.Event() for query in ids}
+    started_events = {query: asyncio.Event() for query in ids}
+    finished_events = {query: asyncio.Event() for query in ids}
     started = []
     owners = set()
 
@@ -99,11 +95,13 @@ async def test_both_topologies_queue_without_lease_and_reserve_light_execution(
         owner = kwargs["lease_owner"]
         owners.add(owner)
         started.append(query)
+        started_events[query].set()
         try:
             await released[query].wait()
             await repo.finalize(run_id, elapsed=1, total_tokens=0, lease_owner=owner)
         finally:
             await repo.release_lease(run_id, owner)
+            finished_events[query].set()
 
     async def embedded(app, *args, **kwargs):
         await body(*args, **kwargs)
@@ -117,10 +115,10 @@ async def test_both_topologies_queue_without_lease_and_reserve_light_execution(
     task = asyncio.create_task(consumer.run_forever())
     try:
 
-        async def first_three():
-            return len(started) == 3
-
-        await wait_for(first_three)
+        async with asyncio.timeout(5):
+            await asyncio.gather(
+                *(started_events[q].wait() for q in ("a-heavy", "b-heavy", "a-light"))
+            )
         assert set(started) == {"a-heavy", "b-heavy", "a-light"}
         assert await repo.get_run_status(ids["a-next"]) == "pending"
         assert len(consumer._running) == 3
@@ -128,17 +126,14 @@ async def test_both_topologies_queue_without_lease_and_reserve_light_execution(
         # Same user's light work used the reservation despite its heavy backlog.
         released["a-heavy"].set()
 
-        async def next_started():
-            return "a-next" in started
-
-        await wait_for(next_started)
+        async with asyncio.timeout(5):
+            await started_events["a-next"].wait()
         for event in released.values():
             event.set()
 
-        async def all_finished():
-            return all([await repo.get_run_status(run_id) == "done" for run_id in ids.values()])
-
-        await wait_for(all_finished)
+        async with asyncio.timeout(5):
+            await asyncio.gather(*(event.wait() for event in finished_events.values()))
+        assert all([await repo.get_run_status(run_id) == "done" for run_id in ids.values()])
         assert Counter(started) == Counter(ids.keys())
         assert len(owners) == len(ids)  # Every claim has a fresh fencing token.
         for run_id in ids.values():

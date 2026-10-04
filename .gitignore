@@ -18,6 +18,7 @@ artifacts/
 *.db-wal
 *.egg-info/
 .pytest_cache/
+/.t*/
 .mypy_cache/
 .ruff_cache/
 .coverage

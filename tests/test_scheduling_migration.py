@@ -1,11 +1,65 @@
 """0038 preserves legacy checkpoints and makes only recoverable work claimable."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
 import sqlalchemy as sa
 
 from alembic import command
-from tests.test_migrations_pg import _alembic_config
+from deep_research.persistence.db import make_engine
+from tests.test_migrations_pg import (
+    _alembic_config,
+    _isolated_database,
+    _postgres_url,
+    _run_migration,
+)
+
+
+@pytest.mark.pg
+async def test_postgres_fair_scheduling_migration_roundtrip_preserves_legacy_work():
+    async with _isolated_database(_postgres_url()) as url:
+        await _run_migration(url, "0037")
+        engine = make_engine(url)
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(sa.text(
+                    "INSERT INTO research_run "
+                    "(id, query, status, interpretation, elapsed, total_tokens) "
+                    "VALUES ('legacy', 'legacy', 'running', '', 12, 123)"
+                ))
+                await connection.execute(sa.text(
+                    "INSERT INTO workflow_run "
+                    "(id, research_run_id, workflow_name, status, attempt, "
+                    "input, output, definition, checkpoint) "
+                    "VALUES ('w', 'legacy', 'deep', 'running', 1, "
+                    "'{}', '{}', '{}', '{\"query\": \"legacy\"}')"
+                ))
+            for _ in range(2):
+                await _run_migration(url, "0038")
+                async with engine.connect() as connection:
+                    row = (await connection.execute(sa.text(
+                        "SELECT schedule_cost, schedule_class, schedule_priority, "
+                        "claimable_at, elapsed, total_tokens FROM research_run WHERE id='legacy'"
+                    ))).one()
+                    assert tuple(row[:3]) == (4, "heavy", 1)
+                    assert row.claimable_at is not None
+                    assert (row.elapsed, row.total_tokens) == (12, 123)
+                    assert await connection.scalar(sa.text(
+                        "SELECT checkpoint FROM workflow_run WHERE id='w'"
+                    )) == {"query": "legacy"}
+                config = _alembic_config(url)
+                await asyncio.to_thread(command.downgrade, config, "0037")
+                async with engine.connect() as connection:
+                    assert await connection.scalar(sa.text(
+                        "SELECT count(*) FROM information_schema.columns "
+                        "WHERE table_name='research_run' AND column_name='schedule_cost'"
+                    )) == 0
+                    assert await connection.scalar(sa.text(
+                        "SELECT checkpoint FROM workflow_run WHERE id='w'"
+                    )) == {"query": "legacy"}
+        finally:
+            await engine.dispose()
 
 
 def test_fair_scheduling_upgrade_backfills_only_checkpointed_unfinished_work(tmp_path):

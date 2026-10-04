@@ -2284,6 +2284,9 @@ async def set_tags(run_id: str, req: TagsUpdate, request: Request) -> RunDetail:
 
 
 async def _enrich_run_detail(repo: ResearchRepository, detail: RunDetail) -> RunDetail:
+    from .cancellation import cancellation_notice
+
+    detail.status_notice = cancellation_notice(detail)
     # Keep the detail payload bounded; callers that need the complete history
     # can page through the dedicated events endpoint.
     detail.events = await repo.get_events(detail.id, limit=_RUN_DETAIL_EVENT_LIMIT)

@@ -413,6 +413,8 @@ export interface RunCompletion {
 }
 
 export interface RunDetail extends RunSummary {
+  cancel_requested_at?: string | null
+  status_notice?: string | null
   completion?: RunCompletion | null
   project_id?: string | null
   interpretation: string

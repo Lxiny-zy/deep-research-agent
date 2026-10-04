@@ -7,10 +7,10 @@ import asyncio
 from deep_research import api
 
 
-async def drain_inline(app, *, timeout: float = 45) -> None:
+async def drain_inline(app, *, seconds: float = 45) -> None:
     consumer = api._make_inline_worker(app, app.state.settings)
     try:
-        async with asyncio.timeout(timeout):
+        async with asyncio.timeout(seconds):
             while True:
                 await consumer._tick()
                 running = list(consumer._running)

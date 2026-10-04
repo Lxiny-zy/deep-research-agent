@@ -3635,6 +3635,8 @@ export interface components {
          * @description 单次研究详情（含计划、结果、报告）。
          */
         RunDetail: {
+            /** Cancel Requested At */
+            cancel_requested_at?: string | null;
             /** Completion */
             completion?: {
                 [key: string]: unknown;
@@ -3672,6 +3674,8 @@ export interface components {
             sources?: components["schemas"]["Source"][];
             /** Status */
             status: string;
+            /** Status Notice */
+            status_notice?: string | null;
             /** Sub Questions */
             sub_questions?: components["schemas"]["SubQuestion"][];
             /** Tags */

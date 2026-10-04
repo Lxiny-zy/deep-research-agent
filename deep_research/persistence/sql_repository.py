@@ -53,6 +53,7 @@ from ..scheduling import (
 from . import orm
 from .coordination import transaction_lock
 from .repository import (
+    EXECUTION_LEASE_SECONDS,
     RUN_ACTIVE_STATUSES,
     ClaimedRun,
     IdempotencyConflictError,
@@ -438,7 +439,7 @@ class SqlRepository:
                     orm.ResearchRun.id == run_id,
                     orm.ResearchRun.status.in_(("pending", "running")),
                 )
-                .values(status="cancelling")
+                .values(status="cancelling", cancel_requested_at=datetime.now(UTC))
             )
             if not cast("CursorResult[Any]", result).rowcount:
                 return await s.scalar(
@@ -824,7 +825,9 @@ class SqlRepository:
                     )
                 )
 
-    async def acquire_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool:
+    async def acquire_lease(
+        self, run_id: str, owner: str, *, seconds: int = EXECUTION_LEASE_SECONDS
+    ) -> bool:
         now = datetime.now(UTC)
         expires = now + timedelta(seconds=seconds)
         async with self._sm() as s, s.begin():
@@ -842,7 +845,9 @@ class SqlRepository:
             )
             return bool(cast("CursorResult[Any]", result).rowcount)
 
-    async def renew_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool:
+    async def renew_lease(
+        self, run_id: str, owner: str, *, seconds: int = EXECUTION_LEASE_SECONDS
+    ) -> bool:
         now = datetime.now(UTC)
         expires = now + timedelta(seconds=seconds)
         async with self._sm() as s, s.begin():
@@ -943,7 +948,10 @@ class SqlRepository:
                         orm.WorkflowRunRow.lease_expires_at <= now,
                     ),
                 )
-                .values(lease_owner=owner, lease_expires_at=now + timedelta(seconds=120))
+                .values(
+                    lease_owner=owner,
+                    lease_expires_at=now + timedelta(seconds=EXECUTION_LEASE_SECONDS),
+                )
             )
             if not cast("CursorResult[Any]", fenced).rowcount:
                 return False
@@ -978,7 +986,8 @@ class SqlRepository:
             return True
 
     async def claim_next_run(
-        self, owner: str, *, lease_seconds: int = 120, max_active_runs: int | None = None
+        self, owner: str, *, lease_seconds: int = EXECUTION_LEASE_SECONDS,
+        max_active_runs: int | None = None
     ) -> ClaimedRun | None:
         """Choose and charge one identity atomically with its execution lease."""
         async with self._sm() as s, s.begin():
@@ -1418,6 +1427,14 @@ class SqlRepository:
                 query=run.query,
                 status=run.status,
                 interpretation=run.interpretation,
+                cancel_requested_at=(
+                    run.cancel_requested_at.replace(tzinfo=UTC)
+                    if (
+                        run.cancel_requested_at is not None
+                        and run.cancel_requested_at.tzinfo is None
+                    )
+                    else run.cancel_requested_at
+                ),
                 sub_questions=sub_questions,
                 results=results,
                 report=report,

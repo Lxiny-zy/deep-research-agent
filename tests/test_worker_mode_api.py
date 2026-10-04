@@ -14,8 +14,10 @@ from httpx import ASGITransport
 
 from deep_research import api
 from deep_research.config import Settings
+from deep_research.execution import ExecutionContext, RunExecutor
 from deep_research.orchestration import OrchestrationRuntime
 from deep_research.persistence.memory_repository import InMemoryRepository
+from deep_research.worker import Worker
 
 
 def _client() -> httpx.AsyncClient:
@@ -213,8 +215,8 @@ async def test_recovery_scan_leaves_orphans_to_workers(worker_repo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recovery_scan_still_settles_cancelling_runs(worker_repo) -> None:
-    """取消结算不需要执行能力，因此在 worker 模式下仍归 API。"""
+async def test_recovery_scan_leaves_cancellation_settlement_to_consumer(worker_repo) -> None:
+    """API 不结算；消费者通过租约协议完成取消。"""
     runtime = OrchestrationRuntime()
     execution = runtime.start("deep", {"query": "abandoned cancel"})
     runtime.save_checkpoint({"query": "abandoned cancel", "scratch": {}}, {"name": "deep"})
@@ -224,4 +226,10 @@ async def test_recovery_scan_still_settles_cancelling_runs(worker_repo) -> None:
 
     await api._recover_orphaned_runs(api.app, api.app.state.settings)
 
+    assert await worker_repo.get_run_status(run_id) == "cancelling"
+    consumer = Worker(
+        worker_repo, RunExecutor(ExecutionContext(repo=worker_repo)), api.app.state.settings
+    )
+    assert await consumer.settle_cancellations() == 1
     assert await worker_repo.get_run_status(run_id) == "cancelled"
+    assert await consumer.settle_cancellations() == 0

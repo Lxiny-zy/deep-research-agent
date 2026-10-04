@@ -34,7 +34,7 @@ async def finish_run(repo):
         await asyncio.wait_for(worker._drain(), 45)
         await repo.remove_worker(worker.name)
     else:
-        await drain_inline(api.app, timeout=45)
+        await drain_inline(api.app, seconds=45)
 
 
 @pytest.mark.parametrize("key", ["autoResearch", "litReview", "slides", "mindmap"])

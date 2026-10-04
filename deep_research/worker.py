@@ -488,7 +488,10 @@ async def main_async(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--name",
         default=os.getenv("DR_WORKER_NAME") or socket.gethostname(),
-        help="worker 心跳与日志标识，默认主机名；各副本应使用不同标识。执行租约由每次领取独立生成。",
+        help=(
+            "worker 心跳与日志标识，默认主机名；各副本应使用不同标识。"
+            "执行租约由每次领取独立生成。"
+        ),
     )
     parser.add_argument("--check", action="store_true", help="检查本 worker 的持久化心跳后退出")
     args = parser.parse_args(argv)

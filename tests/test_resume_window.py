@@ -61,7 +61,7 @@ async def test_http_resume_restarts_expired_window_and_legacy_execution_saves_pr
         await asyncio.wait_for(worker._drain(), 15)
         await repo.remove_worker(worker.name)
     else:
-        await drain_inline(api.app, timeout=15)
+        await drain_inline(api.app, seconds=15)
     detail = await repo.get_run(run_id)
     # Execution resumed successfully; this intentionally tiny report does not
     # satisfy the frozen task's length/source requirements and must stay reviewable.

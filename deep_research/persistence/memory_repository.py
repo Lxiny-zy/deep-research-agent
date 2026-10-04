@@ -27,6 +27,7 @@ from ..scheduling import (
     validate_priority,
 )
 from .repository import (
+    EXECUTION_LEASE_SECONDS,
     RUN_ACTIVE_STATUSES,
     ClaimedRun,
     IdempotencyConflictError,
@@ -45,6 +46,7 @@ class _RunRecord:
     owner_id: str | None = None
     project_id: str | None = None
     status: str = "pending"
+    cancel_requested_at: datetime | None = None
     interpretation: str = ""
     sub_questions: list[SubQuestion] = field(default_factory=list)
     results: list[ResearchResult] = field(default_factory=list)
@@ -138,7 +140,8 @@ class InMemoryRepository:
             record.orchestration = execution.model_copy(deep=True)
             record.lease_owner = lease_owner
             record.lease_expires_at = (
-                datetime.now(UTC) + timedelta(seconds=120) if lease_owner is not None else None
+                datetime.now(UTC) + timedelta(seconds=EXECUTION_LEASE_SECONDS)
+                if lease_owner is not None else None
             )
         self._runs[run_id] = record
         self._order.append(run_id)
@@ -247,6 +250,7 @@ class InMemoryRepository:
             return None
         if rec.status in {"pending", "running"}:
             rec.status = "cancelling"
+            rec.cancel_requested_at = datetime.now(UTC)
         return rec.status
 
     async def save_plan(
@@ -346,7 +350,9 @@ class InMemoryRepository:
         self._runs[run_id].orchestration = execution.model_copy(deep=True)
         self._runs[run_id].attempt = execution.attempt
 
-    async def acquire_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool:
+    async def acquire_lease(
+        self, run_id: str, owner: str, *, seconds: int = EXECUTION_LEASE_SECONDS
+    ) -> bool:
         rec = self._runs.get(run_id)
         if rec is None:
             return False
@@ -358,7 +364,9 @@ class InMemoryRepository:
         rec.lease_expires_at = now + timedelta(seconds=seconds)
         return True
 
-    async def renew_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool:
+    async def renew_lease(
+        self, run_id: str, owner: str, *, seconds: int = EXECUTION_LEASE_SECONDS
+    ) -> bool:
         rec = self._runs.get(run_id)
         if rec is None:
             return False
@@ -432,7 +440,8 @@ class InMemoryRepository:
         return True
 
     async def claim_next_run(
-        self, owner: str, *, lease_seconds: int = 120, max_active_runs: int | None = None
+        self, owner: str, *, lease_seconds: int = EXECUTION_LEASE_SECONDS,
+        max_active_runs: int | None = None
     ) -> ClaimedRun | None:
         """Reference implementation of the claim protocol.
 
@@ -634,6 +643,7 @@ class InMemoryRepository:
             query=rec.query,
             status=rec.status,
             owner_id=rec.owner_id,
+            cancel_requested_at=rec.cancel_requested_at,
             project_id=rec.project_id,
             interpretation=rec.interpretation,
             sub_questions=list(rec.sub_questions),

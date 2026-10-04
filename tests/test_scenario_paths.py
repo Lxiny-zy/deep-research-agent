@@ -193,7 +193,7 @@ async def test_task_creation_execution_result_and_all_promised_downloads(
         await asyncio.wait_for(worker._drain(), timeout=45)
         await repo.remove_worker(worker.name)
     else:
-        await drain_inline(api.app, timeout=45)
+        await drain_inline(api.app, seconds=45)
     detail = await repo.get_run(run_id)
     assert detail is not None
     completion = detail.orchestration.checkpoint.get("scratch", {}).get("_completion")

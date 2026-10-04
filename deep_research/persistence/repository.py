@@ -43,6 +43,7 @@ class RunQueueFullError(RuntimeError):
 
 
 RUN_ACTIVE_STATUSES = frozenset({"pending", "running", "cancelling"})
+EXECUTION_LEASE_SECONDS = 120
 RUN_TERMINAL_STATUSES = frozenset({"cancelled", "done", "error", "needs_review"})
 
 
@@ -86,6 +87,8 @@ class RunDetail:
     # 本次运行的意图判定（从 checkpoint scratch 还原）；未跑意图门禁时为 None。
     intent: IntentDecision | None = None
     completion: dict[str, Any] | None = None
+    cancel_requested_at: datetime | None = None
+    status_notice: str | None = None
 
 
 @dataclass
@@ -199,7 +202,8 @@ class ResearchRepository(Protocol):
         ...
 
     async def claim_next_run(
-        self, owner: str, *, lease_seconds: int = 120, max_active_runs: int | None = None
+        self, owner: str, *, lease_seconds: int = EXECUTION_LEASE_SECONDS,
+        max_active_runs: int | None = None
     ) -> ClaimedRun | None:
         """Atomically claim one queued or abandoned run, or return ``None``.
 
@@ -276,9 +280,13 @@ class ResearchRepository(Protocol):
         lease_owner: str | None = None,
     ) -> None: ...
 
-    async def acquire_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool: ...
+    async def acquire_lease(
+        self, run_id: str, owner: str, *, seconds: int = EXECUTION_LEASE_SECONDS
+    ) -> bool: ...
 
-    async def renew_lease(self, run_id: str, owner: str, *, seconds: int = 120) -> bool: ...
+    async def renew_lease(
+        self, run_id: str, owner: str, *, seconds: int = EXECUTION_LEASE_SECONDS
+    ) -> bool: ...
 
     async def release_lease(self, run_id: str, owner: str) -> None: ...
 

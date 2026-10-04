@@ -15,8 +15,10 @@ from deep_research.agents.intent_router import (
     INTENT_SUB_QUESTION_KEY,
 )
 from deep_research.config import Settings
+from deep_research.execution import ExecutionContext, RunExecutor
 from deep_research.intent.readiness import MAX_CLARIFY_ROUNDS
 from deep_research.persistence.memory_repository import InMemoryRepository
+from deep_research.worker import Worker
 
 
 def _client() -> httpx.AsyncClient:
@@ -222,7 +224,7 @@ async def test_explicit_workflow_suppresses_budget(repo) -> None:
 
 @pytest.mark.asyncio
 async def test_execute_receives_user_choice_not_routed_workflow(monkeypatch, repo) -> None:
-    """传给 _execute 的 requested_workflow 必须是**用户原始选择**。
+    """队列消费者收到的 requested_workflow 必须是**用户原始选择**。
 
     早期版本把解析后的工作流当成用户选择传下去，于是 orchestrator 无条件写
     requested_workflow，plan_route 认为「用户已显式指定」而完全让位——意图路由
@@ -232,15 +234,24 @@ async def test_execute_receives_user_choice_not_routed_workflow(monkeypatch, rep
 
     async def _capture(*args, **kwargs):
         captured.update(kwargs)
-        captured["positional_workflow"] = args[4] if len(args) > 4 else None
         return None
 
-    monkeypatch.setattr(api, "_execute", _capture)
-    await _create("调研一下多智能体系统的工程实践现状")
+    run_id, _ = await _create("调研一下多智能体系统的工程实践现状")
+    detail = await repo.get_run(run_id)
+    assert "requested_workflow" not in detail.orchestration.checkpoint["scratch"]
+    consumer = Worker(
+        repo, RunExecutor(ExecutionContext(repo=repo)), api.app.state.settings, execute=_capture
+    )
+    claimed = await repo.claim_next_run("intent-test")
+    assert claimed is not None and claimed.run_id == run_id
+    try:
+        await consumer._execute_claimed(claimed)
+    finally:
+        await repo.release_lease(run_id, claimed.lease_owner)
 
     # 用户没指定 → 必须传 None，哪怕路由把工作流改写成了 teams。
     assert captured["requested_workflow"] is None
-    assert captured["positional_workflow"] == "teams"
+    assert captured["workflow"] == "teams"
 
 
 @pytest.mark.asyncio
@@ -251,9 +262,20 @@ async def test_execute_forwards_explicit_user_choice(monkeypatch, repo) -> None:
         captured.update(kwargs)
         return None
 
-    monkeypatch.setattr(api, "_execute", _capture)
-    await _create("调研一下多智能体系统的工程实践现状", workflow="quick")
+    run_id, _ = await _create("调研一下多智能体系统的工程实践现状", workflow="quick")
+    detail = await repo.get_run(run_id)
+    assert detail.orchestration.checkpoint["scratch"]["requested_workflow"] == "quick"
+    consumer = Worker(
+        repo, RunExecutor(ExecutionContext(repo=repo)), api.app.state.settings, execute=_capture
+    )
+    claimed = await repo.claim_next_run("intent-test")
+    assert claimed is not None and claimed.run_id == run_id
+    try:
+        await consumer._execute_claimed(claimed)
+    finally:
+        await repo.release_lease(run_id, claimed.lease_owner)
     assert captured["requested_workflow"] == "quick"
+    assert captured["workflow"] == "quick"
 
 
 # --- 多轮：history 由客户端携带，服务端无会话状态 ---
