@@ -406,6 +406,7 @@ def analyse(
             raise DatasetError("分析范围与冻结统计不一致，不能混用")
         scope = frozen.get("scope")
     composition = []
+    pairing = None
     if scope is not None:
         from .analysis_scope import AnalysisScope, background_summary, validate_scope
 
@@ -413,7 +414,9 @@ def analyse(
         validate_scope(frame, selected)
         numeric, categorical = list(selected.measures), list(selected.groups)
         composition = background_summary(frame, selected.groups + selected.background)
-        scope = selected.model_dump(mode="json")
+        pairing = selected.pairing
+        if frozen is None:
+            scope = selected.model_dump(mode="json")
     describe: list[dict[str, Any]] = []
     for column in numeric:
         series = frame[column].dropna()
@@ -431,10 +434,7 @@ def analyse(
             }
         )
 
-    paired_requested = bool(
-        re.search(r"配对|成对|\bpaired\b|同一[组批].*(?:场景|样本|对象)", question, re.I)
-        and not re.search(r"非配对|不配对|不要配对|无需配对|不做配对|\bunpaired\b", question, re.I)
-    )
+    paired_requested = pairing is not None
     tests: list[dict[str, Any]] = []
     for group in [] if paired_requested else categorical:
         for variable in numeric:
@@ -519,55 +519,49 @@ def analyse(
                 }
             )
 
-    if paired_requested:
-        if len(numeric) != 2:
-            issues.append(
-                "配对分析目前支持两列宽表，每行一对；当前配对列不明确，"
-                "需先选择测量列或转换长表，未改用独立样本检验"
-            )
+    if pairing is not None:
+        left, right = pairing.left.column, pairing.right.column
+        pairs = frame[[left, right]].dropna()
+        difference = pairs[right] - pairs[left]
+        n = len(pairs)
+        mean = float(difference.mean())
+        std = float(difference.std(ddof=1)) if n >= 2 else math.nan
+        statistic = pvalue = lower = upper = math.nan
+        reason = ""
+        if n < 2 or not math.isfinite(std) or std <= 0:
+            reason = "完整配对不足或差值无有效变异，无法估计配对 t 检验及置信区间"
+            issues.append(reason)
         else:
-            left, right = numeric
-            pairs = frame[[left, right]].dropna()
-            difference = pairs[right] - pairs[left]
-            n = len(pairs)
-            mean = float(difference.mean())
-            std = float(difference.std(ddof=1)) if n >= 2 else math.nan
-            statistic = pvalue = lower = upper = math.nan
-            reason = ""
-            if n < 2 or not math.isfinite(std) or std <= 0:
-                reason = "完整配对不足或差值无有效变异，无法估计配对 t 检验及置信区间"
+            result = stats.ttest_rel(pairs[right], pairs[left])
+            statistic, pvalue = float(result.statistic), float(result.pvalue)
+            margin = float(stats.t.ppf(0.975, n - 1)) * std / math.sqrt(n)
+            lower, upper = mean - margin, mean + margin
+            if not all(math.isfinite(value) for value in (statistic, pvalue, lower, upper)):
+                statistic = pvalue = lower = upper = math.nan
+                reason = "数值不稳定，无法可靠估计配对 t 检验及置信区间"
                 issues.append(reason)
-            else:
-                result = stats.ttest_rel(pairs[right], pairs[left])
-                statistic, pvalue = float(result.statistic), float(result.pvalue)
-                margin = float(stats.t.ppf(0.975, n - 1)) * std / math.sqrt(n)
-                lower, upper = mean - margin, mean + margin
-                if not all(math.isfinite(value) for value in (statistic, pvalue, lower, upper)):
-                    statistic = pvalue = lower = upper = math.nan
-                    reason = "数值不稳定，无法可靠估计配对 t 检验及置信区间"
-                    issues.append(reason)
-            tests.append(
-                {
-                    "paired": True,
-                    "left": left,
-                    "right": right,
-                    "variable": f"{right} − {left}",
-                    "group": "同一行配对",
-                    "method": "配对 t 检验",
-                    "statistic": _fmt(statistic),
-                    "p_value": _fmt(pvalue),
-                    "significant": bool(pvalue < 0.05) if math.isfinite(pvalue) else None,
-                    "n_pairs": n,
-                    "excluded_pairs": len(frame) - n,
-                    "groups": 2,
-                    "mean_difference": _fmt(mean),
-                    "difference_std": _fmt(std),
-                    "df": n - 1 if n else "NA",
-                    "ci_low": _fmt(lower),
-                    "ci_high": _fmt(upper),
-                    "reason": reason,
-                }
-            )
+        tests.append(
+            {
+                "paired": True,
+                "left": left,
+                "right": right,
+                "variable": f"{right} − {left}",
+                "group": "同一行配对",
+                "method": "配对 t 检验",
+                "statistic": _fmt(statistic),
+                "p_value": _fmt(pvalue),
+                "significant": bool(pvalue < 0.05) if math.isfinite(pvalue) else None,
+                "n_pairs": n,
+                "excluded_pairs": len(frame) - n,
+                "groups": 2,
+                "mean_difference": _fmt(mean),
+                "difference_std": _fmt(std),
+                "df": n - 1 if n else "NA",
+                "ci_low": _fmt(lower),
+                "ci_high": _fmt(upper),
+                "reason": reason,
+            }
+        )
 
     correlations: list[dict[str, Any]] = []
     for i, left in enumerate(numeric):
@@ -595,6 +589,7 @@ def analyse(
         if list(frozen["columns"]) != list(frame.columns) or frozen.get("rows") != len(frame):
             raise DatasetError("数据表结构与统计快照不一致，不能与旧报告混用")
         describe, tests, correlations = frozen["describe"], frozen["tests"], frozen["correlations"]
+        paired_requested = any(test.get("paired") for test in tests)
         numeric = frozen.get("numeric", [row["variable"] for row in describe])
         categorical = frozen.get("categorical", categorical)
         issues = list(frozen.get("issues", []))

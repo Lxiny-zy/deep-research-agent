@@ -477,8 +477,12 @@ async def test_analysis_recovery_replaces_stale_review_and_fallback_status(setti
 def test_statistics_review_uses_the_writer_ledger_and_distinguishes_input_origin():
     from deep_research.workbench.analysis import analyse, ledger_facts
     from deep_research.workbench.prose_review import reviewer_for_report
+    from tests.test_analysis_pairing import paired_scope
 
-    result = analyse("a,b\n1,2\n2,3.1\n3,4.2\n4,5.3", "比较同一场景的配对差异，数据由用户合成")
+    result = analyse(
+        "a,b\n1,2\n2,3.1\n3,4.2\n4,5.3", "比较同一场景的配对差异，数据由用户合成",
+        scope=paired_scope("a", "b").model_dump(),
+    )
     frozen = result.snapshot()
     assert frozen["facts"] == result.facts()
     legacy = {key: value for key, value in frozen.items() if key != "facts"}

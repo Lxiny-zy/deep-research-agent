@@ -56,7 +56,11 @@ def test_unavailable_test_is_not_reported_as_no_significant_difference():
 
 
 def test_paired_and_independent_tests_keep_their_own_assumption_statements():
-    paired = analyse("a,b\n1,2\n2,4\n3,4\n4,7\n", "配对比较")
+    from tests.test_analysis_pairing import paired_scope
+
+    paired = analyse(
+        "a,b\n1,2\n2,4\n3,4\n4,7\n", "配对比较", scope=paired_scope("a", "b").model_dump()
+    )
     independent = analyse("group,value\nA,1\nA,2\nA,3\nB,3\nB,5\nB,7\n", "比较两组")
     assert "各配对对象独立" in paired.facts()
     assert "各配对对象独立" not in independent.facts()

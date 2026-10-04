@@ -34,7 +34,13 @@ from tests.fakes import FakeLLM, FakeSearch, verified_finding
 
 
 def test_pairwise_missingness_direction_and_confidence_interval():
-    result = analyse("scene,a,b\n1,10,12\n2,20,21\n3,30,34\n4,40,\n5,,99", "请做配对差异分析")
+    from tests.test_analysis_pairing import paired_scope
+
+    result = analyse(
+        "scene,a,b\n1,10,12\n2,20,21\n3,30,34\n4,40,\n5,,99",
+        "请做配对差异分析",
+        scope=paired_scope("a", "b").model_dump(),
+    )
     test = next(item for item in result.tests if item.get("paired"))
     assert test["n_pairs"] == 3 and test["excluded_pairs"] == 2
     assert test["left"] == "a" and test["right"] == "b"
@@ -54,7 +60,9 @@ def test_pairwise_missingness_direction_and_confidence_interval():
 
 @pytest.mark.parametrize("rows", ["1,10,11\n2,20,21", "1,10,11\n2,,21"])
 def test_degenerate_pairs_are_unavailable_not_nonsignificant(rows):
-    result = analyse("scene,a,b\n" + rows, "配对比较")
+    from tests.test_analysis_pairing import paired_scope
+
+    result = analyse("scene,a,b\n" + rows, "配对比较", scope=paired_scope("a", "b").model_dump())
     test = next(item for item in result.tests if item.get("paired"))
     assert test["significant"] is None and test["p_value"] == "NA"
     assert result.issues and "无法检验" in result.facts()
@@ -70,15 +78,19 @@ def test_integer_measurement_columns_are_not_misclassified_as_identifiers():
 def test_nonfinite_input_is_rejected_and_ambiguous_pairing_is_not_guessed():
     with pytest.raises(DatasetError, match="无穷值"):
         analyse("x,y\n1,inf\n2,3")
-    result = analyse("a,b,c\n1,3,5\n2,4,6\n3,4,7", "做配对检验")
-    assert not any(test.get("paired") for test in result.tests)
-    assert any("不明确" in issue for issue in result.issues)
+    with pytest.raises(DatasetError, match="配对列不明确"):
+        analyse(
+            "a,b,c\n1,3,5\n2,4,6\n3,4,7", "做配对检验",
+            scope={"measures": ["a", "b", "c"], "comparison": "paired"},
+        )
 
 
 def test_paired_long_table_does_not_fall_back_to_an_independent_test():
-    result = analyse("subject,method,psnr\n1,A,30\n1,B,31\n2,A,32\n2,B,34", "做配对检验")
-    assert result.numeric == ["psnr"]
-    assert result.tests == [] and result.issues
+    with pytest.raises(DatasetError, match="未改用独立样本检验"):
+        analyse(
+            "subject,method,psnr\n1,A,30\n1,B,31\n2,A,32\n2,B,34", "做配对检验",
+            scope={"measures": ["psnr"], "background": ["subject"], "comparison": "paired"},
+        )
     independent = analyse(
         "subject,method,psnr\n1,A,30\n1,B,31\n2,A,32\n2,B,34", "非配对独立样本检验"
     )
