@@ -232,11 +232,13 @@ async def test_task_creation_execution_result_and_all_promised_downloads(
         or any(item["status"] != "pass" or item["size"] <= 0 for item in required_files)
     )
     expected_status = "needs_review" if requires_review else "done"
-    # The fixed external fixture intentionally supplies a short draft and one
-    # cited finding. Its quality warnings must stay visible, even though every
-    # promised file can be downloaded and opened successfully.
+    # The fixed external fixture intentionally supplies a short draft. That
+    # warning remains even when the one available source is properly cited.
     if key == "autoResearch":
-        assert {"length", "citation"} <= {gate["name"] for gate in nonpassing_gates}
+        assert "length" in {gate["name"] for gate in nonpassing_gates}
+        citation = next(gate for gate in record["gates"] if gate["name"] == "citation")
+        assert citation["status"] == "pass"
+        assert citation["metrics"]["required"] == citation["metrics"]["available"] == 1
         assert expected_status == "needs_review"
     response = await client.get(f"/api/runs/{run_id}")
     assert response.status_code == 200, response.text

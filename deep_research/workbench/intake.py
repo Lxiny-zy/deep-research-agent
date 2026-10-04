@@ -83,6 +83,7 @@ async def _fetch_document(url: str) -> list[Source]:
                 content=content,
                 locator=str(chunk.get("locator") or ""),
                 document_authors=authors if isinstance(authors, list) else [],
+                scholarly=metadata.get("scholarly"),
             )
         )
     if prepared.kind == "pdf" or (

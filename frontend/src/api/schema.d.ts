@@ -1715,6 +1715,8 @@ export interface components {
              * @default
              */
             body?: string;
+            /** Cited Documents */
+            cited_documents?: number[] | null;
             /** Documents */
             documents?: components["schemas"]["ReferenceDocument"][];
             /** Locations */

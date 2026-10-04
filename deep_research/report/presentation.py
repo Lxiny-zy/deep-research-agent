@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..bibliography import project_citations
+from ..bibliography import cited_references, project_citations
 from .document import ChartBlock, ProseBlock, ReferenceEntry, ReportDocument, TableBlock
 
 
@@ -14,7 +14,8 @@ def presentation_document(document: ReportDocument) -> ReportDocument:
     result._bibliography_presented = True
     by_index = {location.index: location.document for location in catalog.locations}
     result.references = [
-        ReferenceEntry(index=d.index, url=d.url, reference=d.reference) for d in catalog.documents
+        ReferenceEntry(index=d.index, url=d.url, reference=d.reference)
+        for d in cited_references(catalog)
     ]
     result.abstract = project_citations(result.abstract, catalog, links=False)
     blocks = [*result.blocks, *(block for section in result.sections for block in section.blocks)]

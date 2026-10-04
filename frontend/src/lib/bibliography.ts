@@ -42,6 +42,11 @@ export function documentNumber(catalog: ReportBibliography | undefined, location
   return catalog?.locations.find((item) => item.index === location)?.document ?? location
 }
 
+export function citedDocuments(catalog: ReportBibliography) {
+  const used = catalog.cited_documents
+  return used == null ? catalog.documents : catalog.documents.filter((entry) => used.includes(entry.index))
+}
+
 export function citationOccurrence(
   href: string,
   catalog?: ReportBibliography,

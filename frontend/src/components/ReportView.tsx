@@ -15,6 +15,7 @@ import {
 import type { Finding, ReportBibliography } from '../types'
 import {
   catalogForReport,
+  citedDocuments,
   citationLocations,
   citationOccurrence,
   documentNumber,
@@ -262,12 +263,12 @@ export default function ReportView({
           {streaming && <span className="report-caret" aria-hidden="true" />}
           {/* 流式阶段不渲染来源节：正文还在写，此时的 citations 是残缺快照，
               先给出一份会随后变化的清单，比暂时不给更容易误导。 */}
-          {!streaming && cited.length > 0 && (
+          {!streaming && (catalog ? citedDocuments(catalog).length : cited.length) > 0 && (
             <section className="report-references" aria-label="参考来源">
               <h2>{catalog ? '参考文献' : '参考来源'}</h2>
               <ol>
                 {catalog
-                  ? catalog.documents.map((document) => (
+                  ? citedDocuments(catalog).map((document) => (
                       <li key={document.identity} value={document.index}>
                         {document.url ? (
                           <a href={document.url} target="_blank" rel="noreferrer">

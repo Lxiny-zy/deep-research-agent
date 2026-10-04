@@ -24,7 +24,7 @@ def render_bundle(
 ) -> DeliveryBundle:
     title, markdown, stem = context["title"], context["markdown"], context["stem"]
     extras, citations = context["extras"], context["citations"]
-    from ..bibliography import Bibliography, project_citations
+    from ..bibliography import Bibliography, cited_references, project_citations
 
     bibliography = (
         Bibliography.model_validate(context["bibliography"])
@@ -143,7 +143,7 @@ def render_bundle(
 
         return render_pptx(
             deck(),
-            citations=[entry.reference for entry in bibliography.documents]
+            citations=[entry.reference for entry in cited_references(bibliography)]
             if bibliography
             else citations,
         )

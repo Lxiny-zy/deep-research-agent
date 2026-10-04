@@ -182,9 +182,13 @@ async def test_model_role_search_and_global_configuration_reach_a_complete_task(
         )
     )
     expected = "needs_review" if requires_review else "done"
-    # Configuration routing is verified with one cited finding and short prose;
-    # successful model/profile routing does not make those quality warnings pass.
-    assert {"length", "citation"} <= {gate["name"] for gate in nonpassing}
+    # The one available source satisfies the attainable citation minimum.
+    # Successful routing still does not make the short prose pass its length gate.
+    assert "length" in {gate["name"] for gate in nonpassing}
+    citation = next(gate for gate in record["gates"] if gate["name"] == "citation")
+    assert citation["status"] == "pass"
+    assert citation["metrics"]["required"] == citation["metrics"]["available"] == 1
+    assert citation["metrics"]["retrieval_shortfall"] > 0
     assert expected == "needs_review"
     assert public.json()["status"] == detail.status == completion["status"] == expected
     assert public.json()["completion"] == completion

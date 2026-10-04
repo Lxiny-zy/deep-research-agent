@@ -343,6 +343,7 @@ async def prepare_source(
             "page_count": document.page_count,
             "document_title": document.title,
             "authors": list(document.authors),
+            "scholarly": document.scholarly.model_dump(mode="json") if document.scholarly else None,
         }
         resolved_title = resolved_title or document.title
         resolved_mime = "application/pdf"

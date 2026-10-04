@@ -142,7 +142,10 @@ async def test_pdf_metadata_reaches_bibliography_only_when_confirmed_on_first_pa
     finding = EvidenceVerifier().verify(finding, source).finding
     assert finding is not None
     catalog = build_bibliography("Method [1].", [source.url], [finding], [source])
-    assert catalog.documents[0].reference == "Alice Smith, Bob Jones. " + title
+    assert (
+        catalog.documents[0].reference
+        == "Alice Smith, Bob Jones. " + title + ". 年份未识别. 出处未识别"
+    )
     assert catalog.documents[0].url == ""
 
 

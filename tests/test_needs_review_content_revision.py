@@ -38,6 +38,8 @@ def _detail(status="needs_review"):
 @pytest.mark.parametrize("status", ["done", "needs_review"])
 def test_citation_count_warning_offers_revision_for_completed_drafts(status):
     detail = _detail(status)
+    detail.report.citations.append("https://b.com")
+    detail.results[0].findings.append(verified_finding(source_url="https://b.com"))
     gate = citation_gate(detail.report.markdown, detail.report.citations, AUTO_RESEARCH, 2)
     assert gate.name == "citation" and gate.status == "warn"
     assert revision_offer(detail, [gate])["available"]

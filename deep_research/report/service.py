@@ -8,7 +8,7 @@ from ..blocking import run_blocking
 from ..checkpoints import RUN_SETTINGS_KEY
 from ..persistence.repository import ResearchRepository, RunDetail
 from ..reproducibility import RUN_MANIFEST_CHECKPOINT_KEY
-from .assemble import assemble_document
+from .assemble import assemble_document, table_citations
 from .document import FinalReportValidation, ReportDocument
 
 
@@ -67,6 +67,7 @@ class ReportService:
                 detail.report.citations,
                 [finding for result in detail.results for finding in result.findings],
                 [*detail.sources, *paper_sources(detail)],
+                extra_citations=table_citations(document.blocks),
             )
         validation = scratch.get("_report_validation") if isinstance(scratch, dict) else None
         if isinstance(validation, dict):

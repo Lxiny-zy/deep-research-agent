@@ -285,7 +285,7 @@ details{margin:16px 28px 40px;background:#fff;border:1px solid #dfe4ea;border-ra
 
 def _outline_html(mindmap: dict[str, Any]) -> str:
     registered = {int(item["index"]) for item in mindmap.get("sources", [])}
-    from ...bibliography import Bibliography
+    from ...bibliography import Bibliography, cited_references
     from .html import _citation_evidence_html
 
     catalog = (
@@ -329,7 +329,7 @@ def _outline_html(mindmap: dict[str, Any]) -> str:
             "<h2>参考文献</h2><ol>"
             + "".join(
                 f'<li value="{entry.index}">{escape(entry.reference)}</li>'
-                for entry in catalog.documents
+                for entry in cited_references(catalog)
             )
             + "</ol>"
         )

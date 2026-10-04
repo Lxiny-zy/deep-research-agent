@@ -169,9 +169,12 @@ async def test_library_import_research_followup_and_qa_share_selected_corpus(
         )
         expected = "needs_review" if requires_review else "done"
         if key in {"autoResearch", "litReview"}:
-            # A single selected library source cannot meet these research
-            # templates' citation/length promises, even when retrieval is correct.
-            assert {"length", "citation"} <= {gate["name"] for gate in nonpassing}
+            # The selected source satisfies the attainable citation minimum;
+            # these short fixture reports still fail the length requirement.
+            assert "length" in {gate["name"] for gate in nonpassing}
+            citation = next(gate for gate in record["gates"] if gate["name"] == "citation")
+            assert citation["status"] == "pass"
+            assert citation["metrics"]["required"] == citation["metrics"]["available"] == 1
             assert expected == "needs_review"
         else:
             assert expected == "done", record["gates"]

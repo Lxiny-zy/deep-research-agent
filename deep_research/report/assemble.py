@@ -124,10 +124,24 @@ def assemble_document(
         blocks=blocks,
         sections=sections,
         references=references,
-        bibliography=build_bibliography(body, citations, findings),
+        bibliography=build_bibliography(
+            body, citations, findings, extra_citations=table_citations(blocks)
+        ),
         evidence=_evidence(findings, index_by_url, corroboration=require_corroboration),
         overview=_overview(findings, events),
     )
+
+
+def table_citations(blocks: list[Block]) -> list[int]:
+    indices = []
+    for block in blocks:
+        if isinstance(block, TableBlock):
+            for row in block.rows:
+                if row.citation is not None:
+                    indices.append(row.citation)
+                for cell in row.cells.values():
+                    indices.extend(cell.citations)
+    return list(dict.fromkeys(indices))
 
 
 def _leading_title(body: str) -> str:

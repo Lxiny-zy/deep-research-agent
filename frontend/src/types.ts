@@ -121,6 +121,7 @@ export interface ReportBibliography {
   body: string
   binding_status?: 'unavailable' | 'bound' | 'invalid'
   occurrences?: CitationOccurrence[]
+  cited_documents?: number[] | null
   documents: {
     index: number
     identity: string

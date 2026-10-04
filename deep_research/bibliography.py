@@ -2,13 +2,14 @@
 
 The research report keeps its verified location numbers. Presentation may show a
 single document number for several locations, but always retains their binding.
-No model call, title similarity or guessed publication metadata is used here.
+No model call, fuzzy title matching or guessed publication metadata is used here.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from collections import defaultdict
 from collections.abc import Iterator
 from typing import Literal
@@ -16,7 +17,7 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field
 
-from .models import Finding, Source
+from .models import Finding, ScholarlyMetadata, Source, SourceIdentity
 
 
 class ReferenceDocument(BaseModel):
@@ -56,6 +57,9 @@ class Bibliography(BaseModel):
     locations: list[ReferenceLocation] = Field(default_factory=list)
     occurrences: list[CitationOccurrence] = Field(default_factory=list)
     binding_status: Literal["unavailable", "bound", "invalid"] = "unavailable"
+    # Locations retain the full evidence inventory. Only these documents are
+    # printed as references; None is the compatibility state for old catalogs.
+    cited_documents: list[int] | None = None
 
 
 _DOI = re.compile(r"10\.\d{4,9}/\S+", re.I)
@@ -205,11 +209,109 @@ def _location_label(url: str, source: Source | None, finding: Finding | None) ->
     return parts.fragment if re.fullmatch(r"chunk-\d+", parts.fragment) else ""
 
 
+def _title_key(title: str) -> str:
+    if re.search(r"\.(?:pdf|docx?|txt|md)$", title, re.I):
+        return ""
+    value = "".join(c for c in unicodedata.normalize("NFKC", title).casefold() if c.isalnum())
+    return value if len(value) >= 16 else ""
+
+
+def _work_alias(value: str) -> str:
+    value = value.casefold().strip()
+    match = re.fullmatch(r"(?:arxiv:|doi:10\.48550/arxiv\.)(.+?)(?:v\d+)?", value)
+    return "arxiv:" + match[1] if match else value
+
+
+def _bibliographic_identities(
+    citations: list[str], by_url: dict[str, list[Finding]], snapshots: dict[tuple[str, str], Source]
+) -> dict[int, str]:
+    """Group exact scholarly identities without changing full-text snapshot IDs."""
+    parents: dict[str, str] = {}
+
+    def root(key: str) -> str:
+        parents.setdefault(key, key)
+        if parents[key] != key:
+            parents[key] = root(parents[key])
+        return parents[key]
+
+    def join(a: str, b: str) -> None:
+        a, b = root(a), root(b)
+        if a != b:
+            parents[max(a, b)] = min(a, b)
+
+    slots: dict[int, str] = {}
+    titles: dict[str, list[tuple[str, tuple[str, ...]]]] = defaultdict(list)
+    for index, url in enumerate(citations, 1):
+        records = by_url.get(url, [])
+        source = next(
+            (
+                snapshots[(url, f.verification.source_content_hash)]
+                for f in records
+                if (url, f.verification.source_content_hash) in snapshots
+            ),
+            None,
+        )
+        base = _work_alias(document_identity(url)[0])
+        aliases = {base}
+        identities = [
+            f.verification.source_identity for f in records if f.verification.source_identity
+        ]
+        meta = source.scholarly if source else None
+        metadata_records: list[SourceIdentity | ScholarlyMetadata] = list(identities)
+        if meta:
+            metadata_records.append(meta)
+        dois = {_doi(identity.doi) for identity in metadata_records if _doi(identity.doi)}
+        if len(dois) > 1:
+            slots[index] = base + f"|conflicting-metadata:{index}"
+            continue
+        for identity in metadata_records:
+            if doi := _doi(identity.doi):
+                aliases.add(_work_alias("doi:" + doi))
+            work = identity.work_id
+            if work.lower().startswith("arxiv:"):
+                aliases.add(_work_alias(work))
+            elif "arxiv.org/" in work:
+                aliases.add(_work_alias(document_identity(work)[0]))
+        for alias in aliases:
+            join(base, alias)
+        slots[index] = base
+        title = (source.title if source else "") or next(
+            (i.title for i in identities if i.title), ""
+        )
+        authors = (
+            (meta.authors if meta else [])
+            or (source.document_authors if source else [])
+            or next((i.authors for i in identities if i.authors), [])
+        )
+        if (meta or identities or authors) and (key := _title_key(title)):
+            titles[key].append(
+                (
+                    base,
+                    tuple(sorted(_title_key(name) or name.casefold().strip() for name in authors)),
+                )
+            )
+    for entries in titles.values():
+        author_sets = {authors for _, authors in entries if authors}
+        if len(author_sets) <= 1:
+            for key, _ in entries[1:]:
+                join(entries[0][0], key)
+    return {index: root(key) for index, key in slots.items()}
+
+
+def cited_references(catalog: Bibliography) -> list[ReferenceDocument]:
+    if catalog.cited_documents is None:
+        return catalog.documents
+    used = set(catalog.cited_documents)
+    return [document for document in catalog.documents if document.index in used]
+
+
 def build_bibliography(
     markdown: str,
     citations: list[str],
     findings: list[Finding],
     sources: list[Source] | None = None,
+    *,
+    extra_citations: list[int] | None = None,
 ) -> Bibliography:
     by_url: dict[str, list[Finding]] = defaultdict(list)
     for finding in findings:
@@ -228,8 +330,16 @@ def build_bibliography(
             if 0 < int(value) <= len(citations)
         )
     )
+    order.extend(
+        index
+        for index in dict.fromkeys(extra_citations or [])
+        if 0 < index <= len(citations) and index not in order
+    )
+    used = set(order)
     order.extend(index for index in range(1, len(citations) + 1) if index not in order)
+    bibliography_ids = _bibliographic_identities(citations, by_url, snapshots)
     documents: dict[str, ReferenceDocument] = {}
+    reference_quality: dict[str, int] = {}
     for index in order:
         url = citations[index - 1]
         records = by_url[url]
@@ -247,7 +357,12 @@ def build_bibliography(
             for f in records
             if f.verification.source_identity and _doi(f.verification.source_identity.doi)
         }
-        identity, link = document_identity(url, next(iter(dois)) if len(dois) == 1 else "")
+        _, link = document_identity(url, next(iter(dois)) if len(dois) == 1 else "")
+        identity = bibliography_ids[index]
+        if not link and identity.startswith("arxiv:"):
+            link = "https://arxiv.org/abs/" + identity.removeprefix("arxiv:")
+        elif not link and identity.startswith("doi:"):
+            link = "https://doi.org/" + identity.removeprefix("doi:")
         if len(dois) > 1:
             identity += f"|conflicting-metadata:{index}"
         title = first.verification.source_title if first else ""
@@ -269,6 +384,33 @@ def build_bibliography(
                 reference = ", ".join(source.scholarly.authors) + ". " + reference
         elif reference.endswith(url):
             reference = reference[: -len(url)] + link
+        if not primary and (
+            (source and (source.scholarly or source.document_authors))
+            or (
+                "workspace.invalid/" in url
+                and (source or not title or re.search(r"\.(?:pdf|docx?|txt|md)$", title, re.I))
+            )
+        ):
+            meta = source.scholarly if source else None
+            known_title = (
+                title
+                if title.strip() and not re.search(r"\.(?:pdf|docx?|txt|md)$", title, re.I)
+                else "标题未识别"
+            )
+            authors = (source.document_authors if source else []) or (meta.authors if meta else [])
+            reference = ", ".join(authors) if authors else "作者未识别"
+            reference += ". " + known_title
+            reference += ". " + (str(meta.year) if meta and meta.year else "年份未识别")
+            reference += ". " + (meta.venue if meta and meta.venue else "出处未识别")
+            if meta and meta.doi:
+                reference += ". doi:" + _doi(meta.doi)
+            if meta:
+                from .citation import _status_flags
+
+                for flag in _status_flags(meta):
+                    reference += ". " + flag
+            if link:
+                reference += ". " + link
         if identity not in documents:
             document = ReferenceDocument(
                 index=len(documents) + 1,
@@ -280,6 +422,21 @@ def build_bibliography(
             documents[identity] = document
             catalog.documents.append(document)
         document = documents[identity]
+        meta = source.scholarly if source else None
+        score = (
+            20
+            if primary
+            else 2 * bool(source and (source.document_authors or (meta and meta.authors)))
+            + 2 * bool(meta and meta.year)
+            + 2 * bool(meta and meta.venue)
+            + 2 * bool(_title_key(title))
+            + bool(reference and reference not in {title, url})
+        )
+        if score > reference_quality.get(identity, -1):
+            document.reference = reference or title or link or url
+            document.title = title or document.title
+            document.url = link or document.url
+            reference_quality[identity] = score
         # A later matching location can contain richer explicitly supplied metadata.
         if primary and not re.search(r"https?://(?:dx\.)?doi\.org/", document.reference):
             document.reference = primary
@@ -297,6 +454,9 @@ def build_bibliography(
     catalog.locations.sort(key=lambda location: location.index)
     for document in catalog.documents:
         document.locations.sort()
+    catalog.cited_documents = [
+        document.index for document in catalog.documents if used.intersection(document.locations)
+    ]
     catalog.body = project_citations(catalog.source_body, catalog)
     return catalog
 
@@ -351,14 +511,15 @@ def citation_runs(markdown: str) -> Iterator[re.Match[str]]:
 
 
 def bibliography_markdown(catalog: Bibliography) -> str:
-    if not catalog.documents:
+    references = cited_references(catalog)
+    if not references:
         return ""
 
     def escape(text: str) -> str:
         return re.sub(r"([\\`*_{}\[\]<>])", r"\\\1", text.replace("\n", " "))
 
     return "## 参考文献\n\n" + "\n\n".join(
-        f"[{doc.index}] {escape(doc.reference)}" for doc in catalog.documents
+        f"[{doc.index}] {escape(doc.reference)}" for doc in references
     )
 
 
@@ -369,7 +530,7 @@ def present_markdown(markdown: str, catalog: Bibliography, *, links: bool = True
 
 
 def work_keys(catalog: Bibliography) -> dict[str, str]:
-    """Versions remain separate bibliography entries but are one research work."""
+    """Every precise location maps to the shared bibliographic work."""
     identities = {entry.index: entry.identity for entry in catalog.documents}
     return {
         item.url: re.sub(r"^(arxiv:.+?)v\d+$", r"\1", identities[item.document])

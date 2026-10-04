@@ -62,6 +62,7 @@ def citation_gate(
     *,
     document_keys: dict[str, str] | None = None,
 ) -> GateResult:
+    from .quality import effective_citation_minimum
     from .scholarly import source_counts
 
     body = citation_text(_body_without_references(markdown))
@@ -78,10 +79,16 @@ def citation_gate(
         [citations[i - 1] for i in sorted(used - set(out_of_range))], document_keys=document_keys
     )[0]
     available = source_counts(citations, document_keys=document_keys)[0]
-    minimum = template.min_citations if min_citations is None else min_citations
+    requested = template.min_citations if min_citations is None else min_citations
+    minimum = effective_citation_minimum(requested, available)
     if minimum and distinct < minimum:
         issues.append(f"已核验引用 {distinct} 个，少于要求的 {minimum} 个")
     status: Status = "fail" if out_of_range else ("warn" if issues else "pass")
+    if requested > available:
+        issues.append(
+            f"（检索提示）可用已核验来源只有 {available} 个，低于目标 {requested} 个；"
+            f"本次引用下限按可用来源调整为 {minimum} 个，可继续补充独立来源。"
+        )
     return GateResult(
         "citation",
         status,
@@ -93,6 +100,8 @@ def citation_gate(
             "anchors_used": anchor_count,
             "unused_anchors": len(unused),
             "required": minimum,
+            "requested": requested,
+            "retrieval_shortfall": max(0, requested - available),
         },
     )
 
@@ -293,7 +302,8 @@ def scholarly_gate(
     document_keys: dict[str, str] | None = None,
 ) -> GateResult:
     """学术写作质量：文体、摘要引用、引用堆砌、重复来源、引用下限、时效、局限说明。"""
-    from .scholarly import evaluate
+    from .quality import effective_citation_minimum
+    from .scholarly import evaluate, source_counts
 
     body = citation_text(_body_without_references(markdown))
     used = {
@@ -306,7 +316,9 @@ def scholarly_gate(
         query=query,
         citations=cited,
         used_citations=len(cited),
-        min_citations=min_citations,
+        min_citations=effective_citation_minimum(
+            min_citations, source_counts(citations, document_keys=document_keys)[0]
+        ),
         policy=policy,
         source_texts=source_texts,
         references=references,

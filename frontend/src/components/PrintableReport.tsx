@@ -14,7 +14,7 @@ import {
 } from '../lib/evidence'
 import { displayReportTitle } from '../lib/reportTitle'
 import { verificationText } from '../lib/verificationText'
-import { catalogForReport, documentNumber } from '../lib/bibliography'
+import { catalogForReport, citedDocuments, documentNumber } from '../lib/bibliography'
 import type { Finding, ReportDocument } from '../types'
 
 // 可打印报告：屏幕上的应用 → 纸上的报告。
@@ -313,12 +313,12 @@ export default function PrintableReport({
 
       {document && <StructuredDocumentPreview document={document} print />}
 
-      {cited.length > 0 && (
+      {(catalog ? citedDocuments(catalog).length : cited.length) > 0 && (
         <section className="print-references">
           <h2>{catalog ? '参考文献' : '参考来源'}</h2>
           <ol className="print-reference-list">
             {catalog
-              ? catalog.documents.map((entry) => (
+              ? citedDocuments(catalog).map((entry) => (
                   <li
                     key={entry.identity}
                     value={entry.index}

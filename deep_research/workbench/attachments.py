@@ -23,7 +23,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..models import Source
+from ..models import ScholarlyMetadata, Source
 from ..upload_limits import DOCUMENT_LIMIT_LABEL, DOCUMENT_MAX_BYTES
 
 ATTACHMENTS_SCRATCH_KEY = "attachments"
@@ -78,6 +78,7 @@ class Attachment(BaseModel):
     stored: bool = False
     title: str = Field(default="", max_length=300)
     authors: list[str] = Field(default_factory=list, max_length=32)
+    scholarly: ScholarlyMetadata | None = None
     chunks: list[AttachmentChunk] = Field(default_factory=list, max_length=MAX_CHUNKS_PER_FILE)
 
     def preview(self, limit: int = 240) -> str:
@@ -114,6 +115,7 @@ class Attachment(BaseModel):
                 section_start=chunk.section_start,
                 section_end=chunk.section_end,
                 document_authors=self.authors,
+                scholarly=self.scholarly,
             )
             for chunk in self.chunks
         ]
@@ -198,6 +200,7 @@ async def parse_attachment(raw: bytes, filename: str, mime_type: str = "") -> At
         char_count=prepared.char_count,
         title=str(prepared.metadata.get("document_title") or ""),
         authors=authors if isinstance(authors, list) else [],
+        scholarly=prepared.metadata.get("scholarly"),
         chunks=chunks,
     )
 

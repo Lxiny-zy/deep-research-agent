@@ -3,6 +3,25 @@ import userEvent from '@testing-library/user-event'
 import type { Finding, ReportBibliography } from '../types'
 import ReportView from './ReportView'
 
+it('prints only cited bibliography entries and retains source location binding', () => {
+  const markdown = 'Result [1].'
+  const urls = ['https://paper.test/a', 'https://paper.test/b']
+  const bibliography: ReportBibliography = {
+    source_body: markdown,
+    body: 'Result [[1]](#cite-1).',
+    cited_documents: [1],
+    documents: [
+      { index: 1, identity: 'a', title: 'Used paper', reference: 'Used paper', url: urls[0], locations: [1] },
+      { index: 2, identity: 'b', title: 'Unused paper', reference: 'Unused paper', url: urls[1], locations: [2] },
+    ],
+    locations: urls.map((url, i) => ({ index: i + 1, document: i + 1, url, label: '', content_hashes: [] })),
+  }
+  render(<ReportView markdown={markdown} streaming={false} citations={urls} bibliography={bibliography} />)
+  const references = screen.getByRole('region', { name: '参考来源' })
+  expect(within(references).getByText('Used paper')).toBeVisible()
+  expect(within(references).queryByText('Unused paper')).not.toBeInTheDocument()
+})
+
 it('distinguishes failed final prose review from verified source evidence', async () => {
   render(
     <ReportView

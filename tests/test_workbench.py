@@ -301,7 +301,7 @@ async def test_lit_review_run_produces_checked_deliverables(settings) -> None:
     by_name = {gate.name: gate for gate in bundle.gates}
     assert by_name["structure"].status == "pass"
     assert by_name["consistency"].status == "pass", by_name["consistency"].issues
-    assert by_name["citation"].status in {"pass", "warn"}  # 假数据只有 1 个来源，低于 6 的下限
+    assert by_name["citation"].status == "pass"  # 已引用全部可用来源
 
 
 async def test_closed_review_cannot_export_when_a_supplied_document_is_missing(settings):
@@ -402,8 +402,9 @@ async def test_writer_revises_draft_that_fails_quality_checks(settings) -> None:
     bundle = build_bundle(detail)
     by_name = {gate.name: gate for gate in bundle.gates}
     assert by_name["revision"].metrics["revisions"] >= 1
-    # 假数据只有 1 个来源，远低于综述下限 20：如实标为需关注，而不是悄悄通过
-    assert by_name["citation"].status == "warn"
+    # 已引用全部可用来源；检索目标不足仍明确提示，但不再制造无法满足的写作要求。
+    assert by_name["citation"].status == "pass"
+    assert by_name["citation"].metrics["retrieval_shortfall"] == 19
     assert any("20" in issue for issue in by_name["citation"].issues)
 
 

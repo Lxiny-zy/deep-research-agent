@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from ..blocking import run_blocking
-from ..models import Source
+from ..models import ScholarlyMetadata, Source
 from ..security import provider_http_client
 
 
@@ -150,6 +150,7 @@ class PdfDocument:
     page_count: int = 0
     title: str = ""
     authors: tuple[str, ...] = ()
+    scholarly: ScholarlyMetadata | None = None
 
     @property
     def content(self) -> str:
@@ -408,6 +409,9 @@ def parse_oa_pdf(raw: bytes, limits: OaPdfLimits | None = None) -> PdfDocument:
                 raise OaPdfParseError("PDF text exceeds total text limit")
             pages.append(text)
         title, authors = _confirmed_metadata(document.metadata or {}, pages[0])
+        from .pdf_metadata import first_page_metadata
+
+        title, authors, scholarly = first_page_metadata(document[0], pages[0], title, authors)
     except OaPdfParseError:
         raise
     except Exception as exc:
@@ -421,7 +425,12 @@ def parse_oa_pdf(raw: bytes, limits: OaPdfLimits | None = None) -> PdfDocument:
     if not text or not sections:
         raise OaPdfParseError("PDF contains no extractable text")
     return PdfDocument(
-        text=text, sections=sections, page_count=len(pages), title=title, authors=authors
+        text=text,
+        sections=sections,
+        page_count=len(pages),
+        title=title,
+        authors=authors,
+        scholarly=scholarly,
     )
 
 

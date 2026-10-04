@@ -18,6 +18,11 @@ from pydantic import BaseModel, ConfigDict, Field
 FieldKind = Literal["int", "bool"]
 
 
+def effective_citation_minimum(requested: int, available: int) -> int:
+    """Writing and delivery require the same attainable number of sources."""
+    return min(max(0, requested), max(0, available))
+
+
 @dataclass(frozen=True)
 class QualityField:
     key: str
