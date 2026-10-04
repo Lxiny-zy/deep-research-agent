@@ -299,4 +299,28 @@ describe('runProgress', () => {
     expect(progress.percent).toBe(100)
     expect(progress.currentLabel).toBe('研究任务已完成')
   })
+
+  it('ends needs_review without converting successful workflow steps into accepted delivery', () => {
+    const execution = workflowRun({
+      status: 'succeeded',
+      steps: [
+        {
+          id: 'writer',
+          node_id: 'writer',
+          label: '报告撰写',
+          kind: 'agent',
+          agent: 'writer',
+          status: 'succeeded',
+          attempt: 1,
+          error: null,
+          started_at: null,
+          finished_at: null,
+        },
+      ],
+    })
+    const progress = deriveResearchProgress({ execution, events: [], runStatus: 'needs_review' })
+    expect(progress).toMatchObject({ terminal: true, estimated: false, completed: 1, total: 1 })
+    expect(progress.percent).toBeLessThan(100)
+    expect(progress.currentLabel).toContain('待复核')
+  })
 })

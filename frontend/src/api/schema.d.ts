@@ -2212,7 +2212,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "start" | "info" | "finding" | "round" | "token" | "report" | "done" | "error" | "cancelled";
+            type: "start" | "info" | "finding" | "round" | "token" | "report" | "done" | "needs_review" | "error" | "cancelled";
             /**
              * Version
              * @default 1
@@ -3635,6 +3635,10 @@ export interface components {
          * @description 单次研究详情（含计划、结果、报告）。
          */
         RunDetail: {
+            /** Completion */
+            completion?: {
+                [key: string]: unknown;
+            } | null;
             /** Created At */
             created_at?: string | null;
             /**

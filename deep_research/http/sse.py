@@ -23,7 +23,7 @@ from anyio.lowlevel import checkpoint_if_cancelled
 from fastapi import FastAPI
 
 from ..observability import Event, EventHub, EventStreamGap
-from ..persistence.repository import RUN_ACTIVE_STATUSES, ResearchRepository
+from ..persistence.repository import RUN_ACTIVE_STATUSES, RUN_TERMINAL_STATUSES, ResearchRepository
 
 _REMOTE_STREAM_POLL_SECONDS = 0.5
 _REMOTE_STREAM_TERMINAL_GRACE_SECONDS = 2.0
@@ -102,22 +102,10 @@ async def _stream_run_sse(app: FastAPI, run_id: str, *, after_seq: int = 0) -> A
 
     def classify(event: Event, status: str | None, attempt: int) -> tuple[bool, bool]:
         """Return ``(emit, terminal)`` for the current durable run state."""
-        terminal = event.stage == "ORCHESTRATOR" and event.type in {
-            "done",
-            "error",
-            "cancelled",
-        }
+        terminal = event.stage == "ORCHESTRATOR" and event.type in RUN_TERMINAL_STATUSES
         if terminal and (event.attempt < attempt or status in RUN_ACTIVE_STATUSES):
             return False, terminal
-        expected_type = (
-            {
-                "done": "done",
-                "error": "error",
-                "cancelled": "cancelled",
-            }.get(status)
-            if status is not None
-            else None
-        )
+        expected_type = status if status in RUN_TERMINAL_STATUSES else None
         if terminal and expected_type is not None and event.type != expected_type:
             return False, terminal
         return True, terminal
@@ -260,17 +248,8 @@ async def _stream_run_sse(app: FastAPI, run_id: str, *, after_seq: int = 0) -> A
         events = await _stream_read(
             repo.get_events, run_id, after_seq=cursor, limit=_SSE_EVENT_BATCH_SIZE
         )
-        expected_type = {
-            "done": "done",
-            "error": "error",
-            "cancelled": "cancelled",
-        }.get(status)
+        expected_type = status if status in RUN_TERMINAL_STATUSES else None
         for event in events:
-            terminal = event.stage == "ORCHESTRATOR" and event.type in {
-                "done",
-                "error",
-                "cancelled",
-            }
             # Prior-attempt terminal markers remain in storage for audit but
             # must never terminate a resumed stream.  Likewise, a terminal
             # marker observed while the root status is active is stale.
@@ -306,8 +285,12 @@ async def _stream_run_sse(app: FastAPI, run_id: str, *, after_seq: int = 0) -> A
             if terminal_deadline is None:
                 terminal_deadline = now + _REMOTE_STREAM_TERMINAL_GRACE_SECONDS
             elif now >= terminal_deadline:
+                if not await stable_terminal(status, attempt):
+                    terminal_deadline = None
+                    continue
                 messages = {
                     "done": "运行已完成",
+                    "needs_review": "运行已完成，交付内容需要复核",
                     "error": "运行失败",
                     "cancelled": "运行已取消",
                 }

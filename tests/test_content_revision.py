@@ -59,6 +59,8 @@ async def service(monkeypatch, tmp_path, request):
         "live": {},
         "tasks": set(),
         "run_tasks": {},
+        "inline_worker": None,
+        "executor": None,
         "cancellation_requested": set(),
         "config_lock": asyncio.Lock(),
         "delivery_cache": {},
@@ -140,7 +142,9 @@ async def test_revision_is_queued_once_with_only_the_writer_and_fresh_runtime(se
     scratch = child.orchestration.checkpoint["scratch"]
     assert scratch[REVISION_KEY]["parent_run_id"] == parent.id
     assert "_artifact_run_id" not in scratch and "_catalog_runtime" not in scratch
-    assert "_runtime_metrics" not in scratch and scratch["_deadline_at"] > 1
+    assert "_runtime_metrics" not in scratch
+    # The revision gets fresh clocks when execution starts, after its queue wait.
+    assert "_deadline_at" not in scratch and "_task_deadline_at" not in scratch
     assert [s["agent"] for s in child.orchestration.definition["steps"]] == ["research_writer"]
     assert child.owner_id == "alice" and child.total_tokens == 0
     assert api.app.state.run_tasks == {}
@@ -349,15 +353,20 @@ async def test_inline_revision_uses_shared_admission_and_replays_one_execution(
     monkeypatch.setattr(api, "_execute", execute)
     body = {"source_version": source_version(parent), "request_id": "inline-revision-request"}
     path = f"/api/runs/{parent.id}/revise"
-    first = await client.post(path, json=body)
-    assert first.status_code == 202
-    await asyncio.wait_for(entered.wait(), 5)
+    consumer = api._make_inline_worker(api.app, api.app.state.settings)
+    consumer_task = asyncio.create_task(consumer.run_forever())
     try:
+        first = await client.post(path, json=body)
+        assert first.status_code == 202
+        await asyncio.wait_for(entered.wait(), 5)
         second = await client.post(path, json=body)
         assert second.json() == first.json() and len(started) == 1
     finally:
         release.set()
-        await asyncio.gather(*list(api.app.state.tasks))
+        consumer.request_stop(reason="test_complete")
+        await asyncio.wait_for(consumer_task, 15)
+        if getattr(api.app.state, "inline_worker", None) is consumer:
+            api.app.state.inline_worker = None
 
 
 async def test_mindmap_revision_reuses_tree_and_repairs_only_rejected_nodes():

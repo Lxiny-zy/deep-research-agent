@@ -19,8 +19,13 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('../api/client', async () => ({ ...(await vi.importActual('../api/client')), ...mocks }))
 vi.mock('../components/PdfViewer', () => ({
-  default: (props: { documentId: string; highlight?: { quote: string } | null }) => (
-    <div data-testid="pdf" data-doc={props.documentId} data-quote={props.highlight?.quote ?? ''} />
+  default: (props: { documentId: string; highlight?: { quote: string; token: number } | null }) => (
+    <div
+      data-testid="pdf"
+      data-doc={props.documentId}
+      data-quote={props.highlight?.quote ?? ''}
+      data-token={props.highlight?.token}
+    />
   ),
 }))
 
@@ -261,29 +266,33 @@ describe('ReaderPage', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('shows the original PDF and asks with only the paper by default', async () => {
-    renderPage()
-    expect(await screen.findByTestId('pdf')).toHaveAttribute('data-doc', `att-${ATT}`)
-    const paper = screen.getByRole('checkbox', { name: '本论文' })
-    expect(paper).toBeChecked()
-    expect(paper).toBeDisabled()
-    expect(screen.getByRole('checkbox', { name: '联网检索' })).not.toBeChecked()
+  it.each(['done', 'needs_review'] as const)(
+    'allows original-paper questions for a %s report',
+    async (status) => {
+      mocks.getReader.mockResolvedValue({ ...reader, status, can_ask: true })
+      renderPage()
+      expect(await screen.findByTestId('pdf')).toHaveAttribute('data-doc', `att-${ATT}`)
+      const paper = screen.getByRole('checkbox', { name: '本论文' })
+      expect(paper).toBeChecked()
+      expect(paper).toBeDisabled()
+      expect(screen.getByRole('checkbox', { name: '联网检索' })).not.toBeChecked()
 
-    fireEvent.change(screen.getByLabelText('向这篇论文提问'), {
-      target: { value: '用了什么数据集？' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: '提问' }))
-    await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalled())
-    expect(mocks.createConversation).toHaveBeenCalledWith('用了什么数据集？', 'r1')
-    expect(mocks.askQuestion).toHaveBeenCalledWith(
-      'c1',
-      '用了什么数据集？',
-      expect.any(AbortSignal),
-      { sources: [], projectId: undefined, requestId: expect.any(String) },
-      expect.any(Function),
-      expect.any(Function),
-    )
-  })
+      fireEvent.change(screen.getByLabelText('向这篇论文提问'), {
+        target: { value: '用了什么数据集？' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: '提问' }))
+      await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalled())
+      expect(mocks.createConversation).toHaveBeenCalledWith('用了什么数据集？', 'r1')
+      expect(mocks.askQuestion).toHaveBeenCalledWith(
+        'c1',
+        '用了什么数据集？',
+        expect.any(AbortSignal),
+        { sources: [], projectId: undefined, requestId: expect.any(String) },
+        expect.any(Function),
+        expect.any(Function),
+      )
+    },
+  )
 
   it('aborts only the stream connection when leaving during a model response', async () => {
     mocks.listConversations.mockResolvedValue([answered])
@@ -344,6 +353,21 @@ describe('ReaderPage', () => {
     )
     fireEvent.click(locate)
     expect(screen.getByTestId('pdf')).toHaveAttribute('data-quote', 'PSNR reaches 38.4 dB on CAVE')
+  })
+
+  it('retries the same citation even when the clock has not advanced', async () => {
+    mocks.listConversations.mockResolvedValue([answered])
+    renderPage()
+    const locate = await screen.findByRole('button', { name: '定位引用 1 的论文依据' })
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(12345)
+    try {
+      fireEvent.click(locate)
+      const firstToken = screen.getByTestId('pdf').getAttribute('data-token')
+      fireEvent.click(locate)
+      expect(screen.getByTestId('pdf').getAttribute('data-token')).not.toBe(firstToken)
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   it('switches to the report and explains documents without a PDF', async () => {

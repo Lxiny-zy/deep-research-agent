@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import type { DeliverableRegistry } from '../types'
 import {
   getDeliverables,
@@ -60,6 +61,9 @@ export function useDeliverables(runId: string | undefined, finished: boolean) {
     setRegistry: (registry: DeliverableRegistry) => {
       client.setQueryData(['deliverables', runId], registry)
       void client.invalidateQueries({ queryKey: ['workspace', runId] })
+      void client.invalidateQueries({ queryKey: ['narrative', runId] })
+      void client.invalidateQueries({ queryKey: ['run', runId] })
+      void client.invalidateQueries({ queryKey: ['runs'] })
     },
   }
 }
@@ -76,13 +80,22 @@ export function useRunTemplate(runId: string | undefined) {
 
 /** 人话进度：运行中每 5 秒刷新一次，终态后停止轮询。 */
 export function useNarrative(runId: string | undefined, live: boolean) {
-  return useQuery({
-    queryKey: ['narrative', runId],
+  const query = useQuery({
+    // Keep an in-flight live response from replacing or deduplicating the
+    // final request when persistence has already reached a terminal state.
+    queryKey: ['narrative', runId, live ? 'live' : 'terminal'],
     queryFn: ({ signal }) => getNarrative(runId as string, signal),
     enabled: Boolean(runId),
     refetchInterval: live ? 5000 : false,
     retry: false,
   })
+  const refetch = query.refetch
+  useEffect(() => {
+    // A terminal transition stops polling, but must first replace any cached
+    // active phase with the durable final narrative.
+    if (runId && !live) void refetch()
+  }, [live, refetch, runId])
+  return query
 }
 
 /** 步骤与产物文件树：运行中每 6 秒刷新，终态后停止。 */

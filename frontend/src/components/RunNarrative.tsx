@@ -3,6 +3,7 @@ import type { RunNarrative as Narrative } from '../types'
 
 const STATUS_ICON: Record<string, AppIconName> = {
   done: 'check-circle',
+  needs_review: 'alert',
   active: 'loader',
   error: 'circle-x',
   pending: 'circle-dashed',

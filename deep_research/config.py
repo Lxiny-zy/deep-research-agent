@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from dataclasses import dataclass, field
@@ -62,6 +63,11 @@ def _str_env(name: str, default: str) -> str:
     if raw is None or not raw.strip():
         return default
     return raw.strip()
+
+
+def _run_timeouts() -> dict[str, int]:
+    raw = os.getenv("DR_RUN_TIMEOUT_PROFILES", "")
+    return json.loads(raw) if raw.strip() else {}
 
 
 # 部分中转/网关前置 Cloudflare 等 WAF，会按 User-Agent 拦截 openai SDK 默认的
@@ -189,9 +195,15 @@ class Settings:
 
     # --- 网络 ---
     request_timeout: float = field(default_factory=lambda: _float_env("REQUEST_TIMEOUT", 60.0))
-    # Wall-clock deadline for one complete research run.  This is separate
-    # from per-request timeouts because a workflow can make many provider calls.
-    max_run_seconds: int = field(default_factory=lambda: _int_env("MAX_RUN_SECONDS", 3600))
+    # Zero selects the task profile. A positive value is an exact attempt limit.
+    max_run_seconds: int = field(default_factory=lambda: _int_env("MAX_RUN_SECONDS", 0))
+    run_timeout_profiles: dict[str, int] = field(default_factory=_run_timeouts)
+    research_tier: str = ""
+    max_task_seconds: int = field(default_factory=lambda: _int_env("MAX_TASK_SECONDS", 172800))
+    max_run_recoveries: int = field(default_factory=lambda: _int_env("MAX_RUN_RECOVERIES", 6))
+    max_no_progress_attempts: int = field(
+        default_factory=lambda: _int_env("MAX_NO_PROGRESS_ATTEMPTS", 2)
+    )
     # Process-local admission limits for background research executions.  The
     # queue is intentionally bounded so overload is observable instead of
     # turning into an unbounded collection of asyncio tasks.
@@ -206,6 +218,9 @@ class Settings:
     # worker 空闲时的领取轮询间隔；有任务时连续领取，不受此值限制。
     worker_poll_seconds: float = field(
         default_factory=lambda: _float_env("DR_WORKER_POLL_SECONDS", 1.0)
+    )
+    worker_shutdown_grace_seconds: float = field(
+        default_factory=lambda: _float_env("DR_WORKER_SHUTDOWN_GRACE_SECONDS", 20.0)
     )
     # 同一个 run 被领取并异常失败的最大次数。超过后置 error（原因 ``poison_run``），
     # 避免一个必然崩溃的任务在 worker 之间无限循环传递。
@@ -281,8 +296,19 @@ class Settings:
                 raise ValueError(f"{name} must be a boolean")
         if not math.isfinite(self.request_timeout) or self.request_timeout <= 0:
             raise ValueError("request_timeout 必须 > 0")
-        if self.max_run_seconds < 1:
-            raise ValueError("max_run_seconds 必须 >= 1")
+        if self.max_run_seconds < 0:
+            raise ValueError("max_run_seconds 必须 >= 0（0 使用任务档位）")
+        if self.research_tier not in {"", "light", "standard", "deep"}:
+            raise ValueError("research_tier must be light, standard or deep")
+        if not isinstance(self.run_timeout_profiles, dict) or any(
+            not isinstance(key, str) or not key.strip() or type(value) is not int or value < 1
+            for key, value in self.run_timeout_profiles.items()
+        ):
+            raise ValueError("run_timeout_profiles must map task/profile names to positive seconds")
+        if self.max_task_seconds < 1 or self.max_run_recoveries < 0:
+            raise ValueError("max_task_seconds must be positive; max_run_recoveries non-negative")
+        if self.max_no_progress_attempts < 1:
+            raise ValueError("max_no_progress_attempts must be positive")
         if not isinstance(self.quality, dict):
             raise ValueError("quality must be a mapping")
         if self.quality:
@@ -299,6 +325,11 @@ class Settings:
             raise ValueError("execution_mode 必须是 inline 或 worker")
         if not math.isfinite(self.worker_poll_seconds) or self.worker_poll_seconds <= 0:
             raise ValueError("worker_poll_seconds 必须 > 0")
+        if (
+            not math.isfinite(self.worker_shutdown_grace_seconds)
+            or self.worker_shutdown_grace_seconds < 0
+        ):
+            raise ValueError("worker_shutdown_grace_seconds must be finite and >= 0")
         if self.max_claim_attempts < 1:
             raise ValueError("max_claim_attempts must be >= 1")
         self.orchestration_mode = self.orchestration_mode.strip().lower()

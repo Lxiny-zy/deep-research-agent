@@ -1,5 +1,5 @@
 import type { ResearchEvent } from '../types'
-import { reduceStream, type ResearchStreamState } from './useResearchStream'
+import { isTerminal, reduceStream, type ResearchStreamState } from './useResearchStream'
 
 const base: ResearchStreamState = {
   events: [],
@@ -92,6 +92,34 @@ describe('reduceStream', () => {
     )
     expect(s.status).toBe('done')
     expect(s.stats).toEqual({ elapsed: 1.2, total_tokens: 99, sources: 3 })
+  })
+
+  it('retains review diagnostics and stops at needs_review without reporting done', () => {
+    const review = ev({
+      type: 'needs_review',
+      message: '必需交付尚未通过验收',
+      data: {
+        status: 'needs_review',
+        elapsed: 12,
+        total_tokens: 90,
+        sources: 2,
+        completion: { status: 'needs_review', issues: ['PDF 生成失败'] },
+      },
+    })
+    expect(isTerminal(review)).toBe(true)
+    expect(isTerminal({ ...review, stage: 'DELIVERY' })).toBe(false)
+    const state = reduceStream({ ...base, reportMarkdown: '保留待复核正文' }, review)
+    expect(state.status).toBe('needs_review')
+    expect(state.stats?.total_tokens).toBe(90)
+    expect(state.events).toEqual([review])
+    expect(state.reportMarkdown).toBe('保留待复核正文')
+    expect(reduceStream(state, ev({ type: 'done' }))).toBe(state)
+  })
+
+  it('keeps delivery progress live until an orchestrator terminal event arrives', () => {
+    const state = reduceStream(base, ev({ stage: 'DELIVERY', message: '正在生成 PDF' }))
+    expect(state.status).toBe('streaming')
+    expect(state.events[0].message).toBe('正在生成 PDF')
   })
 
   it('ignores trailing events after a terminal event', () => {

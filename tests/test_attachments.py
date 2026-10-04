@@ -321,6 +321,7 @@ async def test_paper_read_with_only_an_uploaded_paper_reads_it_without_searching
     from deep_research.orchestrator import DeepResearchAgent, create_initial_execution
     from deep_research.persistence.memory_repository import InMemoryRepository
     from deep_research.workbench.contract import CONTRACT_SCRATCH_KEY, build_contract
+    from deep_research.workbench.delivery_store import load_version
     from deep_research.workbench.intake import INTAKE_SOURCES_KEY
     from deep_research.workbench.templates import get_template
 
@@ -346,7 +347,37 @@ async def test_paper_read_with_only_an_uploaded_paper_reads_it_without_searching
     )
     await agent.run(query)
     detail = await repo.get_run(run_id)
-    assert detail is not None and detail.status == "done"
+    assert detail is not None
+    completion = detail.orchestration.checkpoint["scratch"].get("_completion")
+    assert isinstance(completion, dict), detail.status
+    record = load_version(detail, settings.artifact_root, completion["content_version"]).registry()
+    required = set(template.deliverables)
+    missing = required - {item["format"] for item in record["items"]}
+    nonpassing = [gate for gate in record["gates"] if gate["status"] != "pass"]
+    requires_review = (
+        bool(missing or nonpassing or record["failures"])
+        or record["status"] != "pass"
+        or any(
+            item["status"] != "pass" or item["size"] <= 0
+            for item in record["items"]
+            if item["format"] in required
+        )
+    )
+    expected = "needs_review" if requires_review else "done"
+    # Reading and verifying the supplied original succeeds; the fixture's short
+    # generic draft still lacks the sections promised by a full paper-reading task.
+    assert {"length", "structure"} <= {gate["name"] for gate in nonpassing}
+    assert expected == "needs_review"
+    assert detail.status == completion["status"] == expected
+    assert completion["required_formats"] == sorted(required)
+    assert completion["content_version"] == record["content_version"]
+    assert completion["input_version"] == record["input_version"]
+    assert completion["gates"] == record["gates"]
+    assert bool(completion["issues"]) is requires_review
+    for gate in nonpassing:
+        assert set(gate["issues"]) <= set(completion["issues"])
+    for fmt in missing:
+        assert any(fmt.upper() in issue for issue in completion["issues"])
     verified = [
         f
         for r in detail.results

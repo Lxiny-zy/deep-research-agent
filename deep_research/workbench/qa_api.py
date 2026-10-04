@@ -191,13 +191,15 @@ async def _prepare_turn(cid: str, body: AskRequest, request: Request) -> Any:
     async def execute(**callbacks: Any) -> dict[str, Any]:
         return await _answer(cid, body, request, **callbacks)
 
+    from ..execution_policy import attempt_seconds
+
     return start_turn(
         request.app,
         requests,
         cid,
         request_id,
         execute,
-        request.app.state.settings.max_run_seconds,
+        attempt_seconds(request.app.state.settings, "qa"),
     )
 
 
@@ -388,7 +390,7 @@ async def _paper_scope(
         detail = await request.app.state.repo.get_run(conversation.run_id)
         if detail is None:
             raise HTTPException(404, "run not found")
-        if detail.status != "done":
+        if detail.status not in {"done", "needs_review"}:
             raise HTTPException(
                 409,
                 {

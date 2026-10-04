@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import time
 from collections.abc import AsyncIterator
@@ -28,10 +29,16 @@ from .artifacts import ArtifactStore
 from .checkpoints import SCHEMA_VERSION, SETTING_FIELDS
 from .config import Settings
 from .config_service import effective_settings
+from .execution_policy import (
+    recovery_checkpoint,
+    resolved_settings,
+    start_window,
+    transient_failure,
+)
 from .observability import Event, EventHub
 from .orchestration import WorkflowRun
-from .orchestrator import RUN_SETTINGS_CHECKPOINT_KEY, DeepResearchAgent
-from .persistence.repository import ResearchRepository
+from .orchestrator import RUN_SETTINGS_CHECKPOINT_KEY, DeepResearchAgent, create_initial_execution
+from .persistence.repository import LeaseLostError, ResearchRepository
 from .planning import stable_slug
 from .provider_limits import coordinator_for, current_coordinator
 from .runner import CommandRunner
@@ -95,15 +102,15 @@ def settings_for_resume(base: Settings, execution: WorkflowRun) -> Settings:
         raise ValueError("checkpoint was created by a newer incompatible service version")
     raw = scratch.get(RUN_SETTINGS_CHECKPOINT_KEY, {}) if isinstance(scratch, dict) else {}
     if not isinstance(raw, dict):
-        return base
+        return resolved_settings(base, execution.workflow_name)
     overrides = {name: raw[name] for name in _CHECKPOINT_SETTING_FIELDS if name in raw}
     if not overrides:
-        return base
+        return resolved_settings(base, execution.workflow_name)
     try:
-        return replace(base, **overrides)
+        return resolved_settings(replace(base, **overrides), execution.workflow_name)
     except (TypeError, ValueError):
         logger.warning("run checkpoint contains invalid settings; using current defaults")
-        return base
+        return resolved_settings(base, execution.workflow_name)
 
 
 @dataclass
@@ -431,7 +438,54 @@ class RunExecutor:
         agent: DeepResearchAgent | None = None
         heartbeat: asyncio.Task[None] | None = None
         search_tool: SearchTool | None = None
+        release_lease = True
         provider_token = current_coordinator.set(coordinator_for(ctx.repo, settings))
+
+        async def defer_failure(error: BaseException) -> tuple[bool, str]:
+            if lease_owner is None or not transient_failure(error):
+                return False, "execution_failed"
+            detail = await ctx.repo.get_run(run_id)
+            if detail is None or detail.orchestration is None:
+                return False, "checkpoint_missing"
+            saved_metrics = detail.orchestration.checkpoint.get("scratch", {}).get(
+                "_runtime_metrics", {}
+            )
+            saved_elapsed = saved_metrics.get("elapsed", 0)
+            if not isinstance(saved_elapsed, (float, int)) or not math.isfinite(saved_elapsed):
+                saved_elapsed = 0
+            elapsed = (
+                agent.tracer.elapsed if agent is not None else max(0, detail.elapsed, saved_elapsed)
+            )
+            updated, reason = recovery_checkpoint(
+                detail.orchestration,
+                settings,
+                reason="attempt_timeout" if isinstance(error, TimeoutError) else "transport_error",
+                elapsed=elapsed,
+            )
+            if updated is None:
+                return False, reason
+            if agent is not None:
+                updated.checkpoint["scratch"]["_runtime_metrics"].update(
+                    total_tokens=agent.tracer.total_tokens,
+                    estimated_tokens=agent.tracer.estimated_tokens,
+                )
+            recovery = updated.checkpoint["scratch"]["_recovery"]
+            if not await ctx.repo.defer_run(
+                run_id, updated, lease_owner=lease_owner, not_before=recovery["not_before"]
+            ):
+                # Cancellation wins a race with automatic recovery.
+                if await ctx.repo.get_run_status(run_id) == "cancelling":
+                    await persist_cancellation()
+                return True, "not_active"
+            event = Event(
+                stage="ORCHESTRATOR",
+                type="info",
+                message="本次尝试中断，已保存进度并安排自动恢复",
+                data={"status": "running", "recovery": recovery},
+            )
+            await ctx.repo.append_events(run_id, [event], lease_owner=lease_owner)
+            hub.publish(event)
+            return True, "scheduled"
 
         async def persist_cancellation() -> None:
             event = Event(
@@ -459,6 +513,18 @@ class RunExecutor:
                 settings = restored
             else:
                 settings = current_settings
+            settings = resolved_settings(settings, workflow)
+            if source_execution is None:
+                initial_execution = create_initial_execution(
+                    query,
+                    workflow,
+                    settings,
+                    requested_workflow=requested_workflow,
+                    execution_plan=execution_plan,
+                )
+                source_execution = initial_execution
+            start_window(source_execution, settings.max_run_seconds, settings.max_task_seconds)
+            await ctx.repo.save_orchestration(run_id, source_execution, lease_owner=lease_owner)
             artifact_store: ArtifactStore | None = self.ctx.artifact_store
             command_runner: CommandRunner | None = self.ctx.command_runner
             skill_resolver: SkillResolver | None = self.ctx.skill_resolver
@@ -535,8 +601,9 @@ class RunExecutor:
                         hub.publish(
                             Event(
                                 stage="ORCHESTRATOR",
-                                type="error",
-                                message="执行租约续期失败，任务已终止",
+                                type="info",
+                                message="执行租约已失效，等待其他执行进程接管",
+                                data={"status": "running", "reason": "lease_lost"},
                             )
                         )
                         if execution_task is not None:
@@ -580,6 +647,7 @@ class RunExecutor:
                 execution_plan=execution_plan,
                 search_overlay=search_overlay,
             )
+            agent.managed_recovery = lease_owner is not None
             if resume_execution is not None:
                 # Replay useful prior progress locally, but never put historical
                 # events back into the new tracer: append-only persistence keeps
@@ -591,7 +659,7 @@ class RunExecutor:
                     for event in historical_events
                     if not (
                         event.stage == "ORCHESTRATOR"
-                        and event.type in {"done", "error", "cancelled"}
+                        and event.type in {"done", "needs_review", "error", "cancelled"}
                     )
                 ]
                 for historical_event in replayable:
@@ -617,13 +685,29 @@ class RunExecutor:
                 except Exception:
                     logger.exception("run %s failed to persist cancellation", run_id)
                 return
+            release_lease = False
             raise
-        except TimeoutError:
+        except LeaseLostError:
+            # The successor owns durable state. Do not publish a task terminal
+            # event or try to requeue an attempt whose fence has been revoked.
+            release_lease = False
+            hub.publish(
+                Event(
+                    stage="ORCHESTRATOR",
+                    type="info",
+                    message="执行权已交接，后续进度由接管进程继续提供",
+                    data={"status": "running", "reason": "lease_lost"},
+                )
+            )
+        except TimeoutError as exc:
+            deferred, reason = await defer_failure(exc)
+            if deferred:
+                return
             event = Event(
                 stage="ORCHESTRATOR",
                 type="error",
-                message=f"运行超过 {settings.max_run_seconds} 秒期限，已终止",
-                data={"status": "error", "reason": "deadline_exceeded"},
+                message="执行期限或自动恢复上限已到，已保留进度，需复核后继续",
+                data={"status": "error", "reason": reason if lease_owner else "deadline_exceeded"},
             )
             hub.publish(event)
             try:
@@ -634,11 +718,19 @@ class RunExecutor:
                 await ctx.repo.set_status(run_id, "error", lease_owner=lease_owner)
             except Exception:
                 logger.exception("run %s failed to persist deadline status", run_id)
-        except Exception:
+        except Exception as exc:
+            deferred, reason = await defer_failure(exc)
+            if deferred:
+                return
             # run() 内部正常路径已 emit error 事件并置 status=error；
             # 落到这里的是构造期异常或落库自身失败，必须留痕并兜底状态
             logger.exception("run %s 执行失败", run_id)
-            event = Event(stage="ORCHESTRATOR", type="error", message="服务器内部错误，运行已终止")
+            event = Event(
+                stage="ORCHESTRATOR",
+                type="error",
+                message="运行已停止，已保留可用进度",
+                data={"status": "error", "reason": reason},
+            )
             hub.publish(event)
             try:
                 await ctx.repo.append_events(run_id, [event], lease_owner=lease_owner)
@@ -658,11 +750,6 @@ class RunExecutor:
                         await asyncio.gather(heartbeat, return_exceptions=True)
                     except BaseException:
                         logger.exception("run %s lease heartbeat cleanup failed", run_id)
-                if lease_owner is not None:
-                    try:
-                        await ctx.repo.release_lease(run_id, lease_owner)
-                    except BaseException:
-                        logger.exception("run %s release lease failed", run_id)
                 if agent is not None:
                     try:
                         await agent.aclose()
@@ -673,6 +760,13 @@ class RunExecutor:
                         await search_tool.aclose()
                     except BaseException:
                         logger.exception("run %s 释放搜索 client 失败", run_id)
+                # A successor may start as soon as this lease is released.
+                # Close all attempt-owned resources before allowing that handoff.
+                if lease_owner is not None and release_lease:
+                    try:
+                        await ctx.repo.release_lease(run_id, lease_owner)
+                    except BaseException:
+                        logger.exception("run %s release lease failed", run_id)
 
             # A second task.cancel() must not interrupt resource cleanup. Shielding
             # an independent task lets this task retain cancellation semantics while

@@ -204,7 +204,11 @@ def watch_until_done(client: httpx.Client, base: str, run_id: str) -> RunWatch:
             watch.completed_nodes.append(data.get("node_id", "?"))
         elif name == "checkpoint.saved":
             watch.last_checkpoint_tokens = data.get("total_tokens", ev.get("tokens", 0))
-        if ev.get("stage") == "ORCHESTRATOR" and ev.get("type") in ("done", "error"):
+        if ev.get("stage") == "ORCHESTRATOR" and ev.get("type") in (
+            "done",
+            "needs_review",
+            "error",
+        ):
             watch.finished = True
             if ev.get("type") == "error":
                 watch.error = ev.get("message", "unknown")

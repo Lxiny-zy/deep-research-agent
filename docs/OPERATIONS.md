@@ -63,9 +63,29 @@ LLM 根据流式 usage 结算；无 usage 或无法确定的调用明确标为�
 `python -m deep_research.worker --check` 检查本 worker 的心跳，不能靠它替代 API 探针。
 管理员的 `/metrics` 包含数据库汇总状态；部署监控应观察队列等待、活跃租约及 worker 数。
 
-`cancelled` 和 `done` 是终态；`/resume` 返回 409。故障状态修复后可恢复，执行 attempt
-增加但不重置原始总截止时间。崩溃任务由租约过期后的执行者接管；超过领取上限会熔断。
+`cancelled`、`done` 和 `needs_review` 是终态；`/resume` 返回 409。`needs_review` 表示任务保留了
+结果但未通过交付验收，应使用内容修订或格式重试。新契约任务的 `done` 必须在承诺格式生成、
+质量检查与可读取性检查通过后写入；历史无契约记录不批量追溯改写，详见
+[完成状态与交付记录](DELIVERY_COMPLETION_20261004.md)。崩溃任务由租约过期后的执行者接管；
+普通进程中断不会续期任务最终截止时间。故障状态的显式 `/resume` 授权新的有界执行窗口，
+累计耗时、token、证据和原始输入仍保留。超过异常领取上限会熔断；已经登记的自动恢复
+另按恢复上限计数，不误计为 worker 崩溃。
 若配置中的全局模型端点已经变化，应创建新研究，旧 run 不会带着旧设置转发到新端点。
+
+`MAX_RUN_SECONDS=0` 按任务/档位选择尝试期限；正数明确覆盖。`MAX_TASK_SECONDS` 默认
+48 小时，`MAX_RUN_RECOVERIES` 默认 6 次，`MAX_NO_PROGRESS_ATTEMPTS` 默认 2 次。
+`DR_RUN_TIMEOUT_PROFILES` 可覆盖档位、工作流或 `工作流:档位`。已有数据库在线设置中的
+正数优先于新环境默认值；升级不会覆盖已有配置。参数与恢复验证见
+[长任务恢复记录](LONG_TASK_RECOVERY_20261004.md)。
+
+`DR_WORKER_SHUTDOWN_GRACE_SECONDS` 默认 20 秒；停止领取后等待在途任务，再提供最多
+5 秒清理和 5 秒注销时间。仅清理不响应时使用进程退出兜底，未完成任务保留租约供 TTL
+到期后接管；部署 `stop_grace_period` 应大于配置宽限加 10 秒。冷交付与格式重试独立使用
+两个渲染槽，普通文件读取等操作保留另两个槽；这是每 API 进程的隔离，尚非持久化交付队列。
+
+生产拓扑建议在资源核定后使用 `DR_EXECUTION_MODE=worker`，执行
+`docker compose --profile worker up -d --build --scale worker=2`。本地验证不代替生产切换、
+共享产物存储和故障接管验收；部署操作仍需按当前发布授权执行。
 
 ## 文件与命令
 

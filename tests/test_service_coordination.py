@@ -46,8 +46,8 @@ async def sessions(tmp_path, request):
     await engine.dispose()
 
 
-def _execution():
-    execution = OrchestrationRuntime().start("deep", {"query": "same topic"})
+def _execution(workflow="deep"):
+    execution = OrchestrationRuntime().start(workflow, {"query": "same topic"})
     execution.checkpoint = {
         "scratch": {"_artifact_run_scoped": True, "_artifact_slug": "same-topic"}
     }
@@ -61,7 +61,9 @@ async def test_concurrent_repositories_enforce_shared_queue_and_execution_limits
             f"query {index}",
             request_hash=str(index),
             idempotency_key=str(index),
-            execution=_execution(),
+            # Global admission must allow two light runs, independently of the
+            # reserved interactive slot and the per-owner heavy-task ceiling.
+            execution=_execution("quick"),
             claimable=True,
             max_inflight=3,
         )

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from collections.abc import Callable
 from typing import cast
 
 from ..config import Settings
+from ..execution_policy import COMMITTED_RESEARCH_PROGRESS_KEY
 from ..guardrails import (
     ClaimConsistencyVerifier,
     EvidenceVerifier,
@@ -152,6 +155,19 @@ class Researcher:
         )
         progress_failed = asyncio.Event()
 
+        def mark_committed(key: str, result: ResearchResult) -> None:
+            # Call only after a verified load or a successful audited save. Mere
+            # attempts and in-memory findings cannot prove durable progress.
+            digest = hashlib.sha256(
+                json.dumps(
+                    result.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            bb.scratch.setdefault(COMMITTED_RESEARCH_PROGRESS_KEY, {})[key] = digest
+
         async def progress_io(operation, *args):  # type: ignore[no-untyped-def]
             try:
                 return await run_blocking(operation, *args)
@@ -168,6 +184,7 @@ class Researcher:
                 key = progress.key(question, context_findings) if progress is not None else ""
                 saved = await progress_io(progress.load, key, question) if progress else None
                 if saved is not None:
+                    mark_committed(key, saved)
                     from ..reproducibility import RecordingSearchTool
 
                     if isinstance(ctx.search_tool, RecordingSearchTool) and saved.extraction_audit:
@@ -192,6 +209,8 @@ class Researcher:
                 )
                 if progress is not None and result is not None:
                     await progress_io(progress.save, key, result)
+                    if result.extraction_audit is not None:
+                        mark_committed(key, result)
             attempted[question] = len(result.findings) if result is not None else 0
             return result
 

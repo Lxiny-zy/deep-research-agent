@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..intent.types import IntentDecision
 from ..models import (
@@ -43,7 +43,7 @@ class RunQueueFullError(RuntimeError):
 
 
 RUN_ACTIVE_STATUSES = frozenset({"pending", "running", "cancelling"})
-RUN_TERMINAL_STATUSES = frozenset({"cancelled", "done", "error"})
+RUN_TERMINAL_STATUSES = frozenset({"cancelled", "done", "error", "needs_review"})
 
 
 @dataclass
@@ -85,6 +85,7 @@ class RunDetail:
     metrics: QualityMetrics | None = None
     # 本次运行的意图判定（从 checkpoint scratch 还原）；未跑意图门禁时为 None。
     intent: IntentDecision | None = None
+    completion: dict[str, Any] | None = None
 
 
 @dataclass
@@ -113,6 +114,7 @@ class ClaimedRun:
     # True 表示这是对一个已有 checkpoint 的接管（断点续跑），
     # False 表示首次执行。二者的事件重放语义不同。
     resumed: bool
+    dispatch: dict[str, Any] | None = None
 
 
 class ResearchRepository(Protocol):
@@ -138,6 +140,7 @@ class ResearchRepository(Protocol):
         owner_id: str | None = None,
         project_id: str | None = None,
         max_inflight: int | None = None,
+        schedule_priority: int = 1,
     ) -> tuple[str, bool]:
         """Create a run once; return ``(run_id, created)``.
 
@@ -168,6 +171,16 @@ class ResearchRepository(Protocol):
 
         Used by ``resume`` in worker mode: the API hands the run back to the
         queue instead of executing it in the request process.
+        """
+        ...
+
+    async def defer_run(
+        self, run_id: str, execution: WorkflowRun, *, lease_owner: str, not_before: float
+    ) -> bool:
+        """Persist automatic recovery under the live lease without undoing cancellation.
+
+        The caller releases the lease only after its resources have been closed.
+        Returns False if the run became terminal or cancelling.
         """
         ...
 
@@ -276,7 +289,14 @@ class ResearchRepository(Protocol):
         elapsed: float,
         total_tokens: int,
         lease_owner: str | None = None,
+        completion: dict[str, Any] | None = None,
     ) -> None: ...
+
+    async def update_completion(
+        self, run_id: str, completion: dict[str, Any], *, expected_version: str
+    ) -> bool:
+        """CAS a terminal task's delivery assessment after a format-only retry."""
+        ...
 
     async def delete_run(self, run_id: str) -> bool: ...
 

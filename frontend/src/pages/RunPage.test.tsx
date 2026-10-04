@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { useResearchStream, type ResearchStreamState } from '../hooks/useResearchStream'
 import { useRunDetail, useRunDocument } from '../hooks/useRuns'
+import { useDeliverables } from '../hooks/useWorkbench'
 import { loadThread } from '../lib/conversation'
 import type { ReportDocument, RunDetail, RunStatus } from '../types'
 import RunPage from './RunPage'
@@ -23,7 +24,7 @@ vi.mock('../hooks/useRuns', () => ({
 vi.mock('../components/DagView', () => ({ default: () => null }))
 vi.mock('../components/FileTree', () => ({ default: () => null }))
 vi.mock('../hooks/useWorkbench', () => ({
-  useDeliverables: () => ({ data: undefined, isLoading: false, error: null }),
+  useDeliverables: vi.fn(() => ({ data: undefined, isLoading: false, error: null })),
   useRunTemplate: () => ({ data: undefined }),
   useNarrative: () => ({ data: undefined }),
   useWorkspace: () => ({ data: undefined }),
@@ -62,6 +63,15 @@ vi.mock('../components/ReportView', () => ({
 const useResearchStreamMock = vi.mocked(useResearchStream)
 const useRunDetailMock = vi.mocked(useRunDetail)
 const useRunDocumentMock = vi.mocked(useRunDocument)
+const useDeliverablesMock = vi.mocked(useDeliverables)
+
+beforeEach(() => {
+  useDeliverablesMock.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    error: null,
+  } as ReturnType<typeof useDeliverables>)
+})
 
 function makeStream(
   status: ResearchStreamState['status'],
@@ -451,29 +461,130 @@ describe('RunPage database synchronization', () => {
     })
   })
 
-  it('refetches immediately after an SSE error and polls until the database is terminal', async () => {
-    type Interval = (query: { state: { data?: RunDetail } }) => number | false
-    let interval: Interval | undefined
-    const refetch = vi.fn().mockResolvedValue(undefined)
-    useResearchStreamMock.mockReturnValue(makeStream('error'))
-    useRunDetailMock.mockImplementation((_id, options) => {
-      if (typeof options?.refetchInterval === 'function') {
-        interval = options.refetchInterval
-      }
-      return {
-        data: makeDetail('running'),
-        isError: false,
-        error: null,
-        refetch,
-      } as unknown as ReturnType<typeof useRunDetail>
+  it.each(['error', 'needs_review'] as const)(
+    'refetches after SSE %s and polls until the database is terminal',
+    async (terminal) => {
+      type Interval = (query: { state: { data?: RunDetail } }) => number | false
+      let interval: Interval | undefined
+      const refetch = vi.fn().mockResolvedValue(undefined)
+      useResearchStreamMock.mockReturnValue(makeStream(terminal))
+      useRunDetailMock.mockImplementation((_id, options) => {
+        if (typeof options?.refetchInterval === 'function') {
+          interval = options.refetchInterval
+        }
+        return {
+          data: makeDetail('running'),
+          isError: false,
+          error: null,
+          refetch,
+        } as unknown as ReturnType<typeof useRunDetail>
+      })
+
+      renderRunPage()
+
+      await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1))
+      expect(interval?.({ state: { data: makeDetail('running') } })).toBe(4000)
+      expect(interval?.({ state: { data: makeDetail(terminal) } })).toBe(false)
+    },
+  )
+
+  it('loads review-required reports and revision actions while keeping diagnostics and disabling resume', () => {
+    useResearchStreamMock.mockReturnValue({
+      ...makeStream('needs_review', 'partial draft'),
+      events: [
+        {
+          stage: 'ORCHESTRATOR',
+          type: 'needs_review',
+          message: '待复核',
+          elapsed: 2,
+          data: { status: 'needs_review', completion: { issues: ['必需 PDF 生成失败'] } },
+        },
+      ],
     })
+    useRunDetailMock.mockReturnValue({
+      data: makeDetail('needs_review', '待复核正文', 'litReview', null, {
+        checkpoint: { saved: true },
+      }),
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+    useDeliverablesMock.mockReturnValue({
+      data: {
+        version: 1,
+        run_id: 'run-1',
+        template: 'litReview',
+        title: '待复核交付',
+        status: 'fail',
+        generated_at: '',
+        primary: null,
+        items: [],
+        gates: [{ name: 'prose_evidence', status: 'fail', issues: ['引用需要修订'], metrics: {} }],
+        content_version: 'a'.repeat(64),
+        can_retry: true,
+        content_revision: { available: true, reason: '', source_version: 'a'.repeat(64) },
+      },
+      isLoading: false,
+      error: null,
+      setRegistry: vi.fn(),
+    } as unknown as ReturnType<typeof useDeliverables>)
 
     renderRunPage()
 
-    await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1))
-    expect(interval?.({ state: { data: makeDetail('running') } })).toBe(4000)
-    expect(interval?.({ state: { data: makeDetail('error') } })).toBe(false)
+    expect(screen.getByTestId('status')).toHaveTextContent('needs_review')
+    expect(screen.getByTestId('report-markdown')).toHaveTextContent('待复核正文')
+    expect(screen.getByTestId('report-markdown')).toHaveAttribute('data-live', 'false')
+    expect(screen.getByRole('list', { name: '待复核问题' })).toHaveTextContent('必需 PDF 生成失败')
+    expect(screen.getByRole('button', { name: '继续修订内容' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: '恢复运行' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '继续追问' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '取消运行' })).not.toBeInTheDocument()
+    expect(useDeliverablesMock).toHaveBeenCalledWith('run-1', true)
+    expect(useRunDocumentMock).toHaveBeenCalledWith('run-1', {
+      enabled: true,
+      includeHsiTables: false,
+    })
   })
+
+  it.each(['idle', 'needs_review'] as const)(
+    'loads persisted completion diagnostics when the stream is %s',
+    (streamStatus) => {
+      useResearchStreamMock.mockReturnValue({
+        ...makeStream(streamStatus),
+        events:
+          streamStatus === 'idle'
+            ? []
+            : [
+                {
+                  stage: 'ORCHESTRATOR',
+                  type: 'needs_review',
+                  message: '旧诊断',
+                  elapsed: 1,
+                  data: { completion: { issues: ['过时的引用问题'] } },
+                },
+              ],
+      })
+      useRunDetailMock.mockReturnValue({
+        data: {
+          ...makeDetail('needs_review', '已保存的报告'),
+          completion: { status: 'needs_review', issues: ['已持久化的版面问题'] },
+        },
+        isError: false,
+        error: null,
+        refetch: vi.fn(),
+      } as unknown as ReturnType<typeof useRunDetail>)
+
+      renderRunPage()
+
+      expect(screen.getByTestId('status')).toHaveTextContent('needs_review')
+      expect(screen.getByTestId('report-markdown')).toHaveTextContent('已保存的报告')
+      expect(screen.getByRole('list', { name: '待复核问题' })).toHaveTextContent(
+        '已持久化的版面问题',
+      )
+      expect(screen.queryByText('过时的引用问题')).not.toBeInTheDocument()
+      expect(useDeliverablesMock).toHaveBeenCalledWith('run-1', true)
+    },
+  )
 
   it('lets a persisted terminal status override a stale live stream', () => {
     useResearchStreamMock.mockReturnValue(makeStream('streaming', 'partial'))

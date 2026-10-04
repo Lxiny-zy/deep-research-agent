@@ -1,9 +1,10 @@
-"""API 端点测试：httpx ASGITransport + 注入 InMemoryRepository，后台执行被 monkeypatch。"""
+"""HTTP contracts and durable queue lifecycle, with external execution replaced."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -21,6 +22,7 @@ from deep_research.observability import Event, EventHub, Tracer
 from deep_research.orchestration import OrchestrationRuntime
 from deep_research.orchestrator import RUN_SETTINGS_CHECKPOINT_KEY
 from deep_research.persistence.memory_repository import InMemoryRepository
+from tests.queue_helpers import drain_inline
 
 
 def _client() -> httpx.AsyncClient:
@@ -32,6 +34,43 @@ async def _assert_hub_closed(hub: EventHub) -> None:
         await asyncio.wait_for(anext(hub.stream()), timeout=0.1)
 
 
+@asynccontextmanager
+async def _running_consumer(app):
+    consumer = api._make_inline_worker(
+        app,
+        replace(app.state.settings, worker_poll_seconds=0.01, worker_shutdown_grace_seconds=0.05),
+    )
+    task = asyncio.create_task(consumer.run_forever())
+    try:
+        yield consumer
+    finally:
+        consumer.request_stop(reason="test_complete")
+        await asyncio.wait_for(task, timeout=6)
+        if getattr(app.state, "inline_worker", None) is consumer:
+            app.state.inline_worker = None
+
+
+def _queue_app(repo, settings=None):
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            repo=repo,
+            catalog=None,
+            live={},
+            tasks=set(),
+            run_tasks={},
+            cancellation_requested=set(),
+            settings=settings or Settings(),
+            inline_worker=None,
+        )
+    )
+
+
+async def _finish_stub(app, run_id, owner):
+    await app.state.repo.finalize(run_id, elapsed=0, total_tokens=0, lease_owner=owner)
+    if owner is not None:
+        await app.state.repo.release_lease(run_id, owner)
+
+
 @pytest.fixture
 def repo(monkeypatch) -> InMemoryRepository:
     r = InMemoryRepository()
@@ -41,6 +80,10 @@ def repo(monkeypatch) -> InMemoryRepository:
     api.app.state.live = {}
     api.app.state.tasks = set()
     api.app.state.run_tasks = {}
+    api.app.state.cleanup_tasks = set()
+    api.app.state.inline_worker = None
+    api.app.state.inline_worker_task = None
+    api.app.state.executor = None
     api.app.state.cancellation_requested = set()
     api.app.state.run_admission = api.RunAdmission(
         api.app.state.settings.max_active_runs, api.app.state.settings.max_queued_runs
@@ -62,7 +105,9 @@ def repo(monkeypatch) -> InMemoryRepository:
         initial_execution=None,
         requested_workflow=None,
     ):  # 不跑真实 agent
-        return None
+        await app.state.repo.finalize(run_id, elapsed=0, total_tokens=0, lease_owner=lease_owner)
+        if lease_owner is not None:
+            await app.state.repo.release_lease(run_id, lease_owner)
 
     monkeypatch.setattr(api, "_execute", _noop)
     return r
@@ -132,37 +177,48 @@ async def test_create_run(repo):
     assert detail is not None
     assert detail.query == "Q"
     assert detail.orchestration is not None
-    assert await repo.acquire_lease(run_id, "another-worker") is False
+    assert detail.status == "pending"
+    assert api.app.state.live == {}
+    assert api.app.state.run_tasks == {}
+    claimed = await repo.claim_next_run("another-worker")
+    assert claimed is not None and claimed.run_id == run_id
+    assert await repo.claim_next_run("competing-worker") is None
 
 
 @pytest.mark.asyncio
 async def test_create_run_rejects_when_admission_capacity_is_full(repo, monkeypatch):
     api.app.state.settings = Settings(max_active_runs=1, max_queued_runs=0)
-    api.app.state.run_admission = api.RunAdmission(1, 0)
     monkeypatch.setattr(api, "_check_rate_limit", AsyncMock(return_value=None))
     started = asyncio.Event()
     release = asyncio.Event()
 
     async def blocked_execute(*args, **kwargs):  # type: ignore[no-untyped-def]
         started.set()
-        await release.wait()
+        try:
+            await release.wait()
+        finally:
+            await _finish_stub(args[0], args[1], kwargs["lease_owner"])
 
     monkeypatch.setattr(api, "_execute", blocked_execute)
-    async with _client() as c:
-        first = asyncio.create_task(c.post("/api/runs", json={"query": "first"}))
-        await asyncio.wait_for(started.wait(), 5)
-        second = await c.post("/api/runs", json={"query": "second"})
-        assert second.status_code == 503
-        release.set()
-        assert (await first).status_code == 202
-    await asyncio.gather(*list(api.app.state.tasks), return_exceptions=True)
+    async with _running_consumer(api.app), _client() as c:
+        first = await c.post("/api/runs", json={"query": "first"})
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+            second = await c.post("/api/runs", json={"query": "second"})
+            assert second.status_code == 503
+            assert len(await repo.list_runs()) == 1
+        finally:
+            release.set()
+        assert first.status_code == 202
 
 
 @pytest.mark.asyncio
-async def test_cancelled_create_request_releases_admission(repo, monkeypatch) -> None:
-    admission = api.RunAdmission(1, 0)
-    api.app.state.run_admission = admission
+async def test_cancelled_create_request_does_not_leak_shared_queue_capacity(
+    repo, monkeypatch
+) -> None:
+    api.app.state.settings = replace(api.app.state.settings, max_active_runs=1, max_queued_runs=0)
     persistence_started = asyncio.Event()
+    original_create = repo.create_run_once
 
     async def blocked_create_run_once(*args, **kwargs):  # type: ignore[no-untyped-def]
         persistence_started.set()
@@ -176,9 +232,14 @@ async def test_cancelled_create_request_releases_admission(repo, monkeypatch) ->
         with pytest.raises(asyncio.CancelledError):
             await request_task
 
-    assert admission.active == 0
-    assert admission.queued == 0
     assert await repo.list_runs() == []
+    assert api.app.state.live == {} and api.app.state.run_tasks == {}
+    monkeypatch.setattr(repo, "create_run_once", original_create)
+    async with _client() as client:
+        accepted = await client.post("/api/runs", json={"query": "capacity returned"})
+    assert accepted.status_code == 202
+    await drain_inline(api.app)
+    assert (await repo.get_run(accepted.json()["run_id"])).status == "done"
 
 
 @pytest.mark.asyncio
@@ -219,7 +280,7 @@ async def test_cancel_endpoint_is_idempotent_for_active_run(repo):
 
 
 @pytest.mark.asyncio
-async def test_task_cancelled_before_start_reaches_cancelled(repo):
+async def test_legacy_task_tracker_cancelled_before_start_reaches_cancelled(repo):
     owner = "prestart-owner"
     execution = OrchestrationRuntime().start("deep", {"query": "cancel before start"})
     run_id = await repo.create_run("cancel before start", execution=execution, lease_owner=owner)
@@ -248,7 +309,7 @@ async def test_task_cancelled_before_start_reaches_cancelled(repo):
 
 
 @pytest.mark.asyncio
-async def test_prestart_shutdown_cancellation_releases_lease_and_hub(repo) -> None:
+async def test_legacy_prestart_shutdown_cancellation_releases_lease_and_hub(repo) -> None:
     owner = "prestart-shutdown-owner"
     execution = _recoverable_execution("shutdown before start")
     run_id = await repo.create_run("shutdown before start", execution=execution, lease_owner=owner)
@@ -285,7 +346,7 @@ async def test_prestart_shutdown_cancellation_releases_lease_and_hub(repo) -> No
 
 
 @pytest.mark.asyncio
-async def test_handled_task_cancellation_clears_requested_marker(repo) -> None:
+async def test_legacy_task_tracker_cancellation_clears_requested_marker(repo) -> None:
     run_id = await repo.create_run("handled cancellation")
     api.app.state.cancellation_requested = {run_id}
 
@@ -548,7 +609,7 @@ async def test_legacy_research_creates_persisted_run_and_streams_it(repo, monkey
     monkeypatch.setattr(api, "_execute", fake_execute)
     monkeypatch.setattr(api, "_check_rate_limit", AsyncMock(return_value=None))
 
-    async with _client() as c:
+    async with _running_consumer(api.app), _client() as c:
         resp = await c.get("/api/research", params={"q": "Q"})
 
     assert resp.status_code == 200
@@ -559,7 +620,8 @@ async def test_legacy_research_creates_persisted_run_and_streams_it(repo, monkey
     assert detail.status == "done"
     assert '"type":"done"' in resp.text
     assert captured["query"] == "Q"
-    assert captured["settings"] is runtime_settings
+    assert captured["settings"].llm_model == runtime_settings.llm_model
+    assert captured["settings"].llm_api_key == runtime_settings.llm_api_key
 
 
 @pytest.mark.asyncio
@@ -865,67 +927,58 @@ async def test_config_put_persistence_failure_keeps_memory_state(repo, tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_create_task_failure_releases_admission_and_run_lease(repo, monkeypatch):
-    admission = api.RunAdmission(1, 0)
-    api.app.state.run_admission = admission
-    hub = EventHub()
-    monkeypatch.setattr(api, "EventHub", lambda: hub)
-
-    def fail_create_task(coro):  # type: ignore[no-untyped-def]
+async def test_create_request_is_durable_even_when_async_task_creation_is_unavailable(
+    repo, monkeypatch
+):
+    def fail_create_task(coro, **kwargs):
         coro.close()
         raise RuntimeError("scheduler unavailable")
 
-    monkeypatch.setattr(api.asyncio, "create_task", fail_create_task)
-    async with _client() as c:
-        with pytest.raises(RuntimeError, match="scheduler unavailable"):
-            await c.post("/api/runs", json={"query": "cannot schedule"})
-
-    assert admission.active == 0
-    assert admission.queued == 0
-    runs = await repo.list_runs()
-    assert len(runs) == 1
-    assert runs[0].status == "error"
-    assert await repo.acquire_lease(runs[0].id, "replacement-worker") is True
-    assert runs[0].id not in api.app.state.live
-    await _assert_hub_closed(hub)
+    with monkeypatch.context() as patch:
+        patch.setattr(api.asyncio, "create_task", fail_create_task)
+        async with _client() as client:
+            response = await client.post("/api/runs", json={"query": "durable despite scheduler"})
+    assert response.status_code == 202
+    run_id = response.json()["run_id"]
+    assert await repo.get_run_status(run_id) == "pending"
+    assert repo._runs[run_id].lease_owner is None
+    assert api.app.state.live == {} and api.app.state.run_tasks == {}
+    await drain_inline(api.app)
+    assert await repo.get_run_status(run_id) == "done"
 
 
 @pytest.mark.asyncio
-async def test_orphan_task_creation_failure_releases_all_leases(monkeypatch):
+async def test_recovery_wakeup_does_not_allocate_a_task_or_take_a_lease(monkeypatch):
     repo = InMemoryRepository()
-    run_id = await repo.create_run(
-        "recover cannot schedule",
-        execution=_recoverable_execution("recover cannot schedule"),
+    run_id, _ = await repo.create_run_once(
+        "recoverable",
+        request_hash="",
+        execution=_recoverable_execution("recoverable"),
+        claimable=True,
     )
-    admission = api.RunAdmission(1, 0)
-    hub = EventHub()
-    monkeypatch.setattr(api, "EventHub", lambda: hub)
-    app = SimpleNamespace(
-        state=SimpleNamespace(
-            repo=repo,
-            live={},
-            tasks=set(),
-            settings=Settings(max_active_runs=1, max_queued_runs=0),
-            run_admission=admission,
-        )
-    )
+    app = _queue_app(repo)
+    consumer = api._make_inline_worker(app)
 
-    def fail_create_task(coro):  # type: ignore[no-untyped-def]
+    def forbidden(coro, **kwargs):
         coro.close()
-        raise RuntimeError("scheduler unavailable")
+        raise AssertionError("recovery must use the existing consumer")
 
-    monkeypatch.setattr(api.asyncio, "create_task", fail_create_task)
-    await api._recover_orphaned_runs(app, app.state.settings)
+    async def execute(app, run_id, *args, **kwargs):
+        await _finish_stub(app, run_id, kwargs["lease_owner"])
 
-    assert admission.active == 0
-    assert admission.queued == 0
-    assert run_id not in app.state.live
-    assert await repo.acquire_lease(run_id, "replacement-worker") is True
-    await _assert_hub_closed(hub)
+    monkeypatch.setattr(api, "_execute", execute)
+    with monkeypatch.context() as patch:
+        patch.setattr(api.asyncio, "create_task", forbidden)
+        await api._recover_orphaned_runs(app, app.state.settings)
+    assert consumer._wake.is_set()
+    assert repo._runs[run_id].lease_owner is None
+    assert app.state.live == {}
+    await drain_inline(app)
+    assert await repo.get_run_status(run_id) == "done"
 
 
 @pytest.mark.asyncio
-async def test_queued_wrapper_setup_failure_releases_admission_and_durable_lease(monkeypatch):
+async def test_legacy_admission_setup_failure_releases_slot_and_durable_lease(monkeypatch):
     repo = InMemoryRepository()
     owner = "queued-owner"
     run_id = await repo.create_run(
@@ -963,30 +1016,23 @@ async def test_queued_wrapper_setup_failure_releases_admission_and_durable_lease
 
 
 @pytest.mark.asyncio
-async def test_resume_task_creation_failure_releases_resources(repo, monkeypatch):
-    run_id = await repo.create_run(
-        "resume cannot schedule",
-        execution=_recoverable_execution("resume cannot schedule"),
-    )
-    admission = api.RunAdmission(1, 0)
-    api.app.state.run_admission = admission
-    hub = EventHub()
-    monkeypatch.setattr(api, "EventHub", lambda: hub)
+async def test_resume_request_persists_before_any_consumer_is_running(repo, monkeypatch):
+    run_id = await repo.create_run("resume", execution=_recoverable_execution("resume"))
+    await repo.set_status(run_id, "error")
 
-    def fail_create_task(coro):  # type: ignore[no-untyped-def]
+    def forbidden(coro, **kwargs):
         coro.close()
-        raise RuntimeError("scheduler unavailable")
+        raise AssertionError("HTTP resume must not start an execution")
 
-    monkeypatch.setattr(api.asyncio, "create_task", fail_create_task)
-    async with _client() as c:
-        with pytest.raises(RuntimeError, match="scheduler unavailable"):
-            await c.post(f"/api/runs/{run_id}/resume")
-
-    assert admission.active == 0
-    assert admission.queued == 0
-    assert run_id not in api.app.state.live
-    assert await repo.acquire_lease(run_id, "replacement-worker") is True
-    await _assert_hub_closed(hub)
+    with monkeypatch.context() as patch:
+        patch.setattr(api.asyncio, "create_task", forbidden)
+        async with _client() as client:
+            response = await client.post(f"/api/runs/{run_id}/resume")
+    assert response.status_code == 202
+    assert repo._runs[run_id].lease_owner is None
+    assert api.app.state.live == {} and api.app.state.run_tasks == {}
+    await drain_inline(api.app)
+    assert await repo.get_run_status(run_id) == "done"
 
 
 @pytest.mark.asyncio
@@ -1182,7 +1228,7 @@ async def test_run_admission_cancelled_waiter_returns_queue_capacity() -> None:
 
 
 @pytest.mark.asyncio
-async def test_queued_run_renews_durable_lease_until_admitted(monkeypatch) -> None:
+async def test_legacy_admission_waiter_renews_its_durable_lease(monkeypatch) -> None:
     admission = api.RunAdmission(max_active_runs=1, max_queued_runs=1)
     blocker = admission.acquire()
     queued = admission.acquire()
@@ -1215,7 +1261,7 @@ async def test_queued_run_renews_durable_lease_until_admitted(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_queued_run_losing_lease_drops_local_live_state(monkeypatch) -> None:
+async def test_legacy_admission_waiter_losing_lease_drops_live_state(monkeypatch) -> None:
     admission = api.RunAdmission(max_active_runs=1, max_queued_runs=1)
     blocker = admission.acquire()
     queued = admission.acquire()
@@ -1247,7 +1293,7 @@ async def test_queued_run_losing_lease_drops_local_live_state(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_remotely_cancelled_queued_run_settles_before_execution(monkeypatch) -> None:
+async def test_legacy_admission_waiter_settles_remote_cancellation(monkeypatch) -> None:
     repo = InMemoryRepository()
     owner = "queued-owner"
     run_id = await repo.create_run(
@@ -1288,7 +1334,7 @@ async def test_remotely_cancelled_queued_run_settles_before_execution(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_admitted_run_rechecks_durable_lease_before_execution(monkeypatch) -> None:
+async def test_legacy_admission_rechecks_durable_lease_before_execution(monkeypatch) -> None:
     admission = api.RunAdmission(max_active_runs=1, max_queued_runs=0)
     slot = admission.acquire()
     run_id = "lost-at-admission"
@@ -1338,36 +1384,43 @@ def _recoverable_execution(query: str, *, checkpoint_scratch: dict | None = None
 
 
 @pytest.mark.asyncio
-async def test_orphan_recovery_isolates_failures(monkeypatch) -> None:
-    class PartiallyBrokenRepository(InMemoryRepository):
-        def __init__(self) -> None:
-            super().__init__()
-            self.broken_run_id = ""
+async def test_consumer_isolates_broken_execution_preflight_from_other_queued_runs(monkeypatch):
+    poisoned, completed = asyncio.Event(), asyncio.Event()
 
-        async def get_run(self, run_id: str):  # type: ignore[no-untyped-def]
-            if run_id == self.broken_run_id:
+    class Repository(InMemoryRepository):
+        broken = ""
+
+        async def get_run_status(self, run_id):
+            if run_id == self.broken:
                 raise RuntimeError("corrupt run")
-            return await super().get_run(run_id)
+            return await super().get_run_status(run_id)
 
-    repo = PartiallyBrokenRepository()
-    good_run_id = await repo.create_run(
-        "recoverable", execution=_recoverable_execution("recoverable")
+        async def set_status(self, run_id, status, **kwargs):
+            await super().set_status(run_id, status, **kwargs)
+            if run_id == self.broken and status == "error":
+                poisoned.set()
+
+    repo = Repository()
+    good, _ = await repo.create_run_once(
+        "good", request_hash="", execution=_recoverable_execution("good"), claimable=True
     )
-    repo.broken_run_id = await repo.create_run("broken")
-    starts: list[str] = []
+    repo.broken, _ = await repo.create_run_once(
+        "bad", request_hash="", execution=_recoverable_execution("bad"), claimable=True
+    )
+    starts = []
 
-    async def fake_execute(app, run_id, *args, **kwargs):  # type: ignore[no-untyped-def]
+    async def execute(app, run_id, *args, **kwargs):
         starts.append(run_id)
+        await _finish_stub(app, run_id, kwargs["lease_owner"])
+        completed.set()
 
-    monkeypatch.setattr(api, "_execute", fake_execute)
-    app = SimpleNamespace(
-        state=SimpleNamespace(repo=repo, live={}, tasks=set(), settings=Settings())
-    )
-
-    await api._recover_orphaned_runs(app, app.state.settings)
-    await asyncio.gather(*app.state.tasks)
-
-    assert starts == [good_run_id]
+    monkeypatch.setattr(api, "_execute", execute)
+    app = _queue_app(repo)
+    async with _running_consumer(app):
+        await asyncio.wait_for(asyncio.gather(poisoned.wait(), completed.wait()), timeout=2)
+    assert starts == [good]
+    assert await repo.get_run_status(good) == "done"
+    assert repo._runs[repo.broken].status == "error"
 
 
 @pytest.mark.asyncio
@@ -1380,6 +1433,7 @@ async def test_orphan_recovery_leaves_legacy_active_run_without_workflow_untouch
     )
 
     await api._recover_orphaned_runs(app, app.state.settings)
+    await drain_inline(app)
 
     assert await repo.get_run_status(run_id) == "running"
 
@@ -1423,7 +1477,7 @@ async def test_lifespan_stops_recovery_before_snapshotting_workers(monkeypatch) 
     monkeypatch.setattr(api, "make_engine", lambda database_url: Engine())
     monkeypatch.setattr(api, "prepare_sqlite_schema", noop_prepare)
     monkeypatch.setattr(api, "make_sessionmaker", lambda engine: object())
-    monkeypatch.setattr(api, "SqlRepository", lambda sessionmaker: object())
+    monkeypatch.setattr(api, "SqlRepository", lambda sessionmaker: InMemoryRepository())
     monkeypatch.setattr(api, "CatalogRepository", lambda sessionmaker: object())
     monkeypatch.setattr(api, "_recover_orphaned_runs", noop_recovery)
     monkeypatch.setattr(api, "_recovery_loop", recovery_loop)
@@ -1436,49 +1490,50 @@ async def test_lifespan_stops_recovery_before_snapshotting_workers(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_lifespan_drains_cancelled_task_cleanup_before_engine_dispose(monkeypatch) -> None:
-    lease_released = asyncio.Event()
-    run_id = "prestart-shutdown"
-
-    class Repo:
-        async def get_run_status(self, run_id):  # type: ignore[no-untyped-def]
-            return "pending"
-
-        async def get_run_attempt(self, run_id):  # type: ignore[no-untyped-def]
-            return 1
-
-        async def release_lease(self, run_id, owner):  # type: ignore[no-untyped-def]
-            await asyncio.sleep(0)
-            lease_released.set()
+async def test_lifespan_drains_embedded_execution_before_engine_dispose(monkeypatch):
+    repo = InMemoryRepository()
+    started, cleaned = asyncio.Event(), asyncio.Event()
+    disposed = asyncio.Event()
 
     class Engine:
-        async def dispose(self) -> None:
-            assert lease_released.is_set()
+        async def dispose(self):
+            assert cleaned.is_set()
+            disposed.set()
 
-    async def noop_recovery(app, settings):  # type: ignore[no-untyped-def]
+    async def noop_prepare(*args):
         return None
 
-    async def noop_prepare(engine, database_url):  # type: ignore[no-untyped-def]
-        return None
+    async def execute(app, run_id, *args, **kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)
+            cleaned.set()
 
+    monkeypatch.setattr(api, "Settings", lambda: Settings(worker_shutdown_grace_seconds=0.01))
     monkeypatch.setattr(api.runtime_config, "load_overrides", lambda: {})
-    monkeypatch.setattr(api, "make_engine", lambda database_url: Engine())
+    monkeypatch.setattr(api, "make_engine", lambda _: Engine())
     monkeypatch.setattr(api, "prepare_sqlite_schema", noop_prepare)
-    monkeypatch.setattr(api, "make_sessionmaker", lambda engine: object())
-    monkeypatch.setattr(api, "SqlRepository", lambda sessionmaker: Repo())
-    monkeypatch.setattr(api, "CatalogRepository", lambda sessionmaker: object())
-    monkeypatch.setattr(api, "_recover_orphaned_runs", noop_recovery)
-    test_app = SimpleNamespace(state=SimpleNamespace())
-    hub = EventHub()
-
-    async with api.lifespan(test_app):
-        test_app.state.live[run_id] = hub
-        worker = asyncio.create_task(asyncio.Event().wait())
-        api._track_run_task(test_app, run_id, worker, lease_owner="owner")
-
-    assert lease_released.is_set()
-    assert run_id not in test_app.state.live
-    await _assert_hub_closed(hub)
+    monkeypatch.setattr(api, "make_sessionmaker", lambda _: object())
+    monkeypatch.setattr(api, "SqlRepository", lambda _: repo)
+    monkeypatch.setattr(api, "CatalogRepository", lambda _: object())
+    monkeypatch.setattr(api, "_execute", execute)
+    app = SimpleNamespace(state=SimpleNamespace())
+    async with api.lifespan(app):
+        run_id, _ = await repo.create_run_once(
+            "in flight",
+            request_hash="",
+            execution=_recoverable_execution("in flight"),
+            claimable=True,
+        )
+        app.state.inline_worker.wake()
+        await asyncio.wait_for(started.wait(), 2)
+        assert run_id in app.state.run_tasks
+    assert cleaned.is_set() and disposed.is_set()
+    assert app.state.run_tasks == {} and app.state.live == {}
+    assert await repo.get_run_status(run_id) == "running"
+    assert not await repo.acquire_lease(run_id, "premature-replacement")
 
 
 @pytest.mark.asyncio
@@ -1513,31 +1568,38 @@ async def test_lifespan_disposes_engine_when_startup_is_cancelled(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_orphan_recovery_pages_through_all_candidates(monkeypatch) -> None:
+async def test_consumer_eventually_claims_every_queued_candidate_without_duplicate_execution(
+    monkeypatch,
+):
     repo = InMemoryRepository()
-    run_ids = [
-        await repo.create_run(query, execution=_recoverable_execution(query))
-        for query in ("one", "two", "three")
-    ]
-    starts: list[str] = []
+    run_ids = []
+    for index in range(35):
+        query = f"queued-{index}"
+        run_id, _ = await repo.create_run_once(
+            query, request_hash="", execution=_recoverable_execution(query), claimable=True
+        )
+        run_ids.append(run_id)
+    starts = []
 
-    async def fake_execute(app, run_id, *args, **kwargs):  # type: ignore[no-untyped-def]
+    async def execute(app, run_id, *args, **kwargs):
         starts.append(run_id)
+        await _finish_stub(app, run_id, kwargs["lease_owner"])
 
-    monkeypatch.setattr(api, "_RECOVERY_PAGE_SIZE", 2)
-    monkeypatch.setattr(api, "_execute", fake_execute)
-    app = SimpleNamespace(
-        state=SimpleNamespace(repo=repo, live={}, tasks=set(), settings=Settings())
-    )
-
+    monkeypatch.setattr(api, "_execute", execute)
+    app = _queue_app(repo)
+    consumer = api._make_inline_worker(app)
     await api._recover_orphaned_runs(app, app.state.settings)
-    await asyncio.gather(*app.state.tasks)
-
+    assert starts == [] and consumer._wake.is_set()
+    await drain_inline(app)
     assert set(starts) == set(run_ids)
+    assert len(starts) == len(set(starts)) == 35
+    assert all(item.status == "done" for item in await repo.list_runs(limit=50))
 
 
 @pytest.mark.asyncio
-async def test_cancelling_recovery_pages_and_closes_stale_hubs(monkeypatch) -> None:
+async def test_consumer_cancellation_pages_are_bounded_and_close_stale_hubs(monkeypatch):
+    from deep_research import worker as worker_module
+
     repo = InMemoryRepository()
     run_ids = [
         await repo.create_run(query, execution=_recoverable_execution(query))
@@ -1546,181 +1608,140 @@ async def test_cancelling_recovery_pages_and_closes_stale_hubs(monkeypatch) -> N
     for run_id in run_ids:
         assert await repo.request_cancel(run_id) == "cancelling"
     hubs = {run_id: EventHub() for run_id in run_ids}
-    app = SimpleNamespace(
-        state=SimpleNamespace(repo=repo, live=dict(hubs), tasks=set(), settings=Settings())
-    )
-    monkeypatch.setattr(api, "_RECOVERY_PAGE_SIZE", 2)
-
-    await api._recover_orphaned_runs(app, app.state.settings)
-
-    assert [await repo.get_run_status(run_id) for run_id in run_ids] == [
-        "cancelled",
-        "cancelled",
-        "cancelled",
-    ]
+    app = _queue_app(repo)
+    app.state.live.update(hubs)
+    monkeypatch.setattr(worker_module, "_CANCELLATION_PAGE_SIZE", 2)
+    consumer = api._make_inline_worker(app)
+    assert await consumer.settle_cancellations() == 2
+    assert len(await repo.list_runs(status="cancelling")) == 1
+    assert await consumer.settle_cancellations() == 1
+    assert [await repo.get_run_status(run_id) for run_id in run_ids] == ["cancelled"] * 3
     assert app.state.live == {}
     for hub in hubs.values():
-        await _assert_hub_closed(hub)
+        assert [event.type async for event in hub.stream()] == ["cancelled"]
 
 
 @pytest.mark.asyncio
-async def test_cancelling_recovery_isolates_broken_runs() -> None:
-    class PartiallyBrokenRepository(InMemoryRepository):
-        def __init__(self) -> None:
-            super().__init__()
-            self.broken_run_id = ""
+async def test_consumer_cancellation_isolates_broken_run_state():
+    class Repository(InMemoryRepository):
+        broken = ""
 
-        async def get_run(self, run_id: str):  # type: ignore[no-untyped-def]
-            if run_id == self.broken_run_id:
-                raise RuntimeError("corrupt cancelling run")
-            return await super().get_run(run_id)
+        async def get_run_status(self, run_id):
+            if run_id == self.broken:
+                raise RuntimeError("corrupt cancelling state")
+            return await super().get_run_status(run_id)
 
-    repo = PartiallyBrokenRepository()
-    healthy_id = await repo.create_run(
-        "healthy cancellation", execution=_recoverable_execution("healthy cancellation")
-    )
-    repo.broken_run_id = await repo.create_run(
-        "broken cancellation", execution=_recoverable_execution("broken cancellation")
-    )
-    assert await repo.request_cancel(healthy_id) == "cancelling"
-    assert await repo.request_cancel(repo.broken_run_id) == "cancelling"
-    healthy_hub = EventHub()
-    app = SimpleNamespace(
-        state=SimpleNamespace(
-            repo=repo,
-            live={healthy_id: healthy_hub},
-            tasks=set(),
-            settings=Settings(),
-        )
-    )
-
-    await api._recover_orphaned_runs(app, app.state.settings)
-
-    assert await repo.get_run_status(healthy_id) == "cancelled"
-    assert await repo.get_run_status(repo.broken_run_id) == "cancelling"
-    assert healthy_id not in app.state.live
-    await _assert_hub_closed(healthy_hub)
+    repo = Repository()
+    healthy = await repo.create_run("healthy", execution=_recoverable_execution("healthy"))
+    repo.broken = await repo.create_run("broken", execution=_recoverable_execution("broken"))
+    await repo.request_cancel(healthy)
+    await repo.request_cancel(repo.broken)
+    app = _queue_app(repo)
+    consumer = api._make_inline_worker(app)
+    assert await consumer.settle_cancellations() == 1
+    assert await repo.get_run_status(healthy) == "cancelled"
+    assert repo._runs[repo.broken].status == "cancelling"
+    assert repo._runs[repo.broken].lease_owner is None
 
 
 @pytest.mark.asyncio
-async def test_orphan_recovery_reloads_checkpoint_after_acquiring_lease(monkeypatch) -> None:
-    class UpdatingRepository(InMemoryRepository):
-        def __init__(self, fresh_execution) -> None:  # type: ignore[no-untyped-def]
-            super().__init__()
-            self.fresh_execution = fresh_execution
-            self.reads = 0
-
-        async def get_run(self, run_id: str):  # type: ignore[no-untyped-def]
-            detail = await super().get_run(run_id)
-            self.reads += 1
-            if self.reads >= 2 and detail is not None:
-                detail.orchestration = self.fresh_execution.model_copy(deep=True)
-            return detail
-
+async def test_consumer_uses_latest_fenced_checkpoint_instead_of_a_wakeup_snapshot(monkeypatch):
+    repo = InMemoryRepository()
     stale = _recoverable_execution("Q", checkpoint_scratch={"revision": "stale"})
     fresh = _recoverable_execution("Q", checkpoint_scratch={"revision": "fresh"})
-    repo = UpdatingRepository(fresh)
-    run_id = await repo.create_run("Q", execution=stale)
-    captured: list[str] = []
+    run_id, _ = await repo.create_run_once("Q", request_hash="", execution=stale, claimable=True)
+    captured = []
 
-    async def fake_execute(app, run_id, query, settings, workflow, resume_execution, lease_owner):  # type: ignore[no-untyped-def]
-        captured.append(resume_execution.checkpoint["scratch"]["revision"])
+    async def execute(app, run_id, *args, **kwargs):
+        source = kwargs["resume_execution"] or kwargs["initial_execution"]
+        captured.append(source.checkpoint["scratch"]["revision"])
+        await _finish_stub(app, run_id, kwargs["lease_owner"])
 
-    monkeypatch.setattr(api, "_execute", fake_execute)
-    app = SimpleNamespace(
-        state=SimpleNamespace(repo=repo, live={}, tasks=set(), settings=Settings())
-    )
-
+    monkeypatch.setattr(api, "_execute", execute)
+    app = _queue_app(repo)
+    api._make_inline_worker(app)
     await api._recover_orphaned_runs(app, app.state.settings)
-    await asyncio.gather(*app.state.tasks)
-
+    assert captured == []
+    assert await repo.acquire_lease(run_id, "finishing-previous-owner")
+    await repo.save_orchestration(run_id, fresh, lease_owner="finishing-previous-owner")
+    await repo.release_lease(run_id, "finishing-previous-owner")
+    await drain_inline(app)
     assert captured == ["fresh"]
-    assert run_id in app.state.live
+    assert app.state.live == {}
 
 
 @pytest.mark.asyncio
-async def test_concurrent_resume_starts_only_one_execution(monkeypatch) -> None:
-    class BarrierRepository(InMemoryRepository):
-        def __init__(self) -> None:
+async def test_concurrent_resume_enqueues_once_and_consumer_starts_one_execution(monkeypatch):
+    class Repository(InMemoryRepository):
+        def __init__(self):
             super().__init__()
             self.read_count = 0
             self.both_reading = asyncio.Event()
 
-        async def get_run(self, run_id: str):  # type: ignore[no-untyped-def]
+        async def get_run(self, run_id):
             self.read_count += 1
             if self.read_count <= 2:
                 if self.read_count == 2:
                     self.both_reading.set()
                 await self.both_reading.wait()
-                await asyncio.sleep(0)
             return await super().get_run(run_id)
 
-    repo = BarrierRepository()
-    run_id = await repo.create_run("resume-race")
-    await repo.save_orchestration(run_id, _recoverable_execution("resume-race"))
-    api.app.state.settings = Settings()
-    api.app.state.repo = repo
-    api.app.state.live = {}
-    api.app.state.tasks = set()
-    release = asyncio.Event()
-    starts = 0
+    repo = Repository()
+    run_id = await repo.create_run("resume-race", execution=_recoverable_execution("resume-race"))
+    monkeypatch.setattr(api.app, "state", _queue_app(repo).state)
+    started, release = asyncio.Event(), asyncio.Event()
+    starts = []
 
-    async def fake_execute(*args, **kwargs):  # type: ignore[no-untyped-def]
-        nonlocal starts
-        starts += 1
-        await release.wait()
+    async def execute(app, run_id, *args, **kwargs):
+        starts.append(run_id)
+        started.set()
+        try:
+            await release.wait()
+        finally:
+            await _finish_stub(app, run_id, kwargs["lease_owner"])
 
-    monkeypatch.setattr(api, "_execute", fake_execute)
+    monkeypatch.setattr(api, "_execute", execute)
     async with _client() as client:
         responses = await asyncio.gather(
             client.post(f"/api/runs/{run_id}/resume"),
             client.post(f"/api/runs/{run_id}/resume"),
         )
-
     assert sorted(response.status_code for response in responses) == [202, 409]
-    await asyncio.sleep(0)
-    assert starts == 1
-    release.set()
-    await asyncio.gather(*list(api.app.state.tasks))
-    api.app.state.live.clear()
+    assert starts == [] and api.app.state.live == {}
+    async with _running_consumer(api.app):
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            assert starts == [run_id]
+            assert await repo.claim_next_run("competitor") is None
+        finally:
+            release.set()
+    assert await repo.get_run_status(run_id) == "done"
 
 
 @pytest.mark.asyncio
-async def test_manual_resume_reloads_checkpoint_after_acquiring_lease(monkeypatch) -> None:
-    class UpdatingRepository(InMemoryRepository):
-        def __init__(self, fresh_execution) -> None:  # type: ignore[no-untyped-def]
-            super().__init__()
-            self.fresh_execution = fresh_execution
-            self.reads = 0
-
-        async def get_run(self, run_id: str):  # type: ignore[no-untyped-def]
-            detail = await super().get_run(run_id)
-            self.reads += 1
-            if self.reads >= 2 and detail is not None:
-                detail.orchestration = self.fresh_execution.model_copy(deep=True)
-            return detail
-
+async def test_manual_resume_consumer_reads_checkpoint_updated_after_http_acceptance(monkeypatch):
+    repo = InMemoryRepository()
     stale = _recoverable_execution("Q", checkpoint_scratch={"revision": "stale"})
     fresh = _recoverable_execution("Q", checkpoint_scratch={"revision": "fresh"})
-    repo = UpdatingRepository(fresh)
     run_id = await repo.create_run("Q", execution=stale)
-    api.app.state.settings = Settings()
-    api.app.state.repo = repo
-    api.app.state.live = {}
-    api.app.state.tasks = set()
-    captured: list[str] = []
+    monkeypatch.setattr(api.app, "state", _queue_app(repo).state)
+    captured = []
 
-    async def fake_execute(app, run_id, query, settings, workflow, resume_execution, lease_owner):  # type: ignore[no-untyped-def]
-        captured.append(resume_execution.checkpoint["scratch"]["revision"])
+    async def execute(app, run_id, *args, **kwargs):
+        source = kwargs["resume_execution"] or kwargs["initial_execution"]
+        captured.append(source.checkpoint["scratch"]["revision"])
+        await _finish_stub(app, run_id, kwargs["lease_owner"])
 
-    monkeypatch.setattr(api, "_execute", fake_execute)
+    monkeypatch.setattr(api, "_execute", execute)
     async with _client() as client:
         response = await client.post(f"/api/runs/{run_id}/resume")
-    await asyncio.gather(*api.app.state.tasks)
-
-    assert response.status_code == 202
+    assert response.status_code == 202 and captured == []
+    assert await repo.acquire_lease(run_id, "checkpoint-writer")
+    await repo.save_orchestration(run_id, fresh, lease_owner="checkpoint-writer")
+    await repo.release_lease(run_id, "checkpoint-writer")
+    await drain_inline(api.app)
     assert captured == ["fresh"]
-    api.app.state.live.clear()
+    assert api.app.state.live == {}
 
 
 @pytest.mark.asyncio
@@ -1753,14 +1774,22 @@ async def test_resume_restores_original_run_settings(repo, monkeypatch) -> None:
     captured: list[Settings] = []
 
     async def fake_execute(
-        app, run_id, query, settings, workflow=None, resume_execution=None, lease_owner=None
+        app,
+        run_id,
+        query,
+        settings,
+        workflow=None,
+        resume_execution=None,
+        lease_owner=None,
+        **kwargs,
     ):  # type: ignore[no-untyped-def]
         captured.append(settings)
+        await _finish_stub(app, run_id, lease_owner)
 
     monkeypatch.setattr(api, "_execute", fake_execute)
     async with _client() as client:
         response = await client.post(f"/api/runs/{run_id}/resume")
-    await asyncio.gather(*list(api.app.state.tasks))
+    await drain_inline(api.app)
 
     assert response.status_code == 202
     assert captured[0].max_rounds == 1
@@ -1768,7 +1797,7 @@ async def test_resume_restores_original_run_settings(repo, monkeypatch) -> None:
     assert captured[0].max_tokens is None
     assert captured[0].require_corroboration is True
     detail = await repo.get_run(run_id)
-    assert detail is not None and detail.status == "running"
+    assert detail is not None and detail.status == "done"
     api.app.state.live.clear()
 
 
@@ -1780,6 +1809,9 @@ async def test_execute_cleanup_survives_lease_release_failure(monkeypatch) -> No
     search_closed = False
 
     class Repo:
+        async def save_orchestration(self, run_id, execution, *, lease_owner=None):  # type: ignore[no-untyped-def]
+            return None
+
         async def acquire_lease(self, run_id, owner):  # type: ignore[no-untyped-def]
             return True
 
@@ -1916,6 +1948,9 @@ async def test_lease_renewal_failure_cancels_execution(monkeypatch) -> None:
     statuses: list[str] = []
 
     class Repo:
+        async def save_orchestration(self, run_id, execution, *, lease_owner=None):  # type: ignore[no-untyped-def]
+            return None
+
         async def renew_lease(self, run_id, owner):  # type: ignore[no-untyped-def]
             return False
 
@@ -1949,7 +1984,8 @@ async def test_lease_renewal_failure_cancels_execution(monkeypatch) -> None:
 
     events = [event async for event in hub.stream()]
     assert statuses == []
-    assert any(event.type == "error" and "租约" in event.message for event in events)
+    assert any(event.type == "info" and "租约" in event.message for event in events)
+    assert not any(event.type in {"error", "done", "cancelled"} for event in events)
     assert run_id not in app.state.live
 
 
@@ -1962,7 +1998,8 @@ async def test_execute_cleanup_survives_second_cancellation(monkeypatch) -> None
     allow_close = asyncio.Event()
 
     class Repo:
-        pass
+        async def save_orchestration(self, run_id, execution, *, lease_owner=None):  # type: ignore[no-untyped-def]
+            return None
 
     class Agent:
         def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
@@ -2015,8 +2052,12 @@ async def test_cancelled_execution_remains_recoverable(monkeypatch) -> None:
     repo = InMemoryRepository()
     execution = _recoverable_execution("restartable")
     owner = "shutting-down-worker"
-    run_id = await repo.create_run("restartable", execution=execution, lease_owner=owner)
-    await repo.set_status(run_id, "running", lease_owner=owner)
+    run_id, _ = await repo.create_run_once(
+        "restartable", request_hash="", execution=execution, claimable=True
+    )
+    claimed = await repo.claim_next_run(owner)
+    assert claimed is not None and claimed.run_id == run_id
+    execution = claimed.execution
     hub = EventHub()
     started = asyncio.Event()
 
@@ -2064,14 +2105,22 @@ async def test_cancelled_execution_remains_recoverable(monkeypatch) -> None:
 
     async def fake_execute(app, run_id, *args, **kwargs):  # type: ignore[no-untyped-def]
         resumed.append(run_id)
+        await _finish_stub(app, run_id, kwargs["lease_owner"])
 
     monkeypatch.setattr(api, "_execute", fake_execute)
-    second_app = SimpleNamespace(
-        state=SimpleNamespace(repo=repo, live={}, tasks=set(), settings=Settings())
-    )
+    second_app = _queue_app(repo)
+    consumer = api._make_inline_worker(second_app)
+
+    # Shutdown retains the lease; recovery must wait for its expiry before a
+    # replacement worker can resume the checkpoint.
+    assert not await repo.acquire_lease(run_id, "early-replacement")
+    await api._recover_orphaned_runs(second_app, second_app.state.settings)
+    await consumer._tick()
+    assert resumed == []
+    assert await repo.renew_lease(run_id, owner, seconds=0)
 
     await api._recover_orphaned_runs(second_app, second_app.state.settings)
-    await asyncio.gather(*second_app.state.tasks)
+    await drain_inline(second_app)
 
     assert resumed == [run_id]
 

@@ -30,6 +30,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   vi.useRealTimers()
 })
 
@@ -81,6 +82,50 @@ it('clears old highlights when a different quote cannot be located', async () =>
   )
   await screen.findByText('未找到唯一的完整引文，无法准确定位')
   expect(container.querySelectorAll('.pdf-highlight')).toHaveLength(0)
+})
+
+it('centers a distant quotation after committing the actual sizes of unrendered pages', async () => {
+  vi.stubGlobal(
+    'IntersectionObserver',
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  )
+  const heights = [800, 1200, 400]
+  const renderPage = vi.fn(firstPage.render)
+  mocks.getDocument.mockReturnValue({
+    promise: Promise.resolve({
+      numPages: heights.length,
+      getPage: async (number: number) => ({
+        ...firstPage,
+        render: renderPage,
+        getViewport: () => ({ width: 600, height: heights[number - 1] }),
+        getTextContent: async () => ({
+          items: [{ str: number === 3 ? 'target quote' : `Page ${number}` }],
+        }),
+      }),
+    }),
+    destroy: vi.fn().mockResolvedValue(undefined),
+  })
+  const { container, rerender } = render(<PdfViewer runId="r" documentId="d" />)
+  await screen.findByText('共 3 页')
+  const scroller = container.querySelector('.pdf-scroller') as HTMLDivElement
+  const holders = [...container.querySelectorAll<HTMLDivElement>('.pdf-page')]
+  Object.defineProperty(scroller, 'clientHeight', { value: 600 })
+  vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect)
+  vi.spyOn(holders[2], 'getBoundingClientRect').mockImplementation(
+    () =>
+      ({
+        top: parseFloat(holders[0].style.height) + parseFloat(holders[1].style.height),
+      }) as DOMRect,
+  )
+  scroller.scrollTo = vi.fn()
+  rerender(<PdfViewer runId="r" documentId="d" highlight={{ quote: 'target quote', token: 1 }} />)
+  await screen.findByText('已定位完整引文 · 第 3 页')
+  expect(holders.map((holder) => holder.style.height)).toEqual(['800px', '1200px', '400px'])
+  expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 1905.75, behavior: 'smooth' })
+  expect(renderPage).not.toHaveBeenCalled()
 })
 
 it('highlights both pages when a complete quotation crosses a page boundary', async () => {

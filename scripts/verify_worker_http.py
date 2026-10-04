@@ -206,7 +206,9 @@ async def main() -> None:
                 assert resumed.status_code == 202, resumed.text
                 finished = await eventually(
                     lambda: client.get(f"/api/runs/{recover_id}"),
-                    lambda response: response.json().get("status") in {"done", "error"},
+                    lambda response: (
+                        response.json().get("status") in {"done", "needs_review", "error"}
+                    ),
                 )
                 assert finished.json()["status"] == "done", finished.text
                 attempts = (await client.get(f"/api/runs/{recover_id}/events")).json()

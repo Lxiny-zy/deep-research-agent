@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from .execution_policy import COMMITTED_RESEARCH_PROGRESS_KEY, committed_research_progress
 from .guardrails import ClaimConsistencyVerifier, report_eligible, verify_claim_consistency
 from .models import SubQuestion
 from .orchestration import (
@@ -42,6 +43,13 @@ if TYPE_CHECKING:
     # 放到 TYPE_CHECKING 下可切断 workflow → agents 包 → coordinator → workflow 的运行期循环导入。
     from .agents.base import Agent, Blackboard, RunContext
     from .token_budget import TokenBudget
+
+
+def _carry_committed_research_progress(target: Blackboard, source: Blackboard) -> None:
+    """Preserve durable progress without committing a failed candidate's content."""
+    if progress := committed_research_progress(source.scratch):
+        existing = committed_research_progress(target.scratch)
+        target.scratch[COMMITTED_RESEARCH_PROGRESS_KEY] = {**existing, **progress}
 
 
 class Step(BaseModel):
@@ -432,8 +440,10 @@ class WorkflowEngine:
         initial_run: WorkflowRun | None = None,
         require_report: bool = False,
         terminal_roles: set[str] | None = None,
+        recover_transient: bool = False,
     ) -> None:
         self.ctx = ctx
+        self._recover_transient = recover_transient
         # 角色解析器：默认从代码注册表取；编排器可注入「先查 DB 角色卡片，再回退注册表」
         # 的解析器，实现数据驱动角色与内置角色统一调度。
         self._resolve = resolver or create
@@ -580,6 +590,8 @@ class WorkflowEngine:
                     bb = _commit_blackboard(bb, candidate)
                     self.runtime.complete_step(step_run)
                     return bb
+                finally:
+                    _carry_committed_research_progress(bb, candidate)
 
             if step.fallback_agent:
                 candidate = bb.model_copy(deep=True)
@@ -595,6 +607,8 @@ class WorkflowEngine:
                     bb = _commit_blackboard(bb, candidate)
                     self.runtime.complete_step(step_run)
                     return bb
+                finally:
+                    _carry_committed_research_progress(bb, candidate)
             assert last_error is not None
             raise last_error
         except asyncio.CancelledError:
@@ -752,6 +766,10 @@ class WorkflowEngine:
                     bb = await self._execute_with_policy(step, bb, step_run)
                 except Exception as e:  # 单步失败隔离，但进入明确 FAILED 状态
                     self.runtime.fail_step(step_run, e)
+                    from .execution_policy import transient_failure
+
+                    if self._recover_transient and transient_failure(e):
+                        raise
                     if isinstance(e, (LeaseLostError, ResearchProgressError)):
                         raise
                     self.ctx.tracer.emit(
@@ -845,12 +863,15 @@ class WorkflowEngine:
                 )
                 layer_base = bb.model_copy(deep=True)
                 layer_nodes = tuple(layer)
+                children: dict[str, Blackboard] = {}
 
                 async def execute_node(
                     node: WorkflowNode,
                     layer_snapshot: Blackboard = layer_base,
+                    branch_states: dict[str, Blackboard] = children,
                 ) -> tuple[Blackboard, bool, bool]:
                     child = layer_snapshot.model_copy(deep=True)
+                    branch_states[node.id] = child
                     step = Step.model_validate(node.step)
                     previous = restored.get(node.id)
                     # A condition-derived skip is provisional: a failed
@@ -922,6 +943,10 @@ class WorkflowEngine:
                         child = await self._execute_with_policy(step, child, step_run)
                     except Exception as exc:
                         self.runtime.fail_step(step_run, exc)
+                        from .execution_policy import transient_failure
+
+                        if self._recover_transient and transient_failure(exc):
+                            raise
                         if isinstance(exc, (LeaseLostError, ResearchProgressError)):
                             raise
                         self.ctx.tracer.emit(
@@ -939,9 +964,12 @@ class WorkflowEngine:
                     outcomes: Sequence[object],
                     nodes_in_layer: tuple[WorkflowNode, ...] = layer_nodes,
                     layer_snapshot: Blackboard = layer_base,
+                    branch_states: dict[str, Blackboard] = children,
                 ) -> None:
                     for node, outcome in zip(nodes_in_layer, outcomes, strict=True):
                         if isinstance(outcome, BaseException):
+                            if node.id in branch_states:
+                                _carry_committed_research_progress(bb, branch_states[node.id])
                             continue
                         assert isinstance(outcome, tuple) and len(outcome) == 3
                         child, active, succeeded = outcome

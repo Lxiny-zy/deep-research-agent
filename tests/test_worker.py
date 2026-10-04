@@ -8,6 +8,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -45,11 +50,11 @@ class _RecordingExecutor(RunExecutor):
         await self.ctx.repo.release_lease(run_id, lease_owner)
 
 
-def _execution(query: str, *, checkpoint: dict | None = None):
+def _execution(query: str, *, checkpoint: dict | None = None, workflow: str = "deep"):
     runtime = OrchestrationRuntime()
-    execution = runtime.start("deep", {"query": query})
+    execution = runtime.start(workflow, {"query": query})
     if checkpoint is not None:
-        runtime.save_checkpoint(checkpoint, {"name": "deep", "steps": []})
+        runtime.save_checkpoint(checkpoint, {"name": workflow, "steps": []})
     return execution
 
 
@@ -109,7 +114,7 @@ async def test_worker_claims_and_executes_a_queued_run() -> None:
     # 首次执行：带 initial_execution，不带 resume_execution。
     assert call["resume_execution"] is None
     assert call["initial_execution"] is not None
-    assert call["lease_owner"] == "worker-test"
+    assert call["lease_owner"].startswith("claim-")
     assert await repo.get_run_status(run_id) == "done"
 
 
@@ -219,7 +224,8 @@ async def test_poison_status_is_written_when_audit_event_fails() -> None:
 async def test_worker_respects_its_concurrency_limit() -> None:
     repo = InMemoryRepository()
     for i in range(4):
-        await _enqueue(repo, f"q{i}")
+        # This exercises the total cap, independent of the heavy-work reserve.
+        await _enqueue(repo, f"q{i}", workflow="quick")
     release = asyncio.Event()
     executor = _RecordingExecutor(ExecutionContext(repo=repo), block=release)
     worker = _worker(repo, executor, max_active_runs=2)
@@ -238,7 +244,7 @@ async def test_worker_respects_its_concurrency_limit() -> None:
 
 @pytest.mark.asyncio
 async def test_graceful_stop_waits_for_in_flight_runs() -> None:
-    """优雅退出停止领取，但绝不打断已经在跑的研究。"""
+    """优雅退出停止领取，在宽限期内允许已经在跑的研究完成。"""
     repo = InMemoryRepository()
     run_id = await _enqueue(repo, "in flight")
     release = asyncio.Event()
@@ -254,6 +260,205 @@ async def test_graceful_stop_waits_for_in_flight_runs() -> None:
     release.set()
     await asyncio.wait_for(task, timeout=2.0)
     assert await repo.get_run_status(run_id) == "done"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_deadline_preserves_checkpoint_for_the_next_worker(caplog) -> None:
+    repo = InMemoryRepository()
+    checkpoint = {"query": "recover after shutdown", "scratch": {"completed": ["search"]}}
+    run_id = await _enqueue(repo, "recover after shutdown", checkpoint=checkpoint)
+    executor = _RecordingExecutor(ExecutionContext(repo=repo), block=asyncio.Event())
+    worker = _worker(repo, executor, max_active_runs=1, worker_shutdown_grace_seconds=0.02)
+    task = asyncio.create_task(worker.run_forever())
+    await asyncio.wait_for(executor.started.wait(), timeout=2)
+    queued_id = await _enqueue(repo, "leave queued")
+    worker.request_stop()
+    await asyncio.wait_for(task, timeout=2)
+
+    assert not worker.requires_hard_exit
+    assert len(executor.calls) == 1
+    assert repo._runs[queued_id].lease_owner is None
+    original_owner = repo._runs[run_id].lease_owner
+    assert original_owner and original_owner.startswith("claim-")
+    assert await repo.get_run_status(run_id) not in {"done", "error", "cancelled"}
+    assert run_id in caplog.text
+    assert "shutdown_deadline" in caplog.text
+    assert worker.name not in repo._workers
+
+    # Only lease expiry permits takeover, and the checkpoint survives shutdown.
+    assert not await repo.acquire_lease(run_id, "premature-replacement")
+    assert await repo.renew_lease(run_id, original_owner, seconds=0)
+    replacement = _RecordingExecutor(ExecutionContext(repo=repo))
+    successor = _worker(repo, replacement, max_active_runs=1)
+    claimed_ids = set()
+    for _ in range(2):
+        claimed = await repo.claim_next_run("replacement-worker", max_active_runs=1)
+        assert claimed is not None and claimed.run_id not in claimed_ids
+        claimed_ids.add(claimed.run_id)
+        # Fair scheduling may choose the fresh task or the interrupted task first.
+        assert claimed.resumed is (claimed.run_id == run_id)
+        if claimed.resumed:
+            assert claimed.execution.checkpoint == checkpoint
+        assert await repo.claim_next_run("competing-worker", max_active_runs=1) is None
+        await successor._execute_claimed(claimed)
+    assert claimed_ids == {run_id, queued_id}
+    assert await repo.claim_next_run("replacement-worker", max_active_runs=1) is None
+    statuses = await asyncio.gather(*(repo.get_run_status(item) for item in claimed_ids))
+    assert statuses == ["done", "done"]
+    assert len(replacement.calls) == len({call["run_id"] for call in replacement.calls}) == 2
+    resumed_call = next(call for call in replacement.calls if call["run_id"] == run_id)
+    assert resumed_call["resume_execution"].checkpoint == checkpoint
+
+
+@pytest.mark.asyncio
+async def test_draining_worker_keeps_heartbeat_until_tasks_finish(monkeypatch) -> None:
+    from deep_research import worker as worker_module
+
+    monkeypatch.setattr(worker_module, "_HEARTBEAT_SECONDS", 0.01)
+    repo = InMemoryRepository()
+    await _enqueue(repo, "finish while draining")
+    release = asyncio.Event()
+    executor = _RecordingExecutor(ExecutionContext(repo=repo), block=release)
+    worker = _worker(repo, executor)
+    original_heartbeat = repo.heartbeat_worker
+    drain_heartbeats: list[int] = []
+    observed = asyncio.Event()
+
+    async def record_heartbeat(name: str, active: int) -> None:
+        await original_heartbeat(name, active)
+        if worker._stopping.is_set():
+            drain_heartbeats.append(active)
+            if len(drain_heartbeats) >= 2:
+                observed.set()
+
+    monkeypatch.setattr(repo, "heartbeat_worker", record_heartbeat)
+    task = asyncio.create_task(worker.run_forever())
+    try:
+        await asyncio.wait_for(executor.started.wait(), timeout=2)
+        worker.request_stop()
+        await asyncio.wait_for(observed.wait(), timeout=2)
+        assert drain_heartbeats[:2] == [1, 1]
+        assert worker.name in repo._workers
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.wait_for(task, timeout=2)
+    assert worker.name not in repo._workers
+    count = len(drain_heartbeats)
+    await asyncio.sleep(0.03)
+    assert len(drain_heartbeats) == count
+
+
+@pytest.mark.asyncio
+async def test_stop_during_heartbeat_does_not_claim_a_run(monkeypatch) -> None:
+    repo = InMemoryRepository()
+    run_id = await _enqueue(repo, "still queued")
+    executor = _RecordingExecutor(ExecutionContext(repo=repo))
+    worker = _worker(repo, executor)
+
+    async def stop_on_heartbeat(name: str, active: int) -> None:
+        worker.request_stop()
+
+    monkeypatch.setattr(repo, "heartbeat_worker", stop_on_heartbeat)
+    await worker._tick()
+    await worker._tick()
+    assert repo._runs[run_id].lease_owner is None
+    assert not executor.calls
+
+
+@pytest.mark.asyncio
+async def test_stop_interrupts_a_stalled_admission(monkeypatch) -> None:
+    repo = InMemoryRepository()
+    executor = _RecordingExecutor(ExecutionContext(repo=repo))
+    worker = _worker(repo, executor, worker_shutdown_grace_seconds=0.02)
+    entered_claim = asyncio.Event()
+    claim_cancelled = asyncio.Event()
+
+    async def stall_claim(*args, **kwargs):
+        entered_claim.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            claim_cancelled.set()
+
+    monkeypatch.setattr(repo, "claim_next_run", stall_claim)
+    task = asyncio.create_task(worker.run_forever())
+    await asyncio.wait_for(entered_claim.wait(), timeout=2)
+    worker.request_stop()
+    await asyncio.wait_for(task, timeout=2)
+    assert claim_cancelled.is_set()
+    assert not worker.requires_hard_exit
+    assert worker.name not in repo._workers
+
+
+@pytest.mark.asyncio
+async def test_uncooperative_execution_requires_process_exit(monkeypatch, caplog) -> None:
+    from deep_research import worker as worker_module
+
+    monkeypatch.setattr(worker_module, "_CLEANUP_SECONDS", 0.02)
+    repo = InMemoryRepository()
+    run_id = await _enqueue(repo, "stuck provider cleanup")
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def uncooperative(*args, **kwargs) -> None:
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    executor = _RecordingExecutor(ExecutionContext(repo=repo))
+    monkeypatch.setattr(executor, "execute", uncooperative)
+    worker = _worker(repo, executor, worker_shutdown_grace_seconds=0.01)
+    task = asyncio.create_task(worker.run_forever())
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        worker.request_stop()
+        await asyncio.wait_for(task, timeout=2)
+        assert worker.requires_hard_exit
+        assert "shutdown_cleanup_timeout" in caplog.text
+        assert run_id in caplog.text
+        assert repo._runs[run_id].lease_owner.startswith("claim-")
+    finally:
+        release.set()
+        await asyncio.gather(*worker._running, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_drain_heartbeat_failure_is_logged_and_retried(monkeypatch, caplog) -> None:
+    from deep_research import worker as worker_module
+
+    monkeypatch.setattr(worker_module, "_HEARTBEAT_SECONDS", 0.01)
+    repo = InMemoryRepository()
+    await _enqueue(repo, "heartbeat failure")
+    release = asyncio.Event()
+    executor = _RecordingExecutor(ExecutionContext(repo=repo), block=release)
+    worker = _worker(repo, executor)
+    original = repo.heartbeat_worker
+    recovered = asyncio.Event()
+    failed = False
+
+    async def fail_once(name: str, active: int) -> None:
+        nonlocal failed
+        if worker._stopping.is_set():
+            if not failed:
+                failed = True
+                raise RuntimeError("transient heartbeat outage")
+            recovered.set()
+        await original(name, active)
+
+    monkeypatch.setattr(repo, "heartbeat_worker", fail_once)
+    task = asyncio.create_task(worker.run_forever())
+    try:
+        await asyncio.wait_for(executor.started.wait(), timeout=2)
+        worker.request_stop()
+        await asyncio.wait_for(recovered.wait(), timeout=2)
+        assert "transient heartbeat outage" in caplog.text
+    finally:
+        release.set()
+        await asyncio.wait_for(task, timeout=2)
+    assert worker.name not in repo._workers
 
 
 @pytest.mark.asyncio
@@ -321,6 +526,68 @@ async def test_worker_main_builds_and_stops_cleanly(tmp_path, monkeypatch):
         seen["name"] = self.name
         self.request_stop()
 
+    def unexpected_hard_exit(code: int) -> None:
+        pytest.fail(f"clean shutdown must not force process exit: {code}")
+
     monkeypatch.setattr(worker_module.Worker, "run_forever", fake_run_forever)
+    monkeypatch.setattr(worker_module.os, "_exit", unexpected_hard_exit)
     assert await worker_module.main_async(["--name", "w-main"]) == 0
     assert seen["name"] == "w-main"
+
+
+def test_worker_cli_exits_even_when_execution_ignores_cancellation() -> None:
+    """Prove asyncio.run's final cancellation cannot hang the dedicated CLI."""
+    script = textwrap.dedent(
+        """
+        import asyncio
+        from deep_research import worker as module
+        from deep_research.orchestration import OrchestrationRuntime
+        from deep_research.persistence.memory_repository import InMemoryRepository
+
+        module._CLEANUP_SECONDS = 0.02
+
+        async def build(settings):
+            repo = InMemoryRepository()
+            await repo.create_run_once(
+                "stuck provider", request_hash="", claimable=True,
+                execution=OrchestrationRuntime().start("deep", {"query": "stuck provider"}),
+            )
+
+            class Executor:
+                async def execute(self, *args, **kwargs):
+                    worker.request_stop()
+                    while True:
+                        try:
+                            await asyncio.Event().wait()
+                        except asyncio.CancelledError:
+                            pass
+
+            class Engine:
+                async def dispose(self):
+                    raise AssertionError("uncooperative task must be ended at process boundary")
+
+            worker = module.Worker(repo, Executor(), settings)
+            return worker, Engine()
+
+        module._build_worker = build
+        module.main()
+        raise AssertionError("hard exit must end the process")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        env={
+            **os.environ,
+            "APP_ENV": "development",
+            "DR_WORKER_SHUTDOWN_GRACE_SECONDS": "0.02",
+            "DR_WORKER_POLL_SECONDS": "0.01",
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "shutdown_cleanup_timeout" in result.stderr
+    assert "forcing process exit after bounded shutdown" in result.stderr

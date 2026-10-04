@@ -18,7 +18,13 @@ def renewed_checkpoint(checkpoint: dict[str, Any], seconds: int) -> dict[str, An
     if not isinstance(elapsed, (int, float)) or not math.isfinite(elapsed) or elapsed < 0:
         elapsed = 0
     scratch["_attempt_elapsed_origin"] = elapsed
-    scratch["_deadline_at"] = time.time() + seconds
+    # Explicit user recovery authorizes a fresh bounded window. Start clocks
+    # after admission, so even a long worker queue cannot consume that window.
+    scratch.pop("_deadline_at", None)
+    scratch.pop("_task_deadline_at", None)
+    recovery = scratch.get("_recovery")
+    if isinstance(recovery, dict):
+        recovery["not_before"] = 0
     return updated
 
 
@@ -27,7 +33,8 @@ def remaining_seconds(limit: int, elapsed: float, scratch: dict[str, Any]) -> fl
     if not isinstance(origin, (int, float)) or not math.isfinite(origin) or origin < 0:
         origin = 0
     remaining = limit - max(0, elapsed - origin)
-    deadline = scratch.get("_deadline_at")
-    if isinstance(deadline, (float, int)) and math.isfinite(deadline):
-        remaining = min(remaining, deadline - time.time())
+    for key in ("_deadline_at", "_task_deadline_at"):
+        deadline = scratch.get(key)
+        if isinstance(deadline, (float, int)) and math.isfinite(deadline):
+            remaining = min(remaining, deadline - time.time())
     return max(0, remaining)

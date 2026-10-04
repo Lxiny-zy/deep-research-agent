@@ -1,5 +1,6 @@
 import type { ResearchEvent, RunStatus, StepRun, StepRunStatus, WorkflowRun } from '../types'
 import { isActivityEvent } from './researchEvents'
+import { isTerminalRunStatus } from './runStatus'
 
 const TERMINAL_STEP_STATUSES = new Set<StepRunStatus>([
   'succeeded',
@@ -184,16 +185,15 @@ export function deriveResearchProgress({
     (execution?.status === 'succeeded' ||
       execution?.status === 'failed' ||
       execution?.status === 'cancelled')
-  const terminal =
-    runStatus === 'done' ||
-    runStatus === 'error' ||
-    runStatus === 'cancelled' ||
-    persistedWorkflowTerminal
+  const terminal = isTerminalRunStatus(runStatus) || persistedWorkflowTerminal
 
   let percent = 0
   if (
     runStatus === 'done' ||
-    (runStatus !== 'running' && runStatus !== 'cancelling' && execution?.status === 'succeeded')
+    (runStatus !== 'running' &&
+      runStatus !== 'cancelling' &&
+      runStatus !== 'needs_review' &&
+      execution?.status === 'succeeded')
   ) {
     percent = 100
   } else if (total > 0) {
@@ -213,13 +213,15 @@ export function deriveResearchProgress({
   const currentLabel =
     runStatus === 'done'
       ? '研究任务已完成'
-      : runStatus === 'error'
-        ? '研究任务已停止'
-        : runStatus === 'cancelled'
-          ? '研究任务已取消'
-          : runStatus === 'cancelling'
-            ? '正在取消研究任务'
-            : activeStep?.label || readyStep?.label || latestActivityLabel(events)
+      : runStatus === 'needs_review'
+        ? '研究已结束 · 报告与交付待复核'
+        : runStatus === 'error'
+          ? '研究任务已停止'
+          : runStatus === 'cancelled'
+            ? '研究任务已取消'
+            : runStatus === 'cancelling'
+              ? '正在取消研究任务'
+              : activeStep?.label || readyStep?.label || latestActivityLabel(events)
 
   return {
     percent,

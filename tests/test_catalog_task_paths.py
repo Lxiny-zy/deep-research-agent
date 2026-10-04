@@ -13,6 +13,7 @@ from deep_research.llm import LLM
 from deep_research.workbench.templates import AUTO_RESEARCH
 from deep_research.worker import Worker
 from tests.fakes import FakeSearch
+from tests.queue_helpers import drain_inline
 from tests.test_scenario_paths import scenario_app as scenario_app
 from tests.test_workbench import WorkbenchLLM
 
@@ -147,9 +148,9 @@ async def test_model_role_search_and_global_configuration_reach_a_complete_task(
         await asyncio.wait_for(worker._drain(), 45)
         await repo.remove_worker(worker.name)
     else:
-        await asyncio.wait_for(asyncio.gather(*list(api.app.state.tasks)), 45)
+        await drain_inline(api.app, timeout=45)
     detail = await repo.get_run(run_id)
-    assert detail.status == "done", detail.error
+    assert detail is not None
     assert any(
         model == "research-model" and "TASK_PROFILE_MARKER" in prompt for model, prompt in calls
     )
@@ -159,9 +160,38 @@ async def test_model_role_search_and_global_configuration_reach_a_complete_task(
     assert role["context_window_tokens"] == 300000 and role["max_output_tokens"] == 24000
     assert role["temperature"] == 0.25 and role["timeout"] == 47
     assert searches and all(item == (search_id, 3, 47) for item in searches)
-    public = await client.get(f"/api/runs/{run_id}")
-    assert public.status_code == 200 and "test-research-credential" not in public.text
     assert "test-default-credential" not in json.dumps(detail.orchestration.checkpoint)
     registry = await client.get(f"/api/runs/{run_id}/deliverables")
-    assert registry.status_code == 200
-    assert {"md", "pdf", "html", "docx"} <= {f["format"] for f in registry.json()["items"]}
+    assert registry.status_code == 200, registry.text
+    record = registry.json()
+    required = {"md", "pdf", "html", "docx"}
+    assert required <= {item["format"] for item in record["items"]}
+    public = await client.get(f"/api/runs/{run_id}")
+    assert public.status_code == 200 and "test-research-credential" not in public.text
+    detail = await repo.get_run(run_id)
+    completion = detail.orchestration.checkpoint["scratch"].get("_completion")
+    assert isinstance(completion, dict), detail.status
+    nonpassing = [gate for gate in record["gates"] if gate["status"] != "pass"]
+    requires_review = (
+        bool(nonpassing or record["failures"])
+        or record["status"] != "pass"
+        or any(
+            item["status"] != "pass" or item["size"] <= 0
+            for item in record["items"]
+            if item["format"] in required
+        )
+    )
+    expected = "needs_review" if requires_review else "done"
+    # Configuration routing is verified with one cited finding and short prose;
+    # successful model/profile routing does not make those quality warnings pass.
+    assert {"length", "citation"} <= {gate["name"] for gate in nonpassing}
+    assert expected == "needs_review"
+    assert public.json()["status"] == detail.status == completion["status"] == expected
+    assert public.json()["completion"] == completion
+    assert completion["required_formats"] == sorted(required)
+    assert completion["content_version"] == record["content_version"]
+    assert completion["input_version"] == record["input_version"]
+    assert completion["gates"] == record["gates"]
+    assert bool(completion["issues"]) is requires_review
+    for gate in nonpassing:
+        assert set(gate["issues"]) <= set(completion["issues"])

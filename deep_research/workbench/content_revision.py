@@ -56,8 +56,10 @@ _CONTENT_GATES = {
     "provided_corpus",
     "review_coverage",
     "scholarly",
-    "citations",
+    "citation",
     "length",
+    "markdown",
+    "review",
 }
 
 
@@ -101,7 +103,7 @@ def revision_offer(detail: RunDetail, gates: list[Any]) -> dict[str, Any]:
 
     contract = contract_from_scratch(content_state(detail))
     reason = ""
-    if detail.status != "done" or detail.report is None:
+    if detail.status not in {"done", "needs_review"} or detail.report is None:
         reason = "请先完成当前任务；执行中断时可使用任务恢复。"
     elif contract is None or contract.template not in WRITERS:
         reason = "此历史任务缺少继续修订所需的任务信息。"
@@ -115,22 +117,7 @@ def revision_offer(detail: RunDetail, gates: list[Any]) -> dict[str, Any]:
         for f in result.findings
     ):
         reason = "没有已通过材料核验的研究证据，请先补充材料。"
-    elif not any(
-        g.name in _CONTENT_GATES
-        and (
-            g.status == "fail"
-            or g.status == "warn"
-            and g.name
-            in {
-                "structure",
-                "revision",
-                "prose_evidence",
-                "node_evidence",
-                "review_coverage",
-            }
-        )
-        for g in gates
-    ):
+    elif not any(g.name in _CONTENT_GATES and g.status in {"warn", "fail"} for g in gates):
         reason = "正文检查已通过；文件生成失败时可按格式重试。"
     return {"available": not reason, "reason": reason, "source_version": source_version(detail)}
 

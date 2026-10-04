@@ -42,6 +42,7 @@ async def test_postgres_explicit_resume_renews_time_atomically_and_preserves_usa
     import time
 
     from deep_research.config import Settings
+    from deep_research.execution_policy import start_window
     from deep_research.orchestrator import create_initial_execution
     from deep_research.persistence.db import make_sessionmaker
     from deep_research.persistence.repository import LeaseLostError
@@ -55,13 +56,13 @@ async def test_postgres_explicit_resume_renews_time_atomically_and_preserves_usa
         execution.checkpoint["scratch"].update(
             {
                 "_deadline_at": time.time() - 10,
+                "_task_deadline_at": time.time() - 5,
                 "_runtime_metrics": {"elapsed": 90, "total_tokens": 1234, "estimated_tokens": 10},
             }
         )
         try:
             run_id = await repo.create_run("resume", execution=execution)
             await repo.set_status(run_id, "error")
-            started = time.time()
             if mode == "inline":
                 assert await repo.acquire_lease(run_id, "owner")
                 await repo.prepare_resume(run_id, lease_owner="owner", restart_seconds=30)
@@ -81,6 +82,12 @@ async def test_postgres_explicit_resume_renews_time_atomically_and_preserves_usa
             assert saved.status == "running"
             scratch = saved.orchestration.checkpoint["scratch"]
             assert scratch["_attempt_elapsed_origin"] == 90
+            assert "_deadline_at" not in scratch
+            assert "_task_deadline_at" not in scratch
+            # Admission starts fresh clocks; time spent waiting in the durable
+            # queue must not consume either execution window.
+            started = time.time()
+            start_window(saved.orchestration, expected_seconds, expected_seconds * 2)
             assert (
                 scratch["_runtime_metrics"] == execution.checkpoint["scratch"]["_runtime_metrics"]
             )
@@ -88,6 +95,11 @@ async def test_postgres_explicit_resume_renews_time_atomically_and_preserves_usa
                 started + expected_seconds
                 <= scratch["_deadline_at"]
                 <= time.time() + expected_seconds
+            )
+            assert (
+                started + expected_seconds * 2
+                <= scratch["_task_deadline_at"]
+                <= time.time() + expected_seconds * 2
             )
         finally:
             await engine.dispose()

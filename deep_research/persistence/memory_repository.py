@@ -3,14 +3,29 @@
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 from ..models import Report, ResearchPlan, ResearchResult, Source, SubQuestion
 from ..observability import Event
 from ..orchestration import WorkflowRun
 from ..resume_window import renewed_checkpoint
+from ..scheduling import (
+    ActiveRun,
+    IdentityCredit,
+    ScheduleCandidate,
+    ScheduleKind,
+    SchedulerState,
+    dispatch_info,
+    eligible_candidates,
+    identity_key,
+    schedule_for_execution,
+    select_next,
+    validate_priority,
+)
 from .repository import (
     RUN_ACTIVE_STATUSES,
     ClaimedRun,
@@ -47,6 +62,9 @@ class _RunRecord:
     attempt: int = 1
     claimable_at: datetime | None = None
     claim_attempts: int = 0
+    schedule_cost: int = 4
+    schedule_class: ScheduleKind = "heavy"
+    schedule_priority: int = 1
 
 
 class InMemoryRepository:
@@ -58,6 +76,8 @@ class InMemoryRepository:
         self._idempotency: dict[str, tuple[str, str]] = {}
         self._workers: dict[str, tuple[datetime, int]] = {}
         self._artifact_cleanup: dict[str, str] = {}
+        self._scheduler_state = SchedulerState()
+        self._scheduler_credits: dict[str, IdentityCredit] = {}
 
     async def create_run(
         self,
@@ -86,7 +106,9 @@ class InMemoryRepository:
         owner_id: str | None = None,
         project_id: str | None = None,
         max_inflight: int | None = None,
+        schedule_priority: int = 1,
     ) -> tuple[str, bool]:
+        validate_priority(schedule_priority)
         if idempotency_key:
             existing = self._idempotency.get(idempotency_key)
             if existing is not None:
@@ -97,6 +119,7 @@ class InMemoryRepository:
                     )
                 return existing_id, False
         self._check_capacity(max_inflight)
+        schedule = schedule_for_execution(execution)
         run_id = str(uuid4())
         record = _RunRecord(
             id=run_id,
@@ -107,6 +130,9 @@ class InMemoryRepository:
             request_hash=request_hash,
             attempt=execution.attempt if execution is not None else 1,
             claimable_at=datetime.now(UTC) if claimable else None,
+            schedule_cost=schedule.cost,
+            schedule_class=schedule.kind,
+            schedule_priority=schedule_priority,
         )
         if execution is not None:
             record.orchestration = execution.model_copy(deep=True)
@@ -352,9 +378,34 @@ class InMemoryRepository:
 
     async def enqueue_run(self, run_id: str) -> bool:
         rec = self._runs.get(run_id)
-        if rec is None or rec.status not in RUN_ACTIVE_STATUSES or rec.claimable_at is not None:
+        if (
+            rec is None
+            or rec.status not in {"pending", "running"}
+            or rec.orchestration is None
+            or not rec.orchestration.checkpoint
+            or rec.claimable_at is not None
+        ):
             return False
-        rec.claimable_at = datetime.now(UTC)
+        now = datetime.now(UTC)
+        if (
+            rec.lease_owner is not None
+            and rec.lease_expires_at is not None
+            and rec.lease_expires_at > now
+        ):
+            return False
+        rec.claimable_at = now
+        return True
+
+    async def defer_run(
+        self, run_id: str, execution: WorkflowRun, *, lease_owner: str, not_before: float
+    ) -> bool:
+        self._assert_lease(run_id, lease_owner)
+        rec = self._runs[run_id]
+        if rec.status not in {"pending", "running", "error"}:
+            return False
+        rec.orchestration = execution.model_copy(deep=True)
+        rec.status = "running"
+        rec.claimable_at = datetime.fromtimestamp(not_before, UTC)
         return True
 
     async def requeue_failed_run(
@@ -385,24 +436,20 @@ class InMemoryRepository:
     ) -> ClaimedRun | None:
         """Reference implementation of the claim protocol.
 
-        Single-threaded by construction, so the SQL layer's fence-then-reload
-        dance collapses into one pass.  The observable contract is identical:
-        an active lease is never stolen and a claim always advances the
-        attempt counter for a resumed run.
+        This method contains no await: fairness credits, capacity checks and
+        the lease commit form one atomic operation in the in-memory backend.
+        The selection rules are shared with the SQL transaction path.
         """
         now = datetime.now(UTC)
-        if (
-            max_active_runs is not None
-            and sum(
-                r.status in RUN_ACTIVE_STATUSES
-                and r.lease_owner is not None
-                and r.lease_expires_at is not None
-                and r.lease_expires_at > now
-                for r in self._runs.values()
-            )
-            >= max_active_runs
-        ):
-            return None
+        active = [
+            ActiveRun(identity_key(rec.owner_id), rec.schedule_class)
+            for rec in self._runs.values()
+            if rec.status in RUN_ACTIVE_STATUSES
+            and rec.lease_owner is not None
+            and rec.lease_expires_at is not None
+            and rec.lease_expires_at > now
+        ]
+        candidates = []
         for run_id in self._order:
             rec = self._runs.get(run_id)
             if rec is None or rec.orchestration is None:
@@ -415,23 +462,49 @@ class InMemoryRepository:
                 rec.lease_expires_at is not None and rec.lease_expires_at > now
             ):
                 continue
-            resumed = bool(rec.orchestration.checkpoint) and rec.status == "running"
-            rec.lease_owner = owner
-            rec.lease_expires_at = now + timedelta(seconds=lease_seconds)
-            rec.claim_attempts += 1
-            rec.status = "running"
-            if resumed:
-                rec.attempt = rec.orchestration.attempt = max(1, rec.orchestration.attempt) + 1
-            return ClaimedRun(
-                run_id=run_id,
-                query=rec.query,
-                lease_owner=owner,
-                execution=rec.orchestration.model_copy(deep=True),
-                attempt=rec.orchestration.attempt,
-                claim_attempts=rec.claim_attempts,
-                resumed=resumed,
+            ready_at = rec.claimable_at
+            if rec.lease_owner is not None and rec.lease_expires_at is not None:
+                # Time spent executing or awaiting lease expiry is not queue aging.
+                ready_at = max(ready_at, rec.lease_expires_at)
+            candidates.append(
+                ScheduleCandidate(
+                    run_id=run_id,
+                    identity=identity_key(rec.owner_id),
+                    cost=rec.schedule_cost,
+                    kind=rec.schedule_class,
+                    priority=rec.schedule_priority,
+                    ready_at=ready_at.timestamp(),
+                )
             )
-        return None
+        selection = select_next(
+            eligible_candidates(candidates, active, max_active_runs),
+            self._scheduler_credits,
+            self._scheduler_state,
+            now=now.timestamp(),
+        )
+        if selection is None:
+            return None
+        rec = self._runs[selection.candidate.run_id]
+        assert rec.orchestration is not None
+        resumed = bool(rec.orchestration.checkpoint) and rec.status == "running"
+        rec.lease_owner = owner
+        rec.lease_expires_at = now + timedelta(seconds=lease_seconds)
+        rec.claim_attempts += 1
+        rec.status = "running"
+        if resumed:
+            rec.attempt = rec.orchestration.attempt = max(1, rec.orchestration.attempt) + 1
+        self._scheduler_credits = selection.credits
+        self._scheduler_state = selection.state
+        return ClaimedRun(
+            run_id=rec.id,
+            query=rec.query,
+            lease_owner=owner,
+            execution=rec.orchestration.model_copy(deep=True),
+            attempt=rec.orchestration.attempt,
+            claim_attempts=rec.claim_attempts,
+            resumed=resumed,
+            dispatch=dispatch_info(selection.candidate, now=now.timestamp()),
+        )
 
     async def finalize(
         self,
@@ -440,13 +513,49 @@ class InMemoryRepository:
         elapsed: float,
         total_tokens: int,
         lease_owner: str | None = None,
+        completion: dict[str, Any] | None = None,
     ) -> None:
         self._assert_lease(run_id, lease_owner)
         rec = self._runs[run_id]
+        if completion is not None and rec.status in {"pending", "running"}:
+            if rec.orchestration is None or completion.get("status") not in {
+                "done",
+                "needs_review",
+            }:
+                raise ValueError("invalid task completion record")
         rec.elapsed = elapsed
         rec.total_tokens = total_tokens
-        if rec.status != "cancelling":
-            rec.status = "done"
+        if rec.status in {"pending", "running"}:
+            if completion is not None:
+                if rec.orchestration is None or completion.get("status") not in {
+                    "done",
+                    "needs_review",
+                }:
+                    raise ValueError("invalid task completion record")
+                execution = rec.orchestration.model_copy(deep=True)
+                execution.checkpoint.setdefault("scratch", {})["_completion"] = deepcopy(completion)
+                rec.orchestration = execution
+            rec.status = completion["status"] if completion else "done"
+
+    async def update_completion(
+        self, run_id: str, completion: dict[str, Any], *, expected_version: str
+    ) -> bool:
+        rec = self._runs.get(run_id)
+        if rec is None or rec.status not in {"done", "needs_review"} or rec.orchestration is None:
+            return False
+        scratch = rec.orchestration.checkpoint.get("scratch", {})
+        previous = scratch.get("_completion", {})
+        if previous.get("content_version") != expected_version or previous.get(
+            "input_version"
+        ) != completion.get("input_version"):
+            return False
+        if completion.get("status") not in {"done", "needs_review"}:
+            raise ValueError("invalid task completion status")
+        updated = rec.orchestration.model_copy(deep=True)
+        updated.checkpoint["scratch"]["_completion"] = deepcopy(completion)
+        rec.orchestration = updated
+        rec.status = completion["status"]
+        return True
 
     async def delete_run(self, run_id: str) -> bool:
         if run_id not in self._runs:

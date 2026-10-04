@@ -194,6 +194,9 @@ def build_or_load(
 
 
 def _commit(store: ArtifactStore, slug: str, index: dict, bundle: DeliveryBundle) -> None:
+    from .completion import validate_bundle_files
+
+    validate_bundle_files(bundle)
     version = bundle.content_version
     if version in index["versions"]:
         raise ValueError("不得覆盖已有交付版本")

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
@@ -36,6 +37,19 @@ from ..models import (
 from ..observability import Event
 from ..orchestration import StepRun, WorkflowRun
 from ..resume_window import renewed_checkpoint
+from ..scheduling import (
+    ActiveRun,
+    IdentityCredit,
+    ScheduleCandidate,
+    ScheduleKind,
+    SchedulerState,
+    dispatch_info,
+    eligible_candidates,
+    identity_key,
+    schedule_for_execution,
+    select_next,
+    validate_priority,
+)
 from . import orm
 from .coordination import transaction_lock
 from .repository import (
@@ -49,9 +63,7 @@ from .repository import (
     TagCount,
 )
 
-# 一次 claim 调用最多尝试的候选数。并发 worker 抢同一条时会失败重试，
-# 但不能无界重试——超过上限就返回 None，由 worker 的轮询间隔自然退避。
-_CLAIM_CANDIDATE_LIMIT = 8
+logger = logging.getLogger(__name__)
 
 
 def _sub_question_row(
@@ -186,6 +198,7 @@ class SqlRepository:
         owner_id: str | None = None,
         project_id: str | None = None,
         max_inflight: int | None = None,
+        schedule_priority: int = 1,
     ) -> tuple[str, bool]:
         """Insert a run and its initial workflow atomically.
 
@@ -193,6 +206,7 @@ class SqlRepository:
         insert is followed by a read of the winning row so retries return the
         original run rather than launching a second worker.
         """
+        validate_priority(schedule_priority)
         try:
             async with self._sm() as s, s.begin():
                 await transaction_lock(s, "run-admission")
@@ -206,6 +220,7 @@ class SqlRepository:
                         if existing.request_hash != request_hash:
                             raise IdempotencyConflictError("Idempotency-Key 已用于不同的请求")
                         return existing.id, False
+                schedule = schedule_for_execution(execution)
                 await self._check_capacity(s, max_inflight)
                 run = orm.ResearchRun(
                     query=query,
@@ -215,6 +230,9 @@ class SqlRepository:
                     idempotency_key=idempotency_key,
                     request_hash=request_hash or None,
                     claimable_at=datetime.now(UTC) if claimable else None,
+                    schedule_cost=schedule.cost,
+                    schedule_class=schedule.kind,
+                    schedule_priority=schedule_priority,
                 )
                 s.add(run)
                 await s.flush()
@@ -852,16 +870,60 @@ class SqlRepository:
 
     async def enqueue_run(self, run_id: str) -> bool:
         async with self._sm() as s, s.begin():
+            await transaction_lock(s, "run-admission")
+            now = datetime.now(UTC)
+            result = await s.execute(
+                update(orm.WorkflowRunRow)
+                .where(
+                    orm.WorkflowRunRow.research_run_id == run_id,
+                    or_(
+                        orm.WorkflowRunRow.lease_owner.is_(None),
+                        orm.WorkflowRunRow.lease_expires_at.is_(None),
+                        orm.WorkflowRunRow.lease_expires_at <= now,
+                    ),
+                )
+                .values(lease_owner=orm.WorkflowRunRow.lease_owner)
+                .execution_options(synchronize_session=False)
+            )
+            if not cast("CursorResult[Any]", result).rowcount:
+                return False
+            checkpoint = await s.scalar(
+                select(orm.WorkflowRunRow.checkpoint).where(
+                    orm.WorkflowRunRow.research_run_id == run_id
+                )
+            )
+            if not isinstance(checkpoint, dict) or not checkpoint:
+                return False
             result = await s.execute(
                 update(orm.ResearchRun)
                 .where(
                     orm.ResearchRun.id == run_id,
-                    orm.ResearchRun.status.in_(tuple(RUN_ACTIVE_STATUSES)),
+                    orm.ResearchRun.status.in_(("pending", "running")),
                     orm.ResearchRun.claimable_at.is_(None),
                 )
-                .values(claimable_at=datetime.now(UTC))
+                .values(claimable_at=now)
+                .execution_options(synchronize_session=False)
             )
             return bool(cast("CursorResult[Any]", result).rowcount)
+
+    async def defer_run(
+        self, run_id: str, execution: WorkflowRun, *, lease_owner: str, not_before: float
+    ) -> bool:
+        async with self._sm() as s, s.begin():
+            workflow = await self._owned_workflow_row(s, run_id, lease_owner)
+            result = await s.execute(
+                update(orm.ResearchRun)
+                .where(
+                    orm.ResearchRun.id == run_id,
+                    orm.ResearchRun.status.in_(("pending", "running", "error")),
+                )
+                .values(status="running", claimable_at=datetime.fromtimestamp(not_before, UTC))
+            )
+            if not cast("CursorResult[Any]", result).rowcount:
+                return False
+            assert workflow is not None
+            workflow.checkpoint = execution.checkpoint
+            return True
 
     async def requeue_failed_run(
         self, run_id: str, *, max_inflight: int | None = None, restart_seconds: int | None = None
@@ -918,155 +980,174 @@ class SqlRepository:
     async def claim_next_run(
         self, owner: str, *, lease_seconds: int = 120, max_active_runs: int | None = None
     ) -> ClaimedRun | None:
-        """Claim the oldest queued or abandoned run whose lease is free.
-
-        Candidate selection and the actual claim are deliberately separate.
-        ``SKIP LOCKED`` only reduces contention between concurrent workers; the
-        conditional lease UPDATE is what actually guarantees single ownership,
-        and it is the same arbiter crash recovery already relies on.  A worker
-        that loses the race simply moves on to the next candidate.
-        """
-        if max_active_runs is not None:
-            return await self._claim_with_limit(owner, lease_seconds, max_active_runs)
-        for _ in range(_CLAIM_CANDIDATE_LIMIT):
-            candidate = await self._next_claim_candidate()
-            if candidate is None:
-                return None
-            if not await self.acquire_lease(candidate, owner, seconds=lease_seconds):
-                continue
-            claimed = await self._finish_claim(candidate, owner)
-            if claimed is not None:
-                return claimed
-            # The row changed between selection and fencing (finished,
-            # cancelled, or dequeued).  Give the lease back and look further.
-            await self.release_lease(candidate, owner)
-        return None
-
-    async def _claim_with_limit(self, owner: str, seconds: int, maximum: int) -> ClaimedRun | None:
+        """Choose and charge one identity atomically with its execution lease."""
         async with self._sm() as s, s.begin():
             await transaction_lock(s, "run-admission")
             now = datetime.now(UTC)
-            joined = select(orm.ResearchRun).join(
-                orm.WorkflowRunRow, orm.WorkflowRunRow.research_run_id == orm.ResearchRun.id
-            )
-            active = await s.scalar(
-                select(func.count())
-                .select_from(orm.ResearchRun)
-                .join(orm.WorkflowRunRow, orm.WorkflowRunRow.research_run_id == orm.ResearchRun.id)
-                .where(
-                    orm.ResearchRun.status.in_(RUN_ACTIVE_STATUSES),
-                    orm.WorkflowRunRow.lease_owner.is_not(None),
-                    orm.WorkflowRunRow.lease_expires_at > now,
+            active_rows = (
+                await s.execute(
+                    select(orm.ResearchRun.owner_id, orm.ResearchRun.schedule_class)
+                    .join(
+                        orm.WorkflowRunRow,
+                        orm.WorkflowRunRow.research_run_id == orm.ResearchRun.id,
+                    )
+                    .where(
+                        orm.ResearchRun.status.in_(RUN_ACTIVE_STATUSES),
+                        orm.WorkflowRunRow.lease_owner.is_not(None),
+                        orm.WorkflowRunRow.lease_expires_at > now,
+                    )
                 )
-            )
-            if int(active or 0) >= maximum:
+            ).all()
+            active = [
+                ActiveRun(identity_key(row.owner_id), cast(ScheduleKind, row.schedule_class))
+                for row in active_rows
+            ]
+            if max_active_runs is not None and len(active) >= max_active_runs:
                 return None
-            row = await s.scalar(
-                joined.where(
+            lease_free = or_(
+                orm.WorkflowRunRow.lease_owner.is_(None),
+                orm.WorkflowRunRow.lease_expires_at.is_(None),
+                orm.WorkflowRunRow.lease_expires_at <= now,
+            )
+            # Do not truncate runs before grouping by identity: a large queue
+            # owned by one caller must not hide everybody else's eligible head.
+            rows = (
+                await s.execute(
+                    select(orm.ResearchRun, orm.WorkflowRunRow)
+                    .join(
+                        orm.WorkflowRunRow,
+                        orm.WorkflowRunRow.research_run_id == orm.ResearchRun.id,
+                    )
+                    .where(
+                        orm.ResearchRun.status.in_(("pending", "running")),
+                        orm.ResearchRun.claimable_at <= now,
+                        lease_free,
+                    )
+                )
+            ).all()
+
+            def stamp(value: datetime) -> float:
+                return value.replace(tzinfo=UTC).timestamp()
+
+            candidates = []
+            for run, workflow in rows:
+                ready_at = stamp(run.claimable_at)
+                if workflow.lease_owner is not None and workflow.lease_expires_at is not None:
+                    ready_at = max(ready_at, stamp(workflow.lease_expires_at))
+                candidates.append(
+                    ScheduleCandidate(
+                        run.id,
+                        identity_key(run.owner_id),
+                        run.schedule_cost,
+                        cast(ScheduleKind, run.schedule_class),
+                        run.schedule_priority,
+                        ready_at,
+                    )
+                )
+            candidates = eligible_candidates(candidates, active, max_active_runs)
+            if not candidates:
+                return None
+            state_row = await s.get(orm.SchedulerStateRow, "runs")
+            state = (
+                SchedulerState(state_row.cursor, state_row.round_no)
+                if state_row is not None
+                else SchedulerState()
+            )
+            credit_rows = {
+                row.identity_key: row
+                for row in (
+                    await s.scalars(
+                        select(orm.SchedulerIdentityRow).where(
+                            orm.SchedulerIdentityRow.identity_key.in_(
+                                {candidate.identity for candidate in candidates}
+                            )
+                        )
+                    )
+                ).all()
+            }
+            credits = {
+                key: IdentityCredit(row.deficit, row.last_round) for key, row in credit_rows.items()
+            }
+            selection = select_next(candidates, credits, state, now=now.timestamp())
+            assert selection is not None
+            selected = selection.candidate
+            # Non-scheduler writers (cancellation, explicit lease recovery) may
+            # have changed a candidate since the read. Fence W then R, matching
+            # the repository's existing workflow-before-root lock order.
+            result = await s.execute(
+                update(orm.WorkflowRunRow)
+                .where(orm.WorkflowRunRow.research_run_id == selected.run_id, lease_free)
+                .values(lease_owner=owner, lease_expires_at=now + timedelta(seconds=lease_seconds))
+                .execution_options(synchronize_session=False)
+            )
+            if not cast("CursorResult[Any]", result).rowcount:
+                await s.rollback()
+                return None
+            result = await s.execute(
+                update(orm.ResearchRun)
+                .where(
+                    orm.ResearchRun.id == selected.run_id,
                     orm.ResearchRun.status.in_(("pending", "running")),
                     orm.ResearchRun.claimable_at <= now,
-                    or_(
-                        orm.WorkflowRunRow.lease_owner.is_(None),
-                        orm.WorkflowRunRow.lease_expires_at.is_(None),
-                        orm.WorkflowRunRow.lease_expires_at <= now,
-                    ),
                 )
-                .order_by(orm.ResearchRun.claimable_at)
-                .limit(1)
+                .values(status=orm.ResearchRun.status)
+                .execution_options(synchronize_session=False)
             )
-            if row is None:
+            if not cast("CursorResult[Any]", result).rowcount:
+                await s.rollback()
                 return None
+            run = await s.scalar(
+                select(orm.ResearchRun)
+                .where(orm.ResearchRun.id == selected.run_id)
+                .execution_options(populate_existing=True)
+            )
             workflow = await s.scalar(
                 select(orm.WorkflowRunRow)
-                .where(orm.WorkflowRunRow.research_run_id == row.id)
+                .where(orm.WorkflowRunRow.research_run_id == selected.run_id)
                 .options(selectinload(orm.WorkflowRunRow.steps))
+                .execution_options(populate_existing=True)
             )
-            assert workflow is not None
-            resumed = bool(workflow.checkpoint) and row.status == "running"
-            workflow.lease_owner, workflow.lease_expires_at = (
-                owner,
-                now + timedelta(seconds=seconds),
-            )
-            row.status = "running"
-            row.claim_attempts = (row.claim_attempts or 0) + 1
+            assert run is not None and workflow is not None
+            resumed = bool(workflow.checkpoint) and run.status == "running"
+            run.status = "running"
+            run.claim_attempts = (run.claim_attempts or 0) + 1
             if resumed:
                 workflow.attempt = max(1, workflow.attempt or 1) + 1
+            if state_row is None:
+                state_row = orm.SchedulerStateRow(name="runs")
+                s.add(state_row)
+            state_row.cursor = selection.state.cursor
+            state_row.round_no = selection.state.round_no
+            for identity, credit in selection.credits.items():
+                row = credit_rows.get(identity)
+                if row is None:
+                    row = orm.SchedulerIdentityRow(identity_key=identity)
+                    s.add(row)
+                row.deficit, row.last_round = credit.deficit, credit.last_round
+            await s.flush()
+            logger.info(
+                "claimed run %s identity=%s class=%s cost=%s priority=%s wait_seconds=%.3f",
+                run.id,
+                hashlib.sha256(selected.identity.encode()).hexdigest()[:12],
+                selected.kind,
+                selected.cost,
+                selected.priority,
+                max(0.0, now.timestamp() - selected.ready_at),
+            )
             return ClaimedRun(
-                row.id,
-                row.query,
+                run.id,
+                run.query,
                 owner,
                 _workflow_run(workflow),
                 workflow.attempt,
-                row.claim_attempts,
+                run.claim_attempts,
                 resumed,
+                dispatch=dispatch_info(selected, now=now.timestamp()),
             )
 
-    async def _next_claim_candidate(self) -> str | None:
-        now = datetime.now(UTC)
-        async with self._sm() as s, s.begin():
-            stmt = (
-                select(orm.ResearchRun.id)
-                .join(
-                    orm.WorkflowRunRow,
-                    orm.WorkflowRunRow.research_run_id == orm.ResearchRun.id,
-                )
-                .where(
-                    orm.ResearchRun.status.in_(("pending", "running")),
-                    orm.ResearchRun.claimable_at.is_not(None),
-                    orm.ResearchRun.claimable_at <= now,
-                    or_(
-                        orm.WorkflowRunRow.lease_owner.is_(None),
-                        orm.WorkflowRunRow.lease_expires_at.is_(None),
-                        orm.WorkflowRunRow.lease_expires_at <= now,
-                    ),
-                )
-                .order_by(orm.ResearchRun.claimable_at)
-                .limit(1)
-            )
-            if s.get_bind().dialect.name == "postgresql":
-                # SQLite ignores row locking; there the conditional lease UPDATE
-                # below remains the only arbiter, which is sufficient for the
-                # single-node development target.
-                stmt = stmt.with_for_update(skip_locked=True, of=orm.ResearchRun)
-            return await s.scalar(stmt)
-
-    async def _finish_claim(self, run_id: str, owner: str) -> ClaimedRun | None:
-        """Re-read behind the lease, then mark the run as owned by this worker.
-
-        Reloading after fencing is mandatory: the candidate query ran without
-        the lease, so the row may have completed or been cancelled in between.
-        """
-        async with self._sm() as s, s.begin():
-            row = await s.get(orm.ResearchRun, run_id)
-            if row is None or row.status not in ("pending", "running"):
-                return None
-            if row.claimable_at is None:
-                return None
-            workflow = await s.scalar(
-                select(orm.WorkflowRunRow)
-                .where(orm.WorkflowRunRow.research_run_id == run_id)
-                .options(selectinload(orm.WorkflowRunRow.steps))
-            )
-            if workflow is None or workflow.lease_owner != owner:
-                return None
-            resumed = bool(workflow.checkpoint) and row.status == "running"
-            row.claim_attempts = (row.claim_attempts or 0) + 1
-            row.status = "running"
-            if resumed:
-                # Resuming re-emits the run's event stream, so the attempt
-                # counter must advance for SSE to distinguish the new pass.
-                # ``attempt`` lives only on the workflow row (see prepare_resume).
-                workflow.attempt = max(1, workflow.attempt or 1) + 1
-            execution = _workflow_run(workflow)
-            return ClaimedRun(
-                run_id=run_id,
-                query=row.query,
-                lease_owner=owner,
-                execution=execution,
-                attempt=workflow.attempt,
-                claim_attempts=row.claim_attempts,
-                resumed=resumed,
-            )
+    async def _claim_with_limit(self, owner: str, seconds: int, maximum: int) -> ClaimedRun | None:
+        """Compatibility entry point; all claims use the same transaction."""
+        return await self.claim_next_run(owner, lease_seconds=seconds, max_active_runs=maximum)
 
     async def finalize(
         self,
@@ -1075,16 +1156,80 @@ class SqlRepository:
         elapsed: float,
         total_tokens: int,
         lease_owner: str | None = None,
+        completion: dict[str, Any] | None = None,
     ) -> None:
         async with self._sm() as s, s.begin():
-            await self._owned_workflow_row(s, run_id, lease_owner)
+            workflow = await self._owned_workflow_row(s, run_id, lease_owner)
+            if lease_owner is None:
+                await s.execute(
+                    update(orm.WorkflowRunRow)
+                    .where(orm.WorkflowRunRow.research_run_id == run_id)
+                    .values(checkpoint=orm.WorkflowRunRow.checkpoint)
+                )
+            await s.execute(
+                update(orm.ResearchRun)
+                .where(orm.ResearchRun.id == run_id)
+                .values(status=orm.ResearchRun.status)
+            )
+            if completion is not None and workflow is None:
+                workflow = await s.scalar(
+                    select(orm.WorkflowRunRow).where(orm.WorkflowRunRow.research_run_id == run_id)
+                )
             run = await s.get(orm.ResearchRun, run_id)
             if run is not None:
                 run.elapsed = elapsed
                 run.total_tokens = total_tokens
-                if run.status != "cancelling":
-                    run.status = "done"
+                if run.status in {"pending", "running"}:
+                    if completion is not None:
+                        if workflow is None or completion.get("status") not in {
+                            "done",
+                            "needs_review",
+                        }:
+                            raise ValueError("invalid task completion record")
+                        checkpoint = dict(workflow.checkpoint)
+                        checkpoint["scratch"] = {
+                            **checkpoint.get("scratch", {}),
+                            "_completion": completion,
+                        }
+                        workflow.checkpoint = checkpoint
+                    run.status = completion["status"] if completion else "done"
                 run.finished_at = datetime.now(UTC)
+
+    async def update_completion(
+        self, run_id: str, completion: dict[str, Any], *, expected_version: str
+    ) -> bool:
+        async with self._sm() as s, s.begin():
+            # Same workflow -> root lock order as leased finalization/resume.
+            await s.execute(
+                update(orm.WorkflowRunRow)
+                .where(orm.WorkflowRunRow.research_run_id == run_id)
+                .values(checkpoint=orm.WorkflowRunRow.checkpoint)
+            )
+            await s.execute(
+                update(orm.ResearchRun)
+                .where(orm.ResearchRun.id == run_id)
+                .values(status=orm.ResearchRun.status)
+            )
+            run = await s.get(orm.ResearchRun, run_id)
+            workflow = await s.scalar(
+                select(orm.WorkflowRunRow).where(orm.WorkflowRunRow.research_run_id == run_id)
+            )
+            if run is None or run.status not in {"done", "needs_review"} or workflow is None:
+                return False
+            scratch = workflow.checkpoint.get("scratch", {})
+            previous = scratch.get("_completion", {})
+            if previous.get("content_version") != expected_version or previous.get(
+                "input_version"
+            ) != completion.get("input_version"):
+                return False
+            if completion.get("status") not in {"done", "needs_review"}:
+                raise ValueError("invalid task completion status")
+            workflow.checkpoint = {
+                **workflow.checkpoint,
+                "scratch": {**scratch, "_completion": completion},
+            }
+            run.status = completion["status"]
+            return True
 
     async def delete_run(self, run_id: str) -> bool:
         # 单条 DELETE：DB 级 ondelete=CASCADE 清子表（SQLite 已开 foreign_keys=ON）

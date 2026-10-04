@@ -1,11 +1,7 @@
-"""进程级研究任务准入控制。
+"""Compatibility utility for callers that need process-local admission.
 
-限的是**本进程同时执行**多少次研究，与按客户端限流（deps 里的 _RateLimiter）
-是两回事：后者防单个调用方刷接口，前者防本进程被压垮。
-
-队列刻意有界：超载要变成可观测的 503，而不是无限增长的 asyncio 任务集合。
-跨进程的全局上限不在这里——那由 ``execution_mode=worker`` 下的副本数
-× ``max_active_runs`` 表达。
+Research HTTP requests now use the durable fair queue in both execution modes.
+This helper is not a cluster-wide scheduler and does not govern those requests.
 """
 
 from __future__ import annotations

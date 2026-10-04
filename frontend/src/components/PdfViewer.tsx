@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
 import type { TextContent } from 'pdfjs-dist/types/src/display/api'
@@ -274,10 +274,15 @@ export default function PdfViewer({
     const textCache = texts.current
     void (async () => {
       const pages: string[][] = []
+      const measuredSizes: PageSize[] = []
       for (let number = 1; number <= doc.numPages; number += 1) {
         signal.throwIfAborted()
+        const page = await doc.getPage(number)
+        signal.throwIfAborted()
+        const viewport = page.getViewport({ scale: 1 })
+        measuredSizes.push({ width: viewport.width, height: viewport.height })
         if (!textCache.has(number)) {
-          const content = await (await doc.getPage(number)).getTextContent()
+          const content = await page.getTextContent()
           signal.throwIfAborted()
           textCache.set(number, content)
         }
@@ -285,6 +290,9 @@ export default function PdfViewer({
       }
       const match = findQuote(pages, quote)
       signal.throwIfAborted()
+      // Offscreen pages initially use the first page's dimensions. Resolve all
+      // preceding page sizes before measuring a distant quote's scroll offset.
+      setSizes(measuredSizes)
       if (!match) {
         setLocateStatus('未找到唯一的完整引文，无法准确定位')
         return
@@ -305,25 +313,6 @@ export default function PdfViewer({
         `已定位完整引文 · 第 ${[...located.keys()].map((page) => page + 1).join('、')} 页`,
       )
       setMarks(located)
-      const rects = located.get(match.page)!
-      const page = pageRefs.current[match.page]
-      const container = scroller.current
-      if (page && container && rects.length) {
-        // Center the beginning, not the midpoint of a long multi-column quote.
-        const top = rects[0].y
-        const bottom = top + rects[0].height
-        const pageTop =
-          page.getBoundingClientRect().top -
-          container.getBoundingClientRect().top +
-          container.scrollTop
-        container.scrollTo?.({
-          top: Math.max(
-            0,
-            pageTop + ((top + bottom) / 2) * scaleRef.current - container.clientHeight / 2,
-          ),
-          behavior: 'smooth',
-        })
-      }
     })()
       .catch(() => {
         if (!signal.aborted) setLocateStatus('引文定位失败，请重新点击定位')
@@ -334,6 +323,30 @@ export default function PdfViewer({
       controller.abort()
     }
   }, [doc, quote, token])
+
+  useLayoutEffect(() => {
+    const first = marks?.entries().next().value
+    if (!first) return
+    const [pageIndex, rects] = first
+    const page = pageRefs.current[pageIndex]
+    const container = scroller.current
+    if (!page || !container || !rects.length) return
+    // React has now committed the measured page dimensions and highlights.
+    // Center the beginning, not the midpoint of a long multi-column quote.
+    const top = rects[0].y
+    const bottom = top + rects[0].height
+    const pageTop =
+      page.getBoundingClientRect().top -
+      container.getBoundingClientRect().top +
+      container.scrollTop
+    container.scrollTo?.({
+      top: Math.max(
+        0,
+        pageTop + ((top + bottom) / 2) * scaleRef.current - container.clientHeight / 2,
+      ),
+      behavior: 'smooth',
+    })
+  }, [marks])
 
   const pages = useMemo(() => sizes.map((size, index) => ({ size, number: index + 1 })), [sizes])
   const zoomIn = () => setZoom(ZOOM_STEPS.find((step) => step > scale + 0.01) ?? scale)

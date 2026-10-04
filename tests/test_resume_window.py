@@ -10,6 +10,7 @@ from deep_research.resume_window import remaining_seconds, renewed_checkpoint
 from deep_research.workbench.templates import AUTO_RESEARCH
 from deep_research.worker import Worker
 from tests.fakes import FakeSearch
+from tests.queue_helpers import drain_inline
 from tests.test_scenario_paths import scenario_app as scenario_app
 from tests.test_workbench import WorkbenchLLM
 
@@ -25,7 +26,7 @@ def test_explicit_window_renews_time_without_erasing_cumulative_usage(monkeypatc
     assert remaining_seconds(30, 90, old["scratch"]) == 0
     updated = renewed_checkpoint(old, 30)
     assert old["scratch"]["_deadline_at"] == 900
-    assert updated["scratch"]["_deadline_at"] == 1030
+    assert "_deadline_at" not in updated["scratch"]
     assert updated["scratch"]["_runtime_metrics"] == old["scratch"]["_runtime_metrics"]
     assert remaining_seconds(30, 92, updated["scratch"]) == 28
     assert remaining_seconds(30, 121, updated["scratch"]) == 0
@@ -60,9 +61,12 @@ async def test_http_resume_restarts_expired_window_and_legacy_execution_saves_pr
         await asyncio.wait_for(worker._drain(), 15)
         await repo.remove_worker(worker.name)
     else:
-        await asyncio.wait_for(asyncio.gather(*list(api.app.state.tasks)), 15)
+        await drain_inline(api.app, timeout=15)
     detail = await repo.get_run(run_id)
-    assert detail.status == "done"
+    # Execution resumed successfully; this intentionally tiny report does not
+    # satisfy the frozen task's length/source requirements and must stay reviewable.
+    assert detail.status == "needs_review"
+    assert detail.orchestration.checkpoint["scratch"]["_completion"]["issues"]
     assert detail.report is not None and detail.report.markdown
     assert detail.elapsed >= 35 and detail.total_tokens >= 1234
     assert detail.orchestration.checkpoint["scratch"]["_attempt_elapsed_origin"] == 35

@@ -19,7 +19,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..artifacts import ArtifactError
-from ..blocking import run_blocking
+from ..blocking import run_blocking, run_rendering
 from ..upload_limits import DOCUMENT_LIMIT_LABEL, DOCUMENT_MAX_BASE64_CHARS, DOCUMENT_MAX_BYTES
 from .contract import build_contract, pasted_paper_text
 from .delivery_store import DeliveryConflict, build_or_load, current_version, load_version
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["workbench"])
 
-_TERMINAL = {"done", "error", "cancelled"}
+_TERMINAL = {"done", "needs_review", "error", "cancelled"}
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
 
 
@@ -164,6 +164,9 @@ async def _stored_bundle(
     key = (run_id, active_version or delivery_fingerprint(detail))
     bundle = cache.get(key)
     if bundle is not None:
+        from .completion import synchronize_completion
+
+        await synchronize_completion(repo, run_id, settings)
         return bundle
     # 交付面板会同时请求登记表和预览文件；冷缓存时让并发请求共用同一次生成，
     # 而不是各自把 PDF / DOCX / PPTX 全部重排一遍。
@@ -179,7 +182,7 @@ async def _stored_bundle(
 
     async def generate() -> DeliveryBundle:
         try:
-            generated = await run_blocking(
+            generated = await run_rendering(
                 build_or_load,
                 detail,
                 settings.artifact_root,
@@ -189,6 +192,9 @@ async def _stored_bundle(
             if len(cache) >= 32:
                 cache.pop(next(iter(cache)))
             cache[key] = generated
+            from .completion import synchronize_completion
+
+            await synchronize_completion(repo, run_id, settings)
             return generated
         finally:
             pending.pop(key, None)
@@ -284,7 +290,11 @@ async def revise_content(
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     latest = await repo.get_run(run_id)
-    if latest is None or latest.status != "done" or source_version(latest) != body.source_version:
+    if (
+        latest is None
+        or latest.status not in {"done", "needs_review"}
+        or source_version(latest) != body.source_version
+    ):
         raise HTTPException(409, "原任务已变化，请刷新后再继续修订")
     result = await api_module._submit_prepared_run(
         request,
@@ -325,7 +335,7 @@ async def retry_deliverable(
     async def generate() -> DeliveryBundle:
         try:
             settings = request.app.state.settings
-            return await run_blocking(
+            generated = await run_rendering(
                 retry_delivery_format,
                 detail,
                 settings.artifact_root,
@@ -334,6 +344,13 @@ async def retry_deliverable(
                 body.format,
                 body.request_id,
             )
+            from .completion import synchronize_completion
+
+            if not await synchronize_completion(request.app.state.repo, run_id, settings):
+                raise DeliveryConflict(
+                    "delivery_state_changed", "交付版本已变化，请刷新后查看最新结果"
+                )
+            return generated
         finally:
             pending.pop(key, None)
 
@@ -449,7 +466,7 @@ async def get_reader(run_id: str, request: Request) -> dict[str, Any]:
         "status": detail.status,
         "documents": reader_documents(detail),
         "has_report": detail.report is not None,
-        "can_ask": detail.status == "done" and bool(paper_sources(detail)),
+        "can_ask": detail.status in {"done", "needs_review"} and bool(paper_sources(detail)),
     }
 
 

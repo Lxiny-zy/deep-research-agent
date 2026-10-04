@@ -253,7 +253,8 @@
   background: var(--danger);
 }
 
-.live-sync-state.disconnected i {
+.live-sync-state.disconnected i,
+.live-sync-state.needs_review i {
   background: var(--warning);
 }
 
@@ -662,6 +663,10 @@
   color: var(--danger);
 }
 
+.narrative-step.is-needs_review > .app-icon {
+  color: var(--warning);
+}
+
 .narrative-step strong {
   color: var(--text);
   display: block;
@@ -808,6 +813,11 @@
 .run-validation-note .app-icon {
   flex-shrink: 0;
   margin-top: 3px;
+}
+
+.run-validation-note.is-warning {
+  background: var(--warning-soft);
+  color: var(--warning-text);
 }
 
 /* 报告正文：阅读优先 */
@@ -2291,6 +2301,11 @@ details[open] > .run-collapsible-head > .app-icon {
 .runtime-status.cancelled {
   background: var(--danger-soft);
   color: var(--danger-text);
+}
+
+.runtime-status.needs_review {
+  background: var(--warning-soft);
+  color: var(--warning-text);
 }
 
 .runtime-header-progress {

@@ -30,6 +30,7 @@ from deep_research.workbench.templates import TASK_TEMPLATES, get_template
 from deep_research.workbench.writers import Mindmap
 from deep_research.worker import Worker
 from tests.fakes import FakeSearch, verified_finding
+from tests.queue_helpers import drain_inline
 from tests.test_workbench import WorkbenchLLM
 
 
@@ -52,6 +53,7 @@ async def scenario_app(monkeypatch, tmp_path, request):
         "catalog": None,
         "library": None,
         "executor": None,
+        "inline_worker": None,
         "live": {},
         "tasks": set(),
         "run_tasks": {},
@@ -191,14 +193,22 @@ async def test_task_creation_execution_result_and_all_promised_downloads(
         await asyncio.wait_for(worker._drain(), timeout=45)
         await repo.remove_worker(worker.name)
     else:
-        await asyncio.wait_for(asyncio.gather(*list(api.app.state.tasks)), timeout=45)
+        await drain_inline(api.app, timeout=45)
     detail = await repo.get_run(run_id)
-    assert detail.status == "done", detail.error
+    assert detail is not None
+    completion = detail.orchestration.checkpoint.get("scratch", {}).get("_completion")
+    assert isinstance(completion, dict), {
+        "status": detail.status,
+        "events": [
+            (event.type, event.message)
+            for event in await repo.get_events(run_id)
+            if event.stage == "ORCHESTRATOR"
+        ],
+    }
+    assert detail.status == completion["status"]
     assert detail.report is not None and detail.report.markdown.strip()
     assert detail.orchestration.workflow_name == template.workflow_for(strategy)
     assert bool(searches) is (strategy != "none")
-    response = await client.get(f"/api/runs/{run_id}")
-    assert response.status_code == 200 and response.json()["report"]["markdown"]
     events = await client.get(f"/api/runs/{run_id}/events")
     assert events.status_code == 200 and events.json()
     workspace = await client.get(f"/api/runs/{run_id}/workspace")
@@ -214,9 +224,39 @@ async def test_task_creation_execution_result_and_all_promised_downloads(
         "missing": promised - formats,
         "failed": [(g["name"], g["issues"]) for g in record["gates"] if g["status"] == "fail"],
     }
+    nonpassing_gates = [gate for gate in record["gates"] if gate["status"] != "pass"]
+    required_files = [item for item in record["items"] if item["format"] in promised]
+    requires_review = (
+        bool(nonpassing_gates or record["failures"])
+        or record["status"] != "pass"
+        or any(item["status"] != "pass" or item["size"] <= 0 for item in required_files)
+    )
+    expected_status = "needs_review" if requires_review else "done"
+    # The fixed external fixture intentionally supplies a short draft and one
+    # cited finding. Its quality warnings must stay visible, even though every
+    # promised file can be downloaded and opened successfully.
+    if key == "autoResearch":
+        assert {"length", "citation"} <= {gate["name"] for gate in nonpassing_gates}
+        assert expected_status == "needs_review"
+    response = await client.get(f"/api/runs/{run_id}")
+    assert response.status_code == 200, response.text
+    public = response.json()
+    assert public["report"]["markdown"]
+    current = await repo.get_run(run_id)
+    current_completion = current.orchestration.checkpoint["scratch"]["_completion"]
+    assert public["completion"] == current_completion
+    assert public["status"] == current.status == current_completion["status"] == expected_status
+    assert current_completion["required_formats"] == sorted(promised)
+    assert current_completion["content_version"] == record["content_version"]
+    assert current_completion["input_version"] == record["input_version"]
+    assert current_completion["gates"] == record["gates"]
+    assert bool(current_completion["issues"]) is requires_review
+    for gate in nonpassing_gates:
+        assert set(gate["issues"]) <= set(current_completion["issues"])
     for item in record["items"]:
         download = await client.get(f"/api/runs/{run_id}/deliverables/{item['name']}")
         assert download.status_code == 200, item
+        assert len(download.content) == item["size"] > 0
         assert hashlib.sha256(download.content).hexdigest() == item["sha256"]
         if item["format"] in {"xlsx", "pptx", "docx"}:
             with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
@@ -235,7 +275,7 @@ async def test_task_creation_execution_result_and_all_promised_downloads(
                 f"/api/qa/conversations/{cid}/messages/stream",
                 json={"query": question, "request_id": f"paper-question-{i}"},
             )
-            assert streamed.status_code == 200 and "event: complete" in streamed.text
+            assert streamed.status_code == 200 and "event: complete" in streamed.text, streamed.text
         history = (await client.get(f"/api/qa/conversations/{cid}")).json()["messages"]
         assert len(history) == 2 and all(
             m["citations"] and m["status"] == "done" and "发现X" in m["answer"] for m in history

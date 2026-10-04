@@ -42,7 +42,7 @@ _STAGE_PHASE = {
 class NarrativeSection:
     key: str
     title: str
-    status: str = "pending"  # pending | active | done | error
+    status: str = "pending"  # pending | active | done | needs_review | error
     lines: list[str] = field(default_factory=list)
     first_seq: int | None = None
     last_seq: int | None = None
@@ -62,7 +62,7 @@ class NarrativeSection:
 
 def _phase(event: Event) -> str | None:
     if event.stage == "ORCHESTRATOR":
-        if event.type in {"done", "error", "cancelled"}:
+        if event.type in {"done", "needs_review", "error", "cancelled"}:
             return "finish"
         if event.type == "round":
             return "reflect"
@@ -138,13 +138,23 @@ def build_narrative(events: list[Event], *, run_status: str = "running") -> dict
     if write.status != "pending" and not write.lines:
         write.lines.append("基于已核验证据撰写正文，并复核引用编号与数值")
     finish = sections["finish"]
-    terminal = {"done": "done", "error": "error", "cancelled": "error"}.get(run_status)
+    terminal = {
+        "done": "done",
+        "needs_review": "needs_review",
+        "error": "error",
+        "cancelled": "error",
+    }.get(run_status)
     if terminal:
         finish.status = terminal
+        if run_status == "needs_review":
+            finish.title = "待复核"
         finish.lines.append(
-            {"done": "研究完成，交付物已生成", "error": "运行未能完成", "cancelled": "运行已取消"}[
-                run_status
-            ]
+            {
+                "done": "研究完成，交付物已生成",
+                "needs_review": "运行已结束，报告或必需交付待复核",
+                "error": "运行未能完成",
+                "cancelled": "运行已取消",
+            }[run_status]
         )
     # 已被后续阶段越过的阶段视为完成；最后一个活跃阶段保持 active（运行中）
     ordered = [sections[key] for key, _ in _PHASES]
@@ -163,6 +173,7 @@ def build_narrative(events: list[Event], *, run_status: str = "running") -> dict
     headline = (
         {
             "done": "已完成：统计分析与图表已生成，交付物已登记",
+            "needs_review": "待复核：统计分析或必需交付尚未通过验收",
             "error": "运行已结束，未完全完成",
             "cancelled": "运行已结束，未完全完成",
         }.get(run_status, "进行中：正在执行统计分析")
@@ -178,6 +189,8 @@ def build_narrative(events: list[Event], *, run_status: str = "running") -> dict
 
 
 def _headline(counters: dict[str, int], run_status: str) -> str:
+    if run_status == "needs_review":
+        return "待复核：报告或必需交付尚未通过验收"
     if run_status == "done":
         return f"已完成：{counters['verified']} 条已核验证据支撑最终交付物"
     if run_status in {"error", "cancelled"}:

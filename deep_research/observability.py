@@ -31,6 +31,7 @@ EventType = Literal[
     "token",
     "report",
     "done",
+    "needs_review",
     "error",
     "cancelled",
 ]

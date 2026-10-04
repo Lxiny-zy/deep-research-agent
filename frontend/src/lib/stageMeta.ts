@@ -22,6 +22,7 @@ export const STAGE_META: Record<string, StageMeta> = {
   RESEARCHER: { label: '检索', color: INFO, icon: 'search-code' },
   REFLECTOR: { label: '反思', color: WARNING, icon: 'refresh' },
   SYNTHESIZER: { label: '综合', color: SUCCESS, icon: 'file' },
+  DELIVERY: { label: '交付', color: INFO, icon: 'file' },
   ORCHESTRATOR: { label: '编排', color: MUTED, icon: 'workflow' },
   COORDINATOR: { label: '协调', color: PRIMARY, icon: 'waypoints' },
 }

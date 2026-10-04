@@ -155,7 +155,11 @@ async def test_claims_are_ordered_by_enqueue_time(repo):
 @pytest.mark.asyncio
 async def test_enqueue_run_makes_an_existing_run_claimable(repo):
     """resume 在 worker 模式下把任务交还队列，而不是自己执行。"""
-    run_id, _ = await repo.create_run_once("resume me", request_hash="", execution=_execution())
+    run_id, _ = await repo.create_run_once(
+        "resume me",
+        request_hash="",
+        execution=_execution("resume me", checkpoint={"query": "resume me", "scratch": {}}),
+    )
     assert await repo.claim_next_run("worker-1") is None
 
     assert await repo.enqueue_run(run_id) is True
@@ -215,13 +219,12 @@ async def test_requeue_failed_run_is_atomic_and_claimable(repo):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_workers_never_double_claim():
+async def test_concurrent_workers_never_double_claim(tmp_path):
     """并发领取的核心断言：N 个 worker 抢 M 个任务，每个任务恰好派发一次。"""
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
-    )
+    # Independent sessions must use independent database connections. StaticPool
+    # shares one physical transaction and lets concurrent sessions commit or
+    # roll back each other's work instead of exercising database isolation.
+    engine = create_async_engine(f"sqlite+aiosqlite:///{(tmp_path / 'concurrent.db').as_posix()}")
     await create_all(engine)
     repo = SqlRepository(make_sessionmaker(engine))
     try:

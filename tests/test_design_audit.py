@@ -292,6 +292,7 @@ async def test_delivery_generation_survives_first_waiter_disconnect(settings, mo
         return bundle
 
     monkeypatch.setattr(workbench_api, "run_blocking", render)
+    monkeypatch.setattr(workbench_api, "run_rendering", render)
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(repo=SimpleNamespace(get_run=get_run), settings=settings)

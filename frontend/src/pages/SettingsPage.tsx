@@ -31,7 +31,7 @@ const NUM_FIELDS: NumField[] = [
   { key: 'max_concurrency', label: '并行检索上限', min: 1, max: 16 },
   { key: 'results_per_search', label: '每问检索来源数', min: 1, max: 15 },
   { key: 'fulltext_max_chars', label: '全文选读目标长度', min: 1_000, max: 200_000 },
-  { key: 'max_run_seconds', label: '整次运行期限（秒）', min: 1, max: 86400 },
+  { key: 'max_run_seconds', label: '每次尝试期限（秒，0 按任务档位）', min: 0, max: 86400 },
 ]
 
 interface FormState {

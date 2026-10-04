@@ -23,6 +23,7 @@ const RUN_STATUS_LABEL = {
   pending: '排队',
   running: '运行中',
   succeeded: '已完成',
+  needs_review: '待复核',
   failed: '失败',
   cancelled: '已取消',
 }
@@ -37,11 +38,13 @@ export default function OrchestrationPipeline({ execution, events = [], runStatu
       ? 'running'
       : runStatus === 'done'
         ? 'succeeded'
-        : runStatus === 'error'
-          ? 'failed'
-          : runStatus === 'cancelled'
-            ? 'cancelled'
-            : (execution?.status ?? runStatus)
+        : runStatus === 'needs_review'
+          ? 'needs_review'
+          : runStatus === 'error'
+            ? 'failed'
+            : runStatus === 'cancelled'
+              ? 'cancelled'
+              : (execution?.status ?? runStatus)
 
   return (
     <div className="orchestration-runtime">
@@ -85,7 +88,12 @@ export default function OrchestrationPipeline({ execution, events = [], runStatu
           <AppIcon name="arrow-right" size={16} />
         </span>
         <div className={`runtime-terminal output${runStatus === 'done' ? ' completed' : ''}`}>
-          <AppIcon name="check-circle" size={13} aria-hidden="true" /> 输出
+          <AppIcon
+            name={runStatus === 'needs_review' ? 'alert' : 'check-circle'}
+            size={13}
+            aria-hidden="true"
+          />
+          {runStatus === 'needs_review' ? '待复核' : '输出'}
         </div>
       </div>
     </div>

@@ -1,9 +1,10 @@
 import type { ResearchEvent } from '../types'
+import { isTerminalRunStatus } from './runStatus'
 
 /** Streaming payloads belong to the report/reasoning views, not the activity log. */
 export function isActivityEvent(event: ResearchEvent): boolean {
   // Failures and terminal events must remain visible even if they carry model data.
-  if (event.type === 'error' || event.type === 'done' || event.type === 'cancelled') return true
+  if (isTerminalRunStatus(event.type)) return true
   return (
     event.type !== 'token' &&
     event.type !== 'report' &&

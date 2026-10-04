@@ -22,9 +22,9 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from ..persistence.repository import RunDetail
 from .contract import contract_from_scratch
@@ -39,7 +39,14 @@ from .gates import (
     scholarly_gate,
     structure_gate,
 )
-from .templates import DEFAULT_TEMPLATE, TaskTemplate, get_template, template_for_workflow
+from .templates import (
+    DEFAULT_TEMPLATE,
+    DeliverableFormat,
+    SectionSpec,
+    TaskTemplate,
+    get_template,
+    template_for_workflow,
+)
 from .writers import WORKBENCH_SCRATCH_KEY
 
 logger = logging.getLogger(__name__)
@@ -138,7 +145,40 @@ def resolve_template(detail: RunDetail) -> TaskTemplate:
     if contract is not None:
         template = get_template(contract.template)
         if template is not None:
-            return template
+            # The task's promised sections and formats were frozen at creation.
+            # Keep current aliases for equivalent headings without introducing
+            # requirements added to the template while this task was running.
+            sections = []
+            for index, title in enumerate(contract.required_sections):
+                matched = next(
+                    (
+                        section
+                        for section in template.sections
+                        if title.strip().casefold()
+                        in {
+                            heading.strip().casefold()
+                            for heading in (section.title, *section.aliases)
+                        }
+                    ),
+                    None,
+                )
+                sections.append(
+                    replace(
+                        matched,
+                        title=title,
+                        aliases=tuple(dict.fromkeys((matched.title, *matched.aliases))),
+                        required=True,
+                    )
+                    if matched is not None
+                    else SectionSpec(key=f"contract-{index}", title=title, guidance="")
+                )
+            return replace(
+                template,
+                sections=tuple(sections) if contract.required_sections else template.sections,
+                deliverables=cast("tuple[DeliverableFormat, ...]", tuple(contract.deliverables))
+                if contract.deliverables
+                else template.deliverables,
+            )
     workbench = scratch.get(WORKBENCH_SCRATCH_KEY)
     if isinstance(workbench, dict):
         template = get_template(str(workbench.get("template", "")))
@@ -182,19 +222,39 @@ def _insert_analysis_figures(markdown: str, figure_md: str) -> str:
     return markdown if "![" in markdown else markdown + "\n\n## 图表\n\n" + figure_md + "\n"
 
 
+_DELIVERY_RUNTIME_KEYS = frozenset(
+    {
+        "_completion",
+        "_runtime_metrics",
+        "_deadline_at",
+        "_task_deadline_at",
+        "_attempt_elapsed_origin",
+        "_recovery",
+        "_orchestration_run",
+        "_committed_research_progress",
+    }
+)
+
+
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 47,
+        "format_version": 49,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,
         "results": [result.model_dump(mode="json") for result in detail.results],
         "workflow": detail.orchestration.workflow_name if detail.orchestration else None,
-        "scratch": _scratch(detail),
+        # Exact operational keys only: evidence, quality policy, frozen settings,
+        # source material and unknown future content fields remain cache inputs.
+        "scratch": {
+            key: value
+            for key, value in _scratch(detail).items()
+            if key not in _DELIVERY_RUNTIME_KEYS
+        },
         "sources": [source.model_dump(mode="json") for source in detail.sources],
     }
     return hashlib.sha256(

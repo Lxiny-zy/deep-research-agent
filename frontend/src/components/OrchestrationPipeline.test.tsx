@@ -73,6 +73,7 @@ describe('OrchestrationPipeline resume state', () => {
   it.each([
     ['done', 'succeeded'],
     ['error', 'failed'],
+    ['needs_review', 'needs_review'],
   ] as const)(
     'shows the research %s state over a stale running workflow snapshot',
     (runStatus, expectedClass) => {

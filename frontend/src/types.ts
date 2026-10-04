@@ -15,10 +15,12 @@ export type EventType =
   | 'token'
   | 'report'
   | 'done'
+  | 'needs_review'
   | 'error'
   | 'cancelled'
 
-export type RunStatus = 'pending' | 'running' | 'cancelling' | 'cancelled' | 'done' | 'error'
+export type TerminalRunStatus = 'cancelled' | 'done' | 'error' | 'needs_review'
+export type RunStatus = 'pending' | 'running' | 'cancelling' | TerminalRunStatus
 
 export interface ResearchEvent {
   seq?: number | null
@@ -401,7 +403,17 @@ export interface IntentDecision {
   execution_policy?: IntentExecutionPolicy | null
 }
 
+export interface RunCompletion {
+  status: 'done' | 'needs_review'
+  issues: string[]
+  input_version?: string
+  content_version?: string
+  required_formats?: string[]
+  gates?: GateResult[]
+}
+
 export interface RunDetail extends RunSummary {
+  completion?: RunCompletion | null
   project_id?: string | null
   interpretation: string
   sub_questions: SubQuestion[]
@@ -1026,7 +1038,7 @@ export interface RunReader {
 export interface NarrativeSection {
   key: string
   title: string
-  status: 'pending' | 'active' | 'done' | 'error'
+  status: 'pending' | 'active' | 'done' | 'needs_review' | 'error'
   lines: string[]
   first_seq: number | null
   last_seq: number | null

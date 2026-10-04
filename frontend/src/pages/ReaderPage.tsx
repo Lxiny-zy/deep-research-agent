@@ -87,7 +87,8 @@ export default function ReaderPage() {
     documents[0]
   const projectList = projects.data ?? []
   const libraryReady = !withLibrary || Boolean(projectId)
-  const canAsk = reader.data?.status === 'done' && reader.data.can_ask !== false
+  const paperReady = reader.data?.status === 'done' || reader.data?.status === 'needs_review'
+  const canAsk = paperReady && reader.data?.can_ask !== false
 
   const ask = useMutation({
     mutationFn: async (text: string) => {
@@ -186,7 +187,10 @@ export default function ReaderPage() {
     const target = documentForEvidence(evidence.source_url, documents) ?? current
     if (target) setDocumentId(target.id)
     setPane('pdf')
-    setHighlight({ quote: evidence.evidence_quote, token: Date.now() })
+    setHighlight((previous) => ({
+      quote: evidence.evidence_quote,
+      token: (previous?.token ?? 0) + 1,
+    }))
   }
 
   if (reader.isError) {
@@ -329,7 +333,7 @@ export default function ReaderPage() {
               <span className="hint">
                 {running
                   ? '论文正在导入，完成后可提问'
-                  : reader.data?.status === 'done'
+                  : paperReady
                     ? '没有可用的论文原文材料，暂时不可提问'
                     : '论文导入未完成，暂时不可提问'}
               </span>

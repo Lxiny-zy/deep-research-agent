@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { streamRun } from '../api/client'
 import { appendResearchEvent } from '../lib/researchEvents'
-import type { DagData, Report, ResearchEvent, RunStats } from '../types'
+import { isTerminalRunStatus } from '../lib/runStatus'
+import type { DagData, Report, ResearchEvent, RunStats, TerminalRunStatus } from '../types'
 
 // disconnected：连接中断但运行未到终态——由 RunPage 的详情轮询接管兜底
-export type StreamStatus = 'idle' | 'streaming' | 'disconnected' | 'done' | 'error' | 'cancelled'
+export type StreamStatus = 'idle' | 'streaming' | 'disconnected' | TerminalRunStatus
 
 export interface ResearchStreamState {
   events: ResearchEvent[] // 活动及按调用合并的思考内容，分别交给对应视图
@@ -30,20 +31,17 @@ const INITIAL: ResearchStreamState = {
   findings: 0,
 }
 
-// 只有 ORCHESTRATOR 的 done/error 才是运行终态；
+// 只有 ORCHESTRATOR 的终态事件才结束运行；
 // RESEARCHER 等阶段的 error 是被隔离的单点失败，运行仍在继续。
 export function isTerminal(ev: ResearchEvent): boolean {
-  return (
-    ev.stage === 'ORCHESTRATOR' &&
-    (ev.type === 'done' || ev.type === 'error' || ev.type === 'cancelled')
-  )
+  return ev.stage === 'ORCHESTRATOR' && isTerminalRunStatus(ev.type)
 }
 
 // 纯归并函数：把一个 SSE 事件并入当前状态（便于单测）。
 export function reduceStream(prev: ResearchStreamState, ev: ResearchEvent): ResearchStreamState {
   // A replay buffer can contain events after the orchestrator terminal event.
   // Once terminal, never let stale trailing events overwrite the final state.
-  if (prev.status === 'done' || prev.status === 'error' || prev.status === 'cancelled') {
+  if (isTerminalRunStatus(prev.status)) {
     return prev
   }
   // 直播统计：耗时取已见最大值（单调），token 取事件携带的累计值（缺省沿用旧值）。
@@ -73,12 +71,13 @@ export function reduceStream(prev: ResearchStreamState, ev: ResearchEvent): Rese
       return { ...base, findings: base.findings + count, events }
     }
     case 'done':
+    case 'needs_review':
       if (!isTerminal(ev)) {
         return { ...base, events }
       }
       return {
         ...base,
-        status: 'done',
+        status: ev.type,
         stats: (ev.data as unknown as RunStats | null) ?? base.stats,
         events,
       }

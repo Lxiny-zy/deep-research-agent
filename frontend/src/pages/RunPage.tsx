@@ -26,6 +26,7 @@ import { appendTurn, turnFromRun } from '../lib/conversation'
 import { countBlockedSources, flattenFindings, reportEvidenceToFindings } from '../lib/evidence'
 import { displayReportTitle } from '../lib/reportTitle'
 import { deriveResearchProgress } from '../lib/runProgress'
+import { isTerminalRunStatus } from '../lib/runStatus'
 import { finalProseReview } from '../lib/workbench'
 import type { ReportDocument, RunDetail, RunStatus } from '../types'
 
@@ -104,7 +105,7 @@ export default function RunPage() {
   const detail = useRunDetail(id, {
     refetchInterval: (q) => {
       const s = q.state.data?.status
-      const finished = s === 'done' || s === 'error' || s === 'cancelled'
+      const finished = isTerminalRunStatus(s)
       // 等恢复生效期间要继续轮询，哪怕 DB 状态本身已是终态——那个终态正是
       // 我们在等着被新一次尝试覆盖的旧值。
       const waiting = resumePending(resumeBaseline, s, q.state.data?.orchestration?.attempt)
@@ -113,7 +114,7 @@ export default function RunPage() {
   })
 
   const dbStatus = detail.data?.status
-  const persistedTerminal = dbStatus === 'done' || dbStatus === 'error' || dbStatus === 'cancelled'
+  const persistedTerminal = isTerminalRunStatus(dbStatus)
   const resuming = resumePending(resumeBaseline, dbStatus, detail.data?.orchestration?.attempt)
   // A resume starts a new attempt while the cached detail still contains the
   // previous error. Treat that snapshot as stale until the server reports the
@@ -143,21 +144,16 @@ export default function RunPage() {
   const workspace = useWorkspace(id, !dbFinished)
 
   useEffect(() => {
-    if (stream.status !== 'done' && stream.status !== 'error' && stream.status !== 'cancelled')
-      return
+    if (!isTerminalRunStatus(stream.status)) return
     void refetchDetail()
   }, [refetchDetail, stream.status])
 
   const query = displayReportTitle(detail.data?.query ?? '')
   const status: RunStatus = dbFinished
     ? (dbStatus as RunStatus)
-    : stream.status === 'done'
-      ? 'done'
-      : stream.status === 'error'
-        ? 'error'
-        : stream.status === 'cancelled'
-          ? 'cancelled'
-          : (detail.data?.status ?? 'running')
+    : isTerminalRunStatus(stream.status)
+      ? stream.status
+      : (detail.data?.status ?? 'running')
   // Once the stream has ended, any persisted report is the authoritative complete copy.
   const documentMarkdown = useMemo(
     () =>
@@ -174,25 +170,14 @@ export default function RunPage() {
   const persistedMarkdown = detail.data?.report?.markdown || ''
   const preferPersistedReport =
     Boolean(documentMarkdown || persistedMarkdown) &&
-    (dbFinished ||
-      stream.status === 'disconnected' ||
-      stream.status === 'done' ||
-      stream.status === 'error' ||
-      stream.status === 'cancelled')
+    (dbFinished || stream.status === 'disconnected' || isTerminalRunStatus(stream.status))
   const markdown = preferPersistedReport
     ? documentMarkdown || persistedMarkdown
     : stream.reportMarkdown || persistedMarkdown
   const streaming = stream.status === 'streaming' && !dbFinished
   const liveActive =
     (stream.status === 'streaming' || stream.status === 'disconnected') && !dbFinished
-  const connectionStatus =
-    status === 'done'
-      ? 'done'
-      : status === 'error'
-        ? 'error'
-        : status === 'cancelled'
-          ? 'cancelled'
-          : stream.status
+  const connectionStatus = isTerminalRunStatus(status) ? status : stream.status
   const progress = deriveResearchProgress({
     execution: detail.data?.orchestration,
     events: stream.events,
@@ -276,6 +261,17 @@ export default function RunPage() {
         total: deliverables.data.gates.length,
       }
     : null
+  const reviewIssues = useMemo(() => {
+    const streamedCompletion = [...stream.events]
+      .reverse()
+      .find((event) => event.stage === 'ORCHESTRATOR' && event.type === 'needs_review')
+      ?.data?.completion
+    const completion = (dbFinished ? detail.data?.completion : null) ?? streamedCompletion
+    if (!completion || typeof completion !== 'object' || !('issues' in completion)) return []
+    return Array.isArray(completion.issues)
+      ? completion.issues.filter((issue): issue is string => typeof issue === 'string')
+      : []
+  }, [dbFinished, detail.data?.completion, stream.events])
   const createdAt = detail.data?.created_at
     ? new Date(detail.data.created_at).toLocaleString('zh-CN', { hour12: false })
     : ''
@@ -378,6 +374,22 @@ export default function RunPage() {
           )}
         </div>
       </header>
+
+      {status === 'needs_review' && (
+        <div className="run-validation-note is-warning" role="status">
+          <AppIcon name="alert" size={16} aria-hidden="true" />
+          <div>
+            <p>报告或交付尚未通过验收。请查看交付物中的问题，继续修订内容或重新生成失败的格式。</p>
+            {reviewIssues.length > 0 && (
+              <ul aria-label="待复核问题">
+                {reviewIssues.map((issue, index) => (
+                  <li key={index}>{issue}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
 
       <StatsBar
         stats={stream.stats}

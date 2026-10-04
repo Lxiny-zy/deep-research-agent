@@ -18,7 +18,9 @@ from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -44,6 +46,23 @@ class Base(DeclarativeBase):
 class CoordinationRow(Base):
     __tablename__ = "coordination"
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class SchedulerStateRow(Base):
+    __tablename__ = "scheduler_state"
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
+    cursor: Mapped[str] = mapped_column(String(80), default="", server_default="")
+    round_no: Mapped[int] = mapped_column(BigInteger, default=1, server_default="1")
+
+
+class SchedulerIdentityRow(Base):
+    __tablename__ = "scheduler_identity"
+    __table_args__ = (
+        CheckConstraint("deficit >= 0 AND deficit <= 8", name="ck_scheduler_identity_deficit"),
+    )
+    identity_key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    deficit: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_round: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
 
 
 class ProviderStateRow(Base):
@@ -193,6 +212,14 @@ class ResearchRun(Base):
     __table_args__ = (
         Index("uq_research_run_idempotency_key", "idempotency_key", unique=True),
         Index("ix_research_run_claimable", "status", "claimable_at"),
+        Index("ix_research_run_schedule_identity", "owner_id", "status", "claimable_at"),
+        CheckConstraint("schedule_cost BETWEEN 1 AND 8", name="ck_research_run_schedule_cost"),
+        CheckConstraint(
+            "schedule_class IN ('light', 'heavy')", name="ck_research_run_schedule_class"
+        ),
+        CheckConstraint(
+            "schedule_priority BETWEEN 0 AND 2", name="ck_research_run_schedule_priority"
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -214,6 +241,9 @@ class ResearchRun(Base):
     # 被 worker 领取的累计次数。超过 max_claim_attempts 判定为毒任务并置 error，
     # 避免必然崩溃的任务在 worker 之间无限传递。
     claim_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    schedule_cost: Mapped[int] = mapped_column(Integer, default=4, server_default="4")
+    schedule_class: Mapped[str] = mapped_column(String(8), default="heavy", server_default="heavy")
+    schedule_priority: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

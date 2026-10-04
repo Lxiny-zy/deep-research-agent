@@ -59,6 +59,26 @@ describe('HistoryPage result rows', () => {
     expect(container.querySelector('time[datetime="2026-09-07T03:04:05Z"]')).not.toBeNull()
   })
 
+  it('shows review-required runs with a warning badge and a dedicated status filter', () => {
+    mocks.useRunsList.mockReturnValue({
+      data: [{ ...RUN, status: 'needs_review' }],
+      isLoading: false,
+      isError: false,
+    })
+    const { container } = render(
+      <MemoryRouter>
+        <HistoryPage />
+      </MemoryRouter>,
+    )
+    expect(container.querySelector('.history-run-row .badge')).toHaveClass('warning')
+    expect(container.querySelector('.history-run-row .badge')).toHaveTextContent('待复核')
+    expect(container.querySelector('.history-run-row')).not.toHaveTextContent('已完成')
+    fireEvent.change(screen.getByLabelText('状态筛选'), { target: { value: 'needs_review' } })
+    expect(mocks.useRunsList).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'needs_review' }),
+    )
+  })
+
   it('opens the run when the row itself is clicked, but not when the checkbox is toggled', () => {
     const { container } = render(
       <MemoryRouter initialEntries={['/history']}>

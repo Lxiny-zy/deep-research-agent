@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -32,11 +31,12 @@ from .blocking import run_blocking
 from .checkpoints import RUN_SETTINGS_KEY as RUN_SETTINGS_CHECKPOINT_KEY
 from .checkpoints import SCHEMA_VERSION, SETTING_FIELDS
 from .config import Settings
+from .execution_policy import resolved_settings, transient_failure
 from .llm import LLM
 from .models import Finding, Report, ResearchResult, SubQuestion
 from .observability import Event, Tracer
 from .orchestration import OrchestrationRuntime, WorkflowRun
-from .persistence.repository import LeaseLostError, ResearchRepository
+from .persistence.repository import LeaseLostError, ResearchRepository, RunDetail
 from .planner_runtime import (
     ARTIFACT_MANIFEST_SCRATCH_KEY,
     ARTIFACT_SLUG_SCRATCH_KEY,
@@ -173,13 +173,13 @@ def create_initial_execution(
     execution_plan: Any | None = None,
 ) -> WorkflowRun:
     """Create the durable, leased checkpoint used before a background task starts."""
+    settings = resolved_settings(settings, workflow_name)
     runtime = OrchestrationRuntime()
     execution = runtime.start(workflow_name or "deep", {"query": query})
     scratch: dict[str, Any] = {
         RUN_SETTINGS_CHECKPOINT_KEY: checkpoint_settings(settings),
         "_schema_version": SCHEMA_VERSION,
         "_artifact_run_scoped": True,
-        "_deadline_at": time.time() + settings.max_run_seconds,
     }
     # Preserve the user's explicit choice across queue admission and worker
     # recovery.  ``workflow_name`` may instead be an intent-derived route,
@@ -282,6 +282,8 @@ def _default_search_tool(settings: Settings) -> SearchTool:
 
 
 class DeepResearchAgent:
+    managed_recovery = False
+
     def __init__(
         self,
         settings: Settings,
@@ -347,6 +349,7 @@ class DeepResearchAgent:
         # 运行期延迟加载（需 await），收尾时关闭其 LLM 池
         self._catalog_runtime: CatalogRuntime | None = None
         self._run_started = False
+        self._completion_detail: RunDetail | None = None
         self._event_flush_lock = asyncio.Lock()
 
         # Validate only dependencies constructed here. A catalog default model
@@ -507,6 +510,21 @@ class DeepResearchAgent:
 
             self.tracer.emit("ORCHESTRATOR", "report", "报告生成完成", data=report.model_dump())
 
+            from .workbench.completion import prepare_completion, promised_formats
+
+            detail = (
+                await self.repo.get_run(run_id)
+                if self.repo is not None and run_id is not None
+                else self._completion_detail
+            )
+            completion = None
+            if detail is not None and promised_formats(detail) is not None:
+                self.tracer.emit("DELIVERY", "info", "正在生成并检查任务承诺的交付文件…")
+                completion = await prepare_completion(detail, self.settings)
+            terminal = (
+                "needs_review" if completion and completion["status"] == "needs_review" else "done"
+            )
+
             # 先落库再发 done：客户端收到 done 后立刻读详情，必须能读到完整数据
             if self.repo is not None and run_id is not None:
                 await self.repo.finalize(
@@ -514,22 +532,36 @@ class DeepResearchAgent:
                     elapsed=self.tracer.elapsed,
                     total_tokens=self.tracer.total_tokens,
                     lease_owner=self._lease_owner,
+                    **({"completion": completion} if completion is not None else {}),
                 )
+                if await self.repo.get_run_status(run_id) != terminal:
+                    # Cancellation/another terminal decision won the race.
+                    return report
             self.tracer.emit(
                 "ORCHESTRATOR",
-                "done",
-                f"完成 ｜ 用时 {self.tracer.elapsed:.1f}s ｜ token {self.tracer.total_tokens}",
+                "needs_review" if terminal == "needs_review" else "done",
+                "报告与交付仍有未通过的检查，已保留结果供复核与修订"
+                if terminal == "needs_review"
+                else f"完成 ｜ 用时 {self.tracer.elapsed:.1f}s ｜ token {self.tracer.total_tokens}",
                 data={
                     "elapsed": round(self.tracer.elapsed, 1),
                     "total_tokens": self.tracer.total_tokens,
                     "tokens_estimated": self.tracer.tokens_estimated,
                     "sources": len(report.citations),
+                    **({"status": terminal, "completion": completion} if completion else {}),
                 },
             )
             return report
         except Exception as e:
-            self.tracer.emit("ORCHESTRATOR", "error", f"运行失败：{e}")
-            if self.repo is not None and run_id is not None:
+            recovering = self.managed_recovery and (
+                transient_failure(e) or isinstance(e, LeaseLostError)
+            )
+            self.tracer.emit(
+                "ORCHESTRATOR",
+                "info" if recovering else "error",
+                "本次尝试中断，正在检查恢复条件" if recovering else f"运行失败：{e}",
+            )
+            if not recovering and self.repo is not None and run_id is not None:
                 try:
                     await self.repo.set_status(run_id, "error", lease_owner=self._lease_owner)
                 except LeaseLostError:
@@ -1072,6 +1104,7 @@ class DeepResearchAgent:
             initial_run=self._initial_execution,
             require_report=True,
             terminal_roles=runtime_terminal_roles,
+            recover_transient=self.managed_recovery,
         )
         if wf.nodes:
             errors = validate_workflow_graph_terminal(
@@ -1232,6 +1265,14 @@ class DeepResearchAgent:
                     await save_checkpoint(engine.runtime.run)
         report = bb.report
         assert report is not None
+        self._completion_detail = RunDetail(
+            id=run_id or self._run_id or uuid4().hex,
+            query=bb.query,
+            status="running",
+            report=report,
+            results=bb.results,
+            orchestration=engine.runtime.run,
+        )
         if self.repo is not None and run_id is not None:
             if engine.runtime.run is not None:
                 await self.repo.save_orchestration(
@@ -1271,7 +1312,11 @@ class DeepResearchAgent:
                 yield event
                 # 只有 ORCHESTRATOR 的 done/error 才是运行终态；
                 # RESEARCHER 等阶段的 error 是被隔离的单点失败，运行仍在继续
-                if event.stage == "ORCHESTRATOR" and event.type in ("done", "error"):
+                if event.stage == "ORCHESTRATOR" and event.type in (
+                    "done",
+                    "needs_review",
+                    "error",
+                ):
                     finished = True
                     break
         finally:

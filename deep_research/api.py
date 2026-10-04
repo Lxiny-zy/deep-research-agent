@@ -47,7 +47,7 @@ from .agents.intent_router import (
     INTENT_SUB_QUESTION_KEY,
 )
 from .artifact_lifecycle import cleanup_artifacts
-from .blocking import run_blocking
+from .blocking import run_blocking, run_rendering
 from .catalog.repository import CatalogRepository
 from .config import Settings
 from .config_service import ConfigConflictError, ConfigStore, effective_settings
@@ -65,8 +65,12 @@ from .http.admission import (
     RunAdmission,
     RunAdmissionLease,
     RunAdmissionLimit,  # noqa: F401  经 api 命名空间再导出，保持既有调用方与测试不变
-    _acquire_run_slot,
-    _run_admission,
+)
+from .http.admission import (
+    _acquire_run_slot as _acquire_run_slot,  # compatibility helpers; HTTP admission is durable
+)
+from .http.admission import (
+    _run_admission as _run_admission,
 )
 from .http.auth import principal_for, require_api_key
 from .http.sse import (
@@ -187,7 +191,7 @@ class ResearchParams(BaseModel):
     max_concurrency: int | None = Field(default=None, ge=1, le=16)
     results_per_search: int | None = Field(default=None, ge=1, le=15)
     require_corroboration: bool | None = None
-    max_run_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    max_run_seconds: int | None = Field(default=None, ge=0, le=86_400)
 
 
 class DatasetSource(BaseModel):
@@ -351,7 +355,7 @@ class ConfigUpdate(BaseModel):
     fulltext_max_chars: int | None = Field(default=None, ge=1, le=200_000)
     require_corroboration: bool | None = None
     request_timeout: float | None = Field(default=None, gt=0, le=600)
-    max_run_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    max_run_seconds: int | None = Field(default=None, ge=0, le=86_400)
     # 交付质量策略的部分字段：与当前值合并，未给出的字段保持不变
     quality: dict[str, Any] | None = None
     version: int | None = Field(default=None, ge=0)
@@ -549,7 +553,10 @@ def _track_run_task(
         cancellation_requested = run_id in requested_cancellations
         if cancellation_requested:
             requested_cancellations.discard(run_id)
-        if done.cancelled():
+        if done.cancelled() and (tracked_hub is None or live.get(run_id) is tracked_hub):
+            # RunExecutor closes its own exact hub after cleanup. A cancelled
+            # task whose hub is gone already entered that cleanup; preserve its
+            # lease TTL on shutdown rather than running the pre-start fallback.
             cleanup_coro = _settle_prestart_cancellation(app, run_id, lease_owner, tracked_hub)
             try:
                 cleanup = done.get_loop().create_task(cleanup_coro)
@@ -746,157 +753,11 @@ async def _shared_rate_limit(request: Request, action: str, limiter: _RateLimite
 
 
 async def _recover_orphaned_runs(app: FastAPI, settings: Settings) -> None:
-    """Start recoverable runs whose lease is absent or has expired.
-
-    The lease check remains the final cross-instance arbiter; the repeated scan
-    only closes the gap where a crashed worker's TTL expires after startup.
-    """
-    # Finish cancellation requests left behind by a crashed owner.  An active
-    # owner keeps its lease and will observe the state in its monitor loop.
-    cancelling_summaries: list[RunSummary] = []
-    offset = 0
-    while True:
-        page = await app.state.repo.list_runs(
-            status="cancelling", limit=_RECOVERY_PAGE_SIZE, offset=offset
-        )
-        cancelling_summaries.extend(page)
-        if len(page) < _RECOVERY_PAGE_SIZE:
-            break
-        offset += len(page)
-    for summary in cancelling_summaries:
-        owner: str | None = None
-        settled = False
-        live: dict[str, EventHub] = getattr(app.state, "live", {})
-        stale_hub = live.get(summary.id)
-        try:
-            detail = await app.state.repo.get_run(summary.id)
-            if detail is None:
-                continue
-            if detail.orchestration is not None:
-                candidate = uuid4().hex
-                if not await app.state.repo.acquire_lease(summary.id, candidate):
-                    continue
-                owner = candidate
-            event = Event(
-                stage="ORCHESTRATOR",
-                type="cancelled",
-                message="运行已取消",
-                data={"status": "cancelled", "recovered": True},
-            )
-            await app.state.repo.append_events(summary.id, [event], lease_owner=owner)
-            await app.state.repo.set_status(summary.id, "cancelled", lease_owner=owner)
-            settled = True
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("failed to recover cancelling run %s", summary.id)
-        finally:
-            if owner is not None:
-                try:
-                    await app.state.repo.release_lease(summary.id, owner)
-                except Exception:
-                    logger.exception("failed to release cancellation lease for %s", summary.id)
-            if settled and stale_hub is not None:
-                _close_live_hub(app, summary.id, stale_hub)
-
-    if settings.execution_mode == "worker":
-        # 执行归 worker：孤儿任务由领取循环接管（租约过期即可被领走），API 若在这里
-        # 抢着执行就等于两种拓扑同时生效。取消结算仍留在上面——那不需要执行能力。
-        return
-
-    orphaned: list[RunSummary] = []
-    for status in ("pending", "running"):
-        offset = 0
-        while True:
-            page = await app.state.repo.list_runs(
-                status=status, limit=_RECOVERY_PAGE_SIZE, offset=offset
-            )
-            orphaned.extend(page)
-            if len(page) < _RECOVERY_PAGE_SIZE:
-                break
-            offset += len(page)
-    for summary in orphaned:
-        lease_owner: str | None = None
-        admission: RunAdmissionLease | None = None
-        handed_off = False
-        live_created = False
-        try:
-            if summary.id in app.state.live:
-                continue
-            detail = await app.state.repo.get_run(summary.id)
-            execution = detail.orchestration if detail is not None else None
-            if detail is None or execution is None:
-                # A legacy worker can create the root row before its workflow
-                # checkpoint. Without a durable lease there is no safe way to
-                # distinguish that startup window from an orphan, so leave it
-                # pending for the next recovery scan instead of overwriting a
-                # live worker's state.
-                continue
-            lease_owner = uuid4().hex
-            if not await app.state.repo.acquire_lease(summary.id, lease_owner):
-                lease_owner = None
-                continue
-
-            # The initial read only identifies a candidate. Always reload after
-            # fencing so a just-expired worker cannot be resumed from a stale
-            # checkpoint (or restart a run that completed in the meantime).
-            detail = await app.state.repo.get_run(summary.id)
-            execution = detail.orchestration if detail is not None else None
-            if detail is None or execution is None:
-                continue
-            if detail.status not in {"pending", "running"}:
-                continue
-            if not execution.checkpoint:
-                try:
-                    await app.state.repo.set_status(summary.id, "error", lease_owner=lease_owner)
-                finally:
-                    await app.state.repo.release_lease(summary.id, lease_owner)
-                    lease_owner = None
-                continue
-
-            admission = _run_admission(app).try_acquire()
-            if admission is None:
-                # Leave the fenced run recoverable; the next periodic scan
-                # will pick it up after an active slot is released.
-                continue
-
-            execution.attempt = await app.state.repo.prepare_resume(
-                summary.id, lease_owner=lease_owner
-            )
-            app.state.live[summary.id] = EventHub()
-            live_created = True
-            resume_settings = _settings_for_resume(settings, execution)
-            execution_coro = _execute_with_admission(
-                admission,
-                app,
-                summary.id,
-                detail.query,
-                resume_settings,
-                execution.workflow_name,
-                execution,
-                lease_owner,
-            )
-            try:
-                task = asyncio.create_task(execution_coro)
-            except BaseException:
-                execution_coro.close()
-                raise
-            handed_off = True
-            _track_run_task(app, summary.id, task, lease_owner=lease_owner, admission=admission)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("failed to recover orphaned run %s", summary.id)
-        finally:
-            if not handed_off and lease_owner is not None:
-                if admission is not None:
-                    admission.release()
-                if live_created:
-                    _close_live_hub(app, summary.id)
-                try:
-                    await app.state.repo.release_lease(summary.id, lease_owner)
-                except Exception:
-                    logger.exception("failed to release recovery lease for %s", summary.id)
+    """Wake the durable consumer; recovery must never bypass fair admission."""
+    consumer = getattr(app.state, "inline_worker", None)
+    if consumer is not None:
+        consumer.settings = settings
+        consumer.wake()
 
 
 async def _recovery_loop(app: FastAPI) -> None:
@@ -925,6 +786,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _validate_runtime_provider_url(settings)
     engine = make_engine(settings.database_url)
     recovery_task: asyncio.Task[None] | None = None
+    inline_task: asyncio.Task[None] | None = None
+    inline_worker = None
     try:
         # SQLite 本地启动也准备 schema，避免旧 create_all 库升级后缺列；
         # PostgreSQL 由 entrypoint 迁移。
@@ -963,13 +826,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.cancellation_requested = set()  # 本实例主动取消、供 pre-start 收尾识别
         app.state.run_admission = RunAdmission(settings.max_active_runs, settings.max_queued_runs)
         app.state.config_lock = asyncio.Lock()
-        # 自动恢复上次进程中断且已有 checkpoint 的任务；无 checkpoint 的孤儿任务置 error。
-        try:
-            await _recover_orphaned_runs(app, settings)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("启动恢复未完成任务失败（不阻塞启动）")
+        app.state.inline_worker = None
+        app.state.inline_worker_task = None
+        if not _worker_mode(app):
+            inline_worker = _make_inline_worker(app, settings)
+            inline_coro = inline_worker.run_forever()
+            try:
+                inline_task = asyncio.create_task(inline_coro, name="inline-queue-consumer")
+            except BaseException:
+                inline_coro.close()
+                raise
+            app.state.inline_worker_task = inline_task
         recovery_coro = _recovery_loop(app)
         try:
             recovery_task = asyncio.create_task(recovery_coro)
@@ -985,17 +852,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         qa_dispatcher.add_done_callback(app.state.tasks.discard)
         yield
     finally:
+        if inline_worker is not None:
+            inline_worker.request_stop(reason="api_shutdown")
         # Stop the producer of background work first. Otherwise a recovery
         # scan can hand off a new execution after the task snapshot below.
         if recovery_task is not None:
             recovery_task.cancel()
             await asyncio.gather(recovery_task, return_exceptions=True)
+        if inline_task is not None:
+            await asyncio.gather(inline_task, return_exceptions=True)
+        # A worker's bounded drain may leave an uncooperative cleanup pending.
+        # Do not reintroduce an unbounded gather after that deadline; the process
+        # supervisor enforces the API process's final shutdown limit.
+        unfinished = set(inline_worker._running) if inline_worker is not None else set()
+        if inline_worker is not None and inline_worker.requires_hard_exit:
+            logger.error(
+                "inline consumer cleanup exceeded its deadline; supervisor shutdown required"
+            )
         # 再取消并回收后台研究任务，最后释放引擎——避免任务在 dispose 后继续发 SQL
         cleanup_tasks: set[asyncio.Task[None]] = getattr(app.state, "cleanup_tasks", set())
         tasks = [
             task
             for task in getattr(app.state, "tasks", set())
-            if task is not recovery_task and task not in cleanup_tasks
+            if task is not recovery_task and task not in cleanup_tasks and task not in unfinished
         ]
         for task in tasks:
             task.cancel()
@@ -1129,11 +1008,7 @@ async def _enqueue_run(
     *,
     request_hash: str | None = None,
 ) -> CreateRunResponse:
-    """在 worker 模式下持久化一个待领取的 run。
-
-    与 inline 路径的唯一区别是不带 ``lease_owner``：租约必须由**实际执行**该 run
-    的 worker 持有，API 提前占住只会让 worker 在租约到期前都领不走。
-    """
+    """Persist an unleased run for either the embedded or external queue consumer."""
     try:
         run_id, created = await repo.create_run_once(
             req.query,
@@ -1181,6 +1056,56 @@ def _executor(app: FastAPI) -> RunExecutor:
         executor.ctx.library = getattr(app.state, "library", None)
         executor.ctx.live = app.state.live
     return executor
+
+
+def _make_inline_worker(app: FastAPI, settings: Settings | None = None):  # type: ignore[no-untyped-def]
+    """Use exactly the external worker's durable claim protocol inside the API."""
+    from .persistence.repository import ClaimedRun
+    from .worker import Worker
+
+    tracked_hubs: dict[asyncio.Task[None], EventHub] = {}
+
+    async def execute(*args: Any, **kwargs: Any) -> None:
+        await _execute(app, *args, **kwargs)
+
+    def started(claimed: ClaimedRun, task: asyncio.Task[None]) -> None:
+        if not hasattr(app.state, "tasks"):
+            app.state.tasks = set()
+        if not hasattr(app.state, "run_tasks"):
+            app.state.run_tasks = {}
+        app.state.tasks.add(task)
+        app.state.run_tasks[claimed.run_id] = task
+        hub = app.state.live.setdefault(claimed.run_id, EventHub())
+        tracked_hubs[task] = hub
+
+    def finished(claimed: ClaimedRun, task: asyncio.Task[None]) -> None:
+        getattr(app.state, "tasks", set()).discard(task)
+        tasks = getattr(app.state, "run_tasks", {})
+        if tasks.get(claimed.run_id) is task:
+            tasks.pop(claimed.run_id, None)
+        getattr(app.state, "cancellation_requested", set()).discard(claimed.run_id)
+        hub = tracked_hubs.pop(task, None)
+        if hub is not None:
+            _close_live_hub(app, claimed.run_id, hub)
+
+    consumer = Worker(
+        app.state.repo,
+        _executor(app),
+        settings or app.state.settings,
+        name=f"inline-{uuid4().hex[:12]}",
+        execute=execute,
+        on_task_started=started,
+        on_task_finished=finished,
+    )
+    app.state.inline_worker = consumer
+    return consumer
+
+
+def _wake_inline_worker(app: FastAPI) -> None:
+    consumer = getattr(app.state, "inline_worker", None)
+    if consumer is not None:
+        consumer.settings = app.state.settings
+        consumer.wake()
 
 
 async def _build_agent(
@@ -1597,6 +1522,7 @@ async def create_run(
     if tier_key is not None:
         from .workbench.tiers import tier_overrides
 
+        base_settings = replace(base_settings, research_tier=tier_key)
         explicit = req.params.model_dump() if req.params is not None else {}
         overrides = tier_overrides(tier_key, explicit=explicit, ceilings={})
         if overrides:
@@ -1940,92 +1866,18 @@ async def _submit_prepared_run(
     supplied_plan: Any | None = None,
     request_hash: str | None = None,
 ) -> CreateRunResponse:
-    """Share durable admission, leases and cleanup across new and revised tasks."""
-    repo: ResearchRepository = request.app.state.repo
-    principal = principal_for(request)
-    if _worker_mode(request.app):
-        # worker 模式：本进程只入队。不占准入名额、不建 EventHub、不派发 task——
-        # 执行、租约与事件全部归领取到该 run 的 worker。
-        return await _enqueue_run(
-            request, repo, req, execution, normalized_key, response, request_hash=request_hash
-        )
-    try:
-        admission = await _acquire_run_slot(request.app)
-    except HTTPException:
-        if normalized_key:
-            existing_id = await repo.find_run_once(
-                normalized_key, request_hash or _run_request_hash(req)
-            )
-            if existing_id:
-                response.headers["Idempotency-Replayed"] = "true"
-                return CreateRunResponse(run_id=existing_id)
-        raise
-    try:
-        run_id, created = await repo.create_run_once(
-            req.query,
-            request_hash=request_hash or _run_request_hash(req),
-            idempotency_key=normalized_key,
-            execution=execution,
-            lease_owner=lease_owner,
-            owner_id=principal.id,
-            project_id=req.project_id,
-            max_inflight=settings.max_active_runs + settings.max_queued_runs,
-        )
-    except RunQueueFullError as exc:
-        admission.release()
-        raise HTTPException(503, str(exc), headers={"Retry-After": "5"}) from exc
-    except IdempotencyConflictError as exc:
-        admission.release()
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "idempotency_conflict",
-                "message": "Idempotency-Key 已用于不同的请求",
-            },
-        ) from exc
-    except BaseException:
-        admission.release()
-        raise
-    if not created:
-        admission.release()
-        response.headers["Idempotency-Replayed"] = "true"
-        return CreateRunResponse(run_id=run_id)
-    request.app.state.live[run_id] = EventHub()
-    execution_kwargs: dict[str, Any] = {"requested_workflow": req.workflow}
-    if supplied_plan is not None:
-        execution_kwargs["execution_plan"] = supplied_plan
-    execution_coro = _execute_with_admission(
-        admission,
-        request.app,
-        run_id,
-        effective_query,
-        settings,
-        workflow_name,
-        None,
-        lease_owner,
+    """Both topologies persist first; only a fair queue consumer takes a lease."""
+    result = await _enqueue_run(
+        request,
+        request.app.state.repo,
+        req,
         execution,
-        **execution_kwargs,
+        normalized_key,
+        response,
+        request_hash=request_hash,
     )
-    try:
-        task = asyncio.create_task(execution_coro)
-    except BaseException:
-        # Task construction can fail (for example during loop shutdown or a
-        # test-injected scheduler error). Release every resource acquired
-        # above so the process does not become permanently saturated.
-        execution_coro.close()
-        _close_live_hub(request.app, run_id)
-        admission.release()
-        try:
-            await request.app.state.repo.set_status(run_id, "error", lease_owner=lease_owner)
-        except Exception:
-            logger.exception("failed to mark run %s after task creation failure", run_id)
-        try:
-            await request.app.state.repo.release_lease(run_id, lease_owner)
-        except Exception:
-            logger.exception("failed to release run %s lease after task creation failure", run_id)
-        raise
-    _track_run_task(request.app, run_id, task, lease_owner=lease_owner, admission=admission)
-    return CreateRunResponse(run_id=run_id)
+    _wake_inline_worker(request.app)
+    return result
 
 
 @app.post(
@@ -2038,7 +1890,7 @@ async def cancel_run(run_id: str, request: Request) -> CancelRunResponse:
     status = await repo.request_cancel(run_id)
     if status is None:
         raise HTTPException(status_code=404, detail="run not found")
-    if status in {"done", "error"}:
+    if status in {"done", "error", "needs_review"}:
         raise HTTPException(status_code=409, detail=f"run is already {status}")
     if status == "cancelled":
         return CancelRunResponse(run_id=run_id, status=status)
@@ -2053,6 +1905,7 @@ async def cancel_run(run_id: str, request: Request) -> CancelRunResponse:
             request.app.state.cancellation_requested = requested_cancellations
         requested_cancellations.add(run_id)
         task.cancel()
+    _wake_inline_worker(request.app)
     return CancelRunResponse(run_id=run_id, status="cancelling")
 
 
@@ -2062,93 +1915,31 @@ async def cancel_run(run_id: str, request: Request) -> CancelRunResponse:
     dependencies=[Depends(require_api_key)],
 )
 async def resume_run(run_id: str, request: Request) -> CreateRunResponse:
-    if run_id in request.app.state.live:
-        raise HTTPException(status_code=409, detail="run is already active")
-    detail = await request.app.state.repo.get_run(run_id)
+    repo = request.app.state.repo
+    detail = await repo.get_run(run_id)
     if detail is None:
-        raise HTTPException(status_code=404, detail="run not found")
+        raise HTTPException(404, "run not found")
     execution = detail.orchestration
     if execution is None or not execution.checkpoint:
-        raise HTTPException(status_code=409, detail="run has no recoverable checkpoint")
-    if detail.status in {"done", "cancelled", "cancelling"}:
-        raise HTTPException(status_code=409, detail="terminal or cancelling run cannot be resumed")
-    if _worker_mode(request.app):
-        # worker 模式：交还队列而不是自己执行。不取租约——取了 worker 反而领不走。
-        try:
-            if detail.status == "error":
-                settings = request.app.state.settings
-                requeued = await request.app.state.repo.requeue_failed_run(
-                    run_id,
-                    max_inflight=settings.max_active_runs + settings.max_queued_runs,
-                    restart_seconds=_settings_for_resume(settings, execution).max_run_seconds,
-                )
-            else:
-                requeued = await request.app.state.repo.enqueue_run(run_id)
-        except RunQueueFullError as exc:
-            raise HTTPException(503, str(exc), headers={"Retry-After": "5"}) from exc
-        if not requeued:
-            raise HTTPException(status_code=409, detail="run is no longer resumable")
-        return CreateRunResponse(run_id=run_id)
-    # A fresh token identifies this execution attempt, so concurrent resume
-    # requests cannot renew and share the same lease.
-    owner = uuid4().hex
-    if not await request.app.state.repo.acquire_lease(run_id, owner):
-        raise HTTPException(status_code=409, detail="run is leased by another instance")
-    handed_off = False
-    admission: RunAdmissionLease | None = None
+        raise HTTPException(409, "run has no recoverable checkpoint")
+    if detail.status in {"done", "needs_review", "cancelled", "cancelling"}:
+        raise HTTPException(409, "terminal or cancelling run cannot be resumed")
+    settings = request.app.state.settings
     try:
-        # Re-read after acquiring the lease. The first snapshot may have been
-        # stale while the previous worker was finishing or writing a checkpoint.
-        detail = await request.app.state.repo.get_run(run_id)
-        if detail is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        execution = detail.orchestration
-        if execution is None or not execution.checkpoint:
-            raise HTTPException(status_code=409, detail="run has no recoverable checkpoint")
-        if detail.status in {"done", "cancelled", "cancelling"}:
-            raise HTTPException(
-                status_code=409, detail="terminal or cancelling run cannot be resumed"
+        if detail.status == "error":
+            accepted = await repo.requeue_failed_run(
+                run_id,
+                max_inflight=settings.max_active_runs + settings.max_queued_runs,
+                restart_seconds=_settings_for_resume(settings, execution).max_run_seconds,
             )
-        admission = await _acquire_run_slot(request.app)
-        resume_settings = _settings_for_resume(request.app.state.settings, execution)
-        # Publish the new attempt before returning 202 so clients cannot keep
-        # treating the previous attempt's terminal status as authoritative.
-        execution.attempt = await request.app.state.repo.prepare_resume(
-            run_id,
-            lease_owner=owner,
-            restart_seconds=resume_settings.max_run_seconds if detail.status == "error" else None,
-        )
-        refreshed = await request.app.state.repo.get_run(run_id)
-        if refreshed is not None and refreshed.orchestration is not None:
-            execution = refreshed.orchestration
-        request.app.state.live[run_id] = EventHub()
-        execution_coro = _execute_with_admission(
-            admission,
-            request.app,
-            run_id,
-            detail.query,
-            resume_settings,
-            execution.workflow_name,
-            execution,
-            owner,
-        )
-        try:
-            task = asyncio.create_task(execution_coro)
-        except BaseException:
-            execution_coro.close()
-            raise
-        handed_off = True
-        _track_run_task(request.app, run_id, task, lease_owner=owner, admission=admission)
-        return CreateRunResponse(run_id=run_id)
-    finally:
-        if not handed_off:
-            _close_live_hub(request.app, run_id)
-            if admission is not None:
-                admission.release()
-            try:
-                await request.app.state.repo.release_lease(run_id, owner)
-            except Exception:
-                logger.exception("failed to release resume lease for %s", run_id)
+        else:
+            accepted = await repo.enqueue_run(run_id)
+    except RunQueueFullError as exc:
+        raise HTTPException(503, str(exc), headers={"Retry-After": "5"}) from exc
+    if not accepted:
+        raise HTTPException(409, "run is already queued, active or no longer resumable")
+    _wake_inline_worker(request.app)
+    return CreateRunResponse(run_id=run_id)
 
 
 @app.get("/api/workflows", dependencies=[Depends(require_api_key)])
@@ -2497,6 +2288,8 @@ async def _enrich_run_detail(repo: ResearchRepository, detail: RunDetail) -> Run
     # can page through the dedicated events endpoint.
     detail.events = await repo.get_events(detail.id, limit=_RUN_DETAIL_EVENT_LIMIT)
     scratch = detail.orchestration.checkpoint.get("scratch", {}) if detail.orchestration else {}
+    completion = scratch.get("_completion") if isinstance(scratch, dict) else None
+    detail.completion = completion if isinstance(completion, dict) else None
     raw_manifest = scratch.get(RUN_MANIFEST_CHECKPOINT_KEY) if isinstance(scratch, dict) else None
     if raw_manifest is not None:
         detail.manifest = RunManifest.model_validate(raw_manifest)
@@ -2582,7 +2375,7 @@ async def get_run_document_markdown(
     """
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     try:
-        markdown_text = await run_blocking(render_markdown, document)
+        markdown_text = await run_rendering(render_markdown, document)
     except ChartDataError as exc:
         # A chart whose source table is missing means assembly produced an
         # inconsistent document.  Surface it rather than shipping a file with
@@ -2610,7 +2403,7 @@ async def get_run_document_csv(
     """
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     try:
-        csv_text = await run_blocking(render_csv, document, table_id=table_id)
+        csv_text = await run_rendering(render_csv, document, table_id=table_id)
     except CsvTableNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except CsvTableSelectionError as exc:
@@ -2641,7 +2434,7 @@ async def get_run_document_xlsx(
     """
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     try:
-        xlsx_bytes = await run_blocking(render_xlsx, document, table_id=table_id)
+        xlsx_bytes = await run_rendering(render_xlsx, document, table_id=table_id)
     except XlsxDependencyError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     except XlsxTableNotFoundError as exc:
@@ -2666,7 +2459,7 @@ async def get_run_document_pdf(
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     _require_supported_report(document)
     try:
-        pdf_bytes = await run_blocking(render_pdf, document)
+        pdf_bytes = await run_rendering(render_pdf, document)
     except PdfExportUnavailable as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     except PdfRenderError as exc:
@@ -2691,7 +2484,7 @@ async def get_run_document_latex(
     latex_options: dict[str, object] = {"profile": cast(ExportProfile, profile)}
     if template != "ctexart":
         latex_options["template"] = cast(LatexTemplateName, template)
-    source = await run_blocking(render_latex, document, **latex_options)
+    source = await run_rendering(render_latex, document, **latex_options)
     return PlainTextResponse(
         source,
         media_type="application/x-tex; charset=utf-8",
@@ -2710,7 +2503,7 @@ async def get_run_document_bib(
     detail = await request.app.state.repo.get_run(run_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="run not found")
-    bibtex = await run_blocking(render_bibtex, document, sources=detail.sources)
+    bibtex = await run_rendering(render_bibtex, document, sources=detail.sources)
     return PlainTextResponse(
         bibtex,
         media_type="application/x-bibtex; charset=utf-8",
@@ -2731,7 +2524,7 @@ async def get_run_document_bundle(
     if detail is None:
         raise HTTPException(status_code=404, detail="run not found")
     detail = await _enrich_run_detail(request.app.state.repo, detail)
-    bundle = await run_blocking(
+    bundle = await run_rendering(
         render_reproducibility_bundle,
         document,
         run_id=run_id,
@@ -2759,7 +2552,7 @@ async def get_run_document_paper_pdf(
     document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     _require_supported_report(document)
     try:
-        pdf_bytes = await run_blocking(
+        pdf_bytes = await run_rendering(
             render_latex_pdf,
             document,
             profile=cast(ExportProfile, profile),

@@ -7,6 +7,7 @@ const LABEL: Record<RunStatus, string> = {
   cancelling: '取消中',
   cancelled: '已取消',
   done: '已完成',
+  needs_review: '待复核',
   error: '出错',
 }
 
@@ -16,6 +17,7 @@ const BADGE_CLASS: Record<RunStatus, string> = {
   cancelling: 'badge warning',
   cancelled: 'badge muted',
   done: 'badge success',
+  needs_review: 'badge warning',
   error: 'badge error',
 }
 
@@ -25,6 +27,7 @@ const ICON: Record<RunStatus, AppIconName> = {
   cancelling: 'loader',
   cancelled: 'circle-x',
   done: 'check-circle',
+  needs_review: 'alert',
   error: 'circle-x',
 }
 

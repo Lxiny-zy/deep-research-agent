@@ -124,7 +124,14 @@ export default function StatsBar({
   progress: ResearchProgress
   live?: LiveStats | null
   liveActive?: boolean
-  connectionStatus?: 'idle' | 'streaming' | 'disconnected' | 'done' | 'error' | 'cancelled'
+  connectionStatus?:
+    | 'idle'
+    | 'streaming'
+    | 'disconnected'
+    | 'done'
+    | 'needs_review'
+    | 'error'
+    | 'cancelled'
   tokensEstimated?: boolean
   paused?: boolean
   quality?: QualityVerdict | null
@@ -164,17 +171,19 @@ export default function StatsBar({
 
   const connectionLabel = paused
     ? '演示已暂停'
-    : connectionStatus === 'cancelled'
-      ? '运行已取消'
-      : connectionStatus === 'error'
-        ? '运行已停止'
-        : connectionStatus === 'disconnected'
-          ? '连接恢复中'
-          : liveActive
-            ? '实时同步'
-            : progress.percent >= 100
-              ? '统计已确认'
-              : '等待运行'
+    : connectionStatus === 'needs_review'
+      ? '待复核'
+      : connectionStatus === 'cancelled'
+        ? '运行已取消'
+        : connectionStatus === 'error'
+          ? '运行已停止'
+          : connectionStatus === 'disconnected'
+            ? '连接恢复中'
+            : liveActive
+              ? '实时同步'
+              : progress.percent >= 100
+                ? '统计已确认'
+                : '等待运行'
 
   const verdict = quality ? VERDICT[quality.status] : null
 

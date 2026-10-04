@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head><meta charset="utf-8"><title>PDF quote validation</title></head>
+  <body>
+    <div id="root" style="height: 100vh; display: flex; flex-direction: column; min-height: 0"></div>
+    <script type="module">
+      import React, { useState } from 'react'
+      import { createRoot } from 'react-dom/client'
+      import PdfViewer from '/src/components/PdfViewer.tsx'
+      import '/src/styles/index.css'
+      function Preview() {
+        const [highlight, setHighlight] = useState(null)
+        window.locateQuote = (quote) => setHighlight({ quote, token: Date.now() })
+        return React.createElement(PdfViewer, { runId: 'pdf-preview', documentId: 'original', highlight })
+      }
+      createRoot(document.getElementById('root')).render(React.createElement(Preview))
+    </script>
+  </body>
+</html>
