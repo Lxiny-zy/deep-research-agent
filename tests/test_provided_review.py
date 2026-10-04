@@ -145,13 +145,17 @@ def test_pasted_source_chunks_do_not_silently_stop_at_twelve():
     assert len(chunks) == 16 and "Paragraph 15" in chunks[-1].content
 
 
-async def test_pdf_document_import_retains_all_prepared_chunks(monkeypatch):
+@pytest.mark.parametrize("input_kind", ["pdf", "url"])
+async def test_pdf_document_import_retains_all_prepared_chunks(monkeypatch, input_kind):
+    from deep_research.document_corpus import FullTextCorpus
     from deep_research.library import ingestion
     from deep_research.workbench.intake import _fetch_document
 
     async def prepare(**kwargs):
         return SimpleNamespace(
             title="Paper",
+            kind=input_kind,
+            mime_type="application/pdf",
             origin_url="https://paper.test/a.pdf",
             chunks=[
                 {
@@ -167,6 +171,7 @@ async def test_pdf_document_import_retains_all_prepared_chunks(monkeypatch):
     sources = await _fetch_document("https://paper.test/a.pdf")
     assert len(sources) == 19 and sources[-1].content.endswith("18")
     assert sources[-1].locator == "第 19 页"
+    assert next(iter(FullTextCorpus(sources, {}).documents.values())).complete
 
 
 @pytest.mark.parametrize("template", [LIT_REVIEW, SLIDES, MINDMAP])

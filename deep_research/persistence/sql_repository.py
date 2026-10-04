@@ -66,6 +66,15 @@ from .repository import (
 
 logger = logging.getLogger(__name__)
 
+_SOURCE_CONTEXT_FIELDS = {
+    "section_title",
+    "section_start",
+    "section_end",
+    "document_content_hash",
+    "document_part_index",
+    "document_part_count",
+}
+
 
 def _sub_question_row(
     run_id: str,
@@ -591,6 +600,7 @@ class SqlRepository:
                 if key in seen:
                     continue
                 seen.add(key)
+                source_context = source.model_dump(mode="json", include=_SOURCE_CONTEXT_FIELDS)
                 values.append(
                     {
                         "run_id": run_id,
@@ -600,6 +610,7 @@ class SqlRepository:
                         "content_hash": content_hash,
                         "locator": source.locator,
                         "document_authors": source.document_authors,
+                        "source_context": source_context if any(source_context.values()) else None,
                         "scholarly": (
                             source.scholarly.model_dump(mode="json")
                             if source.scholarly is not None
@@ -619,6 +630,9 @@ class SqlRepository:
                     "content": statement.excluded.content,
                     "locator": statement.excluded.locator,
                     "document_authors": statement.excluded.document_authors,
+                    "source_context": func.coalesce(
+                        statement.excluded.source_context, orm.SourceRow.source_context
+                    ),
                     "scholarly": statement.excluded.scholarly,
                 },
             )
@@ -986,8 +1000,11 @@ class SqlRepository:
             return True
 
     async def claim_next_run(
-        self, owner: str, *, lease_seconds: int = EXECUTION_LEASE_SECONDS,
-        max_active_runs: int | None = None
+        self,
+        owner: str,
+        *,
+        lease_seconds: int = EXECUTION_LEASE_SECONDS,
+        max_active_runs: int | None = None,
     ) -> ClaimedRun | None:
         """Choose and charge one identity atomically with its execution lease."""
         async with self._sm() as s, s.begin():
@@ -1450,6 +1467,11 @@ class SqlRepository:
                         content_hash=source.content_hash,
                         locator=source.locator,
                         document_authors=source.document_authors or [],
+                        **{
+                            key: value
+                            for key, value in (source.source_context or {}).items()
+                            if key in _SOURCE_CONTEXT_FIELDS
+                        },
                         scholarly=(
                             ScholarlyMetadata.model_validate(source.scholarly)
                             if isinstance(source.scholarly, dict)

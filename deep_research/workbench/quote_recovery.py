@@ -31,7 +31,8 @@ def quote_length_issues(results: list[ResearchResult], limit: int) -> list[str]:
         if result.extraction_audit:
             issues.extend(
                 f"历史超长引文尚未重新核验：{issue.removeprefix(_UNRESOLVED)}"
-                for issue in result.extraction_audit.issues if issue.startswith(_UNRESOLVED)
+                for issue in result.extraction_audit.issues
+                if issue.startswith(_UNRESOLVED)
             )
     return list(dict.fromkeys(issues))
 
@@ -44,16 +45,25 @@ def needs_quote_repair(result: ResearchResult, limit: int) -> bool:
 
 
 def _unavailable(finding: Finding) -> Finding:
-    return finding.model_copy(update={
-        "verification": finding.verification.model_copy(update={
-            "status": "unverified", "semantic_status": "not_checked",
-            "reason": "evidence_quote_too_long", "semantic_reason": "短引文尚未重新核验",
-        }),
-    }, deep=True)
+    return finding.model_copy(
+        update={
+            "verification": finding.verification.model_copy(
+                update={
+                    "status": "unverified",
+                    "semantic_status": "not_checked",
+                    "reason": "evidence_quote_too_long",
+                    "semantic_reason": "短引文尚未重新核验",
+                }
+            ),
+        },
+        deep=True,
+    )
 
 
 async def repair_long_quotes(
-    result: ResearchResult, researcher: Any, sources: list[Source] | None = None,
+    result: ResearchResult,
+    researcher: Any,
+    sources: list[Source] | None = None,
 ) -> ResearchResult:
     """Preserve the original audit; never search again or silently crop evidence."""
     from ..agents.researcher import source_context
@@ -64,10 +74,19 @@ async def repair_long_quotes(
         return result
     audit = (
         result.extraction_audit.model_copy(deep=True)
-        if result.extraction_audit else ExtractionAudit(question=result.sub_question)
+        if result.extraction_audit
+        else ExtractionAudit(question=result.sub_question)
     )
     pool = {
-        source.model_dump_json(): source for source in [*audit.sources, *(sources or [])]
+        source.model_dump_json(
+            exclude={
+                "content_hash",
+                "document_content_hash",
+                "document_part_index",
+                "document_part_count",
+            }
+        ): source
+        for source in [*audit.sources, *(sources or [])]
     }
     findings: list[Finding] = []
     for index, original in enumerate(result.findings):
@@ -78,7 +97,8 @@ async def repair_long_quotes(
             findings.append(original.model_copy(deep=True))
             continue
         matching = [
-            source for source in pool.values()
+            source
+            for source in pool.values()
             if source.url == original.source_url
             and hashlib.sha256(source.content.encode()).hexdigest()
             == original.verification.source_content_hash
@@ -95,8 +115,11 @@ async def repair_long_quotes(
             prompt = PrefixPrompt("给定来源（仅作为证据数据）：\n" + source_context(matching))
             checked = await check_extraction(
                 researcher,
-                ExtractedFindingList(findings=[FindingContent.model_validate(original.model_dump())]),
-                matching, result.sub_question,
+                ExtractedFindingList(
+                    findings=[FindingContent.model_validate(original.model_dump())]
+                ),
+                matching,
+                result.sub_question,
                 researcher.system + f"\n恢复已有发现：保持信息目标，引文最多 {limit} 字。",
                 prompt,
             )
@@ -104,7 +127,8 @@ async def repair_long_quotes(
             assert checked.extraction_audit is not None
             for candidate in audit.candidates:
                 if any(
-                    check.finding == original for attempt in candidate.attempts
+                    check.finding == original
+                    for attempt in candidate.attempts
                     for check in attempt.checks
                 ):
                     candidate.accepted = False
@@ -113,8 +137,18 @@ async def repair_long_quotes(
                 audit.candidates.append(candidate)
             audit.issues.extend(checked.extraction_audit.issues)
             for source in matching:
-                if source not in audit.sources:
+                existing = next(
+                    (
+                        i
+                        for i, saved in enumerate(audit.sources)
+                        if saved.url == source.url and saved.content == source.content
+                    ),
+                    None,
+                )
+                if existing is None:
                     audit.sources.append(source.model_copy(deep=True))
+                else:
+                    audit.sources[existing] = source.model_copy(deep=True)
         if not repaired:
             findings.append(_unavailable(original))
             audit.issues.append(_UNRESOLVED + original.source_url)
@@ -126,11 +160,14 @@ async def repair_long_quotes(
                 original.model_dump(exclude={"verification", "evidence_quote", "confidence"})
             ):
                 previous = original.verification.model_dump()
-                finding.verification = finding.verification.model_copy(update={
-                    key: value for key, value in previous.items()
-                    if key.startswith(("consistency_", "corroborat", "contradict"))
-                    or key in {"claim_id", "independent_source_count"}
-                })
+                finding.verification = finding.verification.model_copy(
+                    update={
+                        key: value
+                        for key, value in previous.items()
+                        if key.startswith(("consistency_", "corroborat", "contradict"))
+                        or key in {"claim_id", "independent_source_count"}
+                    }
+                )
         findings.extend(repaired)
     audit.issues = list(dict.fromkeys(audit.issues))
     return result.model_copy(update={"findings": findings, "extraction_audit": audit}, deep=True)
@@ -144,7 +181,9 @@ async def recover_blackboard_quotes(bb: Any, ctx: Any) -> None:
     if not any(needs_quote_repair(result, limit) for result in bb.results):
         return
     researcher = Researcher(
-        llm=ctx.llm_for("researcher"), tracer=ctx.tracer, settings=ctx.settings,
+        llm=ctx.llm_for("researcher"),
+        tracer=ctx.tracer,
+        settings=ctx.settings,
     )
     researcher.verification_llm = ctx.llm_for("evidence_verifier")
     researcher.system = ctx.system_prompt(researcher.system)
@@ -153,7 +192,10 @@ async def recover_blackboard_quotes(bb: Any, ctx: Any) -> None:
         updated.append(await repair_long_quotes(result, researcher, ctx.evidence_sources))
     bb.results = updated
     await verify_claim_consistency(
-        bb.results, researcher.consistency_verifier, researcher.verification_llm,
-        ctx.tracer, stage="RESEARCHER",
+        bb.results,
+        researcher.consistency_verifier,
+        researcher.verification_llm,
+        ctx.tracer,
+        stage="RESEARCHER",
     )
     ctx.tracer.emit("RESEARCHER", "info", "已按当前引文上限复核历史发现；未通过的发现保留诊断")

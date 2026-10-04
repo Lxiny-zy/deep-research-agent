@@ -323,6 +323,7 @@ export default function ReportView({
             selectionScope={
               browsingSource ? 'source_location' : scoped ? selectedOccurrence.scope : 'unbound'
             }
+            reviewNote={!browsingSource ? selectedOccurrence?.review_note : undefined}
             missingEvidence={
               !browsingSource && scoped
                 ? new Set(selectedOccurrence.evidence_ids).size -

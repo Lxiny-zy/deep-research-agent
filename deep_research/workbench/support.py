@@ -15,7 +15,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 
+from ..document_corpus import FullTextCorpus, content_hash
 from ..guardrails import report_eligible
 from ..models import Finding, ResearchResult
 from ..persistence.repository import LeaseLostError
@@ -28,6 +30,7 @@ class SupportDecision(BaseModel):
     verdict: Literal["supported", "non_factual", "unsupported", "uncertain"]
     evidence_ids: list[str] = Field(default_factory=list)
     reason: str
+    fulltext_review: SkipJsonSchema[dict[str, Any] | None] = None
 
 
 class SupportDecisions(BaseModel):
@@ -43,7 +46,7 @@ class SupportUnit:
     citations: list[int] = field(default_factory=list)
 
 
-SUPPORT_POLICY_VERSION = 4
+SUPPORT_POLICY_VERSION = 5
 
 
 def asserted_comparison(text: str) -> bool:
@@ -77,6 +80,9 @@ _SYSTEM = (
     "特别检查新增因果/机制、比较、作者归属、条件和数字对应；证据只说明相关不能写成因果，"
     "采用既有方法不能写成发明。只要单元内有一个未支持的事实，就不能判 supported。"
     "supported 必须列出实际支持的 evidence_ids，只能选本单元引用范围内的证据。"
+    "fulltext_checks 是程序另行完成的全文回查，不是逐字引文；它只支持所查的缺失或缺陷命题。"
+    "absence_confirmed 的结论必须明确限定为本次取得的全文文本中未见，不能推广到其他版本。"
+    "仅有这类全文核查命题时 supported 可以不填 evidence_ids；混合单元中的其他事实仍须摘录支持。"
     "证据条目若有 quote_from，其原文与该批中对应 id 条目的 quote 完全相同；"
     "请解引用完整原文后核对。quote_from 只复用原文，不借用另一条的论断、方法或实验条件；"
     "evidence_ids 仍填写实际支持当前论断的证据条目 id。"
@@ -194,6 +200,8 @@ class SupportReviewer:
         *,
         context: str = "",
         system_rules: str = "",
+        fulltext_corpus: FullTextCorpus | None = None,
+        check_fulltext: bool = True,
     ) -> None:
         self.llm, self.evidence = llm, evidence
         self.capacity = getattr(llm, "input_capacity_chars", capacity)
@@ -202,6 +210,68 @@ class SupportReviewer:
         self.protocol_repairs: list[dict[str, Any]] = []
         self.context = context
         self.system = _SYSTEM + ("\n" + system_rules if system_rules else "")
+        self.fulltext_corpus = fulltext_corpus or FullTextCorpus([], {})
+        self.check_fulltext = check_fulltext
+        self.fulltext_records: dict[str, dict[str, Any]] = {}
+
+    def fulltext_issue(self, unit: SupportUnit, decision: SupportDecision) -> str | None:
+        from .fulltext_review import fulltext_supports, requires_fulltext, validate_fulltext_record
+
+        if not self.check_fulltext or not requires_fulltext(unit):
+            return None
+        issue = validate_fulltext_record(unit, decision.fulltext_review, self.fulltext_corpus)
+        if issue:
+            return issue
+        record = decision.fulltext_review
+        assert record is not None
+        if record["status"] == "not_applicable":
+            return None
+        if not fulltext_supports(unit, record, self.fulltext_corpus):
+            return "全文回查未支持当前缺失或缺陷判断"
+        return None
+
+    def fulltext_supports(self, unit: SupportUnit, decision: SupportDecision) -> bool:
+        from .fulltext_review import fulltext_supports
+
+        return self.check_fulltext and fulltext_supports(
+            unit, decision.fulltext_review, self.fulltext_corpus
+        )
+
+    async def _check_fulltext(self, unit: SupportUnit, key: str) -> SupportDecision | None:
+        from .fulltext_review import FullTextReviewer, fulltext_supports, requires_fulltext
+
+        if not self.check_fulltext or not requires_fulltext(unit):
+            return None
+        record = self.fulltext_records.get(unit.id)
+        if record is None and key in self.cache:
+            record = self.cache[key].fulltext_review
+        current = content_hash(json.dumps(asdict(unit), sort_keys=True, ensure_ascii=False))
+        if (
+            not record
+            or record.get("unit_hash") != current
+            or record.get("corpus_hash") != self.fulltext_corpus.fingerprint
+        ):
+            checker = FullTextReviewer(self.llm, self.fulltext_corpus, self.capacity)
+            record = await checker.review(unit)
+        self.fulltext_records[unit.id] = record
+        status = record["status"]
+        reason = record["reason"]
+        if status == "absence_confirmed" and not fulltext_supports(
+            unit, record, self.fulltext_corpus
+        ):
+            status = "refuted"
+            reason = (
+                "全文回查未见所查信息；请明确写为‘本次取得的全文文本中未见’，"
+                "不能保持未经限定的缺失断言"
+            )
+        if status in {"refuted", "uncertain"}:
+            return SupportDecision(
+                unit_id=unit.id,
+                verdict="unsupported" if status == "refuted" else "uncertain",
+                reason=reason,
+                fulltext_review=record,
+            )
+        return None
 
     @property
     def provenance(self) -> dict[str, Any]:
@@ -221,13 +291,26 @@ class SupportReviewer:
             selected = [e for e in self.evidence if e["citation"] in unit.citations]
             key = digest([asdict(unit), selected])
             keys[unit.id] = key
+            if set(unit.citations).issubset(known_citations):
+                fulltext_failure = await self._check_fulltext(unit, key)
+                if fulltext_failure is not None:
+                    results[unit.id] = fulltext_failure
+                    continue
             if key in self.cache:
                 cached = self.cache[key]
                 invalid_fact = cached.verdict == "non_factual" and numeric_fact(unit.text)
-                invalid_support = cached.verdict == "supported" and alignment_issue(
-                    unit.text, unit.citations, cached.evidence_ids, self.evidence
+                invalid_support = (
+                    cached.verdict == "supported"
+                    and not (not cached.evidence_ids and self.fulltext_supports(unit, cached))
+                    and alignment_issue(
+                        unit.text, unit.citations, cached.evidence_ids, self.evidence
+                    )
                 )
-                if not invalid_fact and not invalid_support:
+                invalid_fulltext = cached.verdict in {
+                    "supported",
+                    "non_factual",
+                } and self.fulltext_issue(unit, cached)
+                if not invalid_fact and not invalid_support and not invalid_fulltext:
                     results[unit.id] = cached
                     continue
             if not set(unit.citations).issubset(known_citations):
@@ -347,6 +430,30 @@ class SupportReviewer:
                 "evidence": evidence,
                 "context": self.context,
                 "units": [asdict(u) for u in units],
+                **(
+                    {
+                        "fulltext_checks": {
+                            unit.id: {
+                                "status": self.fulltext_records[unit.id]["status"],
+                                "reason": self.fulltext_records[unit.id]["reason"],
+                                "target": self.fulltext_records[unit.id].get("target"),
+                                "supporting_passages": [
+                                    {
+                                        "source": row["source"],
+                                        "locator": row["locator"],
+                                        "quote": row["quote"],
+                                    }
+                                    for row in self.fulltext_records[unit.id].get("scanned", [])
+                                    if row["verdict"] == "supports"
+                                ],
+                            }
+                            for unit in units
+                            if unit.id in self.fulltext_records
+                        }
+                    }
+                    if any(unit.id in self.fulltext_records for unit in units)
+                    else {}
+                ),
                 **({"repair_issues": repair_issues} if repair_issues else {}),
             },
             ensure_ascii=False,
@@ -409,12 +516,14 @@ class SupportReviewer:
                     unit_id=unit.id, verdict="uncertain", reason="核验节点缺失或重复"
                 )
             else:
-                decision = matched[0]
+                decision = matched[0].model_copy(
+                    update={"fulltext_review": self.fulltext_records.get(unit.id)}
+                )
                 valid_ids = {e["id"] for e in self.evidence if e["citation"] in unit.citations}
                 invalid = (
                     decision.verdict == "supported"
                     and (
-                        not decision.evidence_ids
+                        (not decision.evidence_ids and not self.fulltext_supports(unit, decision))
                         or not set(decision.evidence_ids).issubset(valid_ids)
                     )
                 ) or (decision.verdict == "non_factual" and unit.kind == "translation")
@@ -441,8 +550,12 @@ class SupportReviewer:
                         reason="比较条件或输入关系属于事实，不能作为纯编排说明免检；请逐项核对证据",
                     )
                 if decision.verdict == "supported":
-                    issue = alignment_issue(
-                        unit.text, unit.citations, decision.evidence_ids, self.evidence
+                    issue = (
+                        None
+                        if not decision.evidence_ids and self.fulltext_supports(unit, decision)
+                        else alignment_issue(
+                            unit.text, unit.citations, decision.evidence_ids, self.evidence
+                        )
                     )
                     if issue:
                         decision = SupportDecision(
@@ -450,8 +563,18 @@ class SupportReviewer:
                         )
                 elif decision.verdict == "non_factual" and numeric_fact(unit.text):
                     decision = SupportDecision(
-                        unit_id=unit.id, verdict="unsupported",
+                        unit_id=unit.id,
+                        verdict="unsupported",
                         reason="带引用的数值事实不能作为纯编排说明免检",
                     )
+                if decision.verdict in {"supported", "non_factual"}:
+                    issue = self.fulltext_issue(unit, decision)
+                    if issue:
+                        decision = SupportDecision(
+                            unit_id=unit.id,
+                            verdict="unsupported",
+                            reason=issue,
+                            fulltext_review=self.fulltext_records.get(unit.id),
+                        )
             output[unit.id] = decision
         return output

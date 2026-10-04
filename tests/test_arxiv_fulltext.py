@@ -37,6 +37,40 @@ def _tar(files: dict[str, bytes], *, symlink: bool = False, directory: bool = Fa
     return out.getvalue()
 
 
+@pytest.mark.asyncio
+async def test_complete_lookup_keeps_text_before_sections_and_the_appendix():
+    from deep_research.document_corpus import FullTextCorpus
+
+    raw = _tar(
+        {
+            "main.tex": (
+                b"\\documentclass{article}\n\\begin{document}\n"
+                b"We set T = 4 before the first section.\n"
+                b"\\begin{abstract}An overview.\\end{abstract}\n"
+                b"\\section{Method}Method definition.\n\\section{Appendix}Additional experiment.\n"
+                b"\\end{document}"
+            )
+        }
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=raw))
+    )
+    source = Source(
+        url="https://arxiv.org/abs/2205.10102",
+        title="Paper",
+        scholarly={"work_id": "arxiv:2205.10102"},
+    )
+    try:
+        sources = await ArxivEprintFetcher(client=client).sections(
+            source, "", max_chars=10, required=True
+        )
+        assert any("We set T = 4 before the first section." in part.content for part in sources)
+        assert any("Additional experiment." in part.content for part in sources)
+        assert next(iter(FullTextCorpus(sources, {}).documents.values())).complete
+    finally:
+        await client.aclose()
+
+
 def test_parse_nested_sections_preserves_table_and_comments() -> None:
     raw = _tar(
         {

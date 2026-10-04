@@ -241,7 +241,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 50,
+        "format_version": 51,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -314,6 +314,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             scratch,
             0,
             corroboration=requires_corroboration(detail),
+            sources=detail.sources,
         )
         bind_review(catalog, citation_reviewer, report.markdown, stored_review(scratch))
     display_markdown = present_markdown(markdown, catalog) if citations else markdown
@@ -379,7 +380,19 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 {url: i for i, url in enumerate(citations, 1)},
                 corroboration=requires_corroboration(detail),
             )
-            issues = check_figure(concept, figure_evidence, extras.get(FIGURE_REVIEW_KEY))
+            from ..document_corpus import corpus_from_inputs
+
+            issues = check_figure(
+                concept,
+                figure_evidence,
+                extras.get(FIGURE_REVIEW_KEY),
+                corpus=corpus_from_inputs(
+                    detail.results,
+                    {url: i for i, url in enumerate(citations, 1)},
+                    scratch,
+                    detail.sources,
+                ),
+            )
             if issues:
                 input_gates.append(
                     GateResult(
@@ -529,11 +542,25 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             coverage = coverage_issues(scratch, detail.results)
             gates.append(GateResult("review_coverage", "fail" if coverage else "pass", coverage))
     if template.key == "mindmap" and extras.get("mindmap"):
+        from ..document_corpus import corpus_from_inputs
         from .mindmap_contract import checked_review
 
         raw = extras["mindmap"]
         review = extras.get("node_review")
-        _bound, issues = checked_review(raw, citations, detail.results, review, markdown)
+        _bound, issues = checked_review(
+            raw,
+            citations,
+            detail.results,
+            review,
+            markdown,
+            corpus=corpus_from_inputs(
+                detail.results,
+                {url: i for i, url in enumerate(citations, 1)},
+                scratch,
+                detail.sources,
+            ),
+            query=detail.query,
+        )
         status: Status = "fail" if issues else "pass"
         if review is None and issues and issues[0].startswith("历史导图"):
             status = "warn"
@@ -550,6 +577,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             scratch,
             0,
             corroboration=requires_corroboration(detail),
+            sources=detail.sources,
         )
         record = stored_review(scratch)
         if prose is not None:

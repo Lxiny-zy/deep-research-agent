@@ -49,9 +49,11 @@ def test_quote_limit_is_configurable_and_exposed_by_quality_settings():
     assert QualityPolicy().max_evidence_quote_chars == 600
     field = next(item for item in quality_schema() if item["key"] == "max_evidence_quote_chars")
     assert field["default"] == 600 and field["unit"] == "字"
-    assert EvidenceVerifier(max_quote_chars=1000).verify(
-        finding(quote="x" * 700).as_unverified(), Source(url=URL, content="x" * 700)
-    ).accepted
+    assert (
+        EvidenceVerifier(max_quote_chars=1000)
+        .verify(finding(quote="x" * 700).as_unverified(), Source(url=URL, content="x" * 700))
+        .accepted
+    )
 
 
 def test_quote_options_offer_short_exact_spans_without_a_full_source_escape():
@@ -62,7 +64,7 @@ def test_quote_options_offer_short_exact_spans_without_a_full_source_escape():
     for option in options:
         assert "-full-" not in option.id
         assert len(option.text) <= 600
-        assert source.content[option.start:option.end] == option.text
+        assert source.content[option.start : option.end] == option.text
         assert option.source_content_hash == hashlib.sha256(source.content.encode()).hexdigest()
 
 
@@ -78,9 +80,9 @@ class SelectShortQuote(Extractor):
             candidate = json.loads(user.rsplit("\n", 1)[1])["candidates"][0]
             option = next(item for item in candidate["quote_options"] if item["text"] == TARGET)
             assert "full_source" not in user.rsplit("\n", 1)[1]
-            self.repairs = iter([repair(findings=[
-                dict(finding(TARGET, "").model_dump(), quote_id=option["id"])
-            ])])
+            self.repairs = iter(
+                [repair(findings=[dict(finding(TARGET, "").model_dump(), quote_id=option["id"])])]
+            )
         return await super().parse(system, user, schema, **kwargs)
 
 
@@ -88,7 +90,10 @@ class SelectShortQuote(Extractor):
 async def test_long_quote_is_reselected_and_semantically_verified(settings):
     llm, semantic = SelectShortQuote([finding(TARGET, LONG)], []), Semantic()
     researcher = Researcher(
-        llm, _FixedSources([Source(url=URL, content=LONG)]), Tracer(), settings,
+        llm,
+        _FixedSources([Source(url=URL, content=LONG)]),
+        Tracer(),
+        settings,
         semantic_verifier=semantic,
     )
     result = await researcher.run("What is Alpha's measured accuracy?")
@@ -103,14 +108,21 @@ async def test_long_quote_is_reselected_and_semantically_verified(settings):
 
 
 @pytest.mark.asyncio
-async def test_configured_quote_limit_controls_both_verification_and_prompt(settings):
+@pytest.mark.parametrize("late_settings", [False, True])
+async def test_configured_quote_limit_controls_both_verification_and_prompt(
+    settings, late_settings
+):
     settings.quality = {"max_evidence_quote_chars": 1000}
     quote = "An exact source quotation. " * 30
     llm = Extractor([finding("Alpha description", quote)], [])
     researcher = Researcher(
-        llm, _FixedSources([Source(url=URL, content=quote)]), Tracer(), settings,
+        llm,
+        _FixedSources([Source(url=URL, content=quote)]),
+        Tracer(),
+        None if late_settings else settings,
         semantic_verifier=Semantic(),
     )
+    researcher.settings = settings
     result = await researcher.run("Describe Alpha")
     assert len(llm.requests) == 1 and "最多 1000 字" in llm.requests[0][0]
     assert len(result.findings[0].evidence_quote) > 600
@@ -123,7 +135,9 @@ def test_a_saved_quote_option_cannot_bypass_the_current_length_limit():
     candidate = ExtractionCandidate(id="old", original=finding("Alpha", quote))
     candidate.quote_options = quote_options(candidate, [source], max_quote_chars=1000)
     proposal = RepairFindingContent(
-        statement="Alpha", source_url=URL, quote_id=candidate.quote_options[0].id,
+        statement="Alpha",
+        source_url=URL,
+        quote_id=candidate.quote_options[0].id,
     )
     assert resolve_quote(proposal, candidate, [source])[1] == ["evidence_quote_too_long"]
 
@@ -133,14 +147,18 @@ def legacy_result():
     old = verified_finding(TARGET, URL, LONG)
     old.verification.source_content_hash = hashlib.sha256(LONG.encode()).hexdigest()
     result = ResearchResult(
-        sub_question="Alpha accuracy", findings=[old],
+        sub_question="Alpha accuracy",
+        findings=[old],
         extraction_audit=ExtractionAudit(question="Alpha accuracy", sources=[source]),
     )
     return result, source
 
 
 @pytest.mark.asyncio
-async def test_restored_long_quote_reuses_frozen_source_and_preserves_unaffected_findings(settings):
+@pytest.mark.parametrize("stored_copy", [False, True])
+async def test_restored_long_quote_reuses_frozen_source_and_preserves_unaffected_findings(
+    settings, stored_copy
+):
     from deep_research.workbench.quote_recovery import repair_long_quotes
 
     result, source = legacy_result()
@@ -150,12 +168,19 @@ async def test_restored_long_quote_reuses_frozen_source_and_preserves_unaffected
     llm.requests.append(("prior extraction", ""))  # recovery starts at repair, not extraction
     semantic = Semantic()
     researcher = Researcher(llm, None, Tracer(), settings, semantic_verifier=semantic)
-    recovered = await repair_long_quotes(result, researcher)
+    extra = (
+        [source.model_copy(update={"content_hash": hashlib.sha256(LONG.encode()).hexdigest()})]
+        if stored_copy
+        else []
+    )
+    recovered = await repair_long_quotes(result, researcher, extra)
     assert len(llm.requests) == 2 and semantic.calls == [[TARGET]]
     assert [f.evidence_quote for f in recovered.findings] == [TARGET, TARGET]
     assert recovered.findings[1] == unchanged
     assert result.findings[0].evidence_quote == LONG
-    assert recovered.extraction_audit.sources == [source]
+    assert [(s.url, s.content) for s in recovered.extraction_audit.sources] == [
+        (source.url, source.content)
+    ]
     assert recovered.extraction_audit.candidates[-1].original.evidence_quote == LONG
     assert await repair_long_quotes(recovered, researcher) == recovered
     assert len(llm.requests) == 2
@@ -164,7 +189,8 @@ async def test_restored_long_quote_reuses_frozen_source_and_preserves_unaffected
 @pytest.mark.asyncio
 @pytest.mark.parametrize("changed_source", [False, True])
 async def test_recovery_without_matching_source_blocks_reuse_without_provider_calls(
-    settings, changed_source,
+    settings,
+    changed_source,
 ):
     from deep_research.workbench.quote_recovery import quote_length_issues, repair_long_quotes
 
@@ -220,10 +246,12 @@ class RecoveryLLM(FakeLLM):
             candidate = data["candidates"][0]
             option = next(item for item in candidate["quote_options"] if item["text"] == TARGET)
             self.repairs += 1
-            return ExtractedFindingList.model_validate(repair(
-                candidate["candidate_id"],
-                [dict(finding(TARGET, "").model_dump(), quote_id=option["id"])],
-            ))
+            return ExtractedFindingList.model_validate(
+                repair(
+                    candidate["candidate_id"],
+                    [dict(finding(TARGET, "").model_dump(), quote_id=option["id"])],
+                )
+            )
         return await super().parse(system, user, schema, **kwargs)
 
 
@@ -240,7 +268,10 @@ async def test_workflow_restores_short_quotes_before_downstream_work(settings, g
     bb = Blackboard(query="Alpha accuracy", results=[result])
     llm = RecoveryLLM()
     ctx = RunContext(
-        llm=llm, search_tool=FakeSearch(), tracer=Tracer(), settings=settings,
+        llm=llm,
+        search_tool=FakeSearch(),
+        tracer=Tracer(),
+        settings=settings,
         evidence_sources=[source],
     )
 
@@ -271,7 +302,8 @@ async def test_subquestion_progress_rewrites_long_quotes_without_new_retrieval(t
 
     old, _ = legacy_result()
     initial = Blackboard(
-        query="q", plan=ResearchPlan(
+        query="q",
+        plan=ResearchPlan(
             interpretation="q", sub_questions=[SubQuestion(question=old.sub_question)]
         ),
     )
@@ -303,7 +335,11 @@ def test_delivery_blocks_legacy_long_quotes_before_rendering_formal_formats():
 
     result, source = legacy_result()
     detail = RunDetail(
-        id="legacy-long", query="Research Alpha", status="done", results=[result], sources=[source],
+        id="legacy-long",
+        query="Research Alpha",
+        status="done",
+        results=[result],
+        sources=[source],
         report=Report(query="Research Alpha", markdown=TARGET + " [1]", citations=[URL]),
     )
     bundle = build_bundle(detail)
@@ -315,7 +351,8 @@ def test_delivery_blocks_legacy_long_quotes_before_rendering_formal_formats():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("graph", [False, True])
 async def test_failed_workflow_resume_repairs_completed_research_without_reexecuting_it(
-    settings, graph,
+    settings,
+    graph,
 ):
     from deep_research.agents.base import Blackboard, RunContext
     from deep_research.workflow import Step, Workflow, WorkflowEngine
@@ -333,7 +370,8 @@ async def test_failed_workflow_resume_repairs_completed_research_without_reexecu
 
     steps = [Step(agent="producer"), Step(agent="writer", failure_policy="fail_fast")]
     wf = Workflow(
-        name="resume-old-quotes", steps=[] if graph else steps,
+        name="resume-old-quotes",
+        steps=[] if graph else steps,
         nodes=[{"id": step.agent, "step": step.model_dump()} for step in steps] if graph else [],
         edges=[{"id": "p-w", "source": "producer", "target": "writer"}] if graph else [],
     )
@@ -357,7 +395,10 @@ async def test_failed_workflow_resume_repairs_completed_research_without_reexecu
 
     llm = RecoveryLLM()
     resumed_ctx = RunContext(
-        llm=llm, search_tool=FakeSearch(), tracer=Tracer(), settings=settings,
+        llm=llm,
+        search_tool=FakeSearch(),
+        tracer=Tracer(),
+        settings=settings,
         evidence_sources=[source],
     )
     resumed = WorkflowEngine(resumed_ctx, resolver=resolve, resume_run=saved)

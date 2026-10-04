@@ -379,6 +379,7 @@ export default function EvidencePanel({
   referenceUrl,
   selectedLocationCount,
   selectionScope,
+  reviewNote,
   missingEvidence = 0,
   onShowAll,
   url,
@@ -394,7 +395,13 @@ export default function EvidencePanel({
   displayCitation?: number
   referenceUrl?: string
   selectedLocationCount?: number
-  selectionScope?: 'reviewed_unit' | 'source_location' | 'unused_location' | 'unbound'
+  selectionScope?:
+    | 'reviewed_unit'
+    | 'source_location'
+    | 'unused_location'
+    | 'unbound'
+    | 'fulltext_review'
+  reviewNote?: string
   missingEvidence?: number
   onShowAll?: () => void
   url: string
@@ -496,6 +503,7 @@ export default function EvidencePanel({
             </span>
           </div>
           <div className="evidence-drawer-body" ref={bodyRef}>
+            {selectionScope === 'fulltext_review' && <p className="muted small">{reviewNote}</p>}
             {selectionScope === 'unbound' && (
               <p className="muted small">未绑定依据：本句没有可用的核验绑定记录。</p>
             )}
@@ -518,20 +526,24 @@ export default function EvidencePanel({
             )}
             <p className="evidence-verse">不独知其然，亦问其所据。</p>
             <p className="evidence-snapshot-note">
-              展示的是检索服务返回的快照上下文，不等同于完整网页正文或事实已获证实。
+              {selectionScope === 'fulltext_review'
+                ? '核查范围为本次取得的全文文本，来源更新后需要重新核查。'
+                : '展示的是检索服务返回的快照上下文，不等同于完整网页正文或事实已获证实。'}
               {findings.length > 1 &&
                 (!selectionScope || selectionScope === 'source_location') &&
                 ` 当前引用按来源关联，共 ${findings.length} 条证据记录，尚非正文句子级一一映射。`}
             </p>
             {findings.length === 0 ? (
               <p className="muted small">
-                {selectionScope === 'unused_location'
-                  ? '这个位置未被本次内容核验选用。'
-                  : selectionScope === 'unbound'
-                    ? '可主动浏览来源记录，但不能据此视为本句已获支持。'
-                    : selectionScope === 'reviewed_unit'
-                      ? '该段核验选用的摘录暂未加载。'
-                      : '该来源暂无结构化证据记录。'}
+                {selectionScope === 'fulltext_review'
+                  ? '此判断依据完整文本的核查记录，不以单条摘录证明内容缺失。'
+                  : selectionScope === 'unused_location'
+                    ? '这个位置未被本次内容核验选用。'
+                    : selectionScope === 'unbound'
+                      ? '可主动浏览来源记录，但不能据此视为本句已获支持。'
+                      : selectionScope === 'reviewed_unit'
+                        ? '该段核验选用的摘录暂未加载。'
+                        : '该来源暂无结构化证据记录。'}
               </p>
             ) : (
               findings.map((f, i) => (

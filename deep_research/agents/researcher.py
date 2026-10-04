@@ -250,6 +250,12 @@ class Researcher:
         require_corroboration: bool | None = None,  # 保留签名兼容；背景过滤不再依赖印证
         search_queries: list[str] | None = None,
     ) -> ResearchResult | None:
+        if not self._custom_evidence_verifier:
+            from ..workbench.quality import policy_from
+
+            self.evidence_verifier = EvidenceVerifier(
+                max_quote_chars=policy_from(self.settings).max_evidence_quote_chars
+            )
         self.tracer.emit("RESEARCHER", "start", f"检索：{sub_question}")
         queries = list(dict.fromkeys(q.strip() for q in search_queries or [] if q.strip()))
         if queries:

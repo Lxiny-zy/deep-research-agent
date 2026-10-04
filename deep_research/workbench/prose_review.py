@@ -12,7 +12,8 @@ from collections import Counter
 from dataclasses import asdict
 from typing import Any
 
-from ..models import ResearchResult
+from ..document_corpus import FullTextCorpus, corpus_from_inputs
+from ..models import ResearchResult, Source
 from .delivery.markdown import _parser, framing_paragraphs, parse_blocks
 from .delivery.math_markdown import citation_text, equation_prose_spans, only_math
 from .gates import _body_without_references
@@ -270,6 +271,7 @@ class ProseReviewer:
         corroboration: bool = False,
         translation_citations: list[int] | None = None,
         statistics: dict[str, Any] | None = None,
+        fulltext_corpus: FullTextCorpus | None = None,
     ) -> None:
         self.evidence = evidence
         self.source_version = source_version
@@ -288,6 +290,8 @@ class ProseReviewer:
             capacity,
             context=f"用户问题：{query}",
             system_rules=STATISTICS_RULES if statistics is not None else "",
+            fulltext_corpus=fulltext_corpus,
+            check_fulltext=statistics is None,
         )
         self.records: dict[str, dict[str, Any]] = {}
 
@@ -308,9 +312,20 @@ class ProseReviewer:
             allowed = {e["id"] for e in selected}
             if decision.verdict == "uncertain":
                 continue
+            if self.reviewer.fulltext_issue(unit, decision):
+                continue
+            fulltext_only = not decision.evidence_ids and self.reviewer.fulltext_supports(
+                unit, decision
+            )
             if decision.verdict == "supported" and (
-                not decision.evidence_ids or not set(decision.evidence_ids).issubset(allowed)
-                or alignment_issue(unit.text, unit.citations, decision.evidence_ids, self.evidence)
+                (not decision.evidence_ids and not fulltext_only)
+                or not set(decision.evidence_ids).issubset(allowed)
+                or (
+                    not fulltext_only
+                    and alignment_issue(
+                        unit.text, unit.citations, decision.evidence_ids, self.evidence
+                    )
+                )
             ):
                 continue
             if decision.verdict == "non_factual" and unit.kind in {"claim", "translation"}:
@@ -320,6 +335,8 @@ class ProseReviewer:
             if decision.verdict == "non_factual" and numeric_fact(unit.text):
                 continue
             self.reviewer.cache[digest([asdict(unit), selected])] = decision
+            if decision.fulltext_review:
+                self.reviewer.fulltext_records[unit.id] = decision.fulltext_review
         return True
 
     @classmethod
@@ -334,6 +351,8 @@ class ProseReviewer:
         uncited_sections: tuple[str, ...] = (),
         corroboration: bool = False,
         abstracts: list[dict[str, Any]] | None = None,
+        scratch: dict[str, Any] | None = None,
+        sources: list[Source] | None = None,
     ) -> ProseReviewer:
         evidence = evidence_records(results, mapping, corroboration=corroboration)
         for index, abstract in enumerate(abstracts or [], 1):
@@ -358,10 +377,16 @@ class ProseReviewer:
             translation_citations=list(range(-1, -len(abstracts) - 1, -1))
             if abstracts is not None
             else None,
+            fulltext_corpus=corpus_from_inputs(results, mapping, scratch, sources),
         )
 
     def signature(self, markdown: str) -> str:
         from .analysis_review import STATISTICS_POLICY_VERSION
+        from .fulltext_review import requires_fulltext
+
+        uses_fulltext = self.reviewer.check_fulltext and any(
+            requires_fulltext(unit) for unit in self.units(markdown)[0]
+        )
 
         return digest(
             {
@@ -370,6 +395,9 @@ class ProseReviewer:
                 "body": body_text(markdown, strip_references=False),
                 "evidence": self.evidence,
                 "source_version": self.source_version,
+                "fulltext_corpus": self.reviewer.fulltext_corpus.fingerprint
+                if uses_fulltext
+                else None,
                 "query": self.query,
                 "uncited_sections": self.uncited_sections,
                 "implicit": self.implicit,
@@ -501,6 +529,8 @@ class ProseReviewer:
             problems.append("缺少完整摘要原文，不能核验摘要翻译")
         positions = {location["id"]: location["start_line"] for location in locations}
         for d in decisions:
+            unit = expected[d.unit_id]
+            fulltext_only = not d.evidence_ids and self.reviewer.fulltext_supports(unit, d)
             allowed = {
                 e["id"] for e in self.evidence if e["citation"] in expected[d.unit_id].citations
             }
@@ -513,13 +543,16 @@ class ProseReviewer:
             elif d.verdict == "non_factual" and numeric_fact(expected[d.unit_id].text):
                 problems.append(f"第 {positions[d.unit_id]} 行：数值事实被错误归类为纯编排说明")
             elif d.verdict == "supported" and (
-                not d.evidence_ids or not set(d.evidence_ids).issubset(allowed)
+                (not d.evidence_ids and not fulltext_only)
+                or not set(d.evidence_ids).issubset(allowed)
             ):
                 problems.append(f"第 {positions[d.unit_id]} 行：终稿证据映射超出该单元引用范围")
-            elif d.verdict == "supported":
-                unit = expected[d.unit_id]
+            elif d.verdict == "supported" and not fulltext_only:
                 issue = alignment_issue(unit.text, unit.citations, d.evidence_ids, self.evidence)
                 if issue:
+                    problems.append(f"第 {positions[d.unit_id]} 行：{issue}")
+            if d.verdict in {"supported", "non_factual"}:
+                if issue := self.reviewer.fulltext_issue(unit, d):
                     problems.append(f"第 {positions[d.unit_id]} 行：{issue}")
         return True, problems
 
@@ -533,6 +566,7 @@ def reviewer_for_report(
     capacity: int,
     *,
     corroboration: bool = False,
+    sources: list[Source] | None = None,
 ) -> ProseReviewer | None:
     from .contract import contract_from_scratch
     from .paper_abstract import checked_abstracts
@@ -602,6 +636,8 @@ def reviewer_for_report(
         uncited_sections=uncited,
         corroboration=corroboration,
         abstracts=checked_abstracts(scratch) if paper_read else None,
+        scratch=scratch,
+        sources=sources,
     )
 
 

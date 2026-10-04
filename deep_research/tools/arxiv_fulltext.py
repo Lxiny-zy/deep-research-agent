@@ -567,15 +567,47 @@ class ArxivEprintFetcher:
             required_names = {_canonical(str(item)) for item in required}
         if any(_canonical(section.title) == "abstract" for section in document.sections):
             required_names.add("abstract")
-        selected = select_sections(
-            document,
-            query,
-            max_chars=max_chars,
-            required=required_names,
+        selected = (
+            list(document.sections)
+            if required is True
+            else select_sections(
+                document,
+                query,
+                max_chars=max_chars,
+                required=required_names,
+            )
         )
         if not selected:
             return [source]
-        return [_section_source(source, section) for section in selected]
+        sources = [_section_source(source, section) for section in selected]
+        if required is True:
+            from ..document_corpus import mark_complete_sources
+
+            clean = _strip_comments(document.text)
+            first_section = next(
+                (
+                    match.start()
+                    for match in _SECTION_RE.finditer(clean)
+                    if _section_value(clean, match.end()) is not None
+                ),
+                None,
+            )
+            if first_section is not None and clean[:first_section].strip():
+                # The section selector omits text before the first heading.
+                # Keep it, including definitions and the abstract, for full-text checks.
+                sources.insert(
+                    0,
+                    _section_source(
+                        source,
+                        LatexSection(
+                            title="Document preface",
+                            text=clean[:first_section],
+                            index=-2,
+                        ),
+                    ),
+                )
+            return mark_complete_sources(sources)
+        return sources
 
     async def aclose(self) -> None:
         if self._owns_client:

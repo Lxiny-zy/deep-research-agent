@@ -84,6 +84,11 @@ class Source(BaseModel):
     section_end: bool = False
     # Explicit document metadata does not by itself establish academic publication status.
     document_authors: list[str] = Field(default_factory=list, max_length=32)
+    # Set by complete-document parsers. Missing chunks or changed text invalidate
+    # the shared manifest; a collection of retrieved excerpts is not a full text.
+    document_content_hash: str = ""
+    document_part_index: int | None = Field(None, ge=0)
+    document_part_count: int | None = Field(None, gt=0)
     # 非空即表示「这是一条学术来源」。通用网页后端保持 None，因此既有部署的
     # 行为与产物完全不变——学术元数据是增量信息，不是新的必填契约。
     scholarly: ScholarlyMetadata | None = None

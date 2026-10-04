@@ -144,8 +144,9 @@ export interface CitationOccurrence {
   document: number
   locations: number[]
   unit_id: string
-  scope: 'reviewed_unit' | 'source_location' | 'unused_location'
+  scope: 'reviewed_unit' | 'source_location' | 'unused_location' | 'fulltext_review'
   evidence_ids: string[]
+  review_note?: string
 }
 
 export type ReportBlock = ProseBlock | TableBlock | ChartBlock

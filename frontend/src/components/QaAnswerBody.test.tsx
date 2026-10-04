@@ -14,6 +14,47 @@ const second: QaEvidence = {
   evidence_quote: 'geometric matching',
 }
 
+it('shows full-text review provenance without locating an unrelated excerpt', () => {
+  const id = 'f'.repeat(24)
+  const text = '全文文本中未见 dropout 设置 [1]。'
+  const note = '全文核查：本次取得的全文文本中未见所查信息'
+  const binding: ReportBibliography = {
+    source_body: text,
+    body: `全文文本中未见 dropout 设置 [[1]](#cite-o-${id})。`,
+    binding_status: 'bound',
+    documents: [
+      { index: 1, identity: 'p', title: 'Paper', reference: '', url: '', locations: [1] },
+    ],
+    locations: [{ index: 1, document: 1, url: first.source_url, label: '', content_hashes: [] }],
+    occurrences: [
+      {
+        id,
+        run: 0,
+        document: 1,
+        locations: [1],
+        unit_id: 'u',
+        scope: 'fulltext_review',
+        evidence_ids: [],
+        review_note: note,
+      },
+    ],
+  }
+  const locate = vi.fn()
+  render(
+    <QaAnswerBody
+      text={text}
+      citations={[first.source_url]}
+      evidence={[first]}
+      binding={binding}
+      onLocate={locate}
+    />,
+  )
+  fireEvent.click(screen.getByRole('button', { name: '查看引用 1 的全文核查' }))
+  expect(screen.getByRole('dialog', { name: '全文核查记录' })).toHaveTextContent(note)
+  expect(screen.queryByText(first.evidence_quote)).toBeNull()
+  expect(locate).not.toHaveBeenCalled()
+})
+
 it('uses reviewed evidence instead of lexical similarity and lets the reader choose multiple matches', () => {
   const id = 'a'.repeat(24)
   const text = '选择参考波段 [1]。'

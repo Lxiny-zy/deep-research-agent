@@ -78,7 +78,13 @@ def prime_review(
     from .writers import mindmap_to_markdown
 
     bound, _ = checked_review(
-        model.model_dump(mode="json"), citations, results, record, mindmap_to_markdown(model)
+        model.model_dump(mode="json"),
+        citations,
+        results,
+        record,
+        mindmap_to_markdown(model),
+        corpus=reviewer.fulltext_corpus,
+        query=query,
     )
     if not bound:
         return False
@@ -91,8 +97,11 @@ def prime_review(
         allowed = {e["id"] for e in selected}
         if decision.verdict == "uncertain":
             continue
+        if reviewer.fulltext_issue(unit, decision):
+            continue
         if decision.verdict == "supported" and (
-            not decision.evidence_ids or not set(decision.evidence_ids).issubset(allowed)
+            (not decision.evidence_ids and not reviewer.fulltext_supports(unit, decision))
+            or not set(decision.evidence_ids).issubset(allowed)
         ):
             continue
         if decision.verdict == "non_factual" and (
@@ -100,6 +109,8 @@ def prime_review(
         ):
             continue
         reviewer.cache[digest([asdict(unit), selected])] = decision
+        if decision.fulltext_review:
+            reviewer.fulltext_records[unit.id] = decision.fulltext_review
     return True
 
 
@@ -115,7 +126,13 @@ async def repair_nodes(
     from .writers import mindmap_to_markdown
 
     bound, _ = checked_review(
-        model.model_dump(mode="json"), citations, results, record, mindmap_to_markdown(model)
+        model.model_dump(mode="json"),
+        citations,
+        results,
+        record,
+        mindmap_to_markdown(model),
+        corpus=reviewer.fulltext_corpus,
+        query=query,
     )
     if not bound:
         return None

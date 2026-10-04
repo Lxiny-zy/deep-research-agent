@@ -258,6 +258,52 @@ it('shows a readable explanation for failed source checks while preserving raw d
   expect(finding.verification.corroboration_reason).toBe('consistency_verifier_failed:ValueError')
 })
 
+it('shows a bound full-text review without presenting a source excerpt as absence proof', async () => {
+  const id = 'f'.repeat(24)
+  const url = 'https://example.org/paper'
+  const markdown = '全文文本中未见 dropout 设置 [1]。'
+  const note = '全文核查：本次取得的全文文本中未见所查信息'
+  const catalog: ReportBibliography = {
+    source_body: markdown,
+    body: `全文文本中未见 dropout 设置 [[1]](#cite-o-${id})。`,
+    binding_status: 'bound',
+    documents: [{ index: 1, identity: 'p', title: 'Paper', reference: '', url, locations: [1] }],
+    locations: [{ index: 1, document: 1, url, label: '', content_hashes: [] }],
+    occurrences: [
+      {
+        id,
+        run: 0,
+        document: 1,
+        locations: [1],
+        unit_id: 'u',
+        scope: 'fulltext_review',
+        evidence_ids: [],
+        review_note: note,
+      },
+    ],
+  }
+  render(
+    <ReportView
+      markdown={markdown}
+      citations={[url]}
+      streaming={false}
+      bibliography={catalog}
+      findings={[
+        makeFinding({
+          source_url: url,
+          evidence_quote: 'UNRELATED_QUOTE',
+          statement: 'Other fact',
+          claim_id: 'other',
+        }),
+      ]}
+    />,
+  )
+  await userEvent.click(screen.getByRole('button', { name: '查看引用 1 的证据' }))
+  expect(screen.getByRole('dialog')).toHaveTextContent(note)
+  expect(screen.queryByText('UNRELATED_QUOTE')).toBeNull()
+  expect(screen.queryByText('该段核验选用的摘录暂未加载。')).toBeNull()
+})
+
 it('uses the selected evidence for each occurrence, allows explicit browsing and closes stale selection', async () => {
   const url = 'https://example.org/paper'
   const markdown = 'CLAIM-A [1].\n\nCLAIM-B [1].'

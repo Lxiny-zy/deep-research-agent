@@ -470,12 +470,19 @@ async def answer_question(
     results = [ResearchResult(sub_question=query, findings=findings)]
     from .prose_review import ProseReviewer
 
+    fulltext_sources = list(paper_sources or [])
+    for thought in thoughts:
+        if thought.get("tool") == "extraction_audit":
+            fulltext_sources.extend(
+                Source.model_validate(source) for source in thought["audit"]["sources"]
+            )
     reviewer = ProseReviewer.research(
         ctx.llm_for("evidence_verifier"),
         results,
         url_to_idx,
         ctx.settings.llm_max_input_chars,
         query=f"{context}\n\n本轮问题：{question}" + coverage,
+        sources=fulltext_sources,
     )
 
     async def assess_answer(text: str) -> tuple[ReportCheck, dict[str, Any] | None]:

@@ -102,7 +102,9 @@ class Attachment(BaseModel):
         }
 
     def sources(self) -> list[Source]:
-        return [
+        from ..document_corpus import mark_complete_sources
+
+        sources = [
             Source(
                 title=self.title or self.filename,
                 url=attachment_url(self.id, chunk.ordinal),
@@ -115,6 +117,7 @@ class Attachment(BaseModel):
             )
             for chunk in self.chunks
         ]
+        return sources if self.truncated else mark_complete_sources(sources)
 
 
 ATTACHMENT_URL_PREFIX = "https://workspace.invalid/attachments/"

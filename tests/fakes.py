@@ -129,6 +129,27 @@ class FakeLLM:
                     for unit in data["units"]
                 ]
             )
+        from deep_research.workbench.fulltext_review import FullTextChecks, FullTextTarget
+
+        if schema is FullTextTarget:
+            return FullTextTarget(
+                kind="not_applicable",
+                document_ids=[],
+                keywords=[],
+                reason="fixture judgement; not an absence accuracy test",
+            )
+        if schema is FullTextChecks:
+            return FullTextChecks(
+                checks=[
+                    dict(
+                        part_id=part["id"],
+                        verdict="not_relevant",
+                        quote="",
+                        reason="fixture text check",
+                    )
+                    for part in json.loads(user)["parts"]
+                ]
+            )
         if schema is ResearchPlan:
             return ResearchPlan(
                 interpretation="测试理解",

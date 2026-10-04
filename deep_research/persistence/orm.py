@@ -386,6 +386,11 @@ class SourceRow(Base):
     # 而拆列会让每加一个字段都要一次迁移。非学术来源为 NULL。
     scholarly: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True, default=None)
     document_authors: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=None)
+    source_context: Mapped[dict[str, object] | None] = mapped_column(
+        JSON(none_as_null=True),
+        nullable=True,
+        default=None,
+    )
 
     run: Mapped[ResearchRun] = relationship(back_populates="sources")
 

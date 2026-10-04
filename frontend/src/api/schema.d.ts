@@ -1820,6 +1820,11 @@ export interface components {
             id: string;
             /** Locations */
             locations: number[];
+            /**
+             * Review Note
+             * @default
+             */
+            review_note?: string;
             /** Run */
             run: number;
             /**
@@ -1827,7 +1832,7 @@ export interface components {
              * @default source_location
              * @enum {string}
              */
-            scope?: "reviewed_unit" | "source_location" | "unused_location";
+            scope?: "reviewed_unit" | "source_location" | "unused_location" | "fulltext_review";
             /**
              * Unit Id
              * @default
@@ -3949,6 +3954,15 @@ export interface components {
             content_hash?: string;
             /** Document Authors */
             document_authors?: string[];
+            /**
+             * Document Content Hash
+             * @default
+             */
+            document_content_hash?: string;
+            /** Document Part Count */
+            document_part_count?: number | null;
+            /** Document Part Index */
+            document_part_index?: number | null;
             /**
              * Locator
              * @default

@@ -82,6 +82,7 @@ class ReportService:
                 scratch,
                 0,
                 corroboration=requires_corroboration(detail),
+                sources=detail.sources,
             )
             record = stored_review(scratch)
             if document.bibliography is not None:

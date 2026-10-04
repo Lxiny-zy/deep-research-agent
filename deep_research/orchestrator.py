@@ -767,16 +767,16 @@ class DeepResearchAgent:
 
         recovery_sources = []
         if existing_execution is not None and self.repo is not None and run_id is not None:
-            from .workbench.quality import policy_from
-            from .workbench.quote_recovery import needs_quote_repair
-
-            if any(
-                needs_quote_repair(result, policy_from(self.settings).max_evidence_quote_chars)
-                for result in bb.results
-            ):
+            if bb.results:
                 saved_detail = await self.repo.get_run(run_id)
                 if saved_detail is not None:
                     recovery_sources = saved_detail.sources
+        from .workbench.content_revision import REVISION_SOURCES_KEY
+
+        if seeded := bb.scratch.get(REVISION_SOURCES_KEY):
+            from .models import Source
+
+            recovery_sources.extend(Source.model_validate(source) for source in seeded)
         ctx = RunContext(
             llm=self.llm,
             search_tool=self.search_tool,
@@ -1181,6 +1181,7 @@ class DeepResearchAgent:
             bb.scratch,
             self.settings.llm_max_input_chars,
             corroboration=effective_require_corroboration(bb, self.settings),
+            sources=ctx.evidence_sources,
         )
         previous_review = stored_review(bb.scratch)
         reviewed_prose = bool(
@@ -1241,6 +1242,7 @@ class DeepResearchAgent:
                 bb.scratch,
                 self.settings.llm_max_input_chars,
                 corroboration=effective_require_corroboration(bb, self.settings),
+                sources=ctx.evidence_sources,
             )
             if prose_reviewer is not None:
                 if reviewed_prose:

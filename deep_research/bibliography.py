@@ -42,8 +42,11 @@ class CitationOccurrence(BaseModel):
     document: int
     locations: list[int]
     unit_id: str = ""
-    scope: Literal["reviewed_unit", "source_location", "unused_location"] = "source_location"
+    scope: Literal["reviewed_unit", "source_location", "unused_location", "fulltext_review"] = (
+        "source_location"
+    )
     evidence_ids: list[str] = Field(default_factory=list)
+    review_note: str = ""
 
 
 class Bibliography(BaseModel):

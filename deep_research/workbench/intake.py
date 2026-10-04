@@ -85,6 +85,12 @@ async def _fetch_document(url: str) -> list[Source]:
                 document_authors=authors if isinstance(authors, list) else [],
             )
         )
+    if prepared.kind == "pdf" or (
+        getattr(prepared, "mime_type", "").split(";", 1)[0].strip().casefold() == "application/pdf"
+    ):
+        from ..document_corpus import mark_complete_sources
+
+        return mark_complete_sources(sources)
     return sources
 
 

@@ -57,6 +57,7 @@ def bind_review(
         for document, locations in groups.items():
             selected = []
             scope = "source_location"
+            review_note = ""
             if decision and decision["verdict"] == "supported":
                 selected = list(
                     dict.fromkeys(
@@ -66,10 +67,40 @@ def bind_review(
                     )
                 )
                 scope = "reviewed_unit" if selected else "unused_location"
+            fulltext = decision.get("fulltext_review") if decision else None
+            if isinstance(fulltext, dict) and fulltext.get("status") in {
+                "absence_confirmed",
+                "critique_supported",
+            }:
+                targets = set((fulltext.get("target") or {}).get("document_ids", []))
+                if any(
+                    reviewer.reviewer.fulltext_corpus.citations.get(location) in targets
+                    for location in locations
+                ):
+                    scope = "fulltext_review"
+                    review_note = "全文核查：" + str(fulltext["reason"])
+                    passages = list(
+                        dict.fromkeys(
+                            f"{row['source']} {row['locator']}「{row['quote']}」"
+                            for row in fulltext.get("scanned", [])
+                            if row["verdict"] == "supports"
+                        )
+                    )
+                    if passages:
+                        review_note += "；" + "；".join(passages)
             catalog.occurrences.append(
                 CitationOccurrence(
                     id=digest(
-                        [record["input_hash"], uid, ordinal, document, locations, scope, selected]
+                        [
+                            record["input_hash"],
+                            uid,
+                            ordinal,
+                            document,
+                            locations,
+                            scope,
+                            selected,
+                            review_note,
+                        ]
                     )[:24],
                     run=ordinal,
                     document=document,
@@ -77,6 +108,7 @@ def bind_review(
                     unit_id=uid,
                     scope=scope,
                     evidence_ids=selected,
+                    review_note=review_note,
                 )
             )
     catalog.binding_status = "bound"

@@ -192,7 +192,13 @@ async def review_figure(figure: ConceptFigure, reviewer: SupportReviewer) -> dic
     }
 
 
-def check_figure(figure: ConceptFigure, evidence: list[dict[str, Any]], record: Any) -> list[str]:
+def check_figure(
+    figure: ConceptFigure,
+    evidence: list[dict[str, Any]],
+    record: Any,
+    *,
+    corpus: Any = None,
+) -> list[str]:
     structural = structure_issues(figure)
     if structural:
         return structural
@@ -213,6 +219,7 @@ def check_figure(figure: ConceptFigure, evidence: list[dict[str, Any]], record: 
     if len(decisions) != len(units) or {d.unit_id for d in decisions} != {u.id for u in units}:
         return ["图示核验决定缺失或重复"]
     by_id = {unit.id: unit for unit in units}
+    checker = SupportReviewer(None, evidence, 0, fulltext_corpus=corpus)
     return [
         d.reason or "图示未通过关系核验"
         for d in decisions
@@ -221,7 +228,7 @@ def check_figure(figure: ConceptFigure, evidence: list[dict[str, Any]], record: 
             or (
                 d.verdict == "supported"
                 and (
-                    not d.evidence_ids
+                    (not d.evidence_ids and not checker.fulltext_supports(by_id[d.unit_id], d))
                     or not set(d.evidence_ids).issubset(
                         {e["id"] for e in evidence if e["citation"] in by_id[d.unit_id].citations}
                     )
@@ -231,5 +238,6 @@ def check_figure(figure: ConceptFigure, evidence: list[dict[str, Any]], record: 
                 d.verdict == "non_factual"
                 and (by_id[d.unit_id].kind == "claim" or asserted_comparison(by_id[d.unit_id].text))
             )
+            or checker.fulltext_issue(by_id[d.unit_id], d)
         )
     ]

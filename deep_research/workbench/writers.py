@@ -277,6 +277,8 @@ class TemplateWriter:
                 uncited_sections=abstract_sections(template.key, policy),
                 corroboration=require_corroboration,
                 abstracts=checked_abstracts(bb.scratch) if template.key == "paperRead" else None,
+                scratch=bb.scratch,
+                sources=ctx.evidence_sources,
             )
 
         from .content_revision import revision_seed
@@ -408,6 +410,8 @@ class TemplateWriter:
                 uncited_sections=abstract_sections(template.key, policy),
                 corroboration=corroboration,
                 abstracts=checked_abstracts(bb.scratch) if template.key == "paperRead" else None,
+                scratch=bb.scratch,
+                sources=ctx.evidence_sources,
             )
             if url_to_idx or template.key == "paperRead"
             else None
@@ -510,12 +514,17 @@ class TemplateWriter:
         from .support import evidence_records
 
         def new_figure_reviewer() -> SupportReviewer:
+            from ..document_corpus import corpus_from_inputs
+
             return SupportReviewer(
                 ctx.llm_for("evidence_verifier"),
                 evidence_records(bb.results, url_to_idx, corroboration=corroboration),
                 ctx.settings.llm_max_input_chars,
                 context=bb.query,
                 system_rules=SCOPED_FIGURE_RULES,
+                fulltext_corpus=corpus_from_inputs(
+                    bb.results, url_to_idx, bb.scratch, ctx.evidence_sources
+                ),
             )
 
         figure = None
@@ -936,10 +945,15 @@ class MindmapWriter(TemplateWriter):
         versions: dict[str, Any] = {}
         reviews: dict[str, dict[str, Any]] = {}
         citations = [url for url, _ in sorted(url_to_idx.items(), key=lambda item: item[1])]
+        from ..document_corpus import corpus_from_inputs
+
         reviewer = SupportReviewer(
             ctx.llm_for("evidence_verifier"),
             evidence_records(bb.results, url_to_idx, corroboration=corroboration),
             ctx.settings.llm_max_input_chars,
+            fulltext_corpus=corpus_from_inputs(
+                bb.results, url_to_idx, bb.scratch, ctx.evidence_sources
+            ),
         )
         from .mindmap_edit import repair_nodes, review_units
         from .prose_review import can_revise

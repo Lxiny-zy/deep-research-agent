@@ -62,6 +62,30 @@ const components: Components = {
     if (streaming || !url) return <span className="qa-inline-cite is-unavailable">{children}</span>
     const label = source?.source_reference || source?.source_title || url
     const origin = source?.origin ? ORIGINS[source.origin] : '来源'
+    if (occurrence?.scope === 'fulltext_review' && occurrence.review_note) {
+      return (
+        <>
+          <button
+            type="button"
+            className="qa-inline-cite"
+            aria-label={`查看引用 ${number} 的全文核查`}
+            aria-expanded={choosing}
+            onClick={() => setChoosing(true)}
+          >
+            {children}
+          </button>
+          {choosing && (
+            <EvidenceChoice
+              bound
+              items={[]}
+              fulltextNote={occurrence.review_note}
+              onClose={() => setChoosing(false)}
+              onLocate={() => {}}
+            />
+          )}
+        </>
+      )
+    }
     if (scoped && !source)
       return (
         <span
@@ -173,11 +197,13 @@ export default function QaAnswerBody({
 
 function EvidenceChoice({
   bound,
+  fulltextNote,
   items,
   onClose,
   onLocate,
 }: {
   bound: boolean
+  fulltextNote?: string
   items: QaEvidence[]
   onClose: () => void
   onLocate: (item: QaEvidence) => void
@@ -189,22 +215,23 @@ function EvidenceChoice({
         className="evidence-drawer"
         role="dialog"
         aria-modal="false"
-        aria-label={bound ? '选择论文依据' : '浏览来源记录'}
+        aria-label={fulltextNote ? '全文核查记录' : bound ? '选择论文依据' : '浏览来源记录'}
         tabIndex={-1}
         ref={ref}
       >
         <div className="evidence-drawer-inner">
           <div className="evidence-drawer-head">
-            <h3>{bound ? '选择论文依据' : '浏览来源记录'}</h3>
+            <h3>{fulltextNote ? '全文核查记录' : bound ? '选择论文依据' : '浏览来源记录'}</h3>
             <button type="button" className="btn btn-ghost" onClick={onClose}>
               关闭
             </button>
           </div>
           <div className="evidence-drawer-body">
             <p>
-              {bound
-                ? '这段内容的核验选用了多条摘录，请选择要查看的位置。'
-                : '未绑定依据：以下是该来源的记录，不代表本句的核验依据。'}
+              {fulltextNote ||
+                (bound
+                  ? '这段内容的核验选用了多条摘录，请选择要查看的位置。'
+                  : '未绑定依据：以下是该来源的记录，不代表本句的核验依据。')}
             </p>
             {items.map((item, index) => (
               <article className="evidence-card" key={`${item.support_id}-${index}`}>

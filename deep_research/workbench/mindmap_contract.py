@@ -6,10 +6,12 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from ..document_corpus import FullTextCorpus, corpus_from_inputs
 from ..models import ResearchResult
 from .support import (
     SUPPORT_POLICY_VERSION,
     SupportDecision,
+    SupportReviewer,
     SupportUnit,
     asserted_comparison,
     digest,
@@ -102,7 +104,14 @@ def review_record(
 
 
 def checked_review(
-    raw: dict, citations: list[str], results: list[ResearchResult], record: Any, body: str
+    raw: dict,
+    citations: list[str],
+    results: list[ResearchResult],
+    record: Any,
+    body: str,
+    *,
+    corpus: FullTextCorpus | None = None,
+    query: str = "",
 ) -> tuple[bool, list[str]]:
     """Check coverage and binding; bool indicates a current review, not a pass."""
     from .gates import _body_without_references
@@ -119,22 +128,39 @@ def checked_review(
         decisions = [SupportDecision.model_validate(d) for d in record.get("decisions", [])]
     except ValueError:
         return False, ["导图节点核对记录无法解析"]
-    expected = {u.id: u for u in units(model)}
+    from .mindmap_edit import review_units
+
+    expected = {u.id: u for u in (review_units(model, query) if query else units(model))}
     if {d.unit_id for d in decisions} != set(expected) or len(decisions) != len(expected):
         return False, ["导图的节点核对记录不完整或重复"]
     evidence = evidence_records(results, {url: i for i, url in enumerate(citations, 1)})
+    checker = SupportReviewer(
+        None,
+        evidence,
+        0,
+        fulltext_corpus=corpus
+        or corpus_from_inputs(
+            results,
+            {url: i for i, url in enumerate(citations, 1)},
+        ),
+    )
     problems = structural_issues(model, len(citations))
     for decision in decisions:
         unit = expected[decision.unit_id]
         allowed = {e["id"] for e in evidence if e["citation"] in unit.citations}
+        fulltext_only = not decision.evidence_ids and checker.fulltext_supports(unit, decision)
         if decision.verdict in {"unsupported", "uncertain"}:
             problems.append(f"节点 {unit.id}：{decision.reason}")
         elif decision.verdict == "supported" and (
-            not decision.evidence_ids or not set(decision.evidence_ids).issubset(allowed)
+            (not decision.evidence_ids and not fulltext_only)
+            or not set(decision.evidence_ids).issubset(allowed)
         ):
             problems.append(f"节点 {unit.id}：证据映射不属于该节点")
         elif decision.verdict == "non_factual" and (
             unit.kind == "claim" or asserted_comparison(unit.text)
         ):
             problems.append(f"节点 {unit.id}：事实节点不能免于证据核对")
+        if decision.verdict in {"supported", "non_factual"}:
+            if issue := checker.fulltext_issue(unit, decision):
+                problems.append(f"节点 {unit.id}：{issue}")
     return True, problems

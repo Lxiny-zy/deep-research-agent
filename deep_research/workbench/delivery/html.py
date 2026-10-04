@@ -317,6 +317,12 @@ def _citation_evidence_html(
         if target.startswith("o-") and occurrence is None:
             continue
         source_browse = target.startswith("source-")
+        fulltext = bool(
+            occurrence
+            and occurrence.scope == "fulltext_review"
+            and occurrence.review_note
+            and bibliography.binding_status == "bound"
+        )
         indices = (
             occurrence.locations
             if occurrence
@@ -325,7 +331,7 @@ def _citation_evidence_html(
         selected = (
             set(occurrence.evidence_ids)
             if occurrence
-            and occurrence.scope == "reviewed_unit"
+            and occurrence.scope in {"reviewed_unit", "fulltext_review"}
             and bibliography.binding_status == "bound"
             else set()
         )
@@ -367,10 +373,14 @@ def _citation_evidence_html(
             heading = "来源全部摘录"
             note = "<p>以下为这些来源位置保存的全部摘录，不代表当前句的核验依据。</p>"
         else:
-            heading = "引用依据" if selected else "未绑定依据"
+            heading = "全文核查" if fulltext else "引用依据" if selected else "未绑定依据"
             broad = "-".join(map(str, indices))
             explanation = (
-                "按本段或表格行的核验结果展示。" if selected else "当前引用没有有效的核验摘录绑定。"
+                escape(occurrence.review_note)
+                if fulltext and occurrence
+                else "按本段或表格行的核验结果展示。"
+                if selected
+                else "当前引用没有有效的核验摘录绑定。"
             )
             note = f'<p>{explanation}<a href="#cite-source-{broad}">查看这些位置的全部摘录</a></p>'
         entries.append(
