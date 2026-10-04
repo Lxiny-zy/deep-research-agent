@@ -53,6 +53,7 @@ class QualityPolicy(BaseModel):
     require_limitations: bool = True
     # ---- 返工与收敛 ----
     max_revisions: int = Field(2, ge=0, le=4)
+    qa_claim_max_revisions: int = Field(2, ge=0, le=4)
     extraction_max_revisions: int = Field(1, ge=0, le=4)
     review_evidence_rounds: int = Field(1, ge=0, le=4)
     fail_on_quality: bool = False
@@ -164,7 +165,19 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "返工与收敛",
         "int",
         "质量检查不合格时，把问题清单交回写作者重写的最大次数。0 表示不返工、"
-        "只标注问题。每次返工都会消耗额外 token；返工后仍取问题最少的一版交付。",
+        "只标注问题。问答中仅计引用和数值等机械问题，断言问题另计轮数。"
+        "每次返工都会消耗额外 token；报告返工后仍取问题最少的一版交付。",
+        0,
+        4,
+        "次",
+    ),
+    QualityField(
+        "qa_claim_max_revisions",
+        "问答断言修订轮数",
+        "返工与收敛",
+        "int",
+        "问答中结论未得到引用支持时的修订次数，与补引用、修正数值的机械修订分别计数。"
+        "0 表示仅核验不修订断言；用尽后保留可核验内容。每轮仍消耗本次任务的总 token 预算。",
         0,
         4,
         "次",

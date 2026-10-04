@@ -33,6 +33,7 @@ from ..prompting import (
     structured_system_prompt,
 )
 from ..report.validation import ReportCheck, validate_body
+from ..token_budget import TokenBudgetExceeded
 from ..tools.base import SearchTool
 from .qa_cache import PaperEvidenceCache, evidence_cache_key
 from .qa_context import dialogue_context
@@ -497,15 +498,25 @@ async def answer_question(
     check, audit = await assess_answer(body)
     from .quality import coerce_policy
 
-    for _ in range(coerce_policy(ctx.settings.quality).max_revisions):
+    policy = coerce_policy(ctx.settings.quality)
+    revision_limits = {"mechanical": policy.max_revisions, "claim": policy.qa_claim_max_revisions}
+    revision_counts = {"mechanical": 0, "claim": 0}
+    while True:
         support_issues = audit["issues"] if audit and audit["status"] != "pass" else []
         if (not check.issues and not support_issues) or (audit and not audit["can_revise"]):
             break
+        category = "mechanical" if check.issues else "claim"
+        if revision_counts[category] >= revision_limits[category]:
+            break
+        revision_counts[category] += 1
         # Repair citation/number problems against the same frozen evidence
         # before falling back to a generic extractive summary.
         thoughts.append(
             {
                 "tool": "answer_revision",
+                "category": category,
+                "attempt": revision_counts[category],
+                "limit": revision_limits[category],
                 "input": "",
                 "observation": "按核验问题修订回答：" + "、".join([*check.issues, *support_issues]),
             }
@@ -519,6 +530,15 @@ async def answer_question(
                 patched = await repair_paragraphs(model, reviewer, check.body, audit)
             except LeaseLostError:
                 raise
+            except TokenBudgetExceeded:
+                thoughts.append(
+                    {
+                        "tool": "answer_revision",
+                        "input": "",
+                        "observation": "总 token 预算已用尽，停止修订并保留可核验素材",
+                    }
+                )
+                break
             except Exception:
                 patched = None
             if patched is not None:
