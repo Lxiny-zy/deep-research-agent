@@ -241,7 +241,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 53,
+        "format_version": 54,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -522,6 +522,21 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     from .coverage_review import effective_contract, material_bases, table_scope_issues
 
     canonical_body = report.markdown if report is not None else markdown
+    from ..report.service import requires_corroboration
+    from .tables import TABLES_KEY
+    from .tables import table_issues as rendered_table_issues
+
+    rendered_issues = rendered_table_issues(
+        canonical_body,
+        detail.results,
+        {url: i for i, url in enumerate(citations, 1)},
+        scratch.get(TABLES_KEY),
+        corroboration=requires_corroboration(detail),
+        ledger=scratch.get("analysis"),
+    )
+    gates.append(
+        GateResult("table_evidence", "fail" if rendered_issues else "pass", rendered_issues)
+    )
     table_issues = table_scope_issues(canonical_body)
     gates.append(GateResult("table_scope", "fail" if table_issues else "pass", table_issues))
     validation = scratch.get("_report_validation")
@@ -676,6 +691,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             "evidence_quote_length",
             "user_requirements",
             "table_scope",
+            "table_evidence",
         }
         and g.status == "fail"
         for g in gates

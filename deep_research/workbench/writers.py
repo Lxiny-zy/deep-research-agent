@@ -36,6 +36,7 @@ from .quality import QualityPolicy, coerce_policy
 from .revision import Assessment, RevisionLog, assess_draft, write_with_revisions
 from .scholarly import abstract_sections
 from .support import SupportReviewer, evidence_records
+from .tables import TABLE_INSTRUCTIONS, TABLES_KEY, render_specs, review_tables, table_preview
 from .templates import TaskTemplate, get_template
 
 WORKBENCH_SCRATCH_KEY = "workbench"
@@ -54,7 +55,7 @@ _BASE_SYSTEM = (
     "而应明确提出后续核查或验证建议，不能把未确认内容写成论文缺陷。"
     "章节使用 Markdown 标题层级，不用加粗段落代替标题；避免连续堆砌逐项核验表，"
     "同类比较尽量合并为一张表，表前给出连续编号和明确表题，表下注明单位、缩写和缺失值含义。"
-    "使用标准 Markdown 表格，由导出器排为三线表。引用紧随所支持的论断，"
+    "表格由代码按结构化规格生成并排为三线表。引用紧随所支持的论断，"
     "表格的每个事实或数据行都要有本次 [n] 引用（可放末列），不能仅在表题或表外段落引用。"
     "单位、缩写定义与取值范围须有素材依据，不按常识补齐；公式沿用素材的符号与索引，"
     "不得另加素材中不存在的常数或整数下标。"
@@ -64,6 +65,7 @@ _BASE_SYSTEM = (
     "比较结论须说明任务范围、指标口径与适用条件；不要补写与当前任务无关的领域术语或缺口。"
     + SCIENTIFIC_MARKDOWN
     + MEASUREMENT_SCOPE_RULES
+    + TABLE_INSTRUCTIONS
 )
 
 
@@ -83,11 +85,24 @@ def eligible_material(
             continue
         blocks.append(f"\n### {result.sub_question}")
         for finding in verified:
+            from .support import evidence_id
+
             index = url_to_idx.setdefault(finding.source_url, len(url_to_idx) + 1)
             section = finding.verification.source_title or ""
             blocks.append(
                 f"- [{index}] {finding.statement}\n  原文：{finding.evidence_quote}"
                 + (f"\n  出处：{section}" if section else "")
+                + f"\n  发现ID：{evidence_id(finding)}；对象：{finding.entity}"
+                + "\n  结构化字段："
+                + json.dumps(
+                    {
+                        "quantity": finding.quantity.model_dump() if finding.quantity else None,
+                        "conditions": finding.conditions.model_dump()
+                        if finding.conditions
+                        else None,
+                    },
+                    ensure_ascii=False,
+                )
             )
     return "\n".join(blocks).strip(), url_to_idx
 
@@ -235,13 +250,18 @@ class TemplateWriter:
         chunks: list[str] = []
         first = True
         async for delta in ctx.llm_for(self.name).stream(system, user, temperature=0.3):
+            chunks.append(delta)
+            raw = "".join(chunks)
+            has_specs = "evidence-table" in raw
             ctx.tracer.emit(
                 "SYNTHESIZER",
                 "token",
-                data={"delta": delta, **({"replace": True} if first and revision else {})},
+                data={
+                    "delta": table_preview(raw) if has_specs else delta,
+                    **({"replace": True} if has_specs or (first and revision) else {}),
+                },
             )
             first = False
-            chunks.append(delta)
         return "".join(chunks)
 
     # 报告及幻灯片的文字投影都核对引用和数值；概念导图有独立的结构流程。
@@ -267,6 +287,7 @@ class TemplateWriter:
         last_audit: dict[str, Any] | None = None
         local_revision = False
         local_problems: list[tuple[str, str]] = []
+        table_records: dict[str, dict[str, Any]] = {}
         if reviewer is None and url_to_idx:
             reviewer = ProseReviewer.research(
                 ctx.llm_for("evidence_verifier"),
@@ -329,6 +350,18 @@ class TemplateWriter:
                     ctx.tracer.emit("SYNTHESIZER", "token", data={"delta": body, "replace": True})
             if body is None:
                 body = await self.write(bb, ctx, template, contract, material, revision)
+            unrendered = body
+            body, table_record = render_specs(
+                body,
+                bb.results,
+                url_to_idx,
+                corroboration=require_corroboration,
+                previous=bb.scratch.get(TABLES_KEY),
+            )
+            bb.scratch[TABLES_KEY] = table_record
+            table_records[body] = table_record
+            if body != unrendered:
+                ctx.tracer.emit("SYNTHESIZER", "token", data={"delta": body, "replace": True})
             versions[body] = {
                 key: deepcopy(bb.scratch[key]) for key in self.output_keys if key in bb.scratch
             }
@@ -356,6 +389,22 @@ class TemplateWriter:
                 "mindmap",
             }
             local_problems = assessment.local_problems or []
+            table_record = table_records.setdefault(
+                body, deepcopy(bb.scratch.get(TABLES_KEY) or {})
+            )
+            table_problems = await review_tables(
+                body,
+                table_record,
+                bb.results,
+                url_to_idx,
+                ctx.llm_for("evidence_verifier"),
+                ctx.settings.llm_max_input_chars,
+                corroboration=require_corroboration,
+            )
+            assessment.hard.extend(table_problems)
+            if table_problems:
+                local_revision = False
+                assessment.local_problems = None
             if reviewer is not None:
                 ctx.tracer.emit("SYNTHESIZER", "info", "核对终稿结论与引用的支持关系…")
                 audit = await reviewer.review(body)
@@ -390,6 +439,7 @@ class TemplateWriter:
         for key in self.output_keys:
             bb.scratch.pop(key, None)
         bb.scratch.update(versions.get(body, {}))
+        bb.scratch[TABLES_KEY] = table_records.get(body, {})
         return body, log
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:

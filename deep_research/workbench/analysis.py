@@ -883,6 +883,16 @@ class DataAnalyst:
             "明确区分所选测量、比较分组和仅作背景的列；未参与检验不表示原始数据未提供。"
         )
         user = f"分析问题：{question or '对数据做探索性分析'}\n\n## 统计台账\n{facts}\n"
+        from .tables import TABLES_KEY, render_specs, review_tables, table_preview
+
+        system += (
+            "表格只能用 evidence-table 代码块写 JSON 规格："
+            '{"id":"t1","title":"表 1 描述统计","ledger_path":["describe"]}。'
+            "ledger_path 指向统计台账中的记录数组，代码保留其原始字段名并取值；"
+            "不直接写 Markdown、HTML 或 LaTeX 表格。可用路径包括 describe、tests、correlations，"
+            "以及 tests 下的数字序号、group_summaries。"
+        )
+        table_records: dict[str, dict[str, Any]] = {}
         from .gates import structure_gate
         from .quality import coerce_policy
         from .revision import Assessment, write_with_revisions
@@ -927,17 +937,30 @@ class DataAnalyst:
             async for delta in ctx.llm_for(self.name).stream(
                 system, user + (revision or ""), temperature=0.2
             ):
+                chunks.append(delta)
+                raw = "".join(chunks)
+                has_specs = "evidence-table" in raw
                 ctx.tracer.emit(
                     "SYNTHESIZER",
                     "token",
                     data={
-                        "delta": delta,
-                        **({"replace": True} if first and revision else {}),
+                        "delta": table_preview(raw) if has_specs else delta,
+                        **({"replace": True} if has_specs or (first and revision) else {}),
                     },
                 )
                 first = False
-                chunks.append(delta)
-            return "".join(chunks).strip()
+            body, table_record = render_specs(
+                "".join(chunks).strip(),
+                [],
+                {},
+                ledger=result.snapshot(),
+                previous=bb.scratch.get(TABLES_KEY),
+            )
+            table_records[body] = table_record
+            bb.scratch[TABLES_KEY] = table_record
+            if body != "".join(chunks).strip():
+                ctx.tracer.emit("SYNTHESIZER", "token", data={"delta": body, "replace": True})
+            return body
 
         async def assess(draft: str) -> Assessment:
             # 数字与章节是硬性要求；文体问题同样要求修订。三者都是确定性检查。
@@ -961,6 +984,18 @@ class DataAnalyst:
             from .coverage_review import table_scope_issues
 
             hard.extend(table_scope_issues(draft))
+            table_record = table_records.setdefault(draft, bb.scratch.get(TABLES_KEY) or {})
+            hard.extend(
+                await review_tables(
+                    draft,
+                    table_record,
+                    [],
+                    {},
+                    ctx.llm_for("evidence_verifier"),
+                    ctx.settings.llm_max_input_chars,
+                    ledger=result.snapshot(),
+                )
+            )
             return Assessment(
                 hard=hard,
                 soft=soft,
@@ -1004,6 +1039,7 @@ class DataAnalyst:
         if result.synthetic and not body.startswith(notice):
             body = notice + body
         bb.report = Report(query=bb.query, markdown=body + "\n", citations=[])
+        bb.scratch[TABLES_KEY] = table_records.get(body, {})
         bb.scratch[ANALYSIS_SCRATCH_KEY] = result.snapshot()
         # 图片不进 checkpoint：分析是确定性的（合成数据也用固定种子），交付层按
         # 同一份数据重算即可得到逐字节相同的图，checkpoint 不必背几百 KB 的 PNG。

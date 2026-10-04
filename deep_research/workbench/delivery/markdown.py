@@ -106,7 +106,10 @@ def framing_paragraphs(markdown: str) -> dict[int, str]:
             and tokens[index + 3].type == "table_open"
             and re.match(r"^\s*(?:表\s*[\d一二三四五六七八九十A-Z]|Table\s+[\dA-Z])", text, re.I)
         )
-        if heading or caption:
+        # Table notes share caption citation rules; factual content still goes
+        # through numeric and semantic review with the table's source context.
+        table_note = bool(re.match(r"^\s*(?:表注[：:]|Table note:)", text, re.I))
+        if heading or caption or table_note:
             frames[token.map[0]] = "\n".join(lines[token.map[0] : token.map[1]]).strip()
     return frames
 

@@ -41,6 +41,7 @@ _CONTENT_KEYS = {
     "workbench",
     "prose_review",
     "_report_validation",
+    "_evidence_tables",
     "intent",
     "intent_slots",
     "intent_route",
@@ -60,6 +61,9 @@ _CONTENT_GATES = {
     "length",
     "markdown",
     "review",
+    "user_requirements",
+    "table_scope",
+    "table_evidence",
 }
 
 
