@@ -262,6 +262,23 @@ def policy_from(settings: Any) -> QualityPolicy:
     return coerce_policy(getattr(settings, "quality", None))
 
 
+def writer_policy(value: Any, scratch: dict[str, Any]) -> QualityPolicy:
+    policy = coerce_policy(value)
+    metadata = scratch.get("_active_step_metadata")
+    if isinstance(metadata, dict) and metadata.get("completion_repair") is True:
+        # The original draft is the seed; its first correction is the one
+        # additional completion-repair round, with no further writer loop.
+        return policy.model_copy(update={"max_revisions": 0})
+    return policy
+
+
+def completion_feedback(scratch: dict[str, Any]) -> list[str]:
+    metadata = scratch.get("_active_step_metadata")
+    if not isinstance(metadata, dict) or metadata.get("completion_repair") is not True:
+        return []
+    return [item for item in metadata.get("completion_repair_issues", []) if isinstance(item, str)]
+
+
 __all__ = [
     "QUALITY_FIELDS",
     "QualityField",

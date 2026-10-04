@@ -857,7 +857,7 @@ class DataAnalyst:
         contract = contract_from_scratch(bb.scratch)
         question = contract.focus if contract is not None else bb.query
         csv_text = contract.dataset_csv if contract is not None else ""
-        from .quality import coerce_policy
+        from .quality import completion_feedback, writer_policy
         from .writing_progress import (
             WritingProgressError,
             finish,
@@ -866,7 +866,9 @@ class DataAnalyst:
             restore_prose,
         )
 
-        policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
+        policy = writer_policy(
+            contract.quality if contract is not None else ctx.settings.quality, bb.scratch
+        )
         progress = for_writer(
             bb,
             ctx,
@@ -986,6 +988,8 @@ class DataAnalyst:
                 seed_pending = False
                 reviewer.prime(seed.markdown, seed_review)
                 initial = await assess(seed.markdown)
+                if initial.clean:
+                    initial.hard.extend(completion_feedback(bb.scratch))
                 if initial.clean or not initial.can_revise:
                     current_body = seed.markdown
                     table_records.setdefault(current_body, bb.scratch.get(TABLES_KEY) or {})

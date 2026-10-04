@@ -350,6 +350,7 @@ class DeepResearchAgent:
         self._catalog_runtime: CatalogRuntime | None = None
         self._run_started = False
         self._completion_detail: RunDetail | None = None
+        self._completion_repair_runner: Any = None
         self._event_flush_lock = asyncio.Lock()
 
         # Validate only dependencies constructed here. A catalog default model
@@ -521,6 +522,14 @@ class DeepResearchAgent:
             if detail is not None and promised_formats(detail) is not None:
                 self.tracer.emit("DELIVERY", "info", "正在生成并检查任务承诺的交付文件…")
                 completion = await prepare_completion(detail, self.settings)
+                if completion is not None and self._completion_repair_runner is not None:
+                    old_report = report.model_dump(mode="json")
+                    detail, completion = await self._completion_repair_runner(detail, completion)
+                    report = detail.report or report
+                    if report.model_dump(mode="json") != old_report:
+                        self.tracer.emit(
+                            "ORCHESTRATOR", "report", "交付前修订后的报告", data=report.model_dump()
+                        )
             terminal = (
                 "needs_review" if completion and completion["status"] == "needs_review" else "done"
             )
@@ -1288,11 +1297,11 @@ class DeepResearchAgent:
             results=bb.results,
             orchestration=engine.runtime.run,
         )
-        if self.repo is not None and run_id is not None:
-            if engine.runtime.run is not None:
-                await self.repo.save_orchestration(
-                    run_id, engine.runtime.run, lease_owner=self._lease_owner
-                )
+
+        async def persist_derived() -> None:
+            if self.repo is None or run_id is None:
+                return
+            assert bb.report is not None
             reflection_rounds: list[tuple[int, list[SubQuestion]]] = []
             for raw_round in bb.scratch.get("reflection_rounds", []):
                 if not isinstance(raw_round, dict):
@@ -1308,9 +1317,159 @@ class DeepResearchAgent:
                 plan=bb.plan,
                 reflection_rounds=reflection_rounds,
                 results=bb.results,
-                report=report,
+                report=bb.report,
                 lease_owner=self._lease_owner,
             )
+
+        if self.repo is not None and run_id is not None:
+            if engine.runtime.run is not None:
+                await self.repo.save_orchestration(
+                    run_id, engine.runtime.run, lease_owner=self._lease_owner
+                )
+            await persist_derived()
+
+        async def save_repair(working: RunDetail, changed: bool) -> None:
+            nonlocal bb
+            assert working.orchestration is not None and engine.runtime.run is not None
+            bb = Blackboard.model_validate(working.orchestration.checkpoint)
+            bb.scratch["_runtime_metrics"] = {
+                "total_tokens": self.tracer.total_tokens,
+                "estimated_tokens": self.tracer.estimated_tokens,
+                "elapsed": self.tracer.elapsed,
+            }
+            engine.runtime.run.checkpoint = bb.model_dump(mode="json")
+            engine.runtime.run.output = engine._run_output(bb)
+            if changed:
+                await save_checkpoint(engine.runtime.run)
+                await persist_derived()
+            elif self.repo is not None and run_id is not None:
+                await self.repo.save_orchestration(
+                    run_id, engine.runtime.run, lease_owner=self._lease_owner
+                )
+            working.orchestration = engine.runtime.run.model_copy(deep=True)
+            working.report, working.results = bb.report, bb.results
+            self._completion_detail = working
+
+        async def revise_for_completion(working: RunDetail) -> RunDetail:
+            from .workbench.completion_repair import REPAIR_KEY
+            from .workbench.content_revision import REVISION_KEY, WRITERS
+            from .workbench.contract import contract_from_scratch
+            from .workbench.prose_review import stored_review
+
+            assert working.orchestration is not None and engine.runtime.run is not None
+            candidate = Blackboard.model_validate(working.orchestration.checkpoint)
+            contract = contract_from_scratch(candidate.scratch)
+            if contract is None or contract.template not in WRITERS:
+                raise ValueError("缺少原任务的写作契约")
+            target = WRITERS[contract.template]
+            role = next(
+                (
+                    item.agent
+                    for item in reversed(engine.runtime.run.steps)
+                    if item.agent
+                    and getattr(engine._resolve(item.agent), "behavior", item.agent) == target
+                ),
+                None,
+            )
+            if role is None:
+                raise ValueError("原工作流没有可复用的定向修订角色")
+            old_revision = candidate.scratch.get(REVISION_KEY)
+            candidate.scratch[REVISION_KEY] = {
+                "version": 1,
+                "parent_run_id": working.id,
+                "template": contract.template,
+                "writer": role,
+                "automatic": True,
+                "source_version": candidate.scratch[REPAIR_KEY]["input_version"],
+            }
+            authored = (
+                [Step.model_validate(node["step"]) for node in wf.nodes] if wf.nodes else wf.steps
+            )
+            original_step = next(
+                (item for item in reversed(authored) if item.agent == role), Step(agent=role)
+            )
+            repair_step = original_step.model_copy(
+                update={
+                    "kind": "agent",
+                    "max_attempts": 1,
+                    "fallback_agent": None,
+                    "metadata": {
+                        **original_step.metadata,
+                        "completion_repair": True,
+                        "completion_repair_issues": candidate.scratch[REPAIR_KEY]["content"].get(
+                            "issues", []
+                        ),
+                    },
+                }
+            )
+            try:
+                candidate = await engine.repair_step(repair_step, candidate)
+            finally:
+                if old_revision is None:
+                    candidate.scratch.pop(REVISION_KEY, None)
+                else:
+                    candidate.scratch[REVISION_KEY] = old_revision
+            assert candidate.report is not None
+            record = stored_review(candidate.scratch)
+            if contract.template == "mindmap":
+                from .workbench.mindmap_contract import checked_review
+
+                extras = candidate.scratch.get("workbench", {}).get("extras", {})
+                bound, issues = checked_review(
+                    extras.get("mindmap"),
+                    candidate.report.citations,
+                    candidate.results,
+                    extras.get("node_review"),
+                    candidate.report.markdown,
+                )
+                if not bound:
+                    raise ValueError("自动修订后的导图记录未绑定正文")
+                candidate.scratch["_report_validation"] = {
+                    "scope": "model_assessed_node_evidence_and_relations",
+                    "issues": issues,
+                    "fallback": False,
+                    "semantic_verification": True,
+                }
+            elif isinstance(record, dict):
+                checker = reviewer_for_report(
+                    ctx.llm_for("evidence_verifier"),
+                    candidate.query,
+                    candidate.results,
+                    candidate.report.citations,
+                    candidate.scratch,
+                    self.settings.llm_max_input_chars,
+                    corroboration=effective_require_corroboration(candidate, self.settings),
+                    sources=ctx.evidence_sources,
+                )
+                if checker is None or not checker.check(candidate.report.markdown, record)[0]:
+                    raise ValueError("自动修订后的核验记录未绑定正文")
+                candidate.scratch["_report_validation"] = {
+                    "scope": record.get("scope", "model_assessed_final_prose_support"),
+                    "issues": record["issues"],
+                    "fallback": bool(record.get("body_replaced")),
+                    "semantic_verification": not bool(record.get("model_review_skipped")),
+                    "support_status": record["status"],
+                }
+            working.report, working.results = candidate.report, candidate.results
+            working.orchestration.checkpoint = candidate.model_dump(mode="json")
+            return working
+
+        async def run_completion_repair(
+            working: RunDetail, record: dict[str, Any]
+        ) -> tuple[RunDetail, dict[str, Any]]:
+            from .workbench.completion_repair import repair_completion
+
+            return await repair_completion(
+                working,
+                self.settings,
+                record,
+                revise=revise_for_completion,
+                persist=save_repair,
+                emit=lambda text: self.tracer.emit("DELIVERY", "info", text),
+                recover_transient=self.managed_recovery,
+            )
+
+        self._completion_repair_runner = run_completion_repair
         return report
 
     async def run_stream(self, query: str) -> AsyncIterator[Event]:

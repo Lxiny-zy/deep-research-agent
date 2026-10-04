@@ -32,7 +32,7 @@ from .contract import TaskContract, contract_from_scratch, provided_review
 from .mindmap_contract import Mindmap, MindmapNode, review_record, structural_issues
 from .paper_abstract import abstract_section_support, checked_abstracts, prepare_abstracts
 from .prose_review import PROSE_REVIEW_KEY, ProseReviewer
-from .quality import QualityPolicy, coerce_policy
+from .quality import QualityPolicy, completion_feedback, writer_policy
 from .revision import Assessment, RevisionLog, assess_draft, write_with_revisions
 from .scholarly import abstract_sections
 from .support import SupportReviewer, evidence_records
@@ -333,6 +333,9 @@ class TemplateWriter:
                     "SYNTHESIZER", "info", "复用原稿与已有证据，检查需要继续修订的部分…"
                 )
                 initial = await assess(seed.markdown)
+                if initial.clean and (feedback := completion_feedback(bb.scratch)):
+                    initial.hard.extend(feedback)
+                    local_revision = False
                 if initial.clean or not initial.can_revise:
                     body = seed.markdown
                 else:
@@ -375,6 +378,8 @@ class TemplateWriter:
                 if body is not None:
                     ctx.tracer.emit("SYNTHESIZER", "token", data={"delta": body, "replace": True})
             if body is None:
+                if revision is None and (feedback := completion_feedback(bb.scratch)):
+                    revision = "\n\n【交付前检查问题】\n" + "\n".join(feedback)
                 body = await self.write(bb, ctx, template, contract, material, revision)
             if template.key == "peerReview":
                 score = extract_review_score(body)
@@ -519,7 +524,9 @@ class TemplateWriter:
         corroboration = effective_require_corroboration(bb, ctx.settings)
         material, url_to_idx = eligible_material(bb.results, require_corroboration=corroboration)
         ctx.tracer.emit("SYNTHESIZER", "start", f"撰写{template.title}…")
-        policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
+        policy = writer_policy(
+            contract.quality if contract is not None else ctx.settings.quality, bb.scratch
+        )
         progress = for_writer(
             bb,
             ctx,
@@ -1152,7 +1159,9 @@ class MindmapWriter(TemplateWriter):
         corroboration = effective_require_corroboration(bb, ctx.settings)
         material, url_to_idx = eligible_material(bb.results, require_corroboration=corroboration)
         ctx.tracer.emit("SYNTHESIZER", "start", "整理思维导图…")
-        policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
+        policy = writer_policy(
+            contract.quality if contract is not None else ctx.settings.quality, bb.scratch
+        )
         progress = for_writer(
             bb,
             ctx,
@@ -1227,6 +1236,8 @@ class MindmapWriter(TemplateWriter):
                 last_model = prior_model
                 if not last_record["issues"]:
                     seed_model = prior_model
+                if completion_feedback(bb.scratch):
+                    seed_model = None
 
         async def write(revision: str | None) -> str:
             nonlocal seed_model, current_body

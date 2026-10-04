@@ -226,6 +226,10 @@ def _insert_analysis_figures(markdown: str, figure_md: str) -> str:
 _DELIVERY_RUNTIME_KEYS = frozenset(
     {
         "_completion",
+        "_completion_repair",
+        # Workspace bookkeeping changes when checkpoints are reprojected.
+        # Rendering reads the bound report/material below, not this index.
+        "_artifact_manifest",
         "_runtime_metrics",
         "_deadline_at",
         "_task_deadline_at",
@@ -242,7 +246,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 56,
+        "format_version": 57,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,

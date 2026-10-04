@@ -647,6 +647,31 @@ class WorkflowEngine:
             "failed_steps": failed,
         }
 
+    async def repair_step(self, step: Step, bb: Blackboard) -> Blackboard:
+        """Execute one auxiliary repair using this workflow's frozen resolver and budget."""
+        run = self.runtime.run
+        if run is None:
+            raise RuntimeError("自动修订缺少工作流状态")
+        if self._exhausted():
+            from .token_budget import TokenBudgetExceeded
+
+            raise TokenBudgetExceeded("总 token 预算已用尽")
+        previous = run.status
+        run.status = RunStatus.RUNNING
+        attempt = self.runtime.create_step(
+            node_id=f"completion-repair-{uuid4().hex[:12]}",
+            label="交付前自动修订",
+            kind="agent",
+            agent=step.agent,
+        )
+        try:
+            return await self._execute_with_policy(step, bb, attempt)
+        except Exception as exc:
+            self.runtime.fail_step(attempt, exc)
+            raise
+        finally:
+            run.status = previous
+
     def _exhausted(self) -> bool:
         if self.budget is None:
             return False
