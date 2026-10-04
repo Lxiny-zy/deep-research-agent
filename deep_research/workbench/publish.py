@@ -241,7 +241,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 52,
+        "format_version": 53,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -502,6 +502,10 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         markdown_gate(markdown),
         length_gate(markdown, template),
     ]
+    if scratch.get("task_contract") is not None and contract is None:
+        gates.append(
+            GateResult("user_requirements", "fail", ["研究任务契约无法解析，不能跳过用户要求"])
+        )
     from .quote_recovery import quote_length_issues
 
     quote_issues = quote_length_issues(detail.results, policy.max_evidence_quote_chars)
@@ -514,6 +518,12 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     if incomplete:
         gates.append(GateResult("source_processing", "fail", incomplete))
     gates.append(structure_gate(markdown, template, extras))
+    from .coverage_review import coverage_issues as requested_coverage_issues
+    from .coverage_review import effective_contract, material_bases, table_scope_issues
+
+    canonical_body = report.markdown if report is not None else markdown
+    table_issues = table_scope_issues(canonical_body)
+    gates.append(GateResult("table_scope", "fail" if table_issues else "pass", table_issues))
     validation = scratch.get("_report_validation")
     prose = extras.get("prose_review")
     if not computed_fallback and (
@@ -600,6 +610,36 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                         },
                     )
                 )
+    if contract is not None:
+        required_contract = effective_contract(contract, scratch)
+        if template.key == "mindmap" and extras.get("mindmap"):
+            from .mindmap_edit import review_units
+            from .writers import Mindmap
+
+            required_record = extras.get("node_review") or {}
+            required_units = review_units(Mindmap.model_validate(extras["mindmap"]), detail.query)
+        else:
+            from .prose_review import reviewer_for_report, stored_review
+
+            required_record = stored_review(scratch) or {}
+            checker = reviewer_for_report(
+                None, detail.query, detail.results, citations, scratch, 0, sources=detail.sources
+            )
+            required_units = checker.units(canonical_body)[0] if checker is not None else []
+        required_issues = requested_coverage_issues(
+            required_contract,
+            canonical_body,
+            required_record.get("requirements_review"),
+            material_bases(scratch, required_record, required_units),
+        )
+        gates.append(
+            GateResult(
+                "user_requirements",
+                "fail" if required_issues else "pass",
+                required_issues,
+                {"required": len(required_contract.requested_items)},
+            )
+        )
     if min_citations or citations:
         gates.append(
             citation_gate(markdown, citations, template, min_citations, document_keys=document_keys)
@@ -634,6 +674,8 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             "review_coverage",
             "source_processing",
             "evidence_quote_length",
+            "user_requirements",
+            "table_scope",
         }
         and g.status == "fail"
         for g in gates

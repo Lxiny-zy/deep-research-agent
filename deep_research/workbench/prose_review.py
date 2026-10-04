@@ -273,6 +273,8 @@ class ProseReviewer:
         translation_citations: list[int] | None = None,
         statistics: dict[str, Any] | None = None,
         fulltext_corpus: FullTextCorpus | None = None,
+        contract: Any = None,
+        material_scratch: dict[str, Any] | None = None,
     ) -> None:
         self.evidence = evidence
         self.source_version = source_version
@@ -283,6 +285,13 @@ class ProseReviewer:
         self.capacity = capacity
         self.translation_citations = translation_citations
         self.statistics = statistics
+        from .coverage_review import CoverageReviewer, effective_contract
+
+        self.contract = effective_contract(contract, material_scratch)
+        self.material_scratch = material_scratch or {}
+        self.coverage = (
+            CoverageReviewer(llm, self.contract, capacity) if self.contract is not None else None
+        )
         from .analysis_review import STATISTICS_RULES
 
         self.reviewer = SupportReviewer(
@@ -296,6 +305,29 @@ class ProseReviewer:
             check_formulas=statistics is None,
         )
         self.records: dict[str, dict[str, Any]] = {}
+
+    def requirement_bases(self, markdown: str, record: dict[str, Any]) -> list[dict[str, Any]]:
+        from .coverage_review import material_bases
+
+        return material_bases(self.material_scratch, record, self.units(markdown)[0])
+
+    async def _with_requirements(self, markdown: str, record: dict[str, Any]) -> dict[str, Any]:
+        if self.coverage is None:
+            return record
+        bases = self.requirement_bases(markdown, record)
+        coverage = await self.coverage.review(markdown, bases)
+        return {**record, "requirements_review": coverage}
+
+    def check_requirements(self, markdown: str, record: Any) -> list[str]:
+        from .coverage_review import coverage_issues
+
+        raw = record if isinstance(record, dict) else {}
+        return coverage_issues(
+            self.contract,
+            markdown,
+            raw.get("requirements_review"),
+            self.requirement_bases(markdown, raw),
+        )
 
     def prime(self, markdown: str, record: dict[str, Any] | None) -> bool:
         """Reuse only bound, valid decisions; uncertain results never become facts."""
@@ -355,6 +387,8 @@ class ProseReviewer:
         scratch: dict[str, Any] | None = None,
         sources: list[Source] | None = None,
     ) -> ProseReviewer:
+        from .contract import contract_from_scratch
+
         evidence = evidence_records(results, mapping, corroboration=corroboration)
         for index, abstract in enumerate(abstracts or [], 1):
             evidence.append(
@@ -379,6 +413,8 @@ class ProseReviewer:
             if abstracts is not None
             else None,
             fulltext_corpus=corpus_from_inputs(results, mapping, scratch, sources),
+            contract=contract_from_scratch(scratch or {}),
+            material_scratch=scratch,
         )
 
     def signature(self, markdown: str) -> str:
@@ -456,7 +492,7 @@ class ProseReviewer:
         if cached := self.cached_review(markdown):
             # Adding code-owned bibliography text does not require rejudging
             # the same prose. The public record still binds the complete file.
-            return cached
+            return await self._with_requirements(markdown, cached)
         units, locations = self.units(markdown)
         decisions = await self.reviewer.review(units)
         problems = [d for d in decisions if d.verdict not in {"supported", "non_factual"}]
@@ -500,6 +536,7 @@ class ProseReviewer:
                 record["issues"].extend(scope_issues)
         # This memo exists only for one revision loop. Unknown remains unknown;
         # do not reroll a judgement just because finalization added references.
+        record = await self._with_requirements(markdown, record)
         self.records[content_key] = record
         return record
 
@@ -618,6 +655,8 @@ def reviewer_for_report(
             query=query,
             implicit=True,
             statistics=ledger,
+            contract=contract_from_scratch(scratch),
+            material_scratch=scratch,
         )
     contract = contract_from_scratch(scratch)
     paper_read = workbench.get("template") == "paperRead" or bool(

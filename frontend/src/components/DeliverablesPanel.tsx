@@ -29,6 +29,8 @@ const GATE_LABEL: Record<string, string> = {
   node_evidence: '节点证据与关系',
   prose_evidence: '终稿结论依据',
   evidence_quote_length: '证据引文长度',
+  user_requirements: '用户点名内容',
+  table_scope: '表格范围完整性',
   provided_corpus: '指定文献覆盖',
   review_coverage: '关键证据覆盖',
   task_content: '任务正文完整性',
@@ -43,6 +45,8 @@ const GATE_HELP: Record<string, string> = {
   figure_evidence: '核对节点、关系方向与图注是否有依据；未通过的可选图示不进入报告。',
   prose_evidence: '逐段核对最终表述是否得到所引证据支持；记录绑定最终正文，模型判断仍需人工复核。',
   evidence_quote_length: '每条依据须在长度上限内保留必要条件与归属；超长历史摘录需重新选择并核验。',
+  user_requirements: '逐项核对用户明确要求的章节、比较对象、表格字段和问题；材料限制必须有依据并在正文说明。',
+  table_scope: '检查表格是否完整呈现其声明的分组范围，避免遗漏四分位等必需类别。',
   citation: '正文引用编号必须全部指向已核验来源，并达到本任务的引用下限。',
   scholarly:
     '学术文体（口语化、套话句式、生产过程描述）、摘要不带引用、引用堆砌、重复来源、时效覆盖与局限说明。',

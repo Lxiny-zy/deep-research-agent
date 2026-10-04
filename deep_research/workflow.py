@@ -706,6 +706,16 @@ class WorkflowEngine:
         from .workbench.quote_recovery import recover_blackboard_quotes
 
         await recover_blackboard_quotes(bb, self.ctx)
+        from .workbench.contract import CONTRACT_SCRATCH_KEY, contract_from_scratch
+        from .workbench.coverage_review import effective_contract
+
+        contract = contract_from_scratch(bb.scratch)
+        if bb.scratch.get(CONTRACT_SCRATCH_KEY) is not None and contract is None:
+            raise ValueError("研究任务契约无法解析，不能跳过冻结的用户要求")
+        if contract is not None and contract.requirements_version == 0:
+            bb.scratch[CONTRACT_SCRATCH_KEY] = effective_contract(contract, bb.scratch).model_dump(
+                mode="json"
+            )
         # run 级共享限流：并行图的 K 个检索型节点 / 多团队并行若各自建
         # Semaphore(max_concurrency)，总并发会被放大为 K×max_concurrency。
         # 引擎在 run 入口把信号量挂到 ctx 上（已存在则沿用，嵌套子流程共用同一把），

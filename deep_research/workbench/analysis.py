@@ -891,7 +891,11 @@ class DataAnalyst:
         policy = coerce_policy(contract.quality if contract is not None else ctx.settings.quality)
         from .prose_review import PROSE_REVIEW_KEY, reviewer_for_report
 
-        review_scratch = {"workbench": {"template": "dataAnalysis"}, "analysis": result.snapshot()}
+        review_scratch = {
+            **bb.scratch,
+            "workbench": {"template": "dataAnalysis"},
+            "analysis": result.snapshot(),
+        }
         reviewer = reviewer_for_report(
             ctx.llm_for("evidence_verifier"),
             bb.query,
@@ -952,7 +956,16 @@ class DataAnalyst:
                 soft = []
             audit = await reviewer.review(draft)
             hard.extend(audit["issues"])
-            return Assessment(hard=hard, soft=soft, can_revise=audit["can_revise"])
+            coverage = audit.get("requirements_review", {})
+            hard.extend(coverage.get("issues", []))
+            from .coverage_review import table_scope_issues
+
+            hard.extend(table_scope_issues(draft))
+            return Assessment(
+                hard=hard,
+                soft=soft,
+                can_revise=audit["can_revise"] and coverage.get("can_revise", True),
+            )
 
         body = ""
         revision_log = None

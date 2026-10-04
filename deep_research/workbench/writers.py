@@ -361,6 +361,14 @@ class TemplateWriter:
                 audit = await reviewer.review(body)
                 assessment.hard.extend(audit["issues"])
                 assessment.can_revise = audit["can_revise"]
+                required = audit.get("requirements_review", {})
+                if required.get("status") == "fail":
+                    assessment.hard.extend(required["issues"])
+                    assessment.can_revise = assessment.can_revise and required.get(
+                        "can_revise", False
+                    )
+                    assessment.local_problems = None
+                    local_revision = False
                 last_body, last_audit = body, audit
             return assessment
 
@@ -961,6 +969,16 @@ class MindmapWriter(TemplateWriter):
         last_model: Mindmap | None = None
         last_record: dict[str, Any] | None = None
         repairs: list[list[str]] = []
+        from .coverage_review import CoverageReviewer, material_bases
+
+        coverage_reviewer = (
+            CoverageReviewer(
+                ctx.llm_for("evidence_verifier"), contract, ctx.settings.llm_max_input_chars
+            )
+            if contract
+            else None
+        )
+        requires_coverage_rewrite = False
 
         from .content_revision import REVISION_KEY
         from .mindmap_edit import prime_review
@@ -1013,7 +1031,10 @@ class MindmapWriter(TemplateWriter):
                     bb.results,
                     last_record,
                 )
-                if revision is not None and last_model is not None and last_record is not None
+                if revision is not None
+                and last_model is not None
+                and last_record is not None
+                and not requires_coverage_rewrite
                 else None
             )
             if patched is not None:
@@ -1034,7 +1055,7 @@ class MindmapWriter(TemplateWriter):
             return body
 
         async def assess(body: str) -> Assessment:
-            nonlocal last_model, last_record
+            nonlocal last_model, last_record, requires_coverage_rewrite
             raw = bb.scratch.get("_mindmap") or {}
             model = Mindmap.model_validate(raw)
             hard = structural_issues(model, len(citations))
@@ -1042,10 +1063,24 @@ class MindmapWriter(TemplateWriter):
             decisions = await reviewer.review(review_units(model, bb.query))
             record = review_record(raw, citations, bb.results, decisions)
             record["reviewer"] = reviewer.provenance
+            if coverage_reviewer:
+                coverage = await coverage_reviewer.review(
+                    body, material_bases(bb.scratch, record, review_units(model, bb.query))
+                )
+                record["requirements_review"] = coverage
+                requires_coverage_rewrite = coverage["status"] == "fail"
+                if requires_coverage_rewrite:
+                    hard.extend(coverage["issues"])
             reviews[body] = record
             last_model, last_record = model, record
             hard.extend(record["issues"])
-            return Assessment(hard=hard, can_revise=can_revise(decisions))
+            return Assessment(
+                hard=hard,
+                can_revise=can_revise(decisions)
+                and (
+                    not coverage_reviewer or record["requirements_review"].get("can_revise", True)
+                ),
+            )
 
         body, revision_log = await write_with_revisions(
             write, assess, max_revisions=policy.max_revisions

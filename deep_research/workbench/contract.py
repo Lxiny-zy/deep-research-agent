@@ -16,6 +16,13 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from .requested_content import (
+    RequestedItem,
+    extract_requested_items,
+    instruction_text,
+    render_requested_items,
+    requirements_hash,
+)
 from .templates import STRATEGY_LABELS, TaskTemplate
 
 CONTRACT_SCRATCH_KEY = "task_contract"
@@ -58,6 +65,10 @@ class TaskContract(BaseModel):
     min_citations: int = 0
     quality: dict[str, Any] = Field(default_factory=dict)
     language: str = "zh"
+    requirements_version: int = 0
+    requested_items: list[RequestedItem] = Field(default_factory=list)
+    requested_input_hash: str = ""
+    request_instructions: str = ""
 
     def render(self) -> str:
         """渲染为给模型阅读的 Markdown 任务说明。"""
@@ -78,6 +89,11 @@ class TaskContract(BaseModel):
             lines += [f"{i}. {name}" for i, name in enumerate(self.required_sections, 1)]
         if self.deliverables:
             lines += ["", "## 交付格式", "、".join(self.deliverables)]
+        if self.requested_items:
+            lines += ["", "## 用户点名的必答内容", *render_requested_items(self.requested_items)]
+            lines.append(
+                "逐项落实这些要求；材料确实不足时，在正文说明具体范围与原因，不能直接省略。"
+            )
         if self.strategy in STRATEGY_LABELS:
             label, description = STRATEGY_LABELS[self.strategy]
             lines += ["", "## 研究策略", f"{label}：{description}"]
@@ -163,6 +179,7 @@ def build_contract(
     demo_data: bool = False,
     strategy: str | None = None,
     quality: dict[str, Any] | None = None,
+    request_is_document: bool | None = None,
 ) -> TaskContract:
     """确定性地构建任务契约：同样的输入永远得到同样的契约（便于回放与审计）。"""
     focus = ""
@@ -222,10 +239,28 @@ def build_contract(
         )
     first_line = next((line.strip() for line in query.splitlines() if line.strip()), query)
     title = re.sub(r"\s+", " ", first_line)[:60]
+    original_request = query.strip()[:20_000]
+    confirmed_choices = dict(answers or {})
+    if request_is_document is None:
+        request_is_document = (
+            template.input_kind == "paper"
+            and not papers
+            and len(original_request) >= 150
+            and not re.search(
+                r"^(?:请|精读|评审|审稿|阅读|帮|用中文|用英文|针对|please\b|read\b|review\b|explain\b|analy[sz]e\b)",
+                original_request,
+                re.I | re.M,
+            )
+        )
+    instructions = instruction_text(
+        focus if template.input_kind == "dataset" else original_request,
+        document=request_is_document,
+    )
+    requested = extract_requested_items(instructions, confirmed_choices)
     return TaskContract(
         template=template.key,
         title=f"{template.title}：{title}",
-        original_request=query.strip()[:20_000],
+        original_request=original_request,
         focus=focus[:2000],
         papers=papers,
         # 超长数据在接口层就被拒绝，这里的上限只是兜底，不作为截断手段
@@ -234,13 +269,19 @@ def build_contract(
         demo_data=(demo_data and not dataset) if template.input_kind == "dataset" else None,
         required_sections=template.section_titles(),
         deliverables=list(template.deliverables),
-        confirmed_choices=dict(answers or {}),
+        confirmed_choices=confirmed_choices,
         constraints=constraints,
         evidence_rules=list(_EVIDENCE_RULES) if min_citations or template.min_citations else [],
         tier=tier or template.tier_default,
         strategy=strategy or template.default_strategy,
         min_citations=min_citations,
         quality=policy.model_dump(),
+        requirements_version=1,
+        requested_items=requested,
+        requested_input_hash=requirements_hash(
+            original_request, confirmed_choices, requested, instructions
+        ),
+        request_instructions=instructions,
     )
 
 

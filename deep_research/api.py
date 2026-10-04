@@ -1725,6 +1725,7 @@ async def create_run(
             strategy=req.strategy,
             # 契约里的质量策略会覆盖 settings.quality，这里必须带上用户的设置
             quality=settings.quality,
+            request_is_document=False if req.attachments else None,
         )
         if (
             (task_template.input_kind == "paper" or provided_material(contract))

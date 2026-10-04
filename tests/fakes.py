@@ -129,8 +129,52 @@ class FakeLLM:
                     for unit in data["units"]
                 ]
             )
+        from deep_research.workbench.coverage_review import CoverageDecisions
         from deep_research.workbench.formula_review import FormulaDecisions
         from deep_research.workbench.fulltext_review import FullTextChecks, FullTextTarget
+
+        if schema is CoverageDecisions:
+            data = json.loads(user)
+            decisions = []
+            for requirement in data["requirements"]:
+                location = None
+                for region in data["regions"]:
+                    if requirement["kind"] in {"section", "branch"}:
+                        if (
+                            region["kind"] == requirement["kind"]
+                            and requirement["label"] in region["title"]
+                            and region["text"]
+                        ):
+                            location = dict(region_id=region["id"], quote=region["text"])
+                    elif requirement["kind"] == "table_column":
+                        if region["kind"] == "table" and len(region["rows"]) > 1:
+                            for column, name in enumerate(region["rows"][0]):
+                                if requirement["label"] in name:
+                                    location = dict(
+                                        region_id=region["id"],
+                                        column=column,
+                                        quote=region["rows"][1][column],
+                                    )
+                    elif requirement["table_only"]:
+                        if region["kind"] == "table":
+                            for row, cells in enumerate(region["rows"][1:], 1):
+                                if requirement["label"] in " | ".join(cells):
+                                    location = dict(
+                                        region_id=region["id"], row=row, quote=" | ".join(cells)
+                                    )
+                    elif region["kind"] != "section" and region["text"]:
+                        location = dict(region_id=region["id"], quote=region["text"])
+                    if location:
+                        break
+                decisions.append(
+                    dict(
+                        requirement_id=requirement["id"],
+                        status="covered" if location else "missing",
+                        locations=[location] if location else [],
+                        reason="fixture judgement; not a coverage accuracy test",
+                    )
+                )
+            return CoverageDecisions(decisions=decisions)
 
         if schema is FormulaDecisions:
             from deep_research.workbench.formula_structure import compare_formulas

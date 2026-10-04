@@ -131,6 +131,12 @@ def assess_draft(
     hard += missing_sections
     if missing_sections:
         local_problems = None
+    from .coverage_review import table_scope_issues
+
+    table_issues = table_scope_issues(body)
+    hard.extend(table_issues)
+    if table_issues:
+        local_problems = None
     from ..bibliography import build_bibliography, work_keys
 
     document_keys = work_keys(
