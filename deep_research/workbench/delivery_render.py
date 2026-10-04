@@ -9,7 +9,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
-from .gates import HARD_GATES, GateResult, consistency_gate, overall, slides_gate, territory_gate
+from .gates import HARD_GATES, GateResult, consistency_gate, slides_gate, territory_gate
 from .publish import DeliveryBundle, DeliveryFile, _deck_from_markdown, _stats_xlsx
 
 logger = logging.getLogger(__name__)
@@ -244,8 +244,13 @@ def render_bundle(
             {file.name: file.data for file in files if file.format not in {"png", "xlsx"}}
         )
     )
+    from .gate_classification import blocking_status, classify_gates
+    from .templates import get_template
+
+    template = get_template(context["template"])
+    classify_gates(gates, minimum_length=template.min_length if template else 0)
     for gate in gates:
-        if gate.status == "pass":
+        if not gate.blocking_issues:
             continue
         for file in files:
             applies = (
@@ -263,14 +268,15 @@ def render_bundle(
             )
             if applies:
                 rank = {"pass": 0, "warn": 1, "fail": 2}
-                if rank[gate.status] > rank[file.status]:
-                    file.status = gate.status
-                file.issues = list(dict.fromkeys([*file.issues, *gate.issues]))
-    status = overall(gates)
+                status = "fail" if gate.status == "fail" else "warn"
+                if rank[status] > rank[file.status]:
+                    file.status = status
+                file.issues = list(dict.fromkeys([*file.issues, *(gate.blocking_issues or [])]))
+    status = blocking_status(gates)
     if (
         context["fail_on_quality"]
         and status == "warn"
-        and any(gate.status == "warn" and gate.name in HARD_GATES for gate in gates)
+        and any(gate.blocking_issues and gate.name in HARD_GATES for gate in gates)
     ):
         status = "fail"
     return DeliveryBundle(

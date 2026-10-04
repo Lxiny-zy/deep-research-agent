@@ -111,7 +111,7 @@ def test_completion_cannot_trust_pass_label_without_required_evidence(settings, 
     assert any(expected in issue for issue in record["issues"])
 
 
-@pytest.mark.parametrize("outcome", ["pass", "warn", "cancel"])
+@pytest.mark.parametrize("outcome", ["pass", "warn", "advisory", "cancel"])
 async def test_terminal_state_waits_for_durable_delivery_and_survives_restart(
     repo, settings, monkeypatch, outcome
 ):
@@ -125,7 +125,22 @@ async def test_terminal_state_waits_for_durable_delivery_and_survives_restart(
         builds.append(detail.id)
         entered.set()
         assert release.wait(5)
-        return bundle(detail, status="warn" if outcome == "warn" else "pass")
+        value = bundle(detail, status="warn" if outcome == "warn" else "pass")
+        if outcome == "advisory":
+            message = "一句文体建议"
+            value.gates.append(
+                GateResult(
+                    "scholarly",
+                    "warn",
+                    [message],
+                    {
+                        "findings": [{"code": "colloquial", "message": message}],
+                    },
+                )
+            )
+            value.gates.append(GateResult("revision", "warn", [message]))
+            value.status = "warn"
+        return value
 
     class Agent(DeepResearchAgent):
         async def _run_workflow(self, query, run_id):
@@ -163,7 +178,9 @@ async def test_terminal_state_waits_for_durable_delivery_and_survives_restart(
         release.set()
     await asyncio.wait_for(task, 10)
     detail = await repo.get_run(run_id)
-    expected = {"pass": "done", "warn": "needs_review", "cancel": "cancelled"}[outcome]
+    expected = {"pass": "done", "advisory": "done", "warn": "needs_review", "cancel": "cancelled"}[
+        outcome
+    ]
     assert detail.status == expected
     events = [event async for event in hub.stream()]
     assert events[-1].type == expected
@@ -172,6 +189,8 @@ async def test_terminal_state_waits_for_durable_delivery_and_survives_restart(
         return
     record = detail.orchestration.checkpoint["scratch"]["_completion"]
     assert record["status"] == expected
+    if outcome == "advisory":
+        assert record["issues"] == [] and record["advisories"] == ["一句文体建议"]
     assert current_version(detail, settings.artifact_root) == record["content_version"]
     # A fresh request/process gets the same immutable bytes, not a second render.
     loaded = build_or_load(detail, settings.artifact_root, settings.artifact_total_bytes, render)

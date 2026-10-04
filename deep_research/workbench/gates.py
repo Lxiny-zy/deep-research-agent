@@ -33,6 +33,8 @@ class GateResult:
     status: Status
     issues: list[str] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
+    blocking_issues: list[str] | None = None
+    advisories: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -40,6 +42,11 @@ class GateResult:
             "status": self.status,
             "issues": self.issues,
             "metrics": self.metrics,
+            **(
+                {"blocking_issues": self.blocking_issues, "advisories": self.advisories}
+                if self.blocking_issues is not None
+                else {}
+            ),
         }
 
 
@@ -179,7 +186,7 @@ def length_gate(markdown: str, template: TaskTemplate) -> GateResult:
             "length",
             "warn",
             [f"正文约 {length} 字，少于模板下限 {template.min_length} 字"],
-            {"length": length},
+            {"length": length, "minimum": template.min_length},
         )
     return GateResult("length", "pass", [], {"length": length})
 
@@ -328,7 +335,15 @@ def scholarly_gate(
         f"（建议）{f.render()}" for f in report.warnings
     ]
     status: Status = "warn" if report.errors else "pass"
-    return GateResult("scholarly", status, issues[:20], dict(report.metrics))
+    return GateResult(
+        "scholarly",
+        status,
+        issues[:20],
+        {
+            **report.metrics,
+            "findings": [{"code": f.code, "message": f.render()} for f in report.findings],
+        },
+    )
 
 
 def revision_gate(extras: dict[str, Any]) -> GateResult | None:
@@ -338,10 +353,17 @@ def revision_gate(extras: dict[str, Any]) -> GateResult | None:
         return None
     remaining = [str(item) for item in log.get("remaining") or []]
     attempts = int(log.get("attempts") or 1)
-    metrics = {"attempts": attempts, "revisions": max(0, attempts - 1), "remaining": len(remaining)}
+    advisories = [str(item) for item in log.get("advisories") or []]
+    metrics = {
+        "attempts": attempts,
+        "revisions": max(0, attempts - 1),
+        "remaining": len(remaining),
+        "remaining_issues": remaining,
+        "advisory_issues": advisories,
+    }
     if remaining:
         return GateResult("revision", "warn", remaining[:12], metrics)
-    return GateResult("revision", "pass", [], metrics)
+    return GateResult("revision", "pass", advisories[:12], metrics)
 
 
 HARD_GATES = frozenset(
@@ -359,6 +381,10 @@ HARD_GATES = frozenset(
         "task_content",
         "review_coverage",
         "source_processing",
+        "user_requirements",
+        "table_evidence",
+        "table_scope",
+        "evidence_quote_length",
     }
 )
 

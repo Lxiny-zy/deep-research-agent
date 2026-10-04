@@ -224,7 +224,7 @@ async def test_task_creation_execution_result_and_all_promised_downloads(
         "missing": promised - formats,
         "failed": [(g["name"], g["issues"]) for g in record["gates"] if g["status"] == "fail"],
     }
-    nonpassing_gates = [gate for gate in record["gates"] if gate["status"] != "pass"]
+    nonpassing_gates = [gate for gate in record["gates"] if gate["blocking_issues"]]
     required_files = [item for item in record["items"] if item["format"] in promised]
     requires_review = (
         bool(nonpassing_gates or record["failures"])
@@ -253,8 +253,9 @@ async def test_task_creation_execution_result_and_all_promised_downloads(
     assert current_completion["input_version"] == record["input_version"]
     assert current_completion["gates"] == record["gates"]
     assert bool(current_completion["issues"]) is requires_review
-    for gate in nonpassing_gates:
-        assert set(gate["issues"]) <= set(current_completion["issues"])
+    for gate in record["gates"]:
+        assert set(gate["blocking_issues"]) <= set(current_completion["issues"])
+        assert set(gate["advisories"]) <= set(current_completion["advisories"])
     for item in record["items"]:
         download = await client.get(f"/api/runs/{run_id}/deliverables/{item['name']}")
         assert download.status_code == 200, item

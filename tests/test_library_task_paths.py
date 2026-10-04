@@ -157,7 +157,7 @@ async def test_library_import_research_followup_and_qa_share_selected_corpus(
         detail = await repo.get_run(run_id)
         completion = detail.orchestration.checkpoint["scratch"].get("_completion")
         assert isinstance(completion, dict), detail.status
-        nonpassing = [gate for gate in record["gates"] if gate["status"] != "pass"]
+        nonpassing = [gate for gate in record["gates"] if gate["blocking_issues"]]
         requires_review = (
             bool(nonpassing or record["failures"])
             or record["status"] != "pass"
@@ -185,8 +185,9 @@ async def test_library_import_research_followup_and_qa_share_selected_corpus(
         assert completion["input_version"] == record["input_version"]
         assert completion["gates"] == record["gates"]
         assert bool(completion["issues"]) is requires_review
-        for gate in nonpassing:
-            assert set(gate["issues"]) <= set(completion["issues"])
+        for gate in record["gates"]:
+            assert set(gate["blocking_issues"]) <= set(completion["issues"])
+            assert set(gate["advisories"]) <= set(completion["advisories"])
     assert not any("EXCLUDED_MARKER" in prompt for prompt in parsed)
     before_qa = len(queries)
     qa_mode = True

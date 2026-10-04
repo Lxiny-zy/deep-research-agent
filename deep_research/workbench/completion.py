@@ -12,6 +12,7 @@ from ..config import Settings
 from ..persistence.repository import RUN_TERMINAL_STATUSES, ResearchRepository, RunDetail
 from .contract import contract_from_scratch
 from .delivery_store import build_or_load, current_version, load_version
+from .gate_classification import COMPLETION_POLICY_VERSION, classify_gates
 from .gates import GateResult
 from .publish import DeliveryBundle, build_bundle, delivery_fingerprint, resolve_template
 
@@ -112,6 +113,10 @@ def validate_bundle_files(bundle: DeliveryBundle) -> None:
     )
     if failures:
         bundle.status = "fail"
+    from .templates import get_template
+
+    template = get_template(bundle.template)
+    classify_gates(bundle.gates, minimum_length=template.min_length if template else 0)
 
 
 def promised_formats(detail: RunDetail) -> set[str] | None:
@@ -141,18 +146,25 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
         raise ValueError("task has no frozen delivery contract")
     issues = file_issues(bundle)
     template = resolve_template(detail)
+    classify_gates(bundle.gates, minimum_length=template.min_length)
+    advisories = [message for gate in bundle.gates for message in gate.advisories]
     required_gates = {"markdown", "structure", "length", "consistency", "file_readability"}
     required_gates.add("node_evidence" if template.key == "mindmap" else "prose_evidence")
     if template.key == "dataAnalysis":
         required_gates.add("analysis")
     if template.key == "peerReview":
         required_gates.add("review")
+    scratch = detail.orchestration.checkpoint.get("scratch", {}) if detail.orchestration else {}
+    contract = contract_from_scratch(scratch)
+    if contract is not None and contract.requirements_version:
+        required_gates.update(
+            {"user_requirements", "table_evidence", "table_scope", "evidence_quote_length"}
+        )
     actual_gates = {gate.name for gate in bundle.gates}
     if required_gates - actual_gates:
         issues.append("缺少必需验收记录：" + "、".join(sorted(required_gates - actual_gates)))
     for gate in bundle.gates:
-        if gate.status != "pass":
-            issues.extend(gate.issues or [f"交付检查 {gate.name} 尚未通过"])
+        issues.extend(gate.blocking_issues or [])
         if gate.name == "prose_evidence" and gate.metrics.get("method") == "not_reviewed":
             issues.append("最终正文尚未完成模型支持关系核验")
     for failure in bundle.failures:
@@ -161,15 +173,24 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
         files = [file for file in bundle.files if file.format == fmt]
         if not files:
             issues.append(f"缺少承诺的 {fmt.upper()} 交付文件")
-        elif any(file.status != "pass" or not file.data for file in files):
+        elif any(
+            not file.data
+            or (
+                file.status != "pass"
+                and not (
+                    file.status == "warn" and file.issues and set(file.issues) <= set(advisories)
+                )
+            )
+            for file in files
+        ):
             issues.append(f"{fmt.upper()} 交付文件尚未通过验收")
-    if bundle.status != "pass" and not issues:
+    if not issues and (bundle.status == "fail" or (bundle.status != "pass" and not advisories)):
         issues.append("交付整体检查尚未通过")
     source = delivery_fingerprint(detail)
     if bundle.input_version != source:
         issues.append("交付文件与当前定稿版本不一致")
     return {
-        "policy_version": 1,
+        "policy_version": COMPLETION_POLICY_VERSION,
         "status": "needs_review" if issues else "done",
         "scope": "frozen_task_delivery",
         "input_version": source,
@@ -177,6 +198,7 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
         "required_formats": sorted(required),
         "required_gates": sorted(required_gates),
         "issues": list(dict.fromkeys(issues)),
+        "advisories": list(dict.fromkeys(advisories)),
         "gates": [gate.to_dict() for gate in bundle.gates],
         "checked_at": datetime.now(UTC).isoformat(),
     }

@@ -408,6 +408,7 @@ export interface IntentDecision {
 export interface RunCompletion {
   status: 'done' | 'needs_review'
   issues: string[]
+  advisories?: string[]
   input_version?: string
   content_version?: string
   required_formats?: string[]
@@ -901,6 +902,8 @@ export interface GateResult {
   status: GateStatus
   issues: string[]
   metrics: Record<string, unknown>
+  blocking_issues?: string[] | null
+  advisories?: string[]
 }
 
 export interface DeliverableItem {

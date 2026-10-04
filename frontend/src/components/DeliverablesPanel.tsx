@@ -56,7 +56,7 @@ const GATE_HELP: Record<string, string> = {
   markdown: '交付源文件不含裸 HTML、页内锚点与未闭合代码块，保证各格式渲染一致。',
   structure: '任务模板承诺的章节必须齐全；导图结构应完整，避免重复节点和缺失关系。',
   node_evidence: '区分概念、事实与研究问题；逐节点核对事实引用和上下级关系。模型判断仍需人工审阅。',
-  length: '正文篇幅不低于任务模板的下限。',
+  length: '篇幅接近模板下限时提示补充，明显不足时需要修订。',
   consistency: 'Word、PDF、HTML 与 Markdown 源的图片数量一致，PDF 可完整抽出正文。',
   slides: '每页都有要点与演讲备注，且没有文字溢出页面的风险。',
   review: '同行评审必须给出 1–10 的整数评分。',
@@ -135,7 +135,10 @@ const FORMAT_ICON: Record<string, AppIconName> = {
 function GateRow({ gate }: { gate: GateResult }) {
   const meta = STATUS_META[gate.status]
   const label = GATE_LABEL[gate.name] ?? gate.name
-  const { hard, advice } = splitIssues(gate.issues)
+  const legacy = splitIssues(gate.issues)
+  const hard = gate.blocking_issues ?? legacy.hard
+  const advice = gate.advisories ?? legacy.advice
+  const advisoryOnly = gate.blocking_issues?.length === 0 && advice.length > 0
   return (
     <li className={`run-gate is-${gate.status}`}>
       <div className="run-gate-head">
@@ -144,7 +147,7 @@ function GateRow({ gate }: { gate: GateResult }) {
           {label}
           {GATE_HELP[gate.name] && <InfoTip text={GATE_HELP[gate.name]} label={`${label}说明`} />}
         </span>
-        <span className="run-gate-status">{meta.label}</span>
+        <span className="run-gate-status">{advisoryOnly ? '提示' : meta.label}</span>
       </div>
       {hard.length > 0 && (
         <ul className="run-gate-issues">

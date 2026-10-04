@@ -149,6 +149,18 @@ const registry: DeliverableRegistry = {
 }
 
 describe('DeliverablesPanel', () => {
+  it('shows classified style findings as advice on a completed delivery', () => {
+    const message = '口语化或夸张措辞「说白了」'
+    render(<DeliverablesPanel runId="r1" loading={false} error={null} registry={{
+      ...registry,
+      status: 'pass',
+      gates: [{ name: 'scholarly', status: 'warn', issues: [message], metrics: {}, blocking_issues: [], advisories: [message] }],
+    }} />)
+    expect(screen.getByText('提示')).toBeInTheDocument()
+    expect(screen.getByLabelText('学术质量改进建议')).toHaveTextContent(message)
+    expect(screen.queryByText('部分完成 · 有待改进项')).not.toBeInTheDocument()
+  })
+
   it('starts a separate content revision while retaining the original file registry', async () => {
     const created = vi.fn()
     mocks.reviseRunContent.mockResolvedValue({ run_id: 'revision-child' })

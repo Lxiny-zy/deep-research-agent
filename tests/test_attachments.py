@@ -356,7 +356,7 @@ async def test_paper_read_with_only_an_uploaded_paper_reads_it_without_searching
     record = load_version(detail, settings.artifact_root, completion["content_version"]).registry()
     required = set(template.deliverables)
     missing = required - {item["format"] for item in record["items"]}
-    nonpassing = [gate for gate in record["gates"] if gate["status"] != "pass"]
+    nonpassing = [gate for gate in record["gates"] if gate["blocking_issues"]]
     requires_review = (
         bool(missing or nonpassing or record["failures"])
         or record["status"] != "pass"
@@ -377,8 +377,9 @@ async def test_paper_read_with_only_an_uploaded_paper_reads_it_without_searching
     assert completion["input_version"] == record["input_version"]
     assert completion["gates"] == record["gates"]
     assert bool(completion["issues"]) is requires_review
-    for gate in nonpassing:
-        assert set(gate["issues"]) <= set(completion["issues"])
+    for gate in record["gates"]:
+        assert set(gate["blocking_issues"]) <= set(completion["issues"])
+        assert set(gate["advisories"]) <= set(completion["advisories"])
     for fmt in missing:
         assert any(fmt.upper() in issue for issue in completion["issues"])
     verified = [
