@@ -110,12 +110,16 @@ it('shows one paper while each inline citation opens its own original locations 
   ).toHaveLength(1)
   await userEvent.click(screen.getAllByRole('button', { name: '查看引用 1 的证据' })[0])
   let panel = screen.getByRole('dialog', { name: '引用 1 的证据' })
+  expect(within(panel).getByText('未绑定依据：本句没有可用的核验绑定记录。')).toBeVisible()
+  expect(within(panel).queryByText('CLAIM_2')).toBeNull()
+  await userEvent.click(within(panel).getByRole('button', { name: '查看这些位置的全部记录' }))
   expect(within(panel).getByText('CLAIM_2')).toBeVisible()
   expect(within(panel).queryByText('CLAIM_1')).toBeNull()
   expect(within(panel).getByRole('combobox')).toHaveValue('2')
   await userEvent.click(within(panel).getByRole('button', { name: '关闭证据侧栏' }))
   await userEvent.click(screen.getAllByRole('button', { name: '查看引用 1 的证据' })[1])
   panel = screen.getByRole('dialog', { name: '引用 1 的证据' })
+  await userEvent.click(within(panel).getByRole('button', { name: '查看这些位置的全部记录' }))
   expect(within(panel).getByText('CLAIM_1')).toBeVisible()
   expect(within(panel).getByText('CLAIM_3')).toBeVisible()
   expect(within(panel).getByText(/END FULL QUOTE/)).toBeVisible()
@@ -145,6 +149,34 @@ const MARKDOWN = [
 ].join('\n')
 
 const CITATIONS = ['https://a.example.com/report', 'https://b.example.com/power']
+
+it('keeps legacy inline citations unbound even after the reader browses the source', async () => {
+  render(
+    <ReportView
+      markdown="结论 [1]。"
+      streaming={false}
+      citations={[CITATIONS[0]]}
+      findings={[
+        makeFinding({
+          statement: '来源记录',
+          source_url: CITATIONS[0],
+          evidence_quote: 'SOURCE_QUOTE',
+          claim_id: 'legacy',
+        }),
+      ]}
+    />,
+  )
+  const citation = screen.getByRole('button', { name: '查看引用 1 的证据' })
+  await userEvent.click(citation)
+  expect(screen.getByText('未绑定依据：本句没有可用的核验绑定记录。')).toBeVisible()
+  expect(screen.queryByText('SOURCE_QUOTE')).toBeNull()
+  await userEvent.click(screen.getByRole('button', { name: '查看这些位置的全部记录' }))
+  expect(screen.getByText('SOURCE_QUOTE')).toBeVisible()
+  expect(screen.getByText('正在浏览来源记录；这些记录不代表本句的核验依据。')).toBeVisible()
+  await userEvent.click(citation)
+  expect(screen.queryByText('SOURCE_QUOTE')).toBeNull()
+  expect(screen.getByText('未绑定依据：本句没有可用的核验绑定记录。')).toBeVisible()
+})
 
 it('lets readers interact outside the evidence panel without locking scroll or restoring old focus', async () => {
   const bodyOverflow = document.body.style.overflow
@@ -219,6 +251,7 @@ it('shows a readable explanation for failed source checks while preserving raw d
   )
   await userEvent.click(screen.getByRole('button', { name: '查看引用 1 的证据' }))
   const panel = screen.getByRole('dialog')
+  await userEvent.click(within(panel).getByRole('button', { name: '查看这些位置的全部记录' }))
   expect(panel).toHaveTextContent('来源之间的一致性核对未完成')
   expect(panel).toHaveTextContent('其他来源的支持情况')
   expect(panel.innerHTML).not.toMatch(/consistency_verifier_failed|ValueError/)
@@ -425,6 +458,7 @@ describe('ReportView 可审计证据链', () => {
     await user.click(cite1)
 
     const drawer = within(screen.getByRole('dialog', { name: '引用 1 的证据' }))
+    await user.click(drawer.getByRole('button', { name: '查看这些位置的全部记录' }))
     expect(drawer.getByText(/After several flat quarters/)).toBeInTheDocument()
     expect(drawer.getByText('GPU shipments hit a record high in Q4')).toHaveProperty(
       'tagName',
@@ -467,6 +501,7 @@ describe('ReportView 可审计证据链', () => {
     await user.click(cite2)
 
     expect(screen.getByRole('dialog', { name: '引用 2 的证据' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '查看这些位置的全部记录' }))
     expect(screen.getByText('整机功耗持续上升')).toBeInTheDocument()
     expect(body).toHaveProperty('scrollTop', 0)
     expect(screen.getAllByRole('button', { name: '查看引用 2 的证据' })[0]).toHaveAttribute(
@@ -511,6 +546,7 @@ describe('ReportView 可审计证据链', () => {
     const [cite1] = screen.getAllByRole('button', { name: '查看引用 1 的证据' })
     await user.click(cite1)
 
+    await user.click(screen.getByRole('button', { name: '查看这些位置的全部记录' }))
     expect(screen.getByText('旧记录未保存上下文')).toBeInTheDocument()
     expect(screen.getByText('GPU shipments hit a record high in Q4')).toBeInTheDocument()
   })
@@ -530,6 +566,7 @@ describe('ReportView 可审计证据链', () => {
     await user.click(cite2)
 
     const drawer = within(screen.getByRole('dialog', { name: '引用 2 的证据' }))
+    await user.click(drawer.getByRole('button', { name: '查看这些位置的全部记录' }))
     expect(drawer.getByText('conflicted')).toBeInTheDocument()
     expect(drawer.getByText('来源存在争议 · 1 个独立来源')).toBeInTheDocument()
     expect(drawer.getByText('两来源对功耗趋势结论相反')).toBeInTheDocument()

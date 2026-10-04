@@ -131,8 +131,10 @@ async def test_offline_html_filters_scoped_evidence_and_offers_explicit_source_b
     )[1]
     assert "original quote for A" in first
     assert "original quote for B" not in first and "original quote for C" not in first
-    assert 'href="#cite-1"' in first
-    broad = re.search(r'<aside class="citation-location" id="cite-1">(.*?)</aside>', html, re.S)[1]
+    assert 'href="#cite-source-1"' in first
+    broad = re.search(
+        r'<aside class="citation-location" id="cite-source-1">(.*?)</aside>', html, re.S
+    )[1]
     assert (
         "original quote for A" in broad
         and "original quote for B" in broad

@@ -499,8 +499,11 @@ async def test_slides_and_mindmap_runs_deliver_binary_formats(settings) -> None:
 
 @pytest.mark.parametrize("key", ["slides", "mindmap"])
 async def test_closed_visual_workflow_reads_each_file_once_and_requires_every_input(settings, key):
+    import json
+
     from deep_research.models import ExtractedFindingList
     from deep_research.workbench.attachments import parse_attachment
+    from deep_research.workbench.support import SupportDecisions
 
     attachments = [
         await parse_attachment(b"Alpha uses spectral attention.", "alpha.txt"),
@@ -511,6 +514,20 @@ async def test_closed_visual_workflow_reads_each_file_once_and_requires_every_in
 
     class ClosedLLM(WorkbenchLLM):
         async def parse(self, system, user, schema, **kwargs):
+            if schema is SupportDecisions:
+                response = await super().parse(system, user, schema, **kwargs)
+                data = json.loads(user)
+                for unit, decision in zip(data["units"], response.decisions, strict=True):
+                    # The slide-wide citations expose both inputs, but each
+                    # bullet's reviewed selection must match its actual text.
+                    matching = [
+                        evidence["id"] for evidence in data["evidence"]
+                        if evidence["citation"] in unit["citations"]
+                        and evidence["statement"] in unit["text"]
+                    ]
+                    if matching:
+                        decision.evidence_ids = matching
+                return response
             if schema is ExtractedFindingList:
                 selected = [source for source in sources if source.url in user]
                 extracted.extend(source.url for source in selected)

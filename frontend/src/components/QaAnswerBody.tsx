@@ -10,30 +10,6 @@ import type { QaEvidence, ReportBibliography } from '../types'
 
 const ORIGINS = { paper: '本论文', library: '资料库', web: '联网来源' }
 
-function words(text: string): Set<string> {
-  return new Set(
-    text
-      .replace(/\[\d+(?:[,，]\s*\d+)*\]/g, '')
-      .toLowerCase()
-      .match(/[a-z0-9]+|[\u3400-\u9fff]/g) ?? [],
-  )
-}
-
-function evidenceForParagraph(items: QaEvidence[], paragraph: string): QaEvidence | undefined {
-  const tokens = words(paragraph)
-  let best = items[0]
-  let score = 0
-  for (const item of items) {
-    const claim = words(item.statement)
-    const overlap = [...claim].filter((word) => tokens.has(word)).length / Math.max(1, claim.size)
-    if (overlap > score) {
-      best = item
-      score = overlap
-    }
-  }
-  return best
-}
-
 interface CitationContextValue {
   citations: string[]
   evidence: QaEvidence[]
@@ -105,24 +81,23 @@ const components: Components = {
           <button
             type="button"
             className="qa-inline-cite"
-            aria-label={`定位引用 ${number} 的论文依据`}
-            title={`${origin} · ${label}${scoped ? ' · 核验选用的摘录' : ' · 按段落文本匹配定位'}`}
+            aria-label={scoped ? `定位引用 ${number} 的论文依据` : `浏览引用 ${number} 的来源记录`}
+            title={`${origin} · ${label}${scoped ? ' · 核验选用的摘录' : ' · 未绑定依据，浏览来源记录'}`}
             aria-expanded={choosing}
-            onClick={(event) => {
+            onClick={() => {
               if (scoped) {
                 if (candidates.length === 1) onLocate(candidates[0])
                 else setChoosing(true)
                 return
               }
-              const paragraph = event.currentTarget.closest('p, li, td, th')?.textContent ?? ''
-              const target = evidenceForParagraph(candidates, paragraph)
-              if (target) onLocate(target)
+              setChoosing(true)
             }}
           >
             {children}
           </button>
           {choosing && (
             <EvidenceChoice
+              bound={Boolean(scoped)}
               items={candidates}
               onClose={() => setChoosing(false)}
               onLocate={(item) => {
@@ -136,7 +111,11 @@ const components: Components = {
     }
     if (!/^https?:\/\//i.test(url) || url.startsWith('https://workspace.invalid/')) {
       return (
-        <span className="qa-inline-cite is-unavailable" title={label}>
+        <span
+          className="qa-inline-cite is-unavailable"
+          title={`${label}${scoped ? '' : ' · 未绑定依据'}`}
+          aria-label={scoped ? undefined : `引用 ${number}：未绑定依据`}
+        >
           {children}
         </span>
       )
@@ -148,7 +127,7 @@ const components: Components = {
         target="_blank"
         rel="noopener noreferrer"
         aria-label={`查看引用 ${number}：${label}`}
-        title={`${origin} · ${label}`}
+        title={`${origin} · ${label}${scoped ? '' : ' · 未绑定依据，仅查看来源'}`}
       >
         {children}
       </a>
@@ -193,10 +172,12 @@ export default function QaAnswerBody({
 }
 
 function EvidenceChoice({
+  bound,
   items,
   onClose,
   onLocate,
 }: {
+  bound: boolean
   items: QaEvidence[]
   onClose: () => void
   onLocate: (item: QaEvidence) => void
@@ -208,25 +189,29 @@ function EvidenceChoice({
         className="evidence-drawer"
         role="dialog"
         aria-modal="false"
-        aria-label="选择论文依据"
+        aria-label={bound ? '选择论文依据' : '浏览来源记录'}
         tabIndex={-1}
         ref={ref}
       >
         <div className="evidence-drawer-inner">
           <div className="evidence-drawer-head">
-            <h3>选择论文依据</h3>
+            <h3>{bound ? '选择论文依据' : '浏览来源记录'}</h3>
             <button type="button" className="btn btn-ghost" onClick={onClose}>
               关闭
             </button>
           </div>
           <div className="evidence-drawer-body">
-            <p>这段内容的核验选用了多条摘录，请选择要查看的位置。</p>
+            <p>
+              {bound
+                ? '这段内容的核验选用了多条摘录，请选择要查看的位置。'
+                : '未绑定依据：以下是该来源的记录，不代表本句的核验依据。'}
+            </p>
             {items.map((item, index) => (
               <article className="evidence-card" key={`${item.support_id}-${index}`}>
                 <p>{item.statement}</p>
                 <blockquote>{item.evidence_quote}</blockquote>
                 <button type="button" className="btn btn-ghost" onClick={() => onLocate(item)}>
-                  定位这条依据
+                  {bound ? '定位这条依据' : '定位这条记录'}
                 </button>
               </article>
             ))}

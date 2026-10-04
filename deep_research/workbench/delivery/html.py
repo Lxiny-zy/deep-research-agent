@@ -302,21 +302,36 @@ def _citation_evidence_html(
     targets = dict.fromkeys(re.findall(r'href="#cite-(\d+(?:-\d+)*|o-[0-9a-f]{24})"', body))
     for target in list(targets):
         occurrence = occurrences.get(target)
-        if occurrence and occurrence.scope != "source_location":
-            targets["-".join(map(str, occurrence.locations))] = None
+        indices = (
+            occurrence.locations
+            if occurrence
+            else (
+                [int(index) for index in target.split("-")] if not target.startswith("o-") else []
+            )
+        )
+        if indices:
+            targets["source-" + "-".join(map(str, indices))] = None
     entries = []
     for target in targets:
         occurrence = occurrences.get(target)
         if target.startswith("o-") and occurrence is None:
             continue
+        source_browse = target.startswith("source-")
         indices = (
-            occurrence.locations if occurrence else [int(index) for index in target.split("-")]
+            occurrence.locations
+            if occurrence
+            else [int(index) for index in target.removeprefix("source-").split("-")]
         )
         selected = (
             set(occurrence.evidence_ids)
-            if occurrence and occurrence.scope != "source_location"
-            else None
+            if occurrence
+            and occurrence.scope == "reviewed_unit"
+            and bibliography.binding_status == "bound"
+            else set()
         )
+        available = {item.get("id") for item in evidence if item.get("citation") in indices}
+        if not selected.issubset(available):
+            selected = set()
         if any(index not in locations for index in indices):
             continue
         sections = []
@@ -326,17 +341,16 @@ def _citation_evidence_html(
             records = [
                 item
                 for item in evidence
-                if item.get("citation") == index
-                and (selected is None or item.get("id") in selected)
+                if item.get("citation") == index and (source_browse or item.get("id") in selected)
             ]
             quotes = "".join(
                 f"<p>{escape(str(record['statement']))}</p>"
                 f"<blockquote>{escape(str(record['quote']))}</blockquote>"
                 for record in records
             ) or (
-                "<p>这个位置没有被本段核验选用的摘录。</p>"
-                if selected is not None
-                else "<p>该历史记录没有保存可展示的核验摘录。</p>"
+                "<p>该历史记录没有保存可展示的核验摘录。</p>"
+                if source_browse
+                else "<p>这个位置没有被本段核验选用的摘录。</p>"
             )
             link = (
                 f'<a href="{escape(document.url, quote=True)}" rel="noreferrer">打开文献</a>'
@@ -349,16 +363,19 @@ def _citation_evidence_html(
                 f"<h3>[{document.index}] {escape(location.label or document.title)}</h3>"
                 f"{link}{quotes}</section>"
             )
-        note = ""
-        if selected is not None:
+        if source_browse:
+            heading = "来源全部摘录"
+            note = "<p>以下为这些来源位置保存的全部摘录，不代表当前句的核验依据。</p>"
+        else:
+            heading = "引用依据" if selected else "未绑定依据"
             broad = "-".join(map(str, indices))
-            note = (
-                f"<p>按本段或表格行的核验结果展示。"
-                f'<a href="#cite-{broad}">查看这些位置的全部摘录</a></p>'
+            explanation = (
+                "按本段或表格行的核验结果展示。" if selected else "当前引用没有有效的核验摘录绑定。"
             )
+            note = f'<p>{explanation}<a href="#cite-source-{broad}">查看这些位置的全部摘录</a></p>'
         entries.append(
             f'<aside class="citation-location" id="cite-{target}">'
-            f"<h2>引用依据</h2>{note}{''.join(sections)}</aside>"
+            f"<h2>{heading}</h2>{note}{''.join(sections)}</aside>"
         )
     if not entries:
         return ""

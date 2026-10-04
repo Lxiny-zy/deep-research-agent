@@ -6,7 +6,7 @@ import { verificationText } from '../lib/verificationText'
 import type { Finding } from '../types'
 import { AppIcon } from './AppIcon'
 
-// 证据侧栏：点击报告里的 [n] 引用后展示该来源下的全部论断——
+// 证据侧栏：正文引用只展示核验绑定记录；读者可主动切换到来源记录浏览。
 // 论断 → 逐字 quote（高亮）→ 程序验证徽章 → 内容哈希缩写；
 // conflicted 论断额外渲染矛盾 claim 的反向链接。样式沿用 design-system 卡片语言。
 
@@ -394,7 +394,7 @@ export default function EvidencePanel({
   displayCitation?: number
   referenceUrl?: string
   selectedLocationCount?: number
-  selectionScope?: 'reviewed_unit' | 'source_location' | 'unused_location'
+  selectionScope?: 'reviewed_unit' | 'source_location' | 'unused_location' | 'unbound'
   missingEvidence?: number
   onShowAll?: () => void
   url: string
@@ -496,6 +496,12 @@ export default function EvidencePanel({
             </span>
           </div>
           <div className="evidence-drawer-body" ref={bodyRef}>
+            {selectionScope === 'unbound' && (
+              <p className="muted small">未绑定依据：本句没有可用的核验绑定记录。</p>
+            )}
+            {selectionScope === 'source_location' && (
+              <p className="muted small">正在浏览来源记录；这些记录不代表本句的核验依据。</p>
+            )}
             {selectionScope === 'reviewed_unit' && (
               <p className="muted small">已按这段内容的核验记录筛选摘录。</p>
             )}
@@ -521,9 +527,11 @@ export default function EvidencePanel({
               <p className="muted small">
                 {selectionScope === 'unused_location'
                   ? '这个位置未被本次内容核验选用。'
-                  : selectionScope === 'reviewed_unit'
-                    ? '该段核验选用的摘录暂未加载。'
-                    : '该来源暂无结构化证据记录。'}
+                  : selectionScope === 'unbound'
+                    ? '可主动浏览来源记录，但不能据此视为本句已获支持。'
+                    : selectionScope === 'reviewed_unit'
+                      ? '该段核验选用的摘录暂未加载。'
+                      : '该来源暂无结构化证据记录。'}
               </p>
             ) : (
               findings.map((f, i) => (

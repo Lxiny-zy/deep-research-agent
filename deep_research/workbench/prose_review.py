@@ -25,6 +25,7 @@ from .support import (
     digest,
     evidence_records,
 )
+from .support_alignment import alignment_issue, numeric_fact
 
 PROSE_REVIEW_KEY = "prose_review"
 _CITE = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
@@ -309,11 +310,14 @@ class ProseReviewer:
                 continue
             if decision.verdict == "supported" and (
                 not decision.evidence_ids or not set(decision.evidence_ids).issubset(allowed)
+                or alignment_issue(unit.text, unit.citations, decision.evidence_ids, self.evidence)
             ):
                 continue
             if decision.verdict == "non_factual" and unit.kind in {"claim", "translation"}:
                 continue
             if decision.verdict == "non_factual" and asserted_comparison(unit.text):
+                continue
+            if decision.verdict == "non_factual" and numeric_fact(unit.text):
                 continue
             self.reviewer.cache[digest([asdict(unit), selected])] = decision
         return True
@@ -506,10 +510,17 @@ class ProseReviewer:
                 problems.append(f"第 {positions[d.unit_id]} 行：译文未完成忠实性与完整性核对")
             elif d.verdict == "non_factual" and asserted_comparison(expected[d.unit_id].text):
                 problems.append(f"第 {positions[d.unit_id]} 行：事实性比较被错误归类为纯编排说明")
+            elif d.verdict == "non_factual" and numeric_fact(expected[d.unit_id].text):
+                problems.append(f"第 {positions[d.unit_id]} 行：数值事实被错误归类为纯编排说明")
             elif d.verdict == "supported" and (
                 not d.evidence_ids or not set(d.evidence_ids).issubset(allowed)
             ):
                 problems.append(f"第 {positions[d.unit_id]} 行：终稿证据映射超出该单元引用范围")
+            elif d.verdict == "supported":
+                unit = expected[d.unit_id]
+                issue = alignment_issue(unit.text, unit.citations, d.evidence_ids, self.evidence)
+                if issue:
+                    problems.append(f"第 {positions[d.unit_id]} 行：{issue}")
         return True, problems
 
 

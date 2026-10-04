@@ -220,7 +220,7 @@ def test_offline_html_links_reveal_only_the_requested_locations_without_scripts(
         evidence=evidence,
     )
     combined = re.search(
-        r'<aside class="citation-location" id="cite-1-3">(.*?)</aside>', html, re.S
+        r'<aside class="citation-location" id="cite-source-1-3">(.*?)</aside>', html, re.S
     )[1]
     assert "QUOTE1" in combined and "QUOTE3" in combined and "QUOTE2" not in combined
     assert 'href="#cite-2"' in html and 'id="cite-2"' in html
@@ -305,6 +305,10 @@ def test_mindmap_displays_document_numbers_without_merging_location_evidence():
     linked = re.search(r'<aside class="citation-location" id="cite-1-3">(.*?)</aside>', html, re.S)[
         1
     ]
+    assert "未绑定依据" in linked and "QUOTE1" not in linked
+    linked = re.search(
+        r'<aside class="citation-location" id="cite-source-1-3">(.*?)</aside>', html, re.S
+    )[1]
     assert "QUOTE1" in linked and "QUOTE3" in linked and "QUOTE2" not in linked
 
 

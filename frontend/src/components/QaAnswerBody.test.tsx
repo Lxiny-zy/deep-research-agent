@@ -106,7 +106,7 @@ it('does not use an unrelated quote when a reviewed selection is unavailable', (
   expect(screen.getByText('[1]')).toHaveAttribute('title', '本次核验选用的摘录暂未加载')
 })
 
-it('uses clickable inline citations and selects evidence matching the current paragraph', () => {
+it('requires explicit source browsing instead of guessing unbound evidence from paragraph words', () => {
   const locate = vi.fn()
   render(
     <QaAnswerBody
@@ -117,7 +117,10 @@ it('uses clickable inline citations and selects evidence matching the current pa
     />,
   )
   expect(screen.getByRole('heading', { name: '直接回答' })).toBeInTheDocument()
-  fireEvent.click(screen.getAllByRole('button', { name: '定位引用 1 的论文依据' })[1])
+  fireEvent.click(screen.getAllByRole('button', { name: '浏览引用 1 的来源记录' })[1])
+  expect(locate).not.toHaveBeenCalled()
+  expect(screen.getByText('未绑定依据：以下是该来源的记录，不代表本句的核验依据。')).toBeVisible()
+  fireEvent.click(screen.getAllByRole('button', { name: '定位这条记录' })[1])
   expect(locate).toHaveBeenCalledWith(second)
 })
 
@@ -130,7 +133,7 @@ it('expands grouped markers while leaving code markers and unknown references in
       onLocate={vi.fn()}
     />,
   )
-  expect(screen.getByRole('button', { name: '定位引用 1 的论文依据' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '浏览引用 1 的来源记录' })).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /查看引用 2/ })).toHaveAttribute(
     'href',
     'https://example.org/paper',
@@ -157,9 +160,25 @@ it.each([
     )
     expect(container).toHaveTextContent('[0,1]')
     expect(screen.getAllByRole('button')).toHaveLength(1)
-    expect(screen.getByRole('button', { name: '定位引用 1 的论文依据' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '浏览引用 1 的来源记录' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /查看引用 2/ })).toBeInTheDocument()
     expect(screen.queryByText('[0]')).not.toBeInTheDocument()
+  },
+)
+
+it.each([first.source_url, 'local-paper.pdf'])(
+  'labels an unbound local citation without evidence instead of suggesting a location: %s',
+  (url) => {
+    const locate = vi.fn()
+    render(<QaAnswerBody text="回答 [1]。" citations={[url]} onLocate={locate} />)
+    const citation = screen.getByText('[1]')
+    expect(citation).toHaveAttribute('title', `${url} · 未绑定依据`)
+    expect(citation).toHaveAttribute('aria-label', '引用 1：未绑定依据')
+    expect(citation).toHaveClass('is-unavailable')
+    fireEvent.click(citation)
+    expect(locate).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.queryByRole('link')).toBeNull()
   },
 )
 

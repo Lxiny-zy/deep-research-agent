@@ -20,6 +20,7 @@ from ..guardrails import report_eligible
 from ..models import Finding, ResearchResult
 from ..persistence.repository import LeaseLostError
 from ..prompting import EVIDENCE_MODALITY_RULES, MEASUREMENT_SCOPE_RULES, structured_system_prompt
+from .support_alignment import alignment_issue, numeric_fact
 
 
 class SupportDecision(BaseModel):
@@ -42,7 +43,7 @@ class SupportUnit:
     citations: list[int] = field(default_factory=list)
 
 
-SUPPORT_POLICY_VERSION = 3
+SUPPORT_POLICY_VERSION = 4
 
 
 def asserted_comparison(text: str) -> bool:
@@ -134,6 +135,7 @@ def evidence_records(
                     "id": evidence_id(finding),
                     "citation": citation,
                     "statement": finding.statement,
+                    **({"entity": finding.entity} if finding.entity else {}),
                     "quote": finding.evidence_quote,
                     "source": finding.source_url,
                     "reference": finding.verification.source_reference
@@ -220,8 +222,14 @@ class SupportReviewer:
             key = digest([asdict(unit), selected])
             keys[unit.id] = key
             if key in self.cache:
-                results[unit.id] = self.cache[key]
-                continue
+                cached = self.cache[key]
+                invalid_fact = cached.verdict == "non_factual" and numeric_fact(unit.text)
+                invalid_support = cached.verdict == "supported" and alignment_issue(
+                    unit.text, unit.citations, cached.evidence_ids, self.evidence
+                )
+                if not invalid_fact and not invalid_support:
+                    results[unit.id] = cached
+                    continue
             if not set(unit.citations).issubset(known_citations):
                 results[unit.id] = SupportDecision(
                     unit_id=unit.id,
@@ -431,6 +439,19 @@ class SupportReviewer:
                         unit_id=unit.id,
                         verdict="uncertain",
                         reason="比较条件或输入关系属于事实，不能作为纯编排说明免检；请逐项核对证据",
+                    )
+                if decision.verdict == "supported":
+                    issue = alignment_issue(
+                        unit.text, unit.citations, decision.evidence_ids, self.evidence
+                    )
+                    if issue:
+                        decision = SupportDecision(
+                            unit_id=unit.id, verdict="unsupported", reason=issue
+                        )
+                elif decision.verdict == "non_factual" and numeric_fact(unit.text):
+                    decision = SupportDecision(
+                        unit_id=unit.id, verdict="unsupported",
+                        reason="带引用的数值事实不能作为纯编排说明免检",
                     )
             output[unit.id] = decision
         return output

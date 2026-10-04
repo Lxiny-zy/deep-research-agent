@@ -226,7 +226,7 @@ describe('ReaderPage', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: '提问' }))
     await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledTimes(1))
-    expect(await screen.findByRole('button', { name: '定位引用 1 的论文依据' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '浏览引用 1 的来源记录' })).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByText(/正在翻阅原文并核验/)).not.toBeInTheDocument())
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(mocks.createConversation).toHaveBeenCalledTimes(1)
@@ -244,7 +244,7 @@ describe('ReaderPage', () => {
   it('does not recover an old repeated answer from a stale conversation cache', async () => {
     mocks.listConversations.mockResolvedValue([answered])
     renderPage()
-    await screen.findByRole('button', { name: '定位引用 1 的论文依据' })
+    await screen.findByRole('button', { name: '浏览引用 1 的来源记录' })
     const oldRepeat = { ...answered.messages[0], id: 'm2', position: 1, answer: '之前的回答' }
     const durable = { ...answered, message_count: 2, messages: [...answered.messages, oldRepeat] }
     const latest = { ...oldRepeat, id: 'm3', position: 2, answer: '本轮迟到的回答' }
@@ -345,25 +345,29 @@ describe('ReaderPage', () => {
   it('locates inline paper citations and opens external citations without a source list', async () => {
     mocks.listConversations.mockResolvedValue([answered])
     renderPage()
-    const locate = await screen.findByRole('button', { name: '定位引用 1 的论文依据' })
+    const locate = await screen.findByRole('button', { name: '浏览引用 1 的来源记录' })
     expect(screen.queryByRole('list', { name: '本论文引用' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: '查看引用 2：A survey' })).toHaveAttribute(
       'href',
       'https://b.org/survey',
     )
     fireEvent.click(locate)
+    expect(screen.getByTestId('pdf')).not.toHaveAttribute('data-quote', 'PSNR reaches 38.4 dB on CAVE')
+    fireEvent.click(screen.getByRole('button', { name: '定位这条记录' }))
     expect(screen.getByTestId('pdf')).toHaveAttribute('data-quote', 'PSNR reaches 38.4 dB on CAVE')
   })
 
   it('retries the same citation even when the clock has not advanced', async () => {
     mocks.listConversations.mockResolvedValue([answered])
     renderPage()
-    const locate = await screen.findByRole('button', { name: '定位引用 1 的论文依据' })
+    const locate = await screen.findByRole('button', { name: '浏览引用 1 的来源记录' })
     const clock = vi.spyOn(Date, 'now').mockReturnValue(12345)
     try {
       fireEvent.click(locate)
+      fireEvent.click(screen.getByRole('button', { name: '定位这条记录' }))
       const firstToken = screen.getByTestId('pdf').getAttribute('data-token')
       fireEvent.click(locate)
+      fireEvent.click(screen.getByRole('button', { name: '定位这条记录' }))
       expect(screen.getByTestId('pdf').getAttribute('data-token')).not.toBe(firstToken)
     } finally {
       clock.mockRestore()

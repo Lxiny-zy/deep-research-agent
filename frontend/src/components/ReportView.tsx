@@ -51,11 +51,13 @@ export default function ReportView({
   const [activeLocations, setActiveLocations] = useState<number[]>([])
   const [activeTarget, setActiveTarget] = useState<string | null>(null)
   const [selectedOccurrenceId, setSelectedOccurrenceId] = useState<string | null>(null)
+  const [browsingSource, setBrowsingSource] = useState(false)
   const activeCitation = activeLocations[0] ?? null
   const setActiveCitation = useCallback((value: number | null) => {
     setActiveLocations(value == null ? [] : [value])
     setActiveTarget(value == null ? null : `#cite-${value}`)
     setSelectedOccurrenceId(null)
+    setBrowsingSource(value != null)
   }, [])
   const activeTargetRef = useRef(activeTarget)
   activeTargetRef.current = activeTarget
@@ -130,6 +132,7 @@ export default function ReportView({
               setActiveLocations(indices)
               setActiveTarget(link)
               setSelectedOccurrenceId(occurrence?.id ?? null)
+              setBrowsingSource(false)
             }}
           >
             {children}
@@ -150,9 +153,16 @@ export default function ReportView({
 
   const activeUrl = activeCitation != null ? targets[activeCitation - 1] : undefined
   const scoped = selectedOccurrence && selectedOccurrence.scope !== 'source_location'
-  const activeFindings = scoped
-    ? reviewedFindings(findings, selectedOccurrence, targets)
-    : [...new Set(activeLocations.flatMap((index) => findingsForUrl(findings, targets[index - 1])))]
+  const activeFindings =
+    !browsingSource && scoped
+      ? reviewedFindings(findings, selectedOccurrence, targets)
+      : browsingSource
+        ? [
+            ...new Set(
+              activeLocations.flatMap((index) => findingsForUrl(findings, targets[index - 1])),
+            ),
+          ]
+        : []
   const reportIsLive = isLive ?? streaming
 
   return (
@@ -274,6 +284,7 @@ export default function ReportView({
                             citationTriggerRef.current = event.currentTarget
                             setActiveLocations(document.locations)
                             setSelectedOccurrenceId(null)
+                            setBrowsingSource(true)
                             setActiveTarget(null)
                           }}
                         >
@@ -309,14 +320,16 @@ export default function ReportView({
             id="evidence-panel"
             citation={activeCitation}
             selectedLocationCount={catalog ? activeLocations.length : undefined}
-            selectionScope={selectedOccurrence?.scope}
+            selectionScope={
+              browsingSource ? 'source_location' : scoped ? selectedOccurrence.scope : 'unbound'
+            }
             missingEvidence={
-              scoped
+              !browsingSource && scoped
                 ? new Set(selectedOccurrence.evidence_ids).size -
                   new Set(activeFindings.map((finding) => finding.support_id)).size
                 : 0
             }
-            onShowAll={scoped ? () => setSelectedOccurrenceId(null) : undefined}
+            onShowAll={!browsingSource ? () => setBrowsingSource(true) : undefined}
             displayCitation={catalog ? documentNumber(catalog, activeCitation) : undefined}
             referenceUrl={
               catalog?.documents.find(
