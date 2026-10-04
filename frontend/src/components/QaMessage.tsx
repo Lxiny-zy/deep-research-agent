@@ -26,10 +26,14 @@ export default function QaMessageView({
   message,
   onLocate,
   onReconnect,
+  onRevise,
+  revisionPending,
 }: {
   message: QaMessage
   onLocate?: (evidence: QaEvidence) => void
   onReconnect?: () => void
+  onRevise?: () => void
+  revisionPending?: boolean
 }) {
   const unresolved = message.thoughts
     .filter((thought) => thought.tool === 'evidence_coverage')
@@ -90,6 +94,17 @@ export default function QaMessageView({
               onLocate={onLocate}
             />
           </div>
+          {message.status === 'fallback' && message.revision?.available && onRevise && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={onRevise}
+              disabled={revisionPending}
+              title="复用这条回答的原稿与证据"
+            >
+              继续修订回答
+            </button>
+          )}
           {steps.length > 0 && (
             <details className="qa-thoughts">
               <summary>

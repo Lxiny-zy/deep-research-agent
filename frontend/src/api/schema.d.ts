@@ -527,6 +527,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/qa/conversations/{conversation_id}/messages/{message_id}/revise": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revise Answer */
+        post: operations["revise_answer_api_qa_conversations__conversation_id__messages__message_id__revise_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/qa/conversations/{conversation_id}/messages/{message_id}/revise/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revise Answer Stream */
+        post: operations["revise_answer_stream_api_qa_conversations__conversation_id__messages__message_id__revise_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/qa/conversations/{conversation_id}/requests/{request_id}": {
         parameters: {
             query?: never;
@@ -1611,6 +1645,8 @@ export interface components {
             query: string;
             /** Request Id */
             request_id?: string | null;
+            /** Revision Message Id */
+            revision_message_id?: string | null;
             /** Sources */
             sources?: ("web" | "library")[];
         };
@@ -3636,6 +3672,11 @@ export interface components {
             findings?: components["schemas"]["Finding"][];
             /** Sub Question */
             sub_question: string;
+        };
+        /** RevisionRequest */
+        RevisionRequest: {
+            /** Request Id */
+            request_id?: string | null;
         };
         /**
          * RunDetail
@@ -5762,6 +5803,86 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revise_answer_api_qa_conversations__conversation_id__messages__message_id__revise_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revise_answer_stream_api_qa_conversations__conversation_id__messages__message_id__revise_stream_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevisionRequest"];
             };
         };
         responses: {

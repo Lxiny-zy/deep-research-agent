@@ -86,13 +86,17 @@ def merge_findings(*groups: list[Finding]) -> list[Finding]:
 
 
 async def current_findings(
-    candidates: list[Finding], sources: list[Source], researcher: Any
+    candidates: list[Finding],
+    sources: list[Source],
+    researcher: Any,
+    *,
+    require_prior_admission: bool = True,
 ) -> list[Finding]:
     """Re-admit historical claims against current source, quote and semantic rules."""
     if not candidates:
         return []
     wanted = {finding.source_url for finding in candidates}
-    allowed = {}
+    allowed: dict[tuple[str, str], Source] = {}
     for source in sources:
         if source.url not in wanted:
             continue
@@ -101,10 +105,28 @@ async def current_findings(
             decision = await screen_source_intent(source, decision)
         if decision.allowed:
             key = (source.url, hashlib.sha256(source.content.encode()).hexdigest())
-            allowed[key] = source
+            previous = allowed.get(key)
+            if previous is None or not (
+                previous.scholarly and previous.scholarly.retracted is True
+            ):
+                allowed[key] = source
     result = []
-    for finding in merge_findings(candidates):
+    unique = {digest([f.source_url, f.statement, f.evidence_quote]): f for f in candidates}
+    selected = merge_findings(candidates) if require_prior_admission else list(unique.values())
+    for finding in selected:
         matched = allowed.get((finding.source_url, finding.verification.source_content_hash))
+        if (
+            matched is None
+            and not require_prior_admission
+            and not finding.verification.source_content_hash
+        ):
+            matches = [
+                source
+                for (url, _), source in allowed.items()
+                if url == finding.source_url
+                and researcher.evidence_verifier.verify(finding, source).accepted
+            ]
+            matched = matches[0] if len(matches) == 1 else None
         if matched is None:
             continue
         checked = researcher.evidence_verifier.verify(finding, matched)

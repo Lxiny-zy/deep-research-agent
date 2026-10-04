@@ -1025,7 +1025,12 @@ export function askQuestion(
   id: string,
   query: string,
   signal?: AbortSignal,
-  scope?: { sources: QaSourceOption[]; projectId?: string; requestId?: string },
+  scope?: {
+    sources: QaSourceOption[]
+    projectId?: string
+    requestId?: string
+    revisionMessageId?: string
+  },
   onDelta?: (delta: string) => void,
   onActivity?: (activity: QaActivity) => void,
 ): Promise<QaMessage> {
@@ -1035,6 +1040,7 @@ export function askQuestion(
         sources: scope.sources,
         ...(scope.projectId ? { project_id: scope.projectId } : {}),
         ...(scope.requestId ? { request_id: scope.requestId } : {}),
+        ...(scope.revisionMessageId ? { revision_message_id: scope.revisionMessageId } : {}),
       }
     : { query }
   return askQuestionStream(id, body, signal, onDelta, onActivity)
@@ -1042,7 +1048,13 @@ export function askQuestion(
 
 async function askQuestionStream(
   id: string,
-  body: { query: string; sources?: QaSourceOption[]; project_id?: string; request_id?: string },
+  body: {
+    query: string
+    sources?: QaSourceOption[]
+    project_id?: string
+    request_id?: string
+    revision_message_id?: string
+  },
   signal?: AbortSignal,
   onDelta?: (delta: string) => void,
   onActivity?: (activity: QaActivity) => void,
@@ -1076,7 +1088,9 @@ async function askQuestionStream(
   refreshIdleTimer()
   try {
     const response = await fetch(
-      `/api/qa/conversations/${encodeURIComponent(id)}/messages/stream`,
+      body.revision_message_id
+        ? `/api/qa/conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(body.revision_message_id)}/revise/stream`
+        : `/api/qa/conversations/${encodeURIComponent(id)}/messages/stream`,
       {
         method: 'POST',
         headers: {
@@ -1084,7 +1098,7 @@ async function askQuestionStream(
           'Content-Type': 'application/json',
           ...(key ? { Authorization: `Bearer ${key}` } : {}),
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(body.revision_message_id ? { request_id: body.request_id } : body),
         signal: controller.signal,
       },
     )

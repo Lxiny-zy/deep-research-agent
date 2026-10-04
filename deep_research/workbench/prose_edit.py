@@ -183,12 +183,14 @@ async def repair_paragraphs(
         shapes[unit.id] = shape
         translation = unit.kind == "translation"
         allowed = abstract_known if translation else known
-        if not set(unit.citations).issubset(allowed) or (translation and not unit.citations):
+        if (translation and (not unit.citations or not set(unit.citations).issubset(allowed))) or (
+            not translation and only_units is None and not set(unit.citations).issubset(allowed)
+        ):
             return None
         # Missing printed citations can be repaired against existing admitted
         # evidence; the replacement still undergoes full semantic/numeric checks.
         group_needed = needed.setdefault(translation, set())
-        group_needed.update(unit.citations or allowed)
+        group_needed.update(set(unit.citations).intersection(allowed) or allowed)
         # A checker may point to a specific existing source missing from the
         # paragraph. Include it without resending unrelated parts of the paper.
         group_needed.update(

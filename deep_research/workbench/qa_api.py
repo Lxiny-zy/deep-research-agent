@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator, Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -51,6 +51,7 @@ class AskRequest(BaseModel):
     sources: list[Literal["web", "library"]] = Field(default_factory=list, max_length=2)
     project_id: str | None = Field(None, max_length=64)
     request_id: str | None = Field(None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    revision_message_id: str | None = Field(None, min_length=1, max_length=64)
 
     @field_validator("query")
     @classmethod
@@ -69,7 +70,7 @@ def _store(request: Request) -> QaStore:
 
 
 def _serialize(conversation: QaConversation) -> dict[str, Any]:
-    data = asdict(conversation)
+    data = asdict(replace(conversation, messages=[]))
     for key in ("created_at", "updated_at"):
         if data.get(key) is not None:
             data[key] = data[key].isoformat()
@@ -173,6 +174,9 @@ async def _prepare_turn(cid: str, body: AskRequest, request: Request) -> Any:
     request_id = body.request_id or str(uuid4())
     body = body.model_copy(update={"request_id": request_id, "sources": sorted(set(body.sources))})
     payload = body.model_dump(exclude={"request_id"}, mode="json")
+    if body.revision_message_id is None:
+        # Preserve hashes of requests reserved before revision support existed.
+        payload.pop("revision_message_id", None)
     digest = hashlib.sha256(
         json.dumps({"actor": principal.id, **payload}, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
@@ -180,7 +184,10 @@ async def _prepare_turn(cid: str, body: AskRequest, request: Request) -> Any:
     existing = await requests.get(cid, request_id)
     if existing is None:
         await api_module._check_rate_limit(request)
-        await _paper_scope(request, conversation, body)
+        if body.revision_message_id is not None:
+            await _revision_seed(request, conversation, body)
+        else:
+            await _paper_scope(request, conversation, body)
     try:
         await requests.reserve(cid, request_id, digest, {**payload, "_actor": principal.id})
     except (RequestConflict, ConversationFullError) as exc:
@@ -232,8 +239,22 @@ async def _answer(
         if message.status in {"done", "fallback"}
     ]
     settings = request.app.state.settings
-    scope = await _paper_scope(request, conversation, body)
-    if conversation.run_id is not None:
+    scope: dict[str, Any]
+    if body.revision_message_id is not None:
+        scope = {"revision_seed": await _revision_seed(request, conversation, body)}
+        parent_index = next(
+            i
+            for i, message in enumerate(conversation.messages)
+            if message.id == body.revision_message_id
+        )
+        history = [
+            {"query": message.query, "answer": message.answer}
+            for message in conversation.messages[:parent_index]
+            if message.status in {"done", "fallback"}
+        ]
+    else:
+        scope = await _paper_scope(request, conversation, body)
+    if conversation.run_id is not None and body.revision_message_id is None:
         cache = getattr(request.app.state, "paper_evidence_cache", None)
         if cache is None:
             cache = PaperEvidenceCache()
@@ -299,6 +320,13 @@ async def _answer(
         }
         for finding in result.findings
     ]
+    from .qa_revision_state import PRIVATE_REVISION_TOOL
+
+    private = (
+        [{"tool": PRIVATE_REVISION_TOOL, "state": result.revision_state}]
+        if result.revision_state is not None
+        else []
+    )
     stored = QaMessage(
         id="",
         position=0,
@@ -306,11 +334,11 @@ async def _answer(
         answer=result.answer,
         citations=result.citations,
         evidence=evidence,
-        thoughts=[*result.thoughts, *reasoning.values(), *usages],
+        thoughts=[*result.thoughts, *reasoning.values(), *usages, *private],
         status="fallback" if result.fallback else "done",
         tokens=agent.tracer.total_tokens,
     )
-    return message_payload(stored)
+    return message_payload(stored, include_private=True)
 
 
 @router.post("/conversations/{conversation_id}/messages/stream")
@@ -370,6 +398,74 @@ async def ask_stream(conversation_id: str, body: AskRequest, request: Request) -
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class RevisionRequest(BaseModel):
+    request_id: str | None = Field(None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+async def _revision_seed(
+    request: Request, conversation: QaConversation, body: AskRequest
+) -> dict[str, Any]:
+    from .qa_revision_state import legacy_revision_state, read_revision_state, stored_revision_state
+
+    parent = next(
+        (message for message in conversation.messages if message.id == body.revision_message_id),
+        None,
+    )
+    if parent is None:
+        raise HTTPException(404, "原回答不存在")
+    if conversation.run_id is not None:
+        await _check_run(request, conversation.run_id)
+    if parent.status != "fallback" or body.query != parent.query or body.sources or body.project_id:
+        raise HTTPException(409, "只能复用未通过回答的原问题和材料继续修订")
+    try:
+        raw = stored_revision_state(parent.thoughts)
+        if raw is not None:
+            return read_revision_state(raw).sealed()
+        if conversation.run_id is None:
+            return legacy_revision_state(parent, sources=[])
+        from .qa_scope import task_qa_scope
+
+        detail = await request.app.state.repo.get_run(conversation.run_id)
+        if detail is None:
+            raise ValueError("原任务已不可用")
+        frozen = task_qa_scope(detail)
+        return legacy_revision_state(
+            parent,
+            sources=frozen.sources,
+            scoped=True,
+            scope_kind=frozen.kind,
+            scope_query=frozen.query,
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(409, {"code": "qa_revision_unavailable", "message": str(exc)}) from exc
+
+
+async def _revision_request(
+    cid: str, mid: str, body: RevisionRequest, request: Request
+) -> AskRequest:
+    conversation = await _owned(request, cid)
+    parent = next((message for message in conversation.messages if message.id == mid), None)
+    if parent is None:
+        raise HTTPException(404, "原回答不存在")
+    return AskRequest(query=parent.query, request_id=body.request_id, revision_message_id=mid)
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/revise", status_code=201)
+async def revise_answer(
+    conversation_id: str, message_id: str, body: RevisionRequest, request: Request
+) -> dict[str, Any]:
+    prepared = await _revision_request(conversation_id, message_id, body, request)
+    return await ask(conversation_id, prepared, request)
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/revise/stream")
+async def revise_answer_stream(
+    conversation_id: str, message_id: str, body: RevisionRequest, request: Request
+) -> StreamingResponse:
+    prepared = await _revision_request(conversation_id, message_id, body, request)
+    return await ask_stream(conversation_id, prepared, request)
 
 
 async def _paper_scope(

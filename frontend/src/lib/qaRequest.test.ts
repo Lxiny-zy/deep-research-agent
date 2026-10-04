@@ -33,6 +33,16 @@ it('retains an unresolved request id and creates a new one after known completio
   expect(pendingQaId('cid', message.query, { sources: [] })).not.toBe(first)
 })
 
+it('keeps revision identity separate from a new question and from another parent answer', () => {
+  const plain = pendingQaId('cid', message.query, { sources: [] })
+  const first = pendingQaId('cid', message.query, { sources: [], revisionMessageId: 'm1' })
+  expect(first).not.toBe(plain)
+  expect(pendingQaId('cid', message.query, { sources: [], revisionMessageId: 'm1' })).toBe(first)
+  expect(pendingQaId('cid', message.query, { sources: [], revisionMessageId: 'm2' })).not.toBe(
+    first,
+  )
+})
+
 it('looks up the durable request rather than matching an old identical question', async () => {
   mocks.askQuestion.mockRejectedValueOnce(new RequestTimeoutError())
   mocks.getQaRequest.mockResolvedValue(message)

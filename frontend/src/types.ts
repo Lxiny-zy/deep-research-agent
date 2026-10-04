@@ -1007,7 +1007,13 @@ export interface QaMessage {
   created_at: string | null
   tokens?: number | null
   request_id?: string | null
-  request_payload?: { query?: string; sources?: QaSourceOption[]; project_id?: string | null }
+  request_payload?: {
+    query?: string
+    sources?: QaSourceOption[]
+    project_id?: string | null
+    revision_message_id?: string | null
+  }
+  revision?: { available: boolean; reason?: string }
   error?: string | null
 }
 

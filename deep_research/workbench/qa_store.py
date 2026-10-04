@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
@@ -53,8 +53,23 @@ class ConversationFullError(ValueError):
     pass
 
 
-def message_payload(message: QaMessage) -> dict[str, Any]:
-    data = asdict(message)
+def message_payload(message: QaMessage, *, include_private: bool = False) -> dict[str, Any]:
+    from .qa_revision_state import PRIVATE_REVISION_TOOL, revision_availability
+
+    public = (
+        message
+        if include_private
+        else replace(
+            message,
+            thoughts=[
+                thought
+                for thought in message.thoughts
+                if thought.get("tool") != PRIVATE_REVISION_TOOL
+            ],
+        )
+    )
+    data = asdict(public)
+    data["revision"] = revision_availability(message.status, message.thoughts, message.evidence)
     for name in ("request_hash", "execution_owner", "lease_until"):
         data.pop(name, None)
     if message.created_at is not None:

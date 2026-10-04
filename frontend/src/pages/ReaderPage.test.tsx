@@ -115,6 +115,34 @@ beforeEach(() => {
 })
 
 describe('ReaderPage', () => {
+  it('continues a failed answer from its original message without fetching more sources', async () => {
+    const parent = {
+      ...answered.messages[0],
+      status: 'fallback' as const,
+      revision: { available: true },
+    }
+    mocks.listConversations.mockResolvedValue([{ ...answered, messages: [] }])
+    mocks.getConversation.mockResolvedValue({ ...answered, messages: [parent] })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: '继续修订回答' }))
+    await waitFor(() =>
+      expect(mocks.askQuestion).toHaveBeenCalledWith(
+        'c1',
+        parent.query,
+        expect.any(AbortSignal),
+        {
+          sources: [],
+          projectId: undefined,
+          revisionMessageId: 'm1',
+          requestId: expect.any(String),
+        },
+        expect.any(Function),
+        expect.any(Function),
+      ),
+    )
+    expect(mocks.createConversation).not.toHaveBeenCalled()
+  })
+
   it('reattaches a persisted pending question with its original id and source scope', async () => {
     const pending = {
       ...answered.messages[0],
@@ -352,7 +380,10 @@ describe('ReaderPage', () => {
       'https://b.org/survey',
     )
     fireEvent.click(locate)
-    expect(screen.getByTestId('pdf')).not.toHaveAttribute('data-quote', 'PSNR reaches 38.4 dB on CAVE')
+    expect(screen.getByTestId('pdf')).not.toHaveAttribute(
+      'data-quote',
+      'PSNR reaches 38.4 dB on CAVE',
+    )
     fireEvent.click(screen.getByRole('button', { name: '定位这条记录' }))
     expect(screen.getByTestId('pdf')).toHaveAttribute('data-quote', 'PSNR reaches 38.4 dB on CAVE')
   })

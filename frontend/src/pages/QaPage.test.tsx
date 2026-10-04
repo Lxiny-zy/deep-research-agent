@@ -172,6 +172,68 @@ describe('QaPage', () => {
     expect(mocks.createConversation).not.toHaveBeenCalled()
   })
 
+  it('continues a failed answer with the original message id and no additional search', async () => {
+    const parent = {
+      ...conversation.messages[0],
+      status: 'fallback' as const,
+      revision: { available: true },
+    }
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [parent] })
+    mocks.askQuestion.mockResolvedValue({ ...parent, id: 'm2', status: 'done' })
+    renderAt('/qa/c1')
+    fireEvent.click(await screen.findByRole('button', { name: '继续修订回答' }))
+    await waitFor(() =>
+      expect(mocks.askQuestion).toHaveBeenCalledWith(
+        'c1',
+        parent.query,
+        expect.any(AbortSignal),
+        {
+          sources: [],
+          projectId: undefined,
+          revisionMessageId: 'm1',
+          requestId: expect.any(String),
+        },
+        expect.any(Function),
+        expect.any(Function),
+      ),
+    )
+    expect(mocks.createConversation).not.toHaveBeenCalled()
+  })
+
+  it('reattaches a pending revision to the same parent and request after refresh', async () => {
+    const pending = {
+      ...conversation.messages[0],
+      id: 'm2',
+      status: 'pending' as const,
+      answer: '',
+      request_id: 'resume-revision-one',
+      request_payload: {
+        query: conversation.messages[0].query,
+        sources: [],
+        revision_message_id: 'm1',
+      },
+    }
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [pending] })
+    mocks.askQuestion.mockResolvedValue({ ...pending, status: 'done', answer: '已修订' })
+    renderAt('/qa/c1')
+    await waitFor(() =>
+      expect(mocks.askQuestion).toHaveBeenCalledWith(
+        'c1',
+        pending.query,
+        expect.any(AbortSignal),
+        {
+          sources: [],
+          projectId: undefined,
+          revisionMessageId: 'm1',
+          requestId: 'resume-revision-one',
+        },
+        expect.any(Function),
+        expect.any(Function),
+      ),
+    )
+    expect(mocks.createConversation).not.toHaveBeenCalled()
+  })
+
   it('does not start model work when a conversation is created after leaving the page', async () => {
     let finish!: (value: QaConversation) => void
     mocks.createConversation.mockImplementationOnce(

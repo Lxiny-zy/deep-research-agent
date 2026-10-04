@@ -61,6 +61,7 @@ export default function ReaderPage() {
   const [activity, setActivity] = useState<QaActivity[]>([])
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null)
   const resumeRef = useRef<QaMessage | null>(null)
+  const revisionRef = useRef<QaMessage | null>(null)
   const targetRef = useRef<string>()
   const attemptedResume = useRef(new Set<string>())
   const connection = useRef<AbortController | null>(null)
@@ -97,6 +98,8 @@ export default function ReaderPage() {
       let target = conversationId
       const resume = resumeRef.current
       resumeRef.current = null
+      const revision = revisionRef.current
+      revisionRef.current = null
       if (!target) {
         target = (await createConversation(text.slice(0, 60), id)).id
         controller.signal.throwIfAborted()
@@ -106,12 +109,15 @@ export default function ReaderPage() {
       const sources: QaSourceOption[] = []
       if (withLibrary) sources.push('library')
       if (withWeb) sources.push('web')
-      const scope = resume
-        ? {
-            sources: resume.request_payload?.sources ?? [],
-            projectId: resume.request_payload?.project_id ?? undefined,
-          }
-        : { sources, projectId: withLibrary ? projectId : undefined }
+      const revisionMessageId = revision?.id ?? resume?.request_payload?.revision_message_id
+      const scope = revisionMessageId
+        ? { sources: [], projectId: undefined, revisionMessageId }
+        : resume
+          ? {
+              sources: resume.request_payload?.sources ?? [],
+              projectId: resume.request_payload?.project_id ?? undefined,
+            }
+          : { sources, projectId: withLibrary ? projectId : undefined }
       const requestId = pendingQaId(target, text, scope, resume?.request_id ?? undefined)
       attemptedResume.current.add(requestId)
       setActiveRequestId(requestId)
@@ -235,6 +241,13 @@ export default function ReaderPage() {
               onReconnect={() => {
                 if (!ask.isPending) {
                   resumeRef.current = message
+                  ask.mutate(message.query)
+                }
+              }}
+              revisionPending={ask.isPending}
+              onRevise={() => {
+                if (!ask.isPending) {
+                  revisionRef.current = message
                   ask.mutate(message.query)
                 }
               }}

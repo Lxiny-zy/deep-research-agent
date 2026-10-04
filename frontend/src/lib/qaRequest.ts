@@ -2,7 +2,7 @@ import { ApiError, askQuestion, getQaRequest } from '../api/client'
 import { canRecoverQaAnswer } from './qaRecovery'
 import type { QaActivity, QaMessage, QaSourceOption } from '../types'
 
-export type QaScope = { sources: QaSourceOption[]; projectId?: string }
+export type QaScope = { sources: QaSourceOption[]; projectId?: string; revisionMessageId?: string }
 const memory = new Map<string, { query: string; scope: string; id: string }>()
 if (typeof window !== 'undefined')
   window.addEventListener('dr:credentials-cleared', () => memory.clear())
@@ -45,6 +45,7 @@ export function pendingQaId(cid: string, query: string, scope: QaScope, resumed?
   const signature = JSON.stringify([
     Array.from(new Set(scope.sources)).sort(),
     scope.projectId ?? '',
+    ...(scope.revisionMessageId ? [scope.revisionMessageId] : []),
   ])
   let previous = memory.get(cid)
   try {

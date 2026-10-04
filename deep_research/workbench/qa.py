@@ -37,6 +37,7 @@ from ..token_budget import TokenBudgetExceeded
 from ..tools.base import SearchTool
 from .qa_cache import PaperEvidenceCache, evidence_cache_key
 from .qa_context import dialogue_context
+from .qa_revision_state import QaRevisionState, read_revision_state
 
 _SYSTEM = (
     "你是严谨的学术问答助手。只依据【已核验素材】回答用户问题：简洁、准确、用中文。"
@@ -113,6 +114,7 @@ class QaAnswer:
     unresolved_topics: list[str] = field(default_factory=list)
     # 每个引用的出处：paper（本论文）/ library（资料库）/ web（联网检索）
     origins: dict[str, str] = field(default_factory=dict)
+    revision_state: dict[str, Any] | None = None
 
 
 def _contextual_query(question: str, history: list[dict[str, str]]) -> str:
@@ -174,6 +176,7 @@ async def answer_question(
     cache_scope: str = "",
     scope_kind: Literal["paper", "research"] = "paper",
     scope_query: str = "",
+    revision_seed: dict[str, Any] | None = None,
 ) -> QaAnswer:
     """一次学术问答：检索 → 核验 → 作答 → 复核。``ctx`` 为 ``RunContext``。
 
@@ -181,7 +184,7 @@ async def answer_question(
     ``include_web`` / ``extra_search``（资料库）按用户勾选叠加；不勾选时绝不调用外部检索。
     """
     thoughts: list[dict[str, Any]] = []
-    if _is_casual_question(question):
+    if _is_casual_question(question) and revision_seed is None:
         # A greeting must not spend search, page-fetch, verification, or model
         # tokens.  This also keeps a paper-reader greeting scoped to the paper
         # without silently expanding it to external sources.
@@ -204,6 +207,50 @@ async def answer_question(
     researcher.tracer = ctx.tracer
     researcher.settings = ctx.settings
     researcher.system = ctx.system_prompt(researcher.system)
+
+    if revision_seed is not None:
+        material = read_revision_state(revision_seed)
+        if question != material.question:
+            raise ValueError("修订请求与原问题不一致")
+        if not material.contextual_query:
+            contextual_query = _contextual_query(question, history)
+            if material.scope_kind == "research" and material.scope_query:
+                contextual_query = (
+                    f"绑定研究任务：{material.scope_query}\n本轮追问：{contextual_query}"
+                )
+            material = material.model_copy(update={"contextual_query": contextual_query})
+        if material.scoped:
+            researcher.system += "\n\n" + (
+                _RESEARCH_EXTRACTION if material.scope_kind == "research" else _PAPER_EXTRACTION
+            )
+        admission_key = evidence_cache_key("qa-revision", "", material.sources, researcher)
+        if admission_key != material.admission_key:
+            from .paper_evidence import current_findings
+
+            admitted = await current_findings(
+                material.findings,
+                material.sources,
+                researcher,
+                require_prior_admission=bool(material.admission_key),
+            )
+            material = material.model_copy(
+                update={"findings": admitted, "admission_key": admission_key}
+            )
+        return await _compose_answer(
+            material,
+            ctx=ctx,
+            history=history,
+            thoughts=[
+                {
+                    "tool": "answer_revision",
+                    "input": "",
+                    "observation": "复用原稿与已核验证据，继续修订未通过的部分",
+                }
+            ],
+            on_delta=on_delta,
+            on_event=on_event,
+            continuing=True,
+        )
 
     origins: dict[str, str] = {}
     findings: list[Finding] = []
@@ -449,6 +496,52 @@ async def answer_question(
                 thoughts=thoughts,
                 fallback=not bool(body),
             )
+    fulltext_sources = list(paper_sources or [])
+    for thought in thoughts:
+        if thought.get("tool") == "extraction_audit":
+            fulltext_sources.extend(
+                Source.model_validate(source) for source in thought["audit"]["sources"]
+            )
+    fulltext_sources = list(
+        {source.model_dump_json(): source for source in fulltext_sources}.values()
+    )
+    material = QaRevisionState(
+        question=question,
+        contextual_query=query,
+        findings=findings,
+        sources=fulltext_sources,
+        origins=origins,
+        scoped=paper_sources is not None,
+        scope_kind=scope_kind,
+        scope_query=scope_query,
+        unresolved_topics=unresolved_topics,
+        admission_key=evidence_cache_key("qa-revision", "", fulltext_sources, researcher),
+    )
+    return await _compose_answer(
+        material,
+        ctx=ctx,
+        history=history,
+        thoughts=thoughts,
+        on_delta=on_delta,
+        on_event=on_event,
+    )
+
+
+async def _compose_answer(
+    material: QaRevisionState,
+    *,
+    ctx: Any,
+    history: list[dict[str, str]],
+    thoughts: list[dict[str, Any]],
+    on_delta: Callable[[str], None] | None,
+    on_event: Callable[[dict[str, Any]], None] | None,
+    continuing: bool = False,
+) -> QaAnswer:
+    question, query = material.question, material.contextual_query
+    findings, origins = material.findings, material.origins
+    scope_kind, scope_query = material.scope_kind, material.scope_query
+    unresolved_topics = material.unresolved_topics
+    paper_sources = material.sources if material.scoped else None
     if not findings:
         return QaAnswer(
             answer=(
@@ -465,7 +558,9 @@ async def answer_question(
             unresolved_topics=unresolved_topics,
         )
 
-    url_to_idx: dict[str, int] = {}
+    url_to_idx: dict[str, int] = (
+        {url: index for index, url in enumerate(material.citations, 1)} if continuing else {}
+    )
     lines: list[str] = []
     for finding in findings:
         index = url_to_idx.setdefault(finding.source_url, len(url_to_idx) + 1)
@@ -493,6 +588,8 @@ async def answer_question(
         - 8192
         - len(scope_context),
     )
+    if continuing and material.context is not None:
+        context = material.context
     coverage = (
         "\n\n【读取后仍待确认的方面】\n"
         + json.dumps(unresolved_topics, ensure_ascii=False)
@@ -505,38 +602,41 @@ async def answer_question(
     user = PrefixPrompt(
         "【已核验素材】\n" + "\n".join(lines),
         f"\n\n{context}\n\n【用户问题】\n{question}\n\n本次可用引用编号："
-        + " ".join(f"[{index}]" for index in url_to_idx.values())
+        + " ".join(
+            f"[{index}]"
+            for url, index in url_to_idx.items()
+            if any(f.source_url == url for f in findings)
+        )
         + "。引用只选这些编号，不复制引句中原论文的文献编号。"
         + coverage,
     )
     system = _SYSTEM + (scoped_system if paper_sources is not None else "")
     if on_event is not None:
         on_event({"type": "status", "message": "正在组织回答…"})
-    chunks: list[str] = []
-    async for delta in ctx.llm_for("synthesizer").stream(
-        ctx.system_prompt(system), user, temperature=0.3
-    ):
-        chunks.append(delta)
-        if on_delta is not None:
-            on_delta(delta)
-    body = "".join(chunks).strip()
+    if continuing:
+        body = material.draft
+    else:
+        chunks: list[str] = []
+        async for delta in ctx.llm_for("synthesizer").stream(
+            ctx.system_prompt(system), user, temperature=0.3
+        ):
+            chunks.append(delta)
+            if on_delta is not None:
+                on_delta(delta)
+        body = "".join(chunks).strip()
     results = [ResearchResult(sub_question=query, findings=findings)]
     from .prose_review import ProseReviewer
 
-    fulltext_sources = list(paper_sources or [])
-    for thought in thoughts:
-        if thought.get("tool") == "extraction_audit":
-            fulltext_sources.extend(
-                Source.model_validate(source) for source in thought["audit"]["sources"]
-            )
     reviewer = ProseReviewer.research(
         ctx.llm_for("evidence_verifier"),
         results,
         url_to_idx,
         ctx.settings.llm_max_input_chars,
         query=f"{context}\n\n本轮问题：{question}" + coverage,
-        sources=fulltext_sources,
+        sources=material.sources,
     )
+    if continuing:
+        reviewer.prime(body, material.audit)
 
     from .prose_review import body_text
     from .qa_revision import claim_problems, draft_rank, mechanical_deferrals, partial_answer
@@ -625,6 +725,15 @@ async def answer_question(
                 continue
         if pending != active:
             # A full rewrite would also spend the disabled/exhausted category.
+            break
+        if continuing:
+            thoughts.append(
+                {
+                    "tool": "answer_revision",
+                    "input": "",
+                    "observation": "本轮未能安全完成局部修订，保留原稿与已核验内容",
+                }
+            )
             break
         if on_event is not None:
             on_event({"type": "reset", "message": "正在核对引用并修订回答…"})
@@ -739,6 +848,16 @@ async def answer_question(
         fallback=incomplete,
         unresolved_topics=unresolved_topics,
         origins={url: origins.get(url, "web") for url in citations},
+        revision_state=material.model_copy(
+            update={
+                "draft": body,
+                "audit": audit,
+                "context": context,
+                "citations": citations,
+            }
+        ).sealed()
+        if incomplete and material.sources and body.strip()
+        else None,
     )
 
 

@@ -10,7 +10,43 @@ import {
   streamRun,
   uploadAttachment,
   reviseRunContent,
+  askQuestion,
 } from './client'
+
+describe('answer revision request identity', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('uses the revision stream endpoint with only the durable request id', async () => {
+    const answer = {
+      id: 'm2',
+      request_id: 'revision-one',
+      status: 'done',
+      answer: '已修订',
+      citations: [],
+      evidence: [],
+      thoughts: [],
+    }
+    const fetcher = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(`event: complete\ndata: ${JSON.stringify(answer)}\n\n`, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      )
+    expect(
+      await askQuestion('cid', '原问题', undefined, {
+        sources: [],
+        requestId: 'revision-one',
+        revisionMessageId: 'm1',
+      }),
+    ).toEqual(answer)
+    expect(fetcher.mock.calls[0][0]).toBe('/api/qa/conversations/cid/messages/m1/revise/stream')
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
+      request_id: 'revision-one',
+    })
+  })
+})
 
 describe('binary document upload', () => {
   afterEach(() => vi.restoreAllMocks())
