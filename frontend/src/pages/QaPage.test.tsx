@@ -9,6 +9,7 @@ import type { QaConversation } from '../types'
 const mocks = vi.hoisted(() => ({
   listConversations: vi.fn(),
   getConversation: vi.fn(),
+  getReader: vi.fn(),
   createConversation: vi.fn(),
   askQuestion: vi.fn(),
   getQaRequest: vi.fn(),
@@ -75,6 +76,16 @@ describe('QaPage', () => {
     mocks.getConversation.mockResolvedValue(conversation)
     mocks.getQaRequest.mockResolvedValue(conversation.messages[0])
     mocks.listProjects.mockResolvedValue([])
+    mocks.getReader.mockResolvedValue({
+      run_id: 'run-1',
+      status: 'done',
+      documents: [],
+      has_report: true,
+      can_ask: true,
+      qa_scope: 'research',
+      source_count: 2,
+      query: '原研究问题',
+    })
   })
 
   it('renders answers with citations and the verification trail', async () => {
@@ -107,6 +118,58 @@ describe('QaPage', () => {
       ),
     )
     expect(mocks.createConversation).toHaveBeenCalledWith('新问题')
+  })
+
+  it('binds a task follow-up to its run while keeping additional search opt-in', async () => {
+    mocks.createConversation.mockResolvedValue({
+      ...conversation,
+      id: 'c2',
+      run_id: 'run-1',
+      messages: [],
+    })
+    mocks.getConversation.mockResolvedValue({ ...conversation, id: 'c2', run_id: 'run-1' })
+    mocks.askQuestion.mockResolvedValue(conversation.messages[0])
+    renderAt('/qa?run=run-1')
+    expect(await screen.findByText('任务材料')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('输入问题')).toBeEnabled())
+    fireEvent.change(screen.getByLabelText('输入问题'), { target: { value: '关键结论是什么？' } })
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    await waitFor(() =>
+      expect(mocks.createConversation).toHaveBeenCalledWith('关键结论是什么？', 'run-1'),
+    )
+    expect(mocks.askQuestion).toHaveBeenCalledWith(
+      'c2',
+      '关键结论是什么？',
+      expect.any(AbortSignal),
+      { sources: [], projectId: undefined, requestId: expect.any(String) },
+      expect.any(Function),
+      expect.any(Function),
+    )
+    expect(mocks.listConversations).toHaveBeenCalledWith(expect.any(AbortSignal), 'run-1')
+  })
+
+  it('uses the stored conversation scope instead of a conflicting run query parameter', async () => {
+    mocks.getConversation.mockResolvedValue({ ...conversation, run_id: 'owned-run' })
+    renderAt('/qa/c1?run=foreign-run')
+    await waitFor(() =>
+      expect(mocks.getReader).toHaveBeenCalledWith('owned-run', expect.any(AbortSignal)),
+    )
+    expect(mocks.getReader).not.toHaveBeenCalledWith('foreign-run', expect.anything())
+  })
+
+  it('blocks task questions when frozen sources are unavailable', async () => {
+    mocks.getReader.mockResolvedValue({
+      run_id: 'run-1',
+      status: 'done',
+      documents: [],
+      can_ask: false,
+    })
+    renderAt('/qa?run=run-1')
+    expect(
+      await screen.findByText('这次任务暂无可回查的原文材料，暂时不能提问。'),
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('输入问题')).toBeDisabled()
+    expect(mocks.createConversation).not.toHaveBeenCalled()
   })
 
   it('does not start model work when a conversation is created after leaving the page', async () => {

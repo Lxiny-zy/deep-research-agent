@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
 import QaStreamingAnswer from '../components/QaStreamingAnswer'
@@ -8,6 +8,7 @@ import {
   createConversation,
   deleteConversation,
   getConversation,
+  getReader,
   listConversations,
 } from '../api/client'
 import { useProjects } from '../hooks/useLibrary'
@@ -38,6 +39,18 @@ const STEPS = [
 
 export default function QaPage() {
   const { id } = useParams<{ id?: string }>()
+  const [params] = useSearchParams()
+  const requestedRunId = id ? undefined : params.get('run') || undefined
+  return (
+    <QaWorkspace
+      key={`${id ?? ''}/${requestedRunId ?? ''}`}
+      id={id}
+      requestedRunId={requestedRunId}
+    />
+  )
+}
+
+function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState('')
@@ -64,10 +77,6 @@ export default function QaPage() {
   const endRef = useRef<HTMLDivElement>(null)
   const projects = useProjects()
 
-  const conversations = useQuery({
-    queryKey: ['qa-conversations'],
-    queryFn: ({ signal }) => listConversations(signal),
-  })
   const conversation = useQuery({
     queryKey: ['qa-conversation', id],
     queryFn: ({ signal }) => getConversation(id as string, signal),
@@ -77,6 +86,32 @@ export default function QaPage() {
         ? 5000
         : false,
   })
+  const runId = id ? conversation.data?.run_id || undefined : requestedRunId
+  const conversations = useQuery({
+    queryKey: ['qa-conversations', runId ?? null],
+    queryFn: ({ signal }) => listConversations(signal, runId),
+    enabled: !id || Boolean(conversation.data),
+  })
+  const taskScope = useQuery({
+    queryKey: ['reader', runId],
+    queryFn: ({ signal }) => getReader(runId as string, signal),
+    enabled: Boolean(runId),
+  })
+  const canAsk = (!id || Boolean(conversation.data)) && (!runId || taskScope.data?.can_ask === true)
+  const newConversationPath = runId
+    ? `/qa?${new URLSearchParams({ run: runId }).toString()}`
+    : '/qa'
+  const scopeNotice = !runId
+    ? ''
+    : taskScope.isError
+      ? '无法读取任务材料，请刷新后重试。'
+      : !taskScope.data
+        ? '正在读取任务材料…'
+        : taskScope.data.can_ask
+          ? ''
+          : ['pending', 'running', 'cancelling'].includes(taskScope.data.status)
+            ? '任务尚未完成，完成后可基于材料提问。'
+            : '这次任务暂无可回查的原文材料，暂时不能提问。'
 
   const ask = useMutation({
     mutationFn: async (text: string) => {
@@ -86,7 +121,9 @@ export default function QaPage() {
       const resume = resumeRef.current
       resumeRef.current = null
       if (!target) {
-        const created = await createConversation(text.slice(0, 60))
+        const created = runId
+          ? await createConversation(text.slice(0, 60), runId)
+          : await createConversation(text.slice(0, 60))
         controller.signal.throwIfAborted()
         target = created.id
         createdId.current = created.id
@@ -147,7 +184,7 @@ export default function QaPage() {
     mutationFn: (target: string) => deleteConversation(target),
     onSuccess: async (_, target) => {
       await queryClient.invalidateQueries({ queryKey: ['qa-conversations'] })
-      if (target === id) navigate('/qa')
+      if (target === id) navigate(newConversationPath)
     },
   })
 
@@ -183,7 +220,7 @@ export default function QaPage() {
 
   function submit(text = draft) {
     const value = text.trim()
-    if (!value || ask.isPending || (withLibrary && !projectId)) return
+    if (!value || ask.isPending || !canAsk || (withLibrary && !projectId)) return
     setDraft('')
     ask.mutate(value)
   }
@@ -203,7 +240,7 @@ export default function QaPage() {
         <button
           type="button"
           className="btn btn-secondary btn-block"
-          onClick={() => navigate('/qa')}
+          onClick={() => navigate(newConversationPath)}
         >
           <AppIcon name="plus" size={15} aria-hidden="true" /> 新会话
         </button>
@@ -236,12 +273,19 @@ export default function QaPage() {
 
       <section className={'qa-main' + (empty ? ' is-empty' : '')} aria-label="学术问答">
         <header className="qa-header">
-          <h1>{conversation.data?.title || '学术问答'}</h1>
-          <p className="hint">问概念、找文献、比较研究方法，也可以接着上一轮追问。</p>
+          <h1>{conversation.data?.title || (runId ? '任务追问' : '学术问答')}</h1>
+          {runId ? (
+            <p className="hint">
+              基于本次任务的原文与已核验发现继续提问。{' '}
+              <Link to={`/runs/${encodeURIComponent(runId)}`}>返回任务</Link>
+            </p>
+          ) : (
+            <p className="hint">问概念、找文献、比较研究方法，也可以接着上一轮追问。</p>
+          )}
         </header>
 
         <div className={'qa-thread' + (empty ? ' is-empty' : '')} aria-live="polite">
-          {empty && (
+          {empty && !runId && (
             <div className="qa-welcome">
               <span className="qa-welcome-kicker" aria-hidden="true">
                 Ask the literature
@@ -249,6 +293,11 @@ export default function QaPage() {
               <h2>案头有所疑，且向卷中寻。</h2>
               <p className="hint">选一个示例，或直接写下你的问题。</p>
             </div>
+          )}
+          {scopeNotice && (
+            <p className="hint" role="status">
+              {scopeNotice}
+            </p>
           )}
           {messages.map((message) => (
             <QaMessageView
@@ -301,6 +350,7 @@ export default function QaPage() {
               <span className="qa-scope-title" aria-hidden="true">
                 本轮参考
               </span>
+              {runId && <span className="qa-scope-option">任务材料</span>}
               <label className="qa-scope-toggle">
                 <input
                   className="visually-hidden"
@@ -359,7 +409,9 @@ export default function QaPage() {
               </div>
             )}
             <p id="qa-scope-hint" className="qa-scope-hint">
-              按需添加参考来源；未选择时，使用模型自身知识回答。
+              {runId
+                ? '默认使用本次任务材料；可按需添加知识库或联网来源。'
+                : '按需添加参考来源；未选择时，使用模型自身知识回答。'}
             </p>
           </fieldset>
           <label className="visually-hidden" htmlFor="qa-input">
@@ -370,6 +422,7 @@ export default function QaPage() {
             className="qa-input"
             rows={2}
             value={draft}
+            disabled={!canAsk}
             placeholder={
               messages.length ? '继续追问，例如「第二篇的实验设置是什么？」' : '输入学术问题…'
             }
@@ -391,7 +444,7 @@ export default function QaPage() {
             <button
               type="submit"
               className="btn btn-primary btn-sm"
-              disabled={ask.isPending || !draft.trim() || (withLibrary && !projectId)}
+              disabled={ask.isPending || !canAsk || !draft.trim() || (withLibrary && !projectId)}
             >
               <AppIcon
                 name={ask.isPending ? 'loader' : 'arrow-right'}
@@ -404,7 +457,7 @@ export default function QaPage() {
           </div>
         </form>
 
-        {empty && (
+        {empty && !runId && (
           <div className="qa-starters" aria-label="示例问题">
             {STARTERS.map((starter) => (
               <button

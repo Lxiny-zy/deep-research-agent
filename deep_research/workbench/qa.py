@@ -19,7 +19,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from ..agents.researcher import Researcher
 from ..guardrails import report_eligible
@@ -71,7 +71,24 @@ _PAPER_EXTRACTION = (
     "问题涉及创新或贡献时，优先定位作者的 contribution、we propose、主要贡献等明确表述；"
     "背景知识、常规预处理和采用已有算法不能自动当作原创贡献。"
 )
-_ORIGIN_TAG = {"paper": "【本论文】", "library": "【其他文献·资料库】", "web": "【其他文献】"}
+_RESEARCH_SYSTEM = (
+    "这是基于已完成研究任务的追问。标注【本次任务】的素材来自该任务保存的原文和已核验发现。"
+    "这些材料可能属于多篇论文或多个来源，逐项保留作者、来源和适用条件，不能混为一篇论文的结论。"
+    "原任务问题只用于理解研究范围，历史报告和对话不能代替证据；只根据本轮核验素材回答。"
+    "其他文献只作为明确标注的补充；没有充分依据时说明本轮尚不能确认，不宣称全文没有。"
+    + MEASUREMENT_SCOPE_RULES
+)
+_RESEARCH_EXTRACTION = (
+    "这是对研究任务的追问，固定材料来自本次任务已经保存的多个来源。"
+    "围绕当前问题选取必要的原文证据，逐条保留作者归属、实验条件及来源。"
+    "不重新开展全网研究，不把不同来源的发现拼接为同一篇论文的事实。"
+)
+_ORIGIN_TAG = {
+    "paper": "【本论文】",
+    "research": "【本次任务】",
+    "library": "【其他文献·资料库】",
+    "web": "【其他文献】",
+}
 _PAPER_FALLBACK = (
     "当前可用的原文片段不足以回答这个问题。可以补充章节或页码，或勾选资料库、联网检索后再问。"
 )
@@ -155,6 +172,8 @@ async def answer_question(
     on_event: Callable[[dict[str, Any]], None] | None = None,
     paper_cache: PaperEvidenceCache | None = None,
     cache_scope: str = "",
+    scope_kind: Literal["paper", "research"] = "paper",
+    scope_query: str = "",
 ) -> QaAnswer:
     """一次学术问答：检索 → 核验 → 作答 → 复核。``ctx`` 为 ``RunContext``。
 
@@ -175,6 +194,8 @@ async def answer_question(
         )
         return QaAnswer(answer=_CASUAL_REPLY, citations=[], findings=[], thoughts=thoughts)
     query = _contextual_query(question, history)
+    if scope_kind == "research" and scope_query:
+        query = f"绑定研究任务：{scope_query}\n本轮追问：{query}"
     thoughts.append({"tool": "rewrite", "input": question, "observation": query})
 
     researcher = Researcher(settings=ctx.settings)
@@ -191,7 +212,9 @@ async def answer_question(
         from .intake import _FixedSources
         from .paper_context import paper_context
 
-        researcher.system += "\n\n" + _PAPER_EXTRACTION
+        researcher.system += "\n\n" + (
+            _RESEARCH_EXTRACTION if scope_kind == "research" else _PAPER_EXTRACTION
+        )
         researcher.raise_extraction_errors = True
         # The same frozen paper is reused across DIFFERENT questions. Reserve
         # fixed room for the dynamic query and JSON repair, including the actual
@@ -258,7 +281,11 @@ async def answer_question(
             if candidates and on_event is not None:
                 on_event({"type": "status", "message": "正在核对已有论文证据能否回答本轮问题…"})
             selection = await plan_findings(
-                candidates, question, history, researcher, paper_sources
+                candidates,
+                query if scope_kind == "research" else question,
+                history,
+                researcher,
+                paper_sources,
             )
             collected = list(selection.findings)
             raw = 0
@@ -308,7 +335,12 @@ async def answer_question(
                 if paper_cache is not None:
                     paper_cache.put(pool_key, candidates, len(candidates))
                 selection = await plan_findings(
-                    candidates, question, history, researcher, paper_sources, read_urls
+                    candidates,
+                    query if scope_kind == "research" else question,
+                    history,
+                    researcher,
+                    paper_sources,
+                    read_urls,
                 )
             if selection.sufficient:
                 paper_findings = selection.findings
@@ -318,26 +350,29 @@ async def answer_question(
                 paper_cache.put(cache_key, paper_findings, raw, unresolved_topics=unresolved_topics)
                 merged = merge_findings(candidates, paper_findings)
                 paper_cache.put(pool_key, merged, len(merged))
+        subject = "任务" if scope_kind == "research" else "论文"
         cache_event = {
             "type": "cache",
             "hit": cached is not None or reused,
-            "message": "复用已核验的论文证据"
+            "message": f"复用已核验的{subject}证据"
             if cached is not None or reused
-            else ("本轮已读取并核验论文证据" if paper_findings else "当前原文片段未得到可用证据"),
+            else (
+                f"本轮已读取并核验{subject}证据" if paper_findings else "当前原文片段未得到可用证据"
+            ),
         }
         if on_event is not None:
             on_event(cache_event)
         thoughts.append({"tool": "paper_cache", "input": "", "observation": cache_event["message"]})
         for finding in paper_findings:
-            origins.setdefault(finding.source_url, "paper")
+            origins.setdefault(finding.source_url, scope_kind)
         findings.extend(paper_findings)
         thoughts.append(
             {
-                "tool": "paper_read",
+                "tool": "task_read" if scope_kind == "research" else "paper_read",
                 "input": f"本轮补读 {len(read_urls)} 个原文片段（共 {len(paper_sources)} 个）"
                 if read_urls
                 else f"复用 {len(paper_findings)} 条已核验证据",
-                "observation": f"论文中保留 {len(paper_findings)} 条已核验证据"
+                "observation": f"{subject}中保留 {len(paper_findings)} 条已核验证据"
                 + (
                     f"（{raw - len(paper_findings)} 条未通过核验）"
                     if raw > len(paper_findings)
@@ -416,7 +451,13 @@ async def answer_question(
             )
     if not findings:
         return QaAnswer(
-            answer=(_PAPER_FALLBACK if paper_sources is not None else _SEARCH_FALLBACK),
+            answer=(
+                "本次任务保存的原文和发现不足以回答该问题，可以补充问题范围或选择附加来源。"
+                if paper_sources is not None and scope_kind == "research"
+                else _PAPER_FALLBACK
+                if paper_sources is not None
+                else _SEARCH_FALLBACK
+            ),
             citations=[],
             findings=[],
             thoughts=thoughts,
@@ -434,12 +475,23 @@ async def answer_question(
             f"- [{index}]{tag} {finding.statement}\n  原文：{finding.evidence_quote}"
             + (f"\n  出处：{reference}" if reference else "")
         )
-    system = _SYSTEM + (_PAPER_SYSTEM if paper_sources is not None else "")
+    scoped_system = _RESEARCH_SYSTEM if scope_kind == "research" else _PAPER_SYSTEM
+    system = _SYSTEM + (scoped_system if paper_sources is not None else "")
     model = ctx.llm_for("synthesizer")
     capacity = getattr(model, "input_capacity_chars", ctx.settings.llm_max_input_chars)
-    context = dialogue_context(
+    scope_context = (
+        "【本次任务原问题】\n" + scope_query + "\n\n"
+        if scope_kind == "research" and scope_query
+        else ""
+    )
+    context = scope_context + dialogue_context(
         history,
-        capacity - len(ctx.system_prompt(system)) - sum(map(len, lines)) - len(question) - 8192,
+        capacity
+        - len(ctx.system_prompt(system))
+        - sum(map(len, lines))
+        - len(question)
+        - 8192
+        - len(scope_context),
     )
     coverage = (
         "\n\n【读取后仍待确认的方面】\n"
@@ -457,7 +509,7 @@ async def answer_question(
         + "。引用只选这些编号，不复制引句中原论文的文献编号。"
         + coverage,
     )
-    system = _SYSTEM + (_PAPER_SYSTEM if paper_sources is not None else "")
+    system = _SYSTEM + (scoped_system if paper_sources is not None else "")
     if on_event is not None:
         on_event({"type": "status", "message": "正在组织回答…"})
     chunks: list[str] = []

@@ -41,13 +41,13 @@ _SSE_HEARTBEAT_SECONDS = 15.0
 
 class CreateConversation(BaseModel):
     title: str = Field("", max_length=200)
-    # 论文精读工作区的对话绑定所属任务；为空即学术问答页的独立会话
+    # 论文与开放研究的对话绑定所属任务；为空即学术问答页的独立会话
     run_id: str | None = Field(None, max_length=64)
 
 
 class AskRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
-    # 普通问答中来源全部可选；绑定任务的精读对话另有固定的本论文来源
+    # 普通问答中来源全部可选；绑定任务的对话另有固定的任务来源
     sources: list[Literal["web", "library"]] = Field(default_factory=list, max_length=2)
     project_id: str | None = Field(None, max_length=64)
     request_id: str | None = Field(None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
@@ -375,16 +375,16 @@ async def ask_stream(conversation_id: str, body: AskRequest, request: Request) -
 async def _paper_scope(
     request: Request, conversation: QaConversation, body: AskRequest
 ) -> dict[str, Any]:
-    """Resolve the explicit source scope for both general and paper Q&A.
+    """Resolve the explicit source scope for general and task-bound Q&A.
 
     General Q&A defaults to model knowledge.  The web search model and the
-    private library are opt-in through ``sources``; paper conversations always
-    include their frozen paper chunks and may add either source.
+    private library are opt-in through ``sources``; task conversations always
+    include their frozen source snapshots and may add either source.
     """
     if conversation.run_id is None:
         scope: dict[str, Any] = {"include_web": "web" in body.sources}
     else:
-        from .reader import paper_sources
+        from .qa_scope import task_qa_scope
 
         await _check_run(request, conversation.run_id)
         detail = await request.app.state.repo.get_run(conversation.run_id)
@@ -395,22 +395,24 @@ async def _paper_scope(
                 409,
                 {
                     "code": "paper_not_ready",
-                    "message": "论文仍在导入或任务未成功完成，完成后才能提问",
+                    "message": "任务仍在执行或未成功完成，完成后才能基于任务提问",
                     "status": detail.status,
                 },
             )
-        frozen_paper_sources = paper_sources(detail)
-        if not frozen_paper_sources:
+        task_scope = task_qa_scope(detail)
+        if not task_scope.sources:
             raise HTTPException(
                 409,
                 {
-                    "code": "paper_sources_unavailable",
-                    "message": "这次任务没有可用的论文原文材料，暂时不能提问",
+                    "code": f"{task_scope.kind}_sources_unavailable",
+                    "message": "这次任务没有可回查的原文材料，暂时不能基于任务提问",
                 },
             )
         scope = {
-            "paper_sources": frozen_paper_sources,
-            "paper_evidence": [finding for result in detail.results for finding in result.findings],
+            "paper_sources": task_scope.sources,
+            "paper_evidence": task_scope.findings,
+            "scope_kind": task_scope.kind,
+            "scope_query": task_scope.query,
             "include_web": "web" in body.sources,
         }
     if "library" in body.sources:

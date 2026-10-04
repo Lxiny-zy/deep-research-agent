@@ -988,11 +988,11 @@ export interface QaEvidence {
   evidence_quote: string
   source_title?: string
   source_reference?: string
-  /** 精读对话里区分出处：本论文 / 资料库 / 联网检索；普通问答不带此字段。 */
+  /** 区分本论文、本次任务、资料库与联网来源。 */
   origin?: QaOrigin
 }
 
-export type QaOrigin = 'paper' | 'library' | 'web'
+export type QaOrigin = 'paper' | 'research' | 'library' | 'web'
 export type QaSourceOption = 'web' | 'library'
 
 export interface QaMessage {
@@ -1018,7 +1018,7 @@ export interface QaConversation {
   updated_at: string | null
   message_count: number
   messages: QaMessage[]
-  /** 绑定到某次论文精读任务的会话；普通问答为 null。 */
+  /** 绑定到某次论文或研究任务的会话；普通问答为 null。 */
   run_id?: string | null
 }
 
@@ -1040,6 +1040,9 @@ export interface RunReader {
   documents: ReaderDocument[]
   has_report: boolean
   can_ask?: boolean
+  qa_scope?: 'paper' | 'research'
+  source_count?: number
+  query?: string
 }
 
 export interface NarrativeSection {

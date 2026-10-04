@@ -22,7 +22,6 @@ import { useDeliverables, useNarrative, useRunTemplate, useWorkspace } from '../
 import { AppIcon } from '../components/AppIcon'
 import { useResearchStream } from '../hooks/useResearchStream'
 import { useCancelRun, useResumeRun, useRunDetail, useRunDocument } from '../hooks/useRuns'
-import { appendTurn, turnFromRun } from '../lib/conversation'
 import { countBlockedSources, flattenFindings, reportEvidenceToFindings } from '../lib/evidence'
 import { displayReportTitle } from '../lib/reportTitle'
 import { deriveResearchProgress } from '../lib/runProgress'
@@ -217,10 +216,9 @@ export default function RunPage() {
     return structuredBlocked != null ? structuredBlocked : countBlockedSources(stream.events)
   }, [stream.events, structuredDocument.data?.overview.blocked_sources])
 
-  // 「继续追问」把本次运行折叠成一轮历史再跳去提问页。只在研究真正跑完后可用：
-  // 半截的运行没有可供下一轮指代的结论，把它塞进历史只会误导消解器。
+  // 追问绑定原任务，使用保存的来源和发现；具体材料可用性由问答入口检查。
   const runDetail = detail.data
-  const canFollowUp = status === 'done' && Boolean(runDetail?.query)
+  const canFollowUp = (status === 'done' || status === 'needs_review') && Boolean(runDetail?.query)
   const canCancel = Boolean(id) && (status === 'pending' || status === 'running')
   const canResume = Boolean(
     id &&
@@ -232,11 +230,7 @@ export default function RunPage() {
 
   function askFollowUp() {
     if (!runDetail) return
-    const turn = turnFromRun(runDetail)
-    if (turn) appendTurn(turn)
-    const params = new URLSearchParams({ followup: '1' })
-    if (runDetail.project_id) params.set('project', runDetail.project_id)
-    navigate(`/?${params.toString()}`)
+    navigate(`/qa?${new URLSearchParams({ run: runDetail.id }).toString()}`)
   }
 
   function resumeRun() {

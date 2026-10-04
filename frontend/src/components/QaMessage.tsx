@@ -10,6 +10,7 @@ const THOUGHT_LABEL: Record<string, string> = {
   model_knowledge: '模型知识',
   skip_search: '跳过检索',
   paper_read: '查阅本论文',
+  task_read: '查阅任务材料',
   paper_read_plan: '补读安排',
   evidence_coverage: '待确认内容',
   search_and_verify: '检索与逐字核验',

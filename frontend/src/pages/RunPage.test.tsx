@@ -229,17 +229,25 @@ describe('RunPage database synchronization', () => {
     const notice = '取消请求已保存，仍在等待执行服务完成取消。'
     const delayed = { ...makeDetail('cancelling'), status_notice: notice }
     useRunDetailMock.mockReturnValue({
-      data: delayed, isError: false, error: null, refetch: vi.fn(),
+      data: delayed,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
     } as unknown as ReturnType<typeof useRunDetail>)
     const view = renderRunPage()
     expect(screen.getByText(notice)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '取消中' })).toBeDisabled()
     useRunDetailMock.mockReturnValue({
-      data: { ...delayed, status: 'cancelled' }, isError: false, error: null, refetch: vi.fn(),
+      data: { ...delayed, status: 'cancelled' },
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
     } as unknown as ReturnType<typeof useRunDetail>)
     view.rerender(
       <MemoryRouter initialEntries={['/runs/run-1']}>
-        <Routes><Route path="/runs/:id" element={<RunPage />} /></Routes>
+        <Routes>
+          <Route path="/runs/:id" element={<RunPage />} />
+        </Routes>
       </MemoryRouter>,
     )
     expect(screen.queryByText(notice)).not.toBeInTheDocument()
@@ -558,7 +566,7 @@ describe('RunPage database synchronization', () => {
     expect(screen.getByRole('list', { name: '待复核问题' })).toHaveTextContent('必需 PDF 生成失败')
     expect(screen.getByRole('button', { name: '继续修订内容' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: '恢复运行' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '继续追问' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '继续追问' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: '取消运行' })).not.toBeInTheDocument()
     expect(useDeliverablesMock).toHaveBeenCalledWith('run-1', true)
     expect(useRunDocumentMock).toHaveBeenCalledWith('run-1', {
@@ -640,13 +648,13 @@ describe('RunPage database synchronization', () => {
   })
 })
 
-// --- 继续追问：把本次运行折叠成一轮上下文再跳去提问页 ---
+// --- 继续追问：绑定本次运行的原文与已核验发现 ---
 
 describe('RunPage follow-up', () => {
   beforeEach(() => sessionStorage.clear())
   afterEach(() => vi.clearAllMocks())
 
-  it('records the finished run as a turn and navigates to the composer', () => {
+  it('opens QA bound to the finished run without replacing evidence with history', () => {
     useResearchStreamMock.mockReturnValue(makeStream('done'))
     useRunDetailMock.mockReturnValue({
       data: makeDetail('done', 'complete'),
@@ -659,17 +667,11 @@ describe('RunPage follow-up', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '继续追问' }))
 
-    expect(loadThread()).toEqual([
-      {
-        query: 'query',
-        intent: 'unknown',
-        slots: { entities: [], time_range: '', domain: '', language: '', aspects: [] },
-      },
-    ])
-    expect(navigateMock).toHaveBeenCalledWith('/?followup=1')
+    expect(loadThread()).toEqual([])
+    expect(navigateMock).toHaveBeenCalledWith('/qa?run=run-1')
   })
 
-  it('carries the original library project into the follow-up composer', () => {
+  it('keeps the run binding for library-backed research', () => {
     useResearchStreamMock.mockReturnValue(makeStream('done'))
     useRunDetailMock.mockReturnValue({
       data: { ...makeDetail('done', 'complete'), project_id: 'private-project' },
@@ -679,7 +681,7 @@ describe('RunPage follow-up', () => {
     } as unknown as ReturnType<typeof useRunDetail>)
     renderRunPage()
     fireEvent.click(screen.getByRole('button', { name: '继续追问' }))
-    expect(navigateMock).toHaveBeenCalledWith('/?followup=1&project=private-project')
+    expect(navigateMock).toHaveBeenCalledWith('/qa?run=run-1')
   })
 
   it('hides the follow-up action while the run is still going', () => {

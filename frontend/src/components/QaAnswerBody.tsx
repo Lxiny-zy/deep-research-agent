@@ -8,7 +8,7 @@ import { useEvidenceFocus } from '../hooks/useEvidenceFocus'
 import { createPortal } from 'react-dom'
 import type { QaEvidence, ReportBibliography } from '../types'
 
-const ORIGINS = { paper: '本论文', library: '资料库', web: '联网来源' }
+const ORIGINS = { paper: '本论文', research: '本次任务', library: '资料库', web: '联网来源' }
 
 interface CitationContextValue {
   citations: string[]
