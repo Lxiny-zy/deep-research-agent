@@ -12,8 +12,9 @@ from pydantic import BaseModel, Field
 
 from ..agents.base import direct_system_prompt
 from ..prompting import PrefixPrompt
+from .analysis_inputs import background_aliases, calendar_column, explicitly_grouped
 
-SCOPE_POLICY_VERSION = 2
+SCOPE_POLICY_VERSION = 3
 _UNIT_ALIASES = {
     "毫米": "mm", "millimeter": "mm", "millimeters": "mm",
     "厘米": "cm", "centimeter": "cm", "centimeters": "cm",
@@ -82,7 +83,9 @@ class AnalysisScope(BaseModel):
     reason: str = Field(default="", description="简要说明选择如何对应用户问题，不生成统计结果")
 
 
-def validate_scope(frame: Any, scope: AnalysisScope) -> None:
+def validate_scope(
+    frame: Any, scope: AnalysisScope, *, question: str | None = None, historical: bool = False
+) -> None:
     import pandas as pd
 
     from .analysis import DatasetError, _looks_like_identifier
@@ -93,16 +96,22 @@ def validate_scope(frame: Any, scope: AnalysisScope) -> None:
     if not set(selected).issubset(frame.columns):
         raise DatasetError("分析范围包含数据中不存在的列，未执行统计")
     if any(
-        not pd.api.types.is_numeric_dtype(frame[c]) or _looks_like_identifier(frame[c])
+        not pd.api.types.is_numeric_dtype(frame[c])
+        or _looks_like_identifier(frame[c])
+        or (not historical and calendar_column(c))
         for c in scope.measures
     ):
-        raise DatasetError("测量变量必须是有效的数值列，不能将编号用于测量统计")
+        raise DatasetError("测量变量必须是有效的数值列，不能将编号或年份日期用于测量统计")
     if any(
         not 2 <= frame[c].nunique(dropna=True) <= 20
         or (_looks_like_identifier(frame[c]) and frame[c].nunique(dropna=True) == frame[c].count())
         for c in scope.groups
     ):
         raise DatasetError("分组变量须有可比较的有限类别，不能使用逐条唯一编号")
+    if question is not None:
+        for column in scope.groups:
+            if not explicitly_grouped(column, question):
+                raise DatasetError(f"背景列 {column} 未被明确要求用于分组比较，未执行检验")
     if scope.comparison != "paired":
         if scope.pairing is not None:
             raise DatasetError("独立样本设计不能包含配对列，未执行统计")
@@ -150,7 +159,7 @@ async def plan_scope(
     stored = scratch.get("analysis_scope", {})
     if isinstance(stored, dict) and stored.get("signature") == signature:
         scope = AnalysisScope.model_validate(stored["scope"])
-        validate_scope(frame, scope)
+        validate_scope(frame, scope, question=question)
         return scope
     columns = [
         {
@@ -158,6 +167,7 @@ async def plan_scope(
             "dtype": str(frame[c].dtype),
             "non_missing": int(frame[c].count()),
             "distinct": int(frame[c].nunique(dropna=True)),
+            "background_by_default": bool(calendar_column(c) or background_aliases(c)),
         }
         for c in frame.columns
     ]
@@ -186,7 +196,7 @@ async def plan_scope(
             system, PrefixPrompt(fixed, dynamic), AnalysisScope, temperature=0.0
         )
         try:
-            validate_scope(frame, scope)
+            validate_scope(frame, scope, question=question)
         except DatasetError as exc:
             if attempt:
                 raise

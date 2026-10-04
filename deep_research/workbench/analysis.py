@@ -299,12 +299,15 @@ def _synthetic_csv() -> str:
 def parse_dataset(csv_text: str) -> Any:
     import pandas as pd
 
+    from .analysis_inputs import normalize_missing_markers
+
     text = csv_text.strip()
     if not text:
         raise DatasetError("没有可分析的数据")
     delimiter = "\t" if text.splitlines()[0].count("\t") > text.splitlines()[0].count(",") else ","
     try:
-        frame = pd.read_csv(io.StringIO(text), sep=delimiter, nrows=MAX_ROWS + 1)
+        normalized, notes = normalize_missing_markers(text, delimiter)
+        frame = pd.read_csv(io.StringIO(normalized), sep=delimiter, nrows=MAX_ROWS + 1)
     except Exception as exc:
         raise DatasetError(f"CSV 解析失败：{exc}") from exc
     if len(frame) > MAX_ROWS:
@@ -319,6 +322,7 @@ def parse_dataset(csv_text: str) -> Any:
             "数值列含无穷值，请先清理：" + ", ".join(str(c) for c in nonfinite.index[nonfinite])
         )
     frame.columns = [str(column).strip() or f"col{i}" for i, column in enumerate(frame.columns)]
+    frame.attrs["input_notes"] = notes
     return frame
 
 
@@ -388,11 +392,15 @@ def analyse(
     if frozen and frozen.get("input_sha256") and frozen["input_sha256"] != input_sha256:
         raise DatasetError("输入数据与任务统计快照不一致，需要重新执行分析，不能与旧报告混用")
     frame = parse_dataset(input_text)
-    issues: list[str] = []
+    from .analysis_inputs import calendar_column, explicitly_grouped, suspicious_values
+
+    issues: list[str] = list(frame.attrs.get("input_notes", []))
     numeric = [
         c
         for c in frame.columns
-        if pd.api.types.is_numeric_dtype(frame[c]) and not _looks_like_identifier(frame[c])
+        if pd.api.types.is_numeric_dtype(frame[c])
+        and not _looks_like_identifier(frame[c])
+        and not calendar_column(c)
     ]
     categorical = [
         c
@@ -400,6 +408,7 @@ def analyse(
         if c not in numeric
         and not pd.api.types.is_numeric_dtype(frame[c])
         and 1 < frame[c].nunique(dropna=True) <= min(20, max(2, len(frame) // 2))
+        and explicitly_grouped(c, question)
     ]
     if frozen is not None:
         if scope is not None and scope != frozen.get("scope"):
@@ -411,12 +420,18 @@ def analyse(
         from .analysis_scope import AnalysisScope, background_summary, validate_scope
 
         selected = AnalysisScope.model_validate(scope)
-        validate_scope(frame, selected)
+        validate_scope(
+            frame, selected,
+            question=question if frozen is None and question.strip() else None,
+            historical=frozen is not None,
+        )
         numeric, categorical = list(selected.measures), list(selected.groups)
         composition = background_summary(frame, selected.groups + selected.background)
         pairing = selected.pairing
         if frozen is None:
             scope = selected.model_dump(mode="json")
+    if frozen is None:
+        issues.extend(suspicious_values(frame, numeric))
     describe: list[dict[str, Any]] = []
     for column in numeric:
         series = frame[column].dropna()
