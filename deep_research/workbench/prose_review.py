@@ -545,9 +545,11 @@ class ProseReviewer:
             if not any("缺少完整摘要原文" in issue for issue in record["issues"]):
                 record["issues"].append("缺少完整摘要原文，不能核验摘要翻译")
         if self.statistics is not None:
-            from .analysis_review import count_scope_issues
+            from .analysis_review import statistic_scope_issues
+            from .statistic_bindings import bind_statistics
 
-            scope_issues = count_scope_issues(markdown, self.statistics)
+            record["statistics_bindings"] = bind_statistics(markdown, self.statistics)
+            scope_issues = statistic_scope_issues(markdown, self.statistics)
             if scope_issues:
                 record["status"] = "fail"
                 record["issues"].extend(scope_issues)
@@ -582,11 +584,16 @@ class ProseReviewer:
             return False, ["终稿核验未覆盖全部正文单元"]
         if record.get("units") != locations:
             return False, ["终稿核验定位与正文不一致"]
-        from .analysis_review import count_scope_issues
+        from .analysis_review import statistic_scope_issues
 
         problems = (
-            count_scope_issues(markdown, self.statistics) if self.statistics is not None else []
+            statistic_scope_issues(markdown, self.statistics) if self.statistics is not None else []
         )
+        if self.statistics is not None:
+            from .statistic_bindings import bind_statistics
+
+            if record.get("statistics_bindings") != bind_statistics(markdown, self.statistics):
+                problems.append("统计数值绑定记录缺失或与当前正文/台账不一致")
         if self.translation_citations is not None and not any(
             u.kind == "translation" for u in units
         ):

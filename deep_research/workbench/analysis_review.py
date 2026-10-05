@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-STATISTICS_POLICY_VERSION = 1
+STATISTICS_POLICY_VERSION = 2
 STATISTICS_RULES = (
     "本任务是统计解释核验。数字在台账出现并不代表任意位置都能使用："
     "必须同时对应变量、分组、统计量、有效观测范围与检验方法。"
@@ -92,3 +92,16 @@ def count_scope_issues(markdown: str, ledger: dict[str, Any]) -> list[str]:
                         f"（最大 {largest}），不能把总体样本量用于各分组"
                     )
     return issues
+
+
+def statistic_scope_issues(markdown: str, ledger: dict[str, Any]) -> list[str]:
+    from .statistic_bindings import bind_statistics
+
+    return list(
+        dict.fromkeys(
+            [
+                *count_scope_issues(markdown, ledger),
+                *bind_statistics(markdown, ledger)["issues"],
+            ]
+        )
+    )

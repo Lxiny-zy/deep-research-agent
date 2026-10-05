@@ -262,6 +262,10 @@ def delivery_fingerprint(detail: RunDetail) -> str:
         },
         "sources": [source.model_dump(mode="json") for source in detail.sources],
     }
+    if isinstance(_scratch(detail).get("analysis"), dict):
+        from .analysis_review import STATISTICS_POLICY_VERSION
+
+        payload["statistics_policy"] = STATISTICS_POLICY_VERSION
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
