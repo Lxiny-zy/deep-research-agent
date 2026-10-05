@@ -375,7 +375,8 @@ async def test_peer_review_score_survives_terminal_checks(settings, monkeypatch)
     from tests.test_workbench import _run
 
     async def fetch_paper(*args, **kwargs):
-        return await FakeSearch().search("paper")
+        # This score test supplies one paper, with one verified source snapshot.
+        return (await FakeSearch().search("paper"))[:1]
 
     monkeypatch.setattr(intake, "fetch_paper", fetch_paper)
 

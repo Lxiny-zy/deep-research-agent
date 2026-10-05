@@ -84,6 +84,11 @@ def coverage_fingerprint(scratch: dict[str, Any], results: list[ResearchResult])
 
 
 def coverage_issues(scratch: dict[str, Any], results: list[ResearchResult]) -> list[str]:
+    contract = contract_from_scratch(scratch)
+    if contract is not None and contract.template == "peerReview":
+        from .peer_coverage import coverage_issues as peer_issues
+
+        return peer_issues(scratch, results)
     if not provided_review(contract_from_scratch(scratch)):
         return []
     record = scratch.get(REVIEW_COVERAGE_KEY)
@@ -135,6 +140,10 @@ class ReviewEvidenceCoverage:
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         contract = contract_from_scratch(bb.scratch)
+        if contract is not None and contract.template == "peerReview":
+            from .peer_coverage import check_methods
+
+            return await check_methods(bb, ctx)
         if not provided_review(contract):
             return bb
         assert contract is not None

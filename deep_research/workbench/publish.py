@@ -246,7 +246,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 59,
+        "format_version": 60,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -634,6 +634,11 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
 
             coverage = coverage_issues(scratch, detail.results)
             gates.append(GateResult("review_coverage", "fail" if coverage else "pass", coverage))
+    if template.key == "peerReview":
+        from .peer_coverage import coverage_issues as peer_coverage_issues
+
+        coverage = peer_coverage_issues(scratch, detail.results)
+        gates.append(GateResult("review_coverage", "fail" if coverage else "pass", coverage))
     if template.key == "mindmap" and extras.get("mindmap"):
         from ..document_corpus import corpus_from_inputs
         from .mindmap_contract import checked_review

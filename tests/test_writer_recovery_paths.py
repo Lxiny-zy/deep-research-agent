@@ -200,6 +200,8 @@ async def test_statistical_style_advice_does_not_rewrite_verified_results(settin
 
 
 async def test_peer_reviewer_step_reuses_a_bound_parent_report(settings):
+    import hashlib
+
     from tests.test_workbench import WorkbenchLLM
 
     settings.quality = {
@@ -219,16 +221,22 @@ async def test_peer_reviewer_step_reuses_a_bound_parent_report(settings):
         for section in template.sections
     )
     draft += "\n\n评分：7/10"
+    source = Source(
+        url="https://a.com", content="内容A提供了可核验的原文证据", section_title="Method",
+    )
+    finding = verified_finding()
+    finding.verification.source_content_hash = hashlib.sha256(source.content.encode()).hexdigest()
     initial = Blackboard(
         query="评审这份材料",
-        results=[ResearchResult(sub_question="q", findings=[verified_finding()])],
+        results=[ResearchResult(sub_question="q", findings=[finding])],
+        scratch={"paper_sources": [source.model_dump(mode="json")]},
     )
     first_ctx = RunContext(
         llm=WorkbenchLLM(draft),
         search_tool=FakeSearch(),
         tracer=Tracer(),
         settings=settings,
-        evidence_sources=[Source(url="https://a.com", content="发现X。")],
+        evidence_sources=[source],
     )
     parent = await PeerReviewer().step(initial, first_ctx)
     remaining = parent.scratch["workbench"]["extras"]["revision"]["remaining"]

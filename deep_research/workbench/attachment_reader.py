@@ -38,10 +38,11 @@ def source_batches(
     room = max(0, available - min(8192, max(256, available // 8)))
     batches: list[list[Source]] = []
     batch: list[Source] = []
+    format_sources = researcher.source_context or source_context
     for source in sources:
-        if len(source_context([source])) > room:
+        if len(format_sources([source])) > room:
             raise ValueError("模型输入容量无法容纳一个完整附件片段，请调整模型容量；未截断原文")
-        if batch and len(source_context([*batch, source])) > room:
+        if batch and len(format_sources([*batch, source])) > room:
             batches.append(batch)
             batch = []
         batch.append(source)

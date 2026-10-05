@@ -241,11 +241,15 @@ def _local_reference(source: Source) -> str:
 class EvidenceVerifier:
     """Verify that a candidate quote occurs in the selected source content."""
 
-    def __init__(self, *, min_quote_chars: int = 6, max_quote_chars: int = 600) -> None:
+    def __init__(
+        self, *, min_quote_chars: int = 6, max_quote_chars: int = 600,
+        quote_ranges: dict[tuple[str, str], list[tuple[int, int]]] | None = None,
+    ) -> None:
         if max_quote_chars < min_quote_chars:
             raise ValueError("max_quote_chars must be at least min_quote_chars")
         self.min_quote_chars = min_quote_chars
         self.max_quote_chars = max_quote_chars
+        self.quote_ranges = quote_ranges
 
     def verify(self, finding: Finding, source: Source) -> EvidenceCheck:
         if finding.source_url != source.url:
@@ -258,7 +262,21 @@ class EvidenceVerifier:
         if len(normalized_quote) < self.min_quote_chars:
             return EvidenceCheck(False, "evidence_quote_too_short")
 
-        quote_span = _normalized_span(source.content, quote)
+        content_hash = hashlib.sha256(source.content.encode("utf-8")).hexdigest()
+        ranges = (
+            self.quote_ranges.get((source.url, content_hash), [])
+            if self.quote_ranges is not None else [(0, len(source.content))]
+        )
+        quote_span = None
+        context_bounds = (0, len(source.content))
+        for start, end in ranges:
+            if not 0 <= start < end <= len(source.content):
+                continue
+            found = _normalized_span(source.content[start:end], quote)
+            if found is not None:
+                quote_span = (start + found[0], start + found[1])
+                context_bounds = (start, end)
+                break
         if quote_span is None:
             return EvidenceCheck(False, "evidence_quote_not_found")
 
@@ -266,7 +284,6 @@ class EvidenceVerifier:
         matched_quote = source.content[quote_start:quote_end].strip()
         if len(matched_quote) > self.max_quote_chars:
             return EvidenceCheck(False, "evidence_quote_too_long")
-        content_hash = hashlib.sha256(source.content.encode("utf-8")).hexdigest()
         quantity_status, quantity_reason = self._verify_quantity(
             finding,
             matched_quote,
@@ -279,7 +296,10 @@ class EvidenceVerifier:
             source_title=source.title,
             source_reference=_local_reference(source)
             or format_reference(source.url, source.scholarly, title=source.title),
-            evidence_context=_evidence_context(source.content, quote_start, quote_end),
+            evidence_context=_evidence_context(
+                source.content[context_bounds[0]:context_bounds[1]],
+                quote_start - context_bounds[0], quote_end - context_bounds[0],
+            ),
             # 同一个区间既截出上下文窗口，也作为可复核的引用锚点落库。
             quote_start=quote_start,
             quote_end=quote_end,
@@ -695,8 +715,22 @@ class ClaimConsistencyVerifier:
         checked: list[Finding] = []
         for finding in findings:
             if _semantically_supported(finding):
-                claim_id = _ensure_claim_id(finding).verification.claim_id
-                checked.append(updated.get(claim_id, finding))
+                original = _ensure_claim_id(finding)
+                result = updated.get(original.verification.claim_id)
+                if result is None:
+                    checked.append(original)
+                    continue
+                verdict = result.verification
+                # A claim may be quoted at several locations. Propagate the logical
+                # verdict, while retaining each occurrence's snapshot and quote anchors.
+                consistent = _with_consistency(
+                    original, verdict.consistency_status,
+                    verdict.contradicts_claim_ids, verdict.contradiction_reason,
+                )
+                checked.append(_with_corroboration(
+                    consistent, verdict.corroboration_status, verdict.independent_source_count,
+                    verdict.corroborates_claim_ids, verdict.corroboration_reason,
+                ))
             else:
                 checked.append(finding)
         return checked

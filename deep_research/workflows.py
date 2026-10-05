@@ -128,6 +128,7 @@ PEER_REVIEW = Workflow(
     steps=[
         Step(agent="attachment_reader"),
         Step(agent="paper_intake"),
+        Step(agent="review_evidence_coverage"),
         Step(agent="peer_reviewer"),
     ],
 )

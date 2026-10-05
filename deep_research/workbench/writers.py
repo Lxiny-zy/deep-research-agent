@@ -893,6 +893,37 @@ class PeerReviewer(TemplateWriter):
     template_key = "peerReview"
     output_keys = ("_review_score",)
 
+    async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
+        from .contract import CONTRACT_SCRATCH_KEY, build_contract
+        from .peer_coverage import check_methods, coverage_issues
+
+        if contract_from_scratch(bb.scratch) is None:
+            if bb.scratch.get(CONTRACT_SCRATCH_KEY) is not None:
+                raise ValueError("同行评审任务契约无法解析，不能跳过要求")
+            template = get_template(self.template_key)
+            assert template is not None
+            bb.scratch[CONTRACT_SCRATCH_KEY] = build_contract(
+                template, bb.query, quality=ctx.settings.quality,
+            ).model_dump(mode="json")
+        # Also covers writer-only revisions and older frozen workflows lacking the new step.
+        await check_methods(bb, ctx, reuse_checked=True)
+        issues = coverage_issues(bb.scratch, bb.results)
+        if issues:
+            bb.report = Report(query=bb.query, markdown="# 方法证据待补齐\n\n" + "\n".join(
+                f"- {issue}" for issue in issues
+            ))
+            bb.scratch[WORKBENCH_SCRATCH_KEY] = WriterState(
+                template=self.template_key, extras={"coverage_issues": issues, "score": None},
+            ).model_dump(mode="json")
+            bb.scratch["_report_validation"] = {
+                "scope": "source_processing", "issues": issues, "fallback": True,
+            }
+            ctx.tracer.emit(
+                "SYNTHESIZER", "error", "方法章节证据尚未齐备，已保留补读记录，未生成评审结论",
+            )
+            return bb
+        return await super().step(bb, ctx)
+
     def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
         return super().system_prompt(template, contract) + (
             "\n总体评分单独写成‘评分：N/10’一行，不在这一行混入论文事实或评分理由；"
