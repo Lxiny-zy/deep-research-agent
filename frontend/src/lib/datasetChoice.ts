@@ -1,4 +1,4 @@
-import type { DatasetParseResult, DatasetSheet } from '../types'
+import type { DatasetMergeRequest, DatasetMergeResult, DatasetParseResult, DatasetSheet } from '../types'
 
 export const DATASET_MAX_BYTES = 16 * 1024 * 1024
 
@@ -6,10 +6,14 @@ export const DATASET_MAX_BYTES = 16 * 1024 * 1024
 export interface DatasetChoice {
   parsed: DatasetParseResult
   sheet: string | null
+  selectionId?: string
+  mode?: 'single' | 'merge'
+  merge?: { request: DatasetMergeRequest; result: DatasetMergeResult } | null
 }
 
 export function chosenSheet(choice: DatasetChoice | null): DatasetSheet | null {
   if (!choice) return null
+  if (choice.mode === 'merge') return choice.merge?.result ?? null
   if (choice.parsed.sheets.length === 1) return choice.parsed.sheets[0]
   return choice.parsed.sheets.find((item) => item.name === choice.sheet) ?? null
 }

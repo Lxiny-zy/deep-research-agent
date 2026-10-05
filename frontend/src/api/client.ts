@@ -43,6 +43,8 @@ import type {
   RunTemplateInfo,
   QaConversation,
   DatasetParseResult,
+  DatasetMergeRequest,
+  DatasetMergeResult,
   QaMessage,
   QaActivity,
   QaSourceOption,
@@ -1314,6 +1316,14 @@ export function parseDatasetFile(
     method: 'POST',
     body: JSON.stringify(body),
     signal,
+  })
+}
+
+export function mergeDatasetTables(
+  body: DatasetMergeRequest, signal?: AbortSignal,
+): Promise<DatasetMergeResult> {
+  return request<DatasetMergeResult>('/api/datasets/merge', {
+    method: 'POST', body: JSON.stringify(body), signal,
   })
 }
 

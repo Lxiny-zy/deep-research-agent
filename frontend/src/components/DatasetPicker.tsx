@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { parseDatasetFile } from '../api/client'
 import { toBase64 } from '../hooks/useAttachments'
 import { AppIcon } from './AppIcon'
 import { DATASET_MAX_BYTES, chosenSheet, type DatasetChoice } from '../lib/datasetChoice'
+import DatasetMergePicker from './DatasetMergePicker'
 
 /**
  * 数据分析的数据入口：文件交给服务端按分析规则解析（CSV / TSV / XLSX，中文编码也能读），
@@ -23,6 +24,7 @@ export default function DatasetPicker({
 }) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const selectionCounter = useRef(0)
 
   async function pick(file: File | undefined) {
     setError(null)
@@ -35,7 +37,8 @@ export default function DatasetPicker({
         filename: file.name,
         data_base64: await toBase64(file),
       })
-      onChange({ parsed, sheet: parsed.sheets.length === 1 ? parsed.sheets[0].name : null })
+      onChange({ parsed, sheet: parsed.sheets.length === 1 ? parsed.sheets[0].name : null,
+        selectionId: String(++selectionCounter.current) })
       onDemoChange(false)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '无法解析这个表格')
@@ -87,6 +90,14 @@ export default function DatasetPicker({
         <span className="hint">也可以直接把表格粘贴到上方输入框，第一行写分析问题。</span>
       )}
       {value && multiple && (
+        <div>
+          <button type="button" className="btn btn-secondary btn-sm" disabled={disabled}
+            onClick={() => onChange({ ...value, mode: 'single', merge: null })}>选择单张工作表</button>
+          <button type="button" className="btn btn-secondary btn-sm" disabled={disabled}
+            onClick={() => onChange({ ...value, mode: 'merge', sheet: null })}>合并多张工作表</button>
+        </div>
+      )}
+      {value && multiple && value.mode !== 'merge' && (
         <label className="home-dataset-sheet">
           <span>分析哪张工作表</span>
           <select
@@ -102,6 +113,10 @@ export default function DatasetPicker({
             ))}
           </select>
         </label>
+      )}
+      {value && multiple && value.mode === 'merge' && (
+        <DatasetMergePicker key={value.selectionId ?? value.parsed.filename}
+          value={value} onChange={onChange} disabled={disabled} />
       )}
       {value && value.parsed.skipped.length > 0 && (
         <span className="hint">

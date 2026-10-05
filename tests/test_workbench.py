@@ -191,16 +191,21 @@ def test_review_score_extraction() -> None:
 # --------------------------------------------------------------------------- 数据分析
 
 
-def test_analysis_runs_tests_and_ignores_id_columns() -> None:
+@pytest.mark.parametrize("repeated", [False, True])
+def test_analysis_runs_tests_and_ignores_id_columns(repeated) -> None:
     csv = "method,scene,psnr\n" + "\n".join(
-        f"{m},{s},{base + s * 0.01:.2f}"
-        for m, base in (("A", 30), ("B", 32), ("C", 34))
+        f"{m},{s if repeated else index * 7 + s},{base + s * 0.01:.2f}"
+        for index, (m, base) in enumerate((("A", 30), ("B", 32), ("C", 34)))
         for s in range(1, 8)
     )
     result = analyse(csv, "差异显著吗")
     assert "scene" not in result.numeric  # 编号列不当作测量值
-    assert result.tests and result.tests[0]["method"] == "单因素方差分析"
-    assert result.tests[0]["significant"] is True
+    if repeated:
+        assert result.tests == []
+        assert any("重复测量" in issue for issue in result.issues)
+    else:
+        assert result.tests and result.tests[0]["method"] == "单因素方差分析"
+        assert result.tests[0]["significant"] is True
     assert result.figures and all(fig.png[:4] == b"\x89PNG" for fig in result.figures)
 
 

@@ -625,6 +625,20 @@ async def _store_attachment(
     return {"attachment": attachment.model_dump(mode="json"), "summary": attachment.summary()}
 
 
+from .dataset_merge import DatasetMerge  # noqa: E402
+
+
+@router.post("/datasets/merge")
+async def merge_dataset_tables(req: DatasetMerge) -> dict[str, Any]:
+    from .analysis import DatasetError
+    from .dataset_merge import merge_tables
+
+    try:
+        return await run_blocking(merge_tables, req)
+    except DatasetError as exc:
+        raise HTTPException(422, {"code": "dataset_invalid", "message": str(exc)}) from exc
+
+
 class DatasetUpload(BaseModel):
     """上传一个待分析的表格文件（CSV / TSV / XLSX，Base64 编码）。"""
 

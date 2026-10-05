@@ -51,6 +51,7 @@ class TaskContract(BaseModel):
     dataset_csv: str = ""
     # 数据来源：文件名、工作表、行列数与列类型（粘贴的表格文件名为空）
     dataset_source: dict[str, Any] = Field(default_factory=dict)
+    dataset_tables: list[dict[str, str]] = Field(default_factory=list)
     # 用户是否主动选择用合成示例演示；None 表示旧任务（当时无数据会自动用示例）
     demo_data: bool | None = None
     required_sections: list[str] = Field(default_factory=list)
@@ -84,6 +85,10 @@ class TaskContract(BaseModel):
             if source.get("sheet"):
                 where += f"，工作表「{source['sheet']}」"
             lines += ["", "## 数据来源", f"{where}：{source.get('rows', 0)} 行"]
+            if source.get("merge"):
+                merge = source["merge"]
+                lines.append("合并来源表：" + "、".join(item["name"] for item in merge["tables"]))
+                lines.extend(f"- {note}" for note in merge.get("notes", []))
         if self.required_sections:
             lines += ["", "## 必须包含的章节（按顺序）"]
             lines += [f"{i}. {name}" for i, name in enumerate(self.required_sections, 1)]

@@ -893,6 +893,26 @@ export interface DatasetSourceInfo {
   sheet: string
   rows: number
   columns: DatasetColumn[]
+  input_sha256?: string
+  merge?: DatasetMergeInfo
+}
+
+export type DatasetMergeRequest = Wire<'DatasetMerge'>
+export type DatasetJoinStep = Required<Wire<'JoinStep'>>
+
+export interface DatasetMergeInfo {
+  base: string
+  tables: { name: string; rows: number; input_sha256: string }[]
+  joins: (DatasetJoinStep & {
+    left_rows: number; right_rows: number; rows: number
+    unmatched_left: number; unmatched_right: number
+  })[]
+  notes: string[]
+  input_sha256: string
+}
+
+export interface DatasetMergeResult extends DatasetSheet {
+  merge: DatasetMergeInfo
 }
 
 export type GateStatus = 'pass' | 'warn' | 'fail'

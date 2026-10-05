@@ -160,7 +160,8 @@ function ResearchComposer() {
         workflow: customWorkflow,
         template: activeTemplate ? activeTemplate.key : null,
         strategy: customWorkflow ? null : strategy,
-        dataset: isDataTask && datasetSheet ? datasetSheet.csv : null,
+        dataset: isDataTask && datasetSheet && dataset?.mode !== 'merge' ? datasetSheet.csv : null,
+        dataset_merge: isDataTask && dataset?.mode === 'merge' ? dataset.merge?.request ?? null : null,
         dataset_source:
           isDataTask && dataset && datasetSheet
             ? { filename: dataset.parsed.filename, sheet: datasetSheet.name }
@@ -181,7 +182,8 @@ function ResearchComposer() {
         thread,
         templateKey,
         tier,
-        dataset: dataset ? [dataset.parsed.filename, datasetSheet?.name ?? null] : null,
+        dataset: dataset ? [dataset.parsed.filename, datasetSheet?.name ?? null,
+          dataset.merge?.result.merge ?? null] : null,
         demoData,
         attachments: attachments.payloads.map((item) => item.id),
       }),
@@ -238,7 +240,9 @@ function ResearchComposer() {
       return
     }
     if (isDataTask && dataset && !datasetSheet) {
-      setError('这个文件有多张工作表，请先选择要分析的一张')
+      setError(dataset.mode === 'merge'
+        ? '请先预览合并结果，再开始分析'
+        : '这个文件有多张工作表，请先选择要分析的一张')
       return
     }
     beginRequest()
@@ -523,6 +527,7 @@ function ResearchComposer() {
                       filename: dataset.parsed.filename,
                       sheet: datasetSheet,
                       pending: !datasetSheet,
+                      merging: dataset.mode === 'merge',
                     }
                   : null
               }

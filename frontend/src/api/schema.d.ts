@@ -214,6 +214,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/datasets/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Merge Dataset Tables */
+        post: operations["merge_dataset_tables_api_datasets_merge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/intent/assess": {
         parameters: {
             query?: never;
@@ -2150,6 +2167,7 @@ export interface components {
             clarified?: boolean;
             /** Dataset */
             dataset?: string | null;
+            dataset_merge?: components["schemas"]["DatasetMerge"] | null;
             dataset_source?: components["schemas"]["DatasetSource"] | null;
             /**
              * Demo Data
@@ -2180,6 +2198,15 @@ export interface components {
         CreateRunResponse: {
             /** Run Id */
             run_id: string;
+        };
+        /** DatasetMerge */
+        DatasetMerge: {
+            /** Base */
+            base: string;
+            /** Joins */
+            joins: components["schemas"]["JoinStep"][];
+            /** Tables */
+            tables: components["schemas"]["MergeTable"][];
         };
         /** DatasetSource */
         DatasetSource: {
@@ -2994,6 +3021,27 @@ export interface components {
              */
             time_range?: string;
         };
+        /** JoinStep */
+        JoinStep: {
+            /**
+             * How
+             * @default inner
+             * @enum {string}
+             */
+            how?: "inner" | "left";
+            /** Left Keys */
+            left_keys: string[];
+            /**
+             * Relationship
+             * @default one_to_one
+             * @enum {string}
+             */
+            relationship?: "one_to_one" | "many_to_one";
+            /** Right Keys */
+            right_keys: string[];
+            /** Sheet */
+            sheet: string;
+        };
         /** KeyCreate */
         KeyCreate: {
             /** Api Key */
@@ -3080,6 +3128,13 @@ export interface components {
             title: string;
             /** Updated At */
             updated_at?: string | null;
+        };
+        /** MergeTable */
+        MergeTable: {
+            /** Csv */
+            csv: string;
+            /** Name */
+            name: string;
         };
         /** ModelDiscoveryResult */
         ModelDiscoveryResult: {
@@ -4946,6 +5001,44 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["DatasetUpload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    merge_dataset_tables_api_datasets_merge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetMerge"];
             };
         };
         responses: {

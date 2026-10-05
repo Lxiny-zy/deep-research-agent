@@ -126,6 +126,7 @@ from .report.service import requires_corroboration as _run_requires_corroboratio
 from .reproducibility import RUN_MANIFEST_CHECKPOINT_KEY, quality_metrics
 from .security import ProviderURLPolicyError, validate_provider_url_resolved
 from .tools.base import SearchTool
+from .workbench.dataset_merge import DatasetMerge
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,7 @@ class CreateRunRequest(BaseModel):
     dataset: str | None = Field(default=None, max_length=2_000_000)
     # 表格来自哪个文件、哪张工作表（由 POST /api/datasets 解析得到）；行列数由服务端重算
     dataset_source: DatasetSource | None = None
+    dataset_merge: DatasetMerge | None = None
     # 没有数据时，用户主动选择用合成示例演示分析流程；不选则缺数据直接拒绝
     demo_data: bool = False
     # 已解析的上传文件（由 POST /api/attachments 返回，前端原样提交）。模型会先阅读这些
@@ -383,8 +385,11 @@ def _settings_for(base: Settings, params: ResearchParams | None) -> Settings:
 
 
 def _run_request_hash(request: CreateRunRequest) -> str:
+    fields = request.model_dump(mode="json")
+    if request.dataset_merge is None:
+        fields.pop("dataset_merge", None)
     payload = json.dumps(
-        request.model_dump(mode="json"),
+        fields,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -440,7 +445,10 @@ def _checked_dataset(contract: Any, submitted: str) -> Any:
         "sheet": str(contract.dataset_source.get("sheet", "")),
         "rows": profile.rows,
         "columns": profile.columns,
+        "input_sha256": hashlib.sha256(contract.dataset_csv.strip().encode()).hexdigest(),
     }
+    if contract.dataset_source.get("merge"):
+        source["merge"] = contract.dataset_source["merge"]
     return contract.model_copy(update={"dataset_source": source})
 
 
@@ -1719,12 +1727,32 @@ async def create_run(
             policy = route_policy if route.applied else None
             if policy is not None:
                 scratch[INTENT_POLICY_KEY] = policy.model_dump(mode="json")
+    if req.dataset_merge is not None and (
+        task_template is None or task_template.input_kind != "dataset"
+    ):
+        raise HTTPException(422, "多表合并只能用于数据分析任务")
     if task_template is not None:
+        dataset_csv = req.dataset or ""
+        dataset_source = req.dataset_source.model_dump() if req.dataset_source else {}
+        dataset_tables = []
+        if req.dataset_merge is not None:
+            from .workbench.analysis import DatasetError
+            from .workbench.dataset_merge import merge_tables
+
+            if dataset_csv.strip() or req.demo_data:
+                raise HTTPException(422, "多表合并不能同时提交另一份数据或示例数据")
+            try:
+                merged = await run_blocking(merge_tables, req.dataset_merge)
+            except DatasetError as exc:
+                raise HTTPException(422, {"code": "dataset_invalid", "message": str(exc)}) from exc
+            dataset_csv = merged["csv"]
+            dataset_source.update(sheet="合并结果", merge=merged["merge"])
+            dataset_tables = [table.model_dump() for table in req.dataset_merge.tables]
         contract = build_contract(
             task_template,
             req.query,
-            attachments_csv=req.dataset or "",
-            dataset_source=req.dataset_source.model_dump() if req.dataset_source else None,
+            attachments_csv=dataset_csv,
+            dataset_source=dataset_source,
             demo_data=req.demo_data,
             strategy=req.strategy,
             # 契约里的质量策略会覆盖 settings.quality，这里必须带上用户的设置
@@ -1750,7 +1778,9 @@ async def create_run(
                 },
             )
         if task_template.input_kind == "dataset":
-            contract = _checked_dataset(contract, req.dataset or "")
+            contract = _checked_dataset(contract, dataset_csv)
+            if dataset_tables:
+                contract = contract.model_copy(update={"dataset_tables": dataset_tables})
         scratch = execution.checkpoint.setdefault("scratch", {})
         if isinstance(scratch, dict):
             # 契约与模板一起冻结进初始 checkpoint：恢复后的尝试、worker 与交付层

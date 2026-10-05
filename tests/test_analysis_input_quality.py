@@ -124,6 +124,7 @@ def test_anomaly_notes_survive_reports_and_keep_the_original_data_hash():
     assert result.input_sha256 == hashlib.sha256(csv.encode()).hexdigest()
     assert "38000" in result.facts() and "未自动删除" in result.facts()
     assert "38000" in fallback_report(result)
+    assert "未自动删除" in fallback_report(result)
     assert result.describe[0]["max"] == 38000
 
 

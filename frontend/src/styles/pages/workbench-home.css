@@ -269,6 +269,31 @@
   min-width: 0;
 }
 
+.home-dataset-merge {
+  display: grid;
+  flex-basis: 100%;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.home-dataset-merge fieldset,
+.home-dataset-merge label {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.home-dataset-merge fieldset {
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.home-dataset-merge select {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
 /* ---- 追问上下文 ---- */
 .home-thread-list {
   display: flex;

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   createRun: vi.fn(),
   assessIntent: vi.fn(),
   parseDatasetFile: vi.fn(),
+  mergeDatasetTables: vi.fn(),
 }))
 
 const COLUMNS = [
@@ -451,5 +452,39 @@ describe('NewResearchPage task templates', () => {
     fireEvent.click(screen.getByRole('button', { name: '开始数据分析' }))
     await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
     expect(mocks.createRun.mock.calls[0][0]).toMatchObject({ dataset: null, demo_data: true })
+  })
+
+  it('submits the source tables and join plan instead of trusting the preview CSV', async () => {
+    const tables = [sheet('Left', 'method,psnr\nA,30\nB,31', 2),
+      sheet('Right', 'method,psnr\nA,32\nB,33', 2)]
+    mocks.parseDatasetFile.mockResolvedValue({ filename: 'joined.xlsx', sheets: tables, skipped: [] })
+    mocks.mergeDatasetTables.mockResolvedValue({
+      ...sheet('合并结果', 'preview-only', 2),
+      merge: { base: 'Left', tables: [], joins: [], notes: [], input_sha256: 'a'.repeat(64) },
+    })
+    render(<MemoryRouter><NewResearchPage /></MemoryRouter>)
+    fireEvent.click(screen.getByLabelText(/数据分析/))
+    fireEvent.change(screen.getByLabelText(/上传 CSV/), {
+      target: { files: [new File(['x'], 'joined.xlsx')] },
+    })
+    fireEvent.click(await screen.findByRole('button', { name: '合并多张工作表' }))
+    fireEvent.change(screen.getByLabelText('数据分析输入'), { target: { value: '比较合并数据' } })
+    fireEvent.click(screen.getByRole('button', { name: '开始数据分析' }))
+    expect(mocks.createRun).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('连接表 第1步'), { target: { value: 'Right' } })
+    fireEvent.change(screen.getByLabelText('主表连接键 第1步'), { target: { value: 'method' } })
+    fireEvent.change(screen.getByLabelText('右表连接键 第1步'), { target: { value: 'method' } })
+    fireEvent.click(screen.getByRole('button', { name: '预览合并结果' }))
+    await screen.findByText('合并结果：2 行 × 2 列')
+    fireEvent.click(screen.getByRole('button', { name: '开始数据分析' }))
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalled())
+    expect(mocks.createRun.mock.calls[0][0]).toMatchObject({
+      dataset: null,
+      dataset_merge: {
+        base: 'Left', tables: tables.map(({ name, csv }) => ({ name, csv })),
+        joins: [expect.objectContaining({ sheet: 'Right', left_keys: ['method'], right_keys: ['method'] })],
+      },
+      dataset_source: { filename: 'joined.xlsx', sheet: '合并结果' },
+    })
   })
 })

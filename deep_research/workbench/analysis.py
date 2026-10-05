@@ -299,7 +299,7 @@ def _synthetic_csv() -> str:
 def parse_dataset(csv_text: str) -> Any:
     import pandas as pd
 
-    from .analysis_inputs import normalize_missing_markers
+    from .analysis_inputs import identifier_column, normalize_missing_markers
 
     text = csv_text.strip()
     if not text:
@@ -307,7 +307,11 @@ def parse_dataset(csv_text: str) -> Any:
     delimiter = "\t" if text.splitlines()[0].count("\t") > text.splitlines()[0].count(",") else ","
     try:
         normalized, notes = normalize_missing_markers(text, delimiter)
-        frame = pd.read_csv(io.StringIO(normalized), sep=delimiter, nrows=MAX_ROWS + 1)
+        columns = pd.read_csv(io.StringIO(normalized), sep=delimiter, nrows=0).columns
+        frame = pd.read_csv(
+            io.StringIO(normalized), sep=delimiter, nrows=MAX_ROWS + 1,
+            dtype={column: str for column in columns if identifier_column(str(column))},
+        )
     except Exception as exc:
         raise DatasetError(f"CSV 解析失败：{exc}") from exc
     if len(frame) > MAX_ROWS:
@@ -392,7 +396,18 @@ def analyse(
     if frozen and frozen.get("input_sha256") and frozen["input_sha256"] != input_sha256:
         raise DatasetError("输入数据与任务统计快照不一致，需要重新执行分析，不能与旧报告混用")
     frame = parse_dataset(input_text)
-    from .analysis_inputs import calendar_column, explicitly_grouped, suspicious_values
+    if frozen is not None:
+        # Preserve a saved numerical role when newer parsing rules recognize
+        # the column name as an identifier. New analyses still reject it.
+        for column in frozen.get("numeric", []):
+            if column in frame.columns:
+                frame[column] = pd.to_numeric(frame[column], errors="raise")
+    from .analysis_inputs import (
+        calendar_column,
+        explicitly_grouped,
+        repeated_observations,
+        suspicious_values,
+    )
 
     issues: list[str] = list(frame.attrs.get("input_notes", []))
     numeric = [
@@ -407,6 +422,7 @@ def analyse(
         for c in frame.columns
         if c not in numeric
         and not pd.api.types.is_numeric_dtype(frame[c])
+        and not _looks_like_identifier(frame[c])
         and 1 < frame[c].nunique(dropna=True) <= min(20, max(2, len(frame) // 2))
         and explicitly_grouped(c, question)
     ]
@@ -416,6 +432,7 @@ def analyse(
         scope = frozen.get("scope")
     composition = []
     pairing = None
+    subjects = None
     if scope is not None:
         from .analysis_scope import AnalysisScope, background_summary, validate_scope
 
@@ -428,10 +445,15 @@ def analyse(
         numeric, categorical = list(selected.measures), list(selected.groups)
         composition = background_summary(frame, selected.groups + selected.background)
         pairing = selected.pairing
+        subjects = selected.subject_columns
         if frozen is None:
             scope = selected.model_dump(mode="json")
     if frozen is None:
         issues.extend(suspicious_values(frame, numeric))
+    repeated = repeated_observations(frame, subjects) if frozen is None else []
+    issues.extend(repeated)
+    if source and frozen is None:
+        issues.extend(source.get("merge", {}).get("notes", []))
     describe: list[dict[str, Any]] = []
     for column in numeric:
         series = frame[column].dropna()
@@ -451,7 +473,7 @@ def analyse(
 
     paired_requested = pairing is not None
     tests: list[dict[str, Any]] = []
-    for group in [] if paired_requested else categorical:
+    for group in [] if paired_requested or repeated else categorical:
         for variable in numeric:
             grouped = [
                 (str(label), values.dropna().to_numpy())
@@ -534,7 +556,7 @@ def analyse(
                 }
             )
 
-    if pairing is not None:
+    if pairing is not None and not repeated:
         left, right = pairing.left.column, pairing.right.column
         pairs = frame[[left, right]].dropna()
         difference = pairs[right] - pairs[left]
@@ -579,7 +601,7 @@ def analyse(
         )
 
     correlations: list[dict[str, Any]] = []
-    for i, left in enumerate(numeric):
+    for i, left in enumerate(numeric if not repeated else []):
         for right in numeric[i + 1 :]:
             pair = frame[[left, right]].dropna()
             if len(pair) < 3 or pair[left].nunique() < 2 or pair[right].nunique() < 2:
@@ -758,12 +780,9 @@ def allows_synthetic(contract: TaskContract | None) -> bool:
 
 def _looks_like_identifier(series: Any) -> bool:
     """Use explicit identifier names; integer-valued measurements remain measurements."""
-    name = str(getattr(series, "name", "")).strip().casefold()
-    return (
-        name in {"id", "index", "idx", "scene", "subject", "participant", "sample", "trial"}
-        or name.endswith("_id")
-        or any(word in name for word in ("编号", "序号"))
-    )
+    from .analysis_inputs import identifier_column
+
+    return identifier_column(str(getattr(series, "name", "")))
 
 
 def _safe(text: str) -> str:
@@ -823,6 +842,8 @@ def fallback_report(result: AnalysisResult) -> str:
         "### 描述统计" + facts.split("### 描述统计", 1)[-1].split("\n### 图表")[0],
     ]
     lines += ["", "## 图表"] + [f"- {fig.title}：{fig.caption}" for fig in result.figures]
+    if result.issues and not all(issue in "\n".join(lines) for issue in result.issues):
+        lines += ["", "## 分析说明", *[f"- {issue}" for issue in result.issues]]
     conclusions = []
     for test in result.tests:
         verdict = (
@@ -847,7 +868,11 @@ def fallback_report(result: AnalysisResult) -> str:
             f"- {item['a']} 与 {item['b']} 的 Pearson r={item['r']}（p={item['p_value']}）。"
         )
     if not conclusions:
-        conclusions.append("- 数据中没有可检验的分组或相关关系，仅给出描述统计。")
+        conclusions.append(
+            "- 当前仅提供描述统计；重复测量推断暂不支持，不能据此断言没有差异或相关关系。"
+            if any(issue.startswith("检测到重复测量：") for issue in result.issues)
+            else "- 数据中没有可检验的分组或相关关系，仅给出描述统计。"
+        )
     conclusions.append("- 以上结论依据本次实际执行的统计；检验前提与适用范围见台账及分析说明。")
     lines += ["", "## 结论", *conclusions]
     return "\n".join(lines)
@@ -1122,16 +1147,24 @@ class DataAnalyst:
         # （例如泛泛而谈、或把别的任务的模板套了过来），此时统计摘要更可靠。
         if not unsupported and structure_gate(body, template).status != "pass":
             unsupported = ["missing_sections"]
+        if any(issue.startswith("检测到重复测量：") for issue in result.issues):
+            # The current engine has no repeated-measures inferential model.
+            # Always deliver the explicit limitation, even if prose omits it.
+            unsupported = ["unsupported_repeated_measurements"]
         if unsupported:
             ctx.tracer.emit(
                 "SYNTHESIZER",
                 "info",
-                "报告未通过数字或章节复核，已回退为统计摘要",
+                "重复测量推断暂不支持，交付含限制说明的统计摘要"
+                if unsupported == ["unsupported_repeated_measurements"]
+                else "报告未通过数字或章节复核，已回退为统计摘要",
                 data={
                     "report_validation": {
                         "issues": [
                             "missing_sections"
                             if unsupported == ["missing_sections"]
+                            else "unsupported_repeated_measurements"
+                            if unsupported == ["unsupported_repeated_measurements"]
                             else "unsupported_number"
                         ],
                         "fallback": True,

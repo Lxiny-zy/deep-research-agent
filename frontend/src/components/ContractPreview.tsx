@@ -12,6 +12,7 @@ interface Props {
     filename: string
     sheet: DatasetSheetProfile | null
     pending: boolean
+    merging?: boolean
   } | null
   /** 用户明确选择用示例数据演示 */
   demoData?: boolean
@@ -83,7 +84,9 @@ export default function ContractPreview({
                   uploadedDataset.pending ? (
                     <span className="contract-warning">
                       <AppIcon name="alert" size={13} aria-hidden="true" />
-                      {`${uploadedDataset.filename} 有多张工作表，请先选择要分析的一张`}
+                      {uploadedDataset.merging
+                        ? `${uploadedDataset.filename}：请先预览合并结果`
+                        : `${uploadedDataset.filename} 有多张工作表，请先选择要分析的一张`}
                     </span>
                   ) : (
                     `使用上传文件 ${uploadedDataset.filename}${

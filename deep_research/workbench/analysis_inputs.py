@@ -22,20 +22,61 @@ _MISSING = {"?", "？", "na", "n/a", "nan", "null", "none", "#na", "#n/a", "<na>
 _CSV_LIMIT_LOCK = threading.Lock()
 
 
+def identifier_column(column: str) -> bool:
+    name = column.rsplit(".", 1)[-1].strip().casefold()
+    return (
+        name in {
+            "id", "index", "idx", "scene", "subject", "participant", "patient", "sample", "trial",
+            "subjectid", "patientid", "受试者", "被试", "参与者", "患者", "样本",
+        }
+        or name.endswith("_id")
+        or any(word in name for word in ("编号", "序号"))
+    )
+
+
+def repeated_observations(frame: Any, subjects: list[str] | None = None) -> list[str]:
+    groups = ([subjects] if subjects else []) + [
+        [column] for column in frame.columns
+        if identifier_column(column) and column not in (subjects or [])
+    ]
+    notes = []
+    for columns in groups:
+        complete = frame[columns].dropna()
+        if not complete.duplicated(keep=False).any():
+            continue
+        unique = len(complete.drop_duplicates())
+        notes.append(
+            f"检测到重复测量：标识列 {', '.join(columns)} 的 {len(complete)} 条记录"
+            f"对应 {unique} 个对象。"
+            "当前尚不支持该重复观测结构的推断检验，未改用独立样本检验、配对 t 检验或普通相关 p 值；"
+            "保留逐行描述统计，记录数不代表独立样本量。"
+        )
+    return notes
+
+
+def observation_dimension(column: str) -> bool:
+    name = column.rsplit(".", 1)[-1].strip().casefold()
+    return calendar_column(column) or name in {
+        "visit", "visit_id", "time", "timepoint", "time_point", "occasion", "condition",
+        "treatment", "访视", "时间", "时间点", "处理", "条件", "轮次",
+    }
+
+
 def calendar_column(column: str) -> bool:
-    name = column.strip().casefold().replace(" ", "_")
+    name = column.rsplit(".", 1)[-1].strip().casefold().replace(" ", "_")
     if name.startswith(("age_", "duration_", "elapsed_", "followup_", "follow_up_")):
         return False
     return name in _CALENDAR or name.endswith(("_year", "_date", "_timestamp"))
 
 
 def background_aliases(column: str) -> set[str]:
-    name = column.strip().casefold()
+    full = column.strip().casefold()
+    name = full.rsplit(".", 1)[-1]
     if calendar_column(column):
         if "year" in name or name in {"年份", "年度", "出生年份"}:
-            return {name, "year", "years", "年份", "年度", "逐年"}
-        return {name, "date", "time", "日期", "时间", "月份"}
-    return next((aliases | {name} for aliases in _BACKGROUND if name in aliases), set())
+            return {full, name, "year", "years", "年份", "年度", "逐年"}
+        return {full, name, "date", "time", "日期", "时间", "月份"}
+    return next((aliases | {full, name} for aliases in _BACKGROUND if name in aliases), set())
 
 
 def explicitly_grouped(column: str, question: str) -> bool:
