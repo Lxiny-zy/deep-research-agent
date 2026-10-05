@@ -47,7 +47,7 @@ class SupportUnit:
     citations: list[int] = field(default_factory=list)
 
 
-SUPPORT_POLICY_VERSION = 6
+SUPPORT_POLICY_VERSION = 7
 
 
 def asserted_comparison(text: str) -> bool:

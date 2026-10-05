@@ -60,7 +60,10 @@ class ExemptEverything:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", [SC32_CLAIM, SC56_CLAIM])
+@pytest.mark.parametrize("text", [
+    SC32_CLAIM, SC56_CLAIM,
+    "【待研究】MST++ 的光谱注意力机制是什么？",
+])
 async def test_saved_failure_cases_cannot_be_exempted_without_fulltext_checks(text):
     reviewer = SupportReviewer(ExemptEverything(), [], 20000)
     decision = (await reviewer.review([SupportUnit("u", text, kind="question")]))[0]
@@ -135,7 +138,11 @@ def make_corpus(first="Method overview.", second="Implementation details.", *, c
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("claim, counter", [(SC32_CLAIM, DGSMP_PAGE8), (SC56_CLAIM, MSTPP_PAGE4)])
+@pytest.mark.parametrize("claim, counter", [
+    (SC32_CLAIM, DGSMP_PAGE8), (SC56_CLAIM, MSTPP_PAGE4),
+    ("MST++ 是否也采用类似 MST 的 Mask-guided Mechanism 来引导光谱注意力？", MSTPP_PAGE4),
+    ("【待研究】MST++ 的光谱注意力机制是什么？", MSTPP_PAGE4),
+])
 async def test_original_counterexamples_are_found_outside_the_selected_excerpts(claim, counter):
     sources, corpus = make_corpus(second=counter)
     llm = FullTextJudge(counter)

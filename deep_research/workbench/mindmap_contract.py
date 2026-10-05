@@ -54,6 +54,8 @@ def units(mindmap: Mindmap) -> list[SupportUnit]:
 
 
 def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
+    from .mindmap_duplicates import duplicate_nodes
+
     issues = []
     if not mindmap.branches:
         issues.append("导图没有内容分支，请围绕主题组织必要内容")
@@ -74,13 +76,20 @@ def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
             walk(node.children, node.label)
 
     walk(mindmap.branches, mindmap.root)
+    for duplicate in duplicate_nodes(mindmap):
+        qualifier = "" if duplicate["exact"] else "疑似"
+        issues.append(
+            f"跨分支{qualifier}重复节点 {duplicate['left']} / {duplicate['right']}："
+            f"「{duplicate['labels'][0]}」与「{duplicate['labels'][1]}」；"
+            "核对后合并重复内容或明确各自条件，保留原有事实、限定与引用"
+        )
     return list(dict.fromkeys(issues))
 
 
 def input_hash(raw: dict, citations: list[str], results: list[ResearchResult]) -> str:
     return digest(
         {
-            "version": 1,
+            "version": 2,
             "policy": SUPPORT_POLICY_VERSION,
             "mindmap": Mindmap.model_validate(raw).model_dump(mode="json"),
             "citations": citations,

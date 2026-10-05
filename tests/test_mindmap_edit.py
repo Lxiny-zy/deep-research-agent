@@ -142,6 +142,72 @@ async def test_repair_binds_parent_evidence_explicitly_and_keeps_all_children():
     ) == (True, [])
 
 
+async def test_source_bound_open_question_is_rechecked_and_corrected_from_the_paper():
+    from deep_research.workbench.fulltext_review import FullTextChecks, FullTextTarget
+    from tests.test_fulltext_absence import FullTextJudge, make_corpus, research_material
+
+    answer = "The model calculates self-attention along the spectral dimension."
+    sources, corpus = make_corpus(first=answer, second="The detailed derivation is " + answer)
+    results = research_material(sources)
+    citations = [sources[0].url]
+    model = Mindmap(root="光谱注意力方法", branches=[
+        {"label": "模型采用什么维度的注意力？", "kind": "question", "citations": [1]},
+        {"label": "后续应用方向", "children": [
+            {"label": "可否拓展到更大规模？", "kind": "question"},
+        ]},
+    ])
+
+    class Repair(FakeLLM):
+        def __init__(self):
+            super().__init__()
+            self.fulltext = FullTextJudge(answer)
+
+        async def parse(self, system, user, schema, **kwargs):
+            if schema in {FullTextTarget, FullTextChecks}:
+                return await self.fulltext.parse(system, user, schema, **kwargs)
+            if schema is NodeEdits:
+                payload = json.loads(user.split("【仅修订指定节点】\n", 1)[1])
+                assert answer in payload["nodes"][0]["problem"]
+                return NodeEdits.model_validate({"edits": [{
+                    "unit_id": "0", "label": "模型沿光谱维度计算自注意力", "kind": "claim",
+                    "relation": "包含", "citations": [1],
+                }]})
+            return await super().parse(system, user, schema, **kwargs)
+
+    llm = Repair()
+    checker = SupportReviewer(
+        llm, evidence_records(results, {citations[0]: 1}), 50000, fulltext_corpus=corpus,
+    )
+    decisions = await checker.review(review_units(model, "解释模型的注意力机制"))
+    record = review_record(model.model_dump(), citations, results, decisions)
+    assert record["status"] == "fail" and llm.fulltext.parts
+    patched, paths = await repair_nodes(
+        llm, checker, model, "解释模型的注意力机制", citations, results, record,
+    )
+    assert paths == ["0"] and patched.branches[1] == model.branches[1]
+    decisions = await checker.review(review_units(patched, "解释模型的注意力机制"))
+    repaired = review_record(patched.model_dump(), citations, results, decisions)
+    assert repaired["status"] == "pass"
+    assert checked_review(
+        patched.model_dump(), citations, results, repaired, mindmap_to_markdown(patched),
+        corpus=corpus, query="解释模型的注意力机制",
+    ) == (True, [])
+
+
+async def test_cross_branch_duplicate_requests_whole_tree_revision():
+    from tests.test_mindmap_duplicates import pair_graph
+
+    llm = FakeLLM()
+    model = pair_graph("模型利用光谱间相似性进行特征恢复", "模型利用光谱间相似性进行特征恢复")
+    results, citations = material(), ["https://a.com", "https://b.com"]
+    checker = SupportReviewer(
+        llm, evidence_records(results, {u: i + 1 for i, u in enumerate(citations)}), 50000,
+    )
+    decisions = await checker.review(review_units(model, "分析方法"))
+    record = review_record(model.model_dump(), citations, results, decisions)
+    assert await repair_nodes(llm, checker, model, "分析方法", citations, results, record) is None
+
+
 @pytest.mark.parametrize("mode", ["foreign", "children", "citation", "unchanged"])
 async def test_bad_patch_does_not_change_the_original_map(mode):
     llm, model, results, citations, checker, record = await setup_review()
