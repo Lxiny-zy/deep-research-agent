@@ -32,7 +32,7 @@ from .checkpoints import RUN_SETTINGS_KEY as RUN_SETTINGS_CHECKPOINT_KEY
 from .checkpoints import SCHEMA_VERSION, SETTING_FIELDS
 from .config import Settings
 from .execution_policy import resolved_settings, transient_failure
-from .llm import LLM
+from .llm import LLM, VerificationGenerationOptions
 from .models import Finding, Report, ResearchResult, SubQuestion
 from .observability import Event, Tracer
 from .orchestration import OrchestrationRuntime, WorkflowRun
@@ -218,6 +218,15 @@ class _LazyOwnedLLM(LLM):
     def __getattr__(self, name: str) -> Any:
         return getattr(self._get(), name)
 
+    @property
+    def parameter_mode(self) -> str:
+        # LLM's class default otherwise shadows __getattr__ on this lazy proxy.
+        return getattr(self._get(), "parameter_mode", "temperature")
+
+    @parameter_mode.setter
+    def parameter_mode(self, value: str) -> None:
+        self._get().parameter_mode = value
+
     async def complete(self, system: str, user: str, *, temperature: float = 0.3) -> str:
         return await self._get().complete(system, user, temperature=temperature)
 
@@ -229,9 +238,13 @@ class _LazyOwnedLLM(LLM):
         *,
         temperature: float = 0.2,
         retries: int = 2,
+        reasoning_effort: str | None = None,
     ) -> ModelT:
+        options: VerificationGenerationOptions = (
+            {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
+        )
         return await self._get().parse(
-            system, user, schema, temperature=temperature, retries=retries
+            system, user, schema, temperature=temperature, retries=retries, **options
         )
 
     async def stream(

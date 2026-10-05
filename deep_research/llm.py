@@ -14,7 +14,7 @@ import re
 import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import aclosing, suppress
-from typing import Any, TypeVar
+from typing import Any, TypedDict, TypeVar
 from uuid import uuid4
 
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
@@ -28,6 +28,17 @@ from .security import provider_http_client
 from .token_budget import TokenBudget, TokenReservation
 
 T = TypeVar("T", bound=BaseModel)  # 3.11 兼容写法（不用 3.12 的 def f[T]() 语法）
+
+
+class VerificationGenerationOptions(TypedDict, total=False):
+    reasoning_effort: str
+
+
+def verification_generation_options(llm: Any) -> VerificationGenerationOptions:
+    """Use low reasoning for routine checks only when the profile supports it."""
+    if getattr(llm, "parameter_mode", None) == "reasoning":
+        return {"reasoning_effort": "low"}
+    return {}
 
 
 class ModelOutputTruncated(RuntimeError):
@@ -143,9 +154,11 @@ class LLM:
         # character target guides batching; it is not a known model limit.
         return self.input_capacity_chars if self.context_window_tokens is not None else None
 
-    def _generation_options(self, temperature: float) -> dict[str, Any]:
+    def _generation_options(
+        self, temperature: float, *, reasoning_effort: str | None = None
+    ) -> dict[str, Any]:
         if self.parameter_mode == "reasoning":
-            return {"reasoning_effort": self.reasoning_effort}
+            return {"reasoning_effort": reasoning_effort or self.reasoning_effort}
         configured = self.default_temperature
         return {"temperature": temperature if configured is None else configured}
 
@@ -183,22 +196,29 @@ class LLM:
         key = "max_completion_tokens" if self.parameter_mode == "reasoning" else "max_tokens"
         return {key: reservation.output_tokens}
 
-    async def _complete_once(self, system: str, user: str, temperature: float) -> str:
+    async def _complete_once(
+        self, system: str, user: str, temperature: float, *, reasoning_effort: str | None = None
+    ) -> str:
         # Structured consumers still receive one validated value, while the
         # provider transport streams and usage updates throughout generation.
         parts: list[str] = []
+        options: VerificationGenerationOptions = (
+            {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
+        )
         async with (
             provider_request(
                 self.settings.llm_base_url or "https://api.openai.com", self.settings.llm_api_key
             ),
-            aclosing(self._stream_once(system, user, temperature=temperature)) as stream,
+            aclosing(self._stream_once(system, user, temperature=temperature, **options)) as stream,
         ):
             async for delta in stream:
                 parts.append(delta)
         return "".join(parts)
 
     async def parse(
-        self, system: str, user: str, schema: type[T], *, temperature: float = 0.2, retries: int = 2
+        self, system: str, user: str, schema: type[T], *,
+        temperature: float = 0.2, retries: int = 2,
+        reasoning_effort: str | None = None,
     ) -> T:
         """要求模型只输出符合 schema 的 JSON，再用 Pydantic 校验；失败自动重试。
 
@@ -208,9 +228,12 @@ class LLM:
         sys = structured_system_prompt(system, schema)
         err: Exception | None = None
         attempts = max(1, retries + 1)
+        options: VerificationGenerationOptions = (
+            {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
+        )
         for attempt in range(attempts):
             try:
-                raw = await self._complete_once(sys, user, temperature)
+                raw = await self._complete_once(sys, user, temperature, **options)
             except Exception as exc:
                 if _retryable(exc) and attempt < attempts - 1:
                     await asyncio.sleep(min(2**attempt, 8))
@@ -248,7 +271,8 @@ class LLM:
                 await asyncio.sleep(min(2**attempt, 8))
 
     async def _stream_once(
-        self, system: str, user: str, *, temperature: float = 0.4
+        self, system: str, user: str, *, temperature: float = 0.4,
+        reasoning_effort: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """流式补全：逐块产出文本增量。
 
@@ -262,7 +286,7 @@ class LLM:
         request = {
             "model": self.model,
             "messages": prompt_messages(system, user, split=self._prefix_messages_supported),
-            **self._generation_options(temperature),
+            **self._generation_options(temperature, reasoning_effort=reasoning_effort),
             **self._output_options(reservation),
             "stream": True,
             # Fireworks routes matching prefixes most effectively to one
@@ -384,6 +408,8 @@ class LLM:
                             "model": self.model,
                             "call_id": call_id,
                             "finish_reason": finish_reason,
+                            **({"reasoning_effort": request["reasoning_effort"]}
+                               if "reasoning_effort" in request else {}),
                             "cache_affinity": affinity,
                             **usage_report,
                         }

@@ -98,6 +98,10 @@ _PAPER_FALLBACK = (
 _SEARCH_FALLBACK = (
     "现有检索结果不足以回答这个问题。可以尝试补充更具体的方法名、数据集或年份后再问。"
 )
+_VERIFICATION_FALLBACK = (
+    "本轮已获取资料，但模型抽取或证据核验未能完成，暂时无法提供有可靠依据的回答。"
+    "请稍后重试。"
+)
 _CASUAL_REPLY = "你好！我可以帮你查找和核对学术资料。请直接告诉我想了解的主题、方法、数据集或论文。"
 _CASUAL_RE = re.compile(
     r"^(?:你好|您好|嗨|哈喽|hello|hi|hey|谢谢|感谢|再见|拜拜|早上好|晚上好|晚安|你好吗|在吗)"
@@ -152,6 +156,22 @@ async def _verified(
         if search_queries else await researcher.run(query)
     )
     raw = result.findings if result else []
+    if thoughts is not None and result is not None:
+        model_failed = any(
+            finding.verification.semantic_reason.startswith("semantic_verifier_failed:")
+            for finding in raw
+        ) or bool(
+            result.extraction_audit
+            and any(
+                issue.startswith("extraction_call_failed:")
+                for issue in result.extraction_audit.issues
+            )
+        )
+        if model_failed:
+            thoughts.append({
+                "tool": "evidence_verification", "input": query,
+                "observation": "本轮模型抽取或证据核验未完成", "status": "incomplete",
+            })
     if result and result.extraction_audit is not None and thoughts is not None:
         thoughts.append(
             {
@@ -572,9 +592,16 @@ async def _compose_answer(
     unresolved_topics = material.unresolved_topics
     paper_sources = material.sources if material.scoped else None
     if not findings:
+        verification_incomplete = any(
+            thought.get("tool") == "evidence_verification"
+            and thought.get("status") == "incomplete"
+            for thought in thoughts
+        )
         return QaAnswer(
             answer=(
-                "本次任务保存的原文和发现不足以回答该问题，可以补充问题范围或选择附加来源。"
+                _VERIFICATION_FALLBACK
+                if verification_incomplete
+                else "本次任务保存的原文和发现不足以回答该问题，可以补充问题范围或选择附加来源。"
                 if paper_sources is not None and scope_kind == "research"
                 else _PAPER_FALLBACK
                 if paper_sources is not None

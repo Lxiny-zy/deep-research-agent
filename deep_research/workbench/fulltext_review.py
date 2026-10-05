@@ -214,6 +214,8 @@ class FullTextReviewer:
         self.on_progress = on_progress
 
     async def review(self, unit: Any) -> dict[str, Any]:
+        from ..llm import verification_generation_options
+
         record: dict[str, Any] = {
             "version": 1,
             "unit_hash": _unit_hash(unit),
@@ -235,7 +237,10 @@ class FullTextReviewer:
                 raise ValueError("全文核查目录超过模型容量")
             if self.on_progress is not None:
                 self.on_progress("正在定位需回查全文的断言与文献…")
-            target = await self.llm.parse(_TARGET_SYSTEM, prompt, FullTextTarget, temperature=0.0)
+            target = await self.llm.parse(
+                _TARGET_SYSTEM, prompt, FullTextTarget, temperature=0.0,
+                **verification_generation_options(self.llm),
+            )
             record["target"] = target.model_dump(mode="json")
             if target.kind == "not_applicable":
                 if explicit_absence(unit.text):
@@ -312,6 +317,7 @@ class FullTextReviewer:
                     json.dumps({**base, "parts": batch}, ensure_ascii=False),
                     FullTextChecks,
                     temperature=0.0,
+                    **verification_generation_options(self.llm),
                 )
                 expected = {part["id"]: part for part in batch}
                 ids = [item.part_id for item in response.checks]

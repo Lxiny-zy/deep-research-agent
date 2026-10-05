@@ -635,9 +635,12 @@ class SupportReviewer:
     async def _judge_once(
         self, units: list[SupportUnit], repair_issues: dict[str, str] | None = None
     ) -> dict[str, SupportDecision]:
+        from ..llm import verification_generation_options
+
         try:
             response = await self.llm.parse(
-                self.system, self._prompt(units, repair_issues), SupportDecisions, temperature=0.0
+                self.system, self._prompt(units, repair_issues), SupportDecisions, temperature=0.0,
+                **verification_generation_options(self.llm),
             )
         except LeaseLostError:
             raise

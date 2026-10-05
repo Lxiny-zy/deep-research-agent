@@ -491,9 +491,14 @@ class SemanticEvidenceVerifier:
         *,
         raise_errors: bool,
     ) -> list[tuple[int, Finding]]:
+        from .llm import verification_generation_options
+
         user = self._prompt(group)
         try:
-            response = await llm.parse(system, user, SemanticEvidenceDecisionList, temperature=0.0)
+            response = await llm.parse(
+                system, user, SemanticEvidenceDecisionList, temperature=0.0,
+                **verification_generation_options(llm),
+            )
         except LeaseLostError:
             raise
         except Exception as exc:
