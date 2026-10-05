@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 import weakref
 from typing import Any
@@ -38,12 +39,37 @@ def guard_sqlite_stop(connection: Any) -> None:
     requested = False
     completion: Any = None
     reference = weakref.ref(connection)
+    cursors: weakref.WeakSet[sqlite3.Cursor] = weakref.WeakSet()
+    execute_reference = weakref.WeakMethod(connection._execute)
+
+    async def execute_tracking_cursors(fn: Any, *args: Any, **kwargs: Any) -> Any:
+        execute = execute_reference()
+        if execute is None:
+            raise ValueError("SQLite connection is no longer available")
+
+        def tracked_operation() -> Any:
+            result = fn(*args, **kwargs)
+            if isinstance(result, sqlite3.Cursor):
+                # Track on the worker, before a cancelled future can discard the
+                # result. Weak ownership must not retain ordinary closed cursors.
+                cursors.add(result)
+            return result
+
+        return await execute(tracked_operation)
+
+    connection._execute = execute_tracking_cursors
 
     def close_native_and_stop() -> Any:
         nonlocal native
         # Own the native handle independently of the driver's mutable attribute.
         # Weak references are already cleared when cyclic GC invokes __del__.
         if native is not None:
+            # sqlite3_close_v2 defers finalization while unread cursors survive.
+            # A zombie handle can therefore keep an uncommitted transaction or
+            # DELETE-journal read lock after connection.close() reports success.
+            for cursor in list(cursors):
+                cursor.close()
+            cursors.clear()
             native.close()
             native = None
         driver = reference()
