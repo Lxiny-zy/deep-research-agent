@@ -228,6 +228,7 @@ def for_writer(
 ) -> WritingProgress | None:
     from ..agents.base import effective_require_corroboration
     from .analysis_review import STATISTICS_POLICY_VERSION
+    from .mindmap_contract import MINDMAP_POLICY_VERSION
     from .quality import coerce_policy
     from .support import SUPPORT_POLICY_VERSION
     from .tables import TABLES_VERSION
@@ -274,6 +275,7 @@ def for_writer(
             "support_policy": SUPPORT_POLICY_VERSION,
             "table_policy": TABLES_VERSION,
             "statistics_policy": STATISTICS_POLICY_VERSION,
+            **({"mindmap_policy": MINDMAP_POLICY_VERSION} if role == "mindmap_writer" else {}),
         },
         tracer=ctx.tracer,
     )

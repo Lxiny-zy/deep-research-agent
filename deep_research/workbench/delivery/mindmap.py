@@ -52,7 +52,7 @@ def _layout(mindmap: dict[str, Any]) -> tuple[list[dict[str, Any]], list[tuple[i
     edges: list[tuple[int, int]] = []
     columns: dict[int, float] = {}
 
-    def measure(raw: dict, depth: int, branch: int) -> int:
+    def measure(raw: dict, depth: int, branch: int, path: str = "root") -> int:
         label = _label(raw)
         lines = _wrap(label)
         size = 18 if depth == 0 else 14
@@ -78,11 +78,14 @@ def _layout(mindmap: dict[str, Any]) -> tuple[list[dict[str, Any]], list[tuple[i
             "branch": branch,
             "children": [],
             "citations": raw.get("citations", []),
+            "path": path,
+            "raw_label": str(raw.get("label", "")),
         }
         nodes.append(node)
         columns[depth] = max(columns.get(depth, 0), width)
         for i, child in enumerate(raw.get("children", [])):
-            target = measure(child, depth + 1, i if depth == 0 else branch)
+            child_path = str(i) if depth == 0 else f"{path}.{i}"
+            target = measure(child, depth + 1, i if depth == 0 else branch, child_path)
             node["children"].append(target)
             edges.append((index, target))
         child_height = sum(nodes[c]["span"] for c in node["children"])
@@ -119,15 +122,65 @@ def _bounds(nodes: list[dict[str, Any]]) -> tuple[float, float, float, float]:
     )
 
 
+def _cross_links(mindmap: dict[str, Any], nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_path = {n["path"]: n for n in nodes}
+    right = max(n["x"] + n["width"] / 2 for n in nodes)
+    result = []
+    for index, link in enumerate(mindmap.get("links", [])):
+        source, target = by_path.get(link["source"]), by_path.get(link["target"])
+        if source is None or target is None or source is target:
+            raise ValueError("跨分支关联的节点不存在或连接自身")
+        cite = "".join(
+            f"[{int(i)}]" for i in link.get("display_citations", link.get("citations", []))
+        )
+        result.append(
+            {
+                "source": source,
+                "target": target,
+                "number": index + 1,
+                "lane": right + 40 + index * 28,
+                "label": (
+                    f"{source['raw_label']} —{link['relation']}→ {target['raw_label']} {cite}"
+                ).rstrip(),
+                "citations": link.get("citations", []),
+            }
+        )
+    return result
+
+
+def _cross_notes(
+    nodes: list[dict[str, Any]],
+    links: list[dict[str, Any]],
+) -> tuple[tuple[float, float, float, float], list[dict[str, Any]]]:
+    x0, y0, x1, y1 = _bounds(nodes)
+    if not links:
+        return (x0, y0, x1, y1), []
+    x1 = max(x1, max(link["lane"] for link in links) + 35)
+    notes = []
+    cursor = y1 + 20
+    for link in links:
+        lines = _wrap(f"关联 {link['number']}：{link['label']}", max(32, int((x1 - x0 - 32) / 8)))
+        notes.append({"x": x0 + 16, "y": cursor, "lines": lines})
+        cursor += len(lines) * 20 + 10
+    return (x0, y0, x1, cursor + 14), notes
+
+
 def render_svg(mindmap: dict[str, Any]) -> str:
     nodes, edges = _layout(mindmap)
-    x0, y0, x1, y1 = _bounds(nodes)
+    links = _cross_links(mindmap, nodes)
+    (x0, y0, x1, y1), notes = _cross_notes(nodes, links)
     parts = [
         '<svg xmlns="http://www.w3.org/2000/svg" '
         f'width="{x1 - x0:.0f}" height="{y1 - y0:.0f}" '
         f'viewBox="{x0:.0f} {y0:.0f} {x1 - x0:.0f} {y1 - y0:.0f}" '
         'font-family="Microsoft YaHei, Noto Sans SC, sans-serif" role="img">'
     ]
+    if links:
+        parts.append(
+            '<defs><marker id="cross-arrow" viewBox="0 0 10 10" refX="9" refY="5" '
+            'markerWidth="6" markerHeight="6" orient="auto-start-reverse">'
+            '<path d="M 0 0 L 10 5 L 0 10 z" fill="#536579"/></marker></defs>'
+        )
     for parent, child in edges:
         a, b = nodes[parent], nodes[child]
         color = _PALETTE[b["branch"] % len(_PALETTE)]
@@ -138,6 +191,23 @@ def render_svg(mindmap: dict[str, Any]) -> str:
             f'<path class="edge b{b["branch"]}" data-depth="{b["depth"]}" d="{path}" '
             f'fill="none" stroke="{color}" stroke-opacity="0.55" '
             f'stroke-width="{3 - min(b["depth"], 2)}"/>'
+        )
+    for link in links:
+        a, b, lane = link["source"], link["target"], link["lane"]
+        path = (
+            f"M{a['x'] + a['width'] / 2:.1f},{a['y']:.1f} L{lane:.1f},{a['y']:.1f} "
+            f"L{lane:.1f},{b['y']:.1f} L{b['x'] + b['width'] / 2:.1f},{b['y']:.1f}"
+        )
+        binding = f'data-source="{a["path"]}" data-target="{b["path"]}"'
+        parts.append(
+            f'<path class="cross-edge" {binding} d="{path}" fill="none" stroke="#536579" '
+            'stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#cross-arrow)">'
+            f"<title>{escape(link['label'])}</title></path>"
+        )
+        parts.append(
+            f'<text class="cross-edge-label" {binding} x="{lane + 4:.1f}" '
+            f'y="{(a["y"] + b["y"]) / 2:.1f}" font-size="12" fill="#334155">'
+            f"{link['number']}</text>"
         )
     for node in nodes:
         depth = node["depth"]
@@ -153,7 +223,8 @@ def render_svg(mindmap: dict[str, Any]) -> str:
             for i, line in enumerate(node["lines"])
         )
         parts.append(
-            f'<g class="{cls}" data-branch="{node["branch"]}" data-depth="{depth}">'
+            f'<g class="{cls}" data-branch="{node["branch"]}" data-depth="{depth}" '
+            f'data-node-path="{node["path"]}">'
             f"<title>{escape(node['label'])}</title>"
             f'<rect x="{x - width / 2:.1f}" y="{y - height / 2:.1f}" '
             f'width="{width:.1f}" height="{height:.1f}" '
@@ -161,6 +232,12 @@ def render_svg(mindmap: dict[str, Any]) -> str:
             f'<text x="{x:.1f}" y="{y + size * 0.36:.1f}" font-size="{size}" '
             f'text-anchor="middle" fill="{text_color}">{spans}</text></g>'
         )
+    for note in notes:
+        for index, line in enumerate(note["lines"]):
+            parts.append(
+                f'<text x="{note["x"]:.1f}" y="{note["y"] + index * 20:.1f}" '
+                f'font-size="14" fill="#334155">{escape(line)}</text>'
+            )
     parts.append("</svg>")
     return "".join(parts)
 
@@ -223,6 +300,11 @@ document.querySelectorAll('g.node.d1').forEach(function(g){
     document.querySelectorAll('.b'+b).forEach(function(el){
       if(el===g)return; if(el.getAttribute('data-depth')==='1')return;
       el.style.display=hide?'none':'';});
+    svg.querySelectorAll('.cross-edge,.cross-edge-label').forEach(function(el){
+      var a=svg.querySelector('g[data-node-path="'+el.getAttribute('data-source')+'"]');
+      var t=svg.querySelector('g[data-node-path="'+el.getAttribute('data-target')+'"]');
+      el.style.display=(!a||!t||a.style.display==='none'||t.style.display==='none')?'none':'';
+    });
   }
   g.addEventListener('click',toggle);
   g.addEventListener('keydown',function(event){
@@ -323,8 +405,30 @@ def _outline_html(mindmap: dict[str, Any]) -> str:
         items = "".join(f"<li>{label(node)}{walk(node.get('children', []))}</li>" for node in nodes)
         return f"<ul>{items}</ul>"
 
+    links = _cross_links(mindmap, _layout(mindmap)[0])
+    cross_outline = (
+        "<h2>跨分支关联</h2><ol>"
+        + "".join(
+            "<li>"
+            + label(
+                {
+                    "label": (
+                        f"{item['source']['raw_label']} —{raw['relation']}→ "
+                        f"{item['target']['raw_label']}"
+                    ),
+                    "citations": item["citations"],
+                }
+            )
+            + "</li>"
+            for item, raw in zip(links, mindmap.get("links", []), strict=True)
+        )
+        + "</ol>"
+        if links
+        else ""
+    )
+
     if catalog:
-        outline = walk(mindmap.get("branches", []))
+        outline = walk(mindmap.get("branches", [])) + cross_outline
         bibliography = (
             "<h2>参考文献</h2><ol>"
             + "".join(
@@ -358,8 +462,10 @@ def _outline_html(mindmap: dict[str, Any]) -> str:
             )
             + "</li>"
         )
-    return walk(mindmap.get("branches", [])) + (
-        "<h2>参考来源</h2><ul>" + "".join(references) + "</ul>" if references else ""
+    return (
+        walk(mindmap.get("branches", []))
+        + cross_outline
+        + ("<h2>参考来源</h2><ul>" + "".join(references) + "</ul>" if references else "")
     )
 
 
@@ -374,7 +480,8 @@ def render_mindmap_png(mindmap: dict[str, Any]) -> bytes:
 
     _chart_font()
     nodes, edges = _layout(mindmap)
-    x0, y0, x1, y1 = _bounds(nodes)
+    links = _cross_links(mindmap, nodes)
+    (x0, y0, x1, y1), notes = _cross_notes(nodes, links)
     width, height = x1 - x0, y1 - y0
     if max(width, height) > 30000 or width * height > 60_000_000:
         raise ValueError("导图超出单张图片可读尺寸，请使用完整交互 HTML 或按主题拆分")
@@ -393,6 +500,22 @@ def render_mindmap_png(mindmap: dict[str, Any]) -> bytes:
             alpha=0.5,
             linewidth=2.2 - 0.6 * min(b["depth"], 2),
         )
+    for link in links:
+        a, b, lane = link["source"], link["target"], link["lane"]
+        ax.plot(
+            [a["x"] + a["width"] / 2, lane, lane],
+            [a["y"], a["y"], b["y"]],
+            color="#536579",
+            linestyle="--",
+            linewidth=1.2,
+        )
+        ax.annotate(
+            "",
+            xy=(b["x"] + b["width"] / 2, b["y"]),
+            xytext=(lane, b["y"]),
+            arrowprops={"arrowstyle": "->", "color": "#536579", "linestyle": "--"},
+        )
+        ax.text(lane + 4, (a["y"] + b["y"]) / 2, str(link["number"]), fontsize=9, color="#334155")
     for node in nodes:
         depth = node["depth"]
         color = "#14222f" if depth == 0 else _PALETTE[node["branch"] % len(_PALETTE)]
@@ -411,6 +534,17 @@ def render_mindmap_png(mindmap: dict[str, Any]) -> bytes:
                 "edgecolor": color,
             },
         )
+    for note in notes:
+        for index, line in enumerate(note["lines"]):
+            ax.text(
+                note["x"],
+                note["y"] + index * 20,
+                line,
+                fontsize=10,
+                ha="left",
+                va="baseline",
+                color="#334155",
+            )
     buffer = io.BytesIO()
     fig.savefig(buffer, format="png", dpi=100, facecolor="white")
     plt.close(fig)

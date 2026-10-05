@@ -1145,6 +1145,16 @@ def mindmap_to_markdown(mindmap: Mindmap) -> str:
 
     for branch in mindmap.branches:
         walk(branch, 0)
+    if mindmap.links:
+        from .mindmap_contract import node_index
+
+        nodes = node_index(mindmap)
+        lines.extend(["", "## 跨分支关联", ""])
+        for link in mindmap.links:
+            source = nodes[link.source].label if link.source in nodes else link.source
+            target = nodes[link.target].label if link.target in nodes else link.target
+            cite = "".join(f"[{i}]" for i in link.citations)
+            lines.append(f"- {source} —{link.relation}→ {target} {cite}".rstrip())
     return "\n".join(lines).strip() + "\n"
 
 
@@ -1181,7 +1191,13 @@ class MindmapWriter(TemplateWriter):
             "不能把无证据的事实改标 concept 绕过核验，不把常识当作某篇论文的结果。"
             "父标题如果断言共同机制、因果或比较边界，也属于 claim，须绑定所涉及各篇的引用，"
             "不能仅因下面有带引用的子节点就省略自身依据。"
-            "relation 说明当前节点与直接父节点的真实关系（如包含、依赖、方法步骤、对比）。"
+            "relation 只使用包含、导致、依赖、对比、改进、前提、应用于，"
+            "不可填写任务、配置、实验设置等话题标签。方向为父节点指向当前节点，"
+            "A—依赖→B 表示 A 依赖 B，A—前提→B 表示 A 是 B 的前提。"
+            "因果、依赖、改进等事实关系本身也须有引用支持，不能只证明两端节点各自成立。"
+            "必要时在 links 中添加最多 8 条跨分支关联，source/target 使用从零开始的节点路径，"
+            "如 0.1 表示第一个分支的第二个子节点；路径须存在且属于不同一级分支。"
+            "links 的 relation 使用同一词表，citations 绑定该关联的依据；没有必要时 links=[]。"
             "label 简练且完整，保留适用条件；根节点只写主题，不写未经支持的结论。"
             "导图要帮助理解用户关心的关系，不要将全部素材逐条搬成树形摘录。"
             "组织标题优先用简短主题名（如方法结构、比较边界），具体差异与结论放在带引用的子节点。"
@@ -1355,6 +1371,8 @@ class MindmapWriter(TemplateWriter):
 
         async def assess(body: str) -> Assessment:
             nonlocal last_model, last_record, requires_coverage_rewrite, current_body
+            from .mindmap_contract import composition
+
             current_body = body
             raw = bb.scratch.get("_mindmap") or {}
             model = Mindmap.model_validate(raw)
@@ -1380,6 +1398,7 @@ class MindmapWriter(TemplateWriter):
             hard.extend(record["issues"])
             return Assessment(
                 hard=hard,
+                soft=composition(model)[1],
                 can_revise=can_revise(decisions)
                 and (
                     not coverage_reviewer or record["requirements_review"].get("can_revise", True)

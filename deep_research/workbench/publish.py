@@ -243,11 +243,13 @@ _DELIVERY_RUNTIME_KEYS = frozenset(
 
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
+    from .mindmap_contract import MINDMAP_POLICY_VERSION
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 62,
+        "format_version": 63,
         "support_policy": SUPPORT_POLICY_VERSION,
+        "mindmap_policy": MINDMAP_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
         "report": detail.report.model_dump(mode="json") if detail.report else None,
@@ -641,9 +643,11 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         gates.append(GateResult("review_coverage", "fail" if coverage else "pass", coverage))
     if template.key == "mindmap" and extras.get("mindmap"):
         from ..document_corpus import corpus_from_inputs
-        from .mindmap_contract import checked_review
+        from .gates import mindmap_composition_gate
+        from .mindmap_contract import Mindmap, checked_review
 
         raw = extras["mindmap"]
+        gates.append(mindmap_composition_gate(Mindmap.model_validate(raw)))
         review = extras.get("node_review")
         _bound, issues = checked_review(
             raw,

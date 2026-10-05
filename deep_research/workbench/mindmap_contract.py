@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
@@ -18,22 +19,71 @@ from .support import (
     evidence_records,
 )
 
+RELATIONS = ("包含", "导致", "依赖", "对比", "改进", "前提", "应用于")
+MINDMAP_POLICY_VERSION = 3
+FACTUAL_RELATIONS = frozenset(RELATIONS) - {"包含", "对比"}
+MAX_CROSS_LINKS = 8
+
 
 class MindmapNode(BaseModel):
     label: str = Field(min_length=1, max_length=240)
     kind: Literal["concept", "claim", "question"] = "concept"
-    relation: str = Field("包含", max_length=80)
+    # Keep legacy values readable so they can receive a review issue rather than a 500.
+    relation: str = Field("包含", max_length=80, json_schema_extra={"enum": list(RELATIONS)})
     citations: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
     children: list[MindmapNode] = Field(default_factory=list)
+
+
+class MindmapLink(BaseModel):
+    source: str = Field(min_length=1, max_length=120, description="起点节点路径，如 0 或 1.2")
+    target: str = Field(min_length=1, max_length=120, description="终点节点路径，如 1 或 0.2")
+    relation: str = Field(max_length=80, json_schema_extra={"enum": list(RELATIONS)})
+    citations: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
 
 
 class Mindmap(BaseModel):
     root: str = Field(min_length=1, max_length=240)
     branches: list[MindmapNode] = Field(default_factory=list)
+    links: list[MindmapLink] = Field(
+        default_factory=list,
+        json_schema_extra={"maxItems": MAX_CROSS_LINKS},
+    )
+
+
+def node_index(mindmap: Mindmap) -> dict[str, MindmapNode]:
+    found: dict[str, MindmapNode] = {}
+
+    def walk(nodes: list[MindmapNode], prefix: str = "") -> None:
+        for i, node in enumerate(nodes):
+            key = f"{prefix}.{i}" if prefix else str(i)
+            found[key] = node
+            walk(node.children, key)
+
+    walk(mindmap.branches)
+    return found
+
+
+def composition(mindmap: Mindmap) -> tuple[dict[str, Any], list[str]]:
+    nodes = list(node_index(mindmap).values())
+    claims = sum(node.kind == "claim" for node in nodes)
+    ratio = claims / len(nodes) if nodes else 0.0
+    advice = []
+    if len(nodes) >= 10 and ratio > 0.7:
+        advice.append(
+            f"结论节点 {claims}/{len(nodes)}（{ratio:.0%}），建议用主题与关系组织必要结论，"
+            "避免逐条堆放摘录；保留关键事实与限定，不为降低比例改标节点类型"
+        )
+    return {
+        "nodes": len(nodes),
+        "claims": claims,
+        "claim_ratio": ratio,
+        "cross_links": len(mindmap.links),
+    }, advice
 
 
 def units(mindmap: Mindmap) -> list[SupportUnit]:
     output = [SupportUnit("root", mindmap.root, kind="concept")]
+    nodes = node_index(mindmap)
 
     def walk(node: MindmapNode, path: str, parent: str) -> None:
         output.append(
@@ -45,11 +95,37 @@ def units(mindmap: Mindmap) -> list[SupportUnit]:
                 citations=node.citations,
             )
         )
+        if node.relation != "包含":
+            source = nodes[path.rsplit(".", 1)[0]].label if "." in path else mindmap.root
+            output.append(
+                SupportUnit(
+                    "relation:" + path,
+                    f"{source} —{node.relation}→ {node.label}",
+                    context="有方向的父子关系，来源须支持这条关系本身，不能仅分别提及两个节点。",
+                    kind="claim" if node.relation in FACTUAL_RELATIONS else "concept",
+                    citations=node.citations,
+                )
+            )
         for i, child in enumerate(node.children):
             walk(child, f"{path}.{i}", f"{parent} / {node.label}")
 
     for i, branch in enumerate(mindmap.branches):
         walk(branch, str(i), mindmap.root)
+    for i, link in enumerate(mindmap.links):
+        source = nodes[link.source].label if link.source in nodes else link.source
+        target = nodes[link.target].label if link.target in nodes else link.target
+        output.append(
+            SupportUnit(
+                f"link:{i}",
+                f"{source} —{link.relation}→ {target}",
+                context=(
+                    f"跨分支关联 {link.source} → {link.target}；按起点到终点核对关系和引用。"
+                    "支持两个端点不等于支持因果、改进或依赖关系。"
+                ),
+                kind="claim" if link.relation in FACTUAL_RELATIONS else "concept",
+                citations=link.citations,
+            )
+        )
     return output
 
 
@@ -69,6 +145,10 @@ def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
                 issues.append("节点标题不能为空白")
             if not node.relation.strip():
                 issues.append(f"「{node.label}」缺少与上级的关系")
+            elif node.relation not in RELATIONS:
+                issues.append(f"「{node.label}」关系不在固定关系词表中：{node.relation}")
+            if node.relation in FACTUAL_RELATIONS and not node.citations:
+                issues.append(f"「{node.label}」的{node.relation}关系需要绑定支持该关系的引用")
             if any(index > citation_count for index in node.citations):
                 issues.append(f"「{node.label}」使用了不存在的引用编号")
             if node.kind == "claim" and not node.citations:
@@ -76,6 +156,36 @@ def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
             walk(node.children, node.label)
 
     walk(mindmap.branches, mindmap.root)
+    nodes = node_index(mindmap)
+    if len(mindmap.links) > MAX_CROSS_LINKS:
+        issues.append(f"跨分支关联超过 {MAX_CROSS_LINKS} 条，请只保留理解主题必需的关联")
+    seen = set()
+    for i, link in enumerate(mindmap.links):
+        prefix = f"跨分支关联 {i + 1}"
+        if any(
+            not re.fullmatch(r"\d+(?:\.\d+)*", key) or key not in nodes
+            for key in (link.source, link.target)
+        ):
+            issues.append(prefix + "引用了不存在的节点路径")
+        if link.source.split(".")[0] == link.target.split(".")[0]:
+            issues.append(prefix + "必须连接不同分支，不能连接自身或重复父子层级")
+        if link.relation not in RELATIONS:
+            issues.append(prefix + "不在固定关系词表中")
+        key = (
+            tuple(sorted((link.source, link.target)))
+            if link.relation == "对比"
+            else (
+                link.source,
+                link.target,
+            )
+        )
+        if (key, link.relation) in seen:
+            issues.append(prefix + "重复，保留一条并合并其引用")
+        seen.add((key, link.relation))
+        if link.relation in FACTUAL_RELATIONS and not link.citations:
+            issues.append(prefix + "的事实关系缺少引用")
+        if any(c > citation_count for c in link.citations):
+            issues.append(prefix + "使用了不存在的引用编号")
     for duplicate in duplicate_nodes(mindmap):
         qualifier = "" if duplicate["exact"] else "疑似"
         issues.append(
@@ -89,7 +199,7 @@ def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
 def input_hash(raw: dict, citations: list[str], results: list[ResearchResult]) -> str:
     return digest(
         {
-            "version": 2,
+            "version": MINDMAP_POLICY_VERSION,
             "policy": SUPPORT_POLICY_VERSION,
             "mindmap": Mindmap.model_validate(raw).model_dump(mode="json"),
             "citations": citations,
@@ -129,8 +239,9 @@ def checked_review(
     model = Mindmap.model_validate(raw)
     if _body_without_references(body).strip() != mindmap_to_markdown(model).strip():
         return False, ["导图结构与审核后的大纲不一致，未导出旧结构"]
+    structural = structural_issues(model, len(citations))
     if not isinstance(record, dict):
-        return False, ["历史导图没有节点证据核对记录，不能确认事实与关系均有支持"]
+        return False, [*structural, "历史导图没有节点证据核对记录，不能确认事实与关系均有支持"]
     if record.get("input_hash") != input_hash(raw, citations, results):
         return False, ["导图或证据已变更，原核对记录不再适用"]
     try:
@@ -153,7 +264,7 @@ def checked_review(
             {url: i for i, url in enumerate(citations, 1)},
         ),
     )
-    problems = structural_issues(model, len(citations))
+    problems = structural
     for decision in decisions:
         unit = expected[decision.unit_id]
         allowed = {e["id"] for e in evidence if e["citation"] in unit.citations}

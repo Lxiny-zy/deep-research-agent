@@ -207,6 +207,10 @@ def render_bundle(
                     label(node.get("children", []))
 
             label(value.get("branches", []))
+            for link in value.get("links", []):
+                link["display_citations"] = list(dict.fromkeys(
+                    document_by_location.get(i, i) for i in link.get("citations", [])
+                ))
         return value
 
     def map_html() -> bytes:

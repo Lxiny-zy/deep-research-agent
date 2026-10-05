@@ -228,6 +228,13 @@ def review_gate(extras: dict[str, Any]) -> GateResult:
     return GateResult("review", "fail", ["评审没有给出 1–10 的整数评分（格式：评分：N/10）"])
 
 
+def mindmap_composition_gate(model: Any) -> GateResult:
+    from .mindmap_contract import composition
+
+    metrics, advice = composition(model)
+    return GateResult("mindmap_composition", "pass", advice, metrics)
+
+
 def consistency_gate(markdown: str, files: dict[str, bytes]) -> GateResult:
     """同源多格式交叉计数。只比对实际生成了的格式。"""
     issues: list[str] = []

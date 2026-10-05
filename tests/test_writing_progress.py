@@ -111,6 +111,36 @@ async def test_progress_isolated_by_run_input_and_budget(tmp_path):
     assert len(calls) == 4
 
 
+@pytest.mark.parametrize("role,expected", [("mindmap_writer", 2), ("research_writer", 1)])
+async def test_mindmap_rule_upgrade_cannot_reuse_the_completed_old_writer(
+    settings, tmp_path, monkeypatch, role, expected,
+):
+    from deep_research.agents.base import Blackboard, RunContext
+    from deep_research.observability import Tracer
+    from deep_research.workbench import mindmap_contract
+    from deep_research.workbench.writing_progress import for_writer
+    from tests.fakes import FakeLLM, FakeSearch
+
+    bb = Blackboard(query="关系导图")
+    ctx = RunContext(
+        llm=FakeLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings,
+        artifact_store=ArtifactStore(tmp_path), run_id="mindmap-upgrade",
+    )
+    writes = []
+
+    async def write(revision):
+        writes.append(revision)
+        return "Completed map"
+
+    for version in (2, 3, 3):
+        monkeypatch.setattr(mindmap_contract, "MINDMAP_POLICY_VERSION", version, raising=False)
+        progress = for_writer(bb, ctx, role, "stable system", inputs={})
+        await write_with_revisions(
+            write, lambda _: Assessment(), max_revisions=0, progress=progress,
+        )
+    assert len(writes) == expected
+
+
 async def test_save_failure_stops_before_another_model_call(tmp_path, monkeypatch):
     from deep_research.workbench.writing_progress import WritingProgressError
 

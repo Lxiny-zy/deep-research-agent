@@ -11,7 +11,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..agents.base import direct_system_prompt
 from ..models import ResearchResult
 from ..prompting import PrefixPrompt, structured_system_prompt
-from .mindmap_contract import Mindmap, MindmapNode, checked_review, structural_issues, units
+from .mindmap_contract import (
+    RELATIONS,
+    Mindmap,
+    MindmapNode,
+    checked_review,
+    structural_issues,
+    units,
+)
 from .prose_review import can_revise
 from .support import SupportDecision, SupportReviewer, SupportUnit, asserted_comparison, digest
 
@@ -21,7 +28,7 @@ class NodeEdit(BaseModel):
     unit_id: str
     label: str = Field(min_length=1, max_length=240)
     kind: Literal["concept", "claim", "question"]
-    relation: str = Field(min_length=1, max_length=80)
+    relation: str = Field(min_length=1, max_length=80, json_schema_extra={"enum": list(RELATIONS)})
     citations: list[Annotated[int, Field(ge=1)]]
 
 
@@ -35,6 +42,7 @@ _SYSTEM = (
     "每个 unit_id 恰好返回一个 edit，所有字段都填写，没问题的字段保持原值。"
     "节点的 children 与完整路径仅帮助理解结构，不得修改；未列出的节点不能修改。"
     "父标题中的共同机制、比较边界也是事实性断言，应标为 claim 并给出相应文献的引用；"
+    "relation 只使用包含、导致、依赖、对比、改进、前提、应用于；不能填写数据来源或实验设置等话题。"
     "不能只把事实改标 concept 或 question 来免检，共同结论须有涉及各篇的证据。"
     "引用只使用本次已核验证据中的 citation 编号，不复制原引文的文献编号。"
     "不能把资料缺失说成论文没有；无依据的结论应收窄或改成不预设答案的研究问题。"
