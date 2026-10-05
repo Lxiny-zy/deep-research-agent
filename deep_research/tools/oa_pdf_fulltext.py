@@ -24,6 +24,7 @@ import httpx
 from ..blocking import run_blocking
 from ..models import ScholarlyMetadata, Source
 from ..security import provider_http_client
+from .pdf_headings import PdfLine
 
 
 class OaPdfFulltextError(ValueError):
@@ -175,6 +176,8 @@ _ALIASES: dict[str, str] = {
     "methodology": "method",
     "approach": "method",
     "materials and methods": "method",
+    "proposed method": "method",
+    "proposed approach": "method",
     "experiment": "experiment",
     "experiments": "experiment",
     "experimental setup": "experiment",
@@ -187,6 +190,19 @@ _ALIASES: dict[str, str] = {
     "conclusion": "conclusion",
     "conclusions": "conclusion",
     "discussion": "conclusion",
+    "references": "references",
+    "bibliography": "references",
+    "acknowledgments": "other",
+    "acknowledgements": "other",
+    "appendix": "other",
+    "摘要": "abstract",
+    "引言": "introduction",
+    "方法": "method",
+    "实验": "experiment",
+    "结果": "results",
+    "讨论": "conclusion",
+    "结论": "conclusion",
+    "参考文献": "references",
 }
 _CANONICAL_KINDS = frozenset(
     {"abstract", "introduction", "method", "experiment", "results", "conclusion"}
@@ -209,7 +225,7 @@ def _fitz_module() -> ModuleType:
 
 def _normalise_heading(value: str) -> str:
     value = _NUMBERING_RE.sub("", value.strip())
-    value = re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+    value = re.sub(r"[\W_]+", " ", value.casefold()).strip()
     return _WHITESPACE_RE.sub(" ", value)
 
 
@@ -229,6 +245,14 @@ def _heading_kind(value: str) -> str | None:
     return None
 
 
+def _heading_phrase(value: str) -> bool:
+    text = value.strip()
+    return bool(
+        text and len(text) <= 140 and text[0].isalpha() and not text[0].islower()
+        and not re.search(r"[=+*/^{}\[\]<>|]|[.!?。]$", text)
+    )
+
+
 def _line_heading_kind(value: str) -> str | None:
     """Recognize boundaries more conservatively than classifying known titles.
 
@@ -236,10 +260,12 @@ def _line_heading_kind(value: str) -> str | None:
     'method using covariance ...' must remain in its surrounding abstract.
     """
     kind = _heading_kind(value)
+    if _normalise_heading(value) in _ALIASES:
+        return kind
+    if numbered := _NUMBERING_RE.match(value):
+        return (kind or "other") if _heading_phrase(value[numbered.end():]) else None
     if kind is None:
         return None
-    if _normalise_heading(value) in _ALIASES or _NUMBERING_RE.match(value):
-        return kind
     # Abstract labels commonly share their first line with prose.
     if re.match(r"^(?:abstract|summary)\s*[:—–-]", value, re.I):
         return kind
@@ -256,21 +282,35 @@ def _line_heading_kind(value: str) -> str | None:
     return None
 
 
-def _sections_from_pages(pages: list[str]) -> tuple[PdfSection, ...]:
+def _sections_from_pages(
+    pages: list[str], layouts: list[list[PdfLine]] | None = None,
+) -> tuple[PdfSection, ...]:
+    from .pdf_headings import body_font_size, heading_allowed
+
     lines: list[str] = []
     line_pages: list[int] = []
+    hints: list[PdfLine | None] = []
     for page_index, page in enumerate(pages):
         page_lines = page.splitlines()
         if page_index and lines and lines[-1].strip():
             lines.append("")
             line_pages.append(page_index)
+            hints.append(None)
         lines.extend(page_lines)
         line_pages.extend([page_index] * len(page_lines))
+        page_hints = layouts[page_index] if layouts else []
+        hints.extend(page_hints if len(page_hints) == len(page_lines) else [None] * len(page_lines))
 
     boundaries: list[tuple[int, str, str]] = []
+    body_size = body_font_size(layouts) if layouts else 0
     for index, line in enumerate(lines):
         title = _WHITESPACE_RE.sub(" ", line.strip())
         kind = _line_heading_kind(title)
+        hint = hints[index]
+        if kind is not None and hint is not None and layouts and not heading_allowed(
+            hint, layouts[line_pages[index]], body_size, custom=_heading_kind(title) is None,
+        ):
+            continue
         if kind is not None and len(title) <= 160:
             boundaries.append((index, title, kind))
 
@@ -291,8 +331,8 @@ def _sections_from_pages(pages: list[str]) -> tuple[PdfSection, ...]:
                 "Preamble",
                 "\n".join(lines[:first_start]).strip(),
                 len(sections),
-                line_pages[0] if line_pages else 0,
-                line_pages[first_start - 1] if first_start else 0,
+                next(line_pages[i] for i in range(first_start) if lines[i].strip()),
+                next(line_pages[i] for i in range(first_start - 1, -1, -1) if lines[i].strip()),
                 "other",
             )
         )
@@ -304,12 +344,16 @@ def _sections_from_pages(pages: list[str]) -> tuple[PdfSection, ...]:
         )
         body = "\n".join(lines[start + 1 : end]).strip()
         page_start = line_pages[start] if start < len(line_pages) else 0
-        page_end = line_pages[end - 1] if end and end - 1 < len(line_pages) else page_start
+        page_end = next(
+            (line_pages[i] for i in range(end - 1, start, -1) if lines[i].strip()), page_start,
+        )
         sections.append(PdfSection(title, body, len(sections), page_start, page_end, kind))
     return tuple(sections)
 
 
-def _page_text(page: Any, fitz: ModuleType, max_chars: int) -> str:
+def _page_text(
+    page: Any, fitz: ModuleType, max_chars: int, *, layout: list[PdfLine] | None = None,
+) -> str:
     """Keep numeric exponents that the plain text extractor flattens.
 
     Use the same text flags and reading order as plain extraction, without
@@ -317,8 +361,13 @@ def _page_text(page: Any, fitz: ModuleType, max_chars: int) -> str:
     mantissa × 10 is rewritten; author footnotes and other math stay intact.
     """
     flags = fitz.TEXTFLAGS_TEXT & ~fitz.TEXT_PRESERVE_IMAGES
+    from dataclasses import replace
+
+    from .pdf_headings import line_layout
+
     data = page.get_text("dict", flags=flags)
     lines: list[str] = []
+    line_data: list[PdfLine] = []
     size = 0
     previous_spans: list[dict[str, Any]] = []
     for block in data.get("blocks", []):
@@ -356,7 +405,7 @@ def _page_text(page: Any, fitz: ModuleType, max_chars: int) -> str:
                 and previous_spans
                 and spans
                 and re.fullmatch(r"(?:\d+(?:\.\d+)*|[IVXLC]+)\.?", lines[-1].strip())
-                and _line_heading_kind(text.strip()) is not None
+                and (_line_heading_kind(text.strip()) is not None or _heading_phrase(text))
             ):
                 previous, current = previous_spans[-1], spans[0]
                 a, b = previous.get("origin"), current.get("origin")
@@ -369,9 +418,21 @@ def _page_text(page: Any, fitz: ModuleType, max_chars: int) -> str:
                     )
             if same_heading_line:
                 lines[-1] = lines[-1].rstrip("\n") + " " + text + "\n"
+                current_line = line_layout(text, spans)
+                previous_line = line_data[-1]
+                line_data[-1] = replace(
+                    previous_line, text=lines[-1].rstrip("\n"),
+                    box=(previous_line.box[0], min(previous_line.box[1], current_line.box[1]),
+                         current_line.box[2], max(previous_line.box[3], current_line.box[3])),
+                    bold=previous_line.bold and current_line.bold,
+                )
             else:
                 lines.append(text + "\n")
+                line_data.append(line_layout(text, spans))
             previous_spans = spans
+    if layout is not None:
+        for item in line_data:
+            layout.extend(replace(item, text=part) for part in item.text.splitlines() or [""])
     return "".join(lines)
 
 
@@ -396,10 +457,12 @@ def parse_oa_pdf(raw: bytes, limits: OaPdfLimits | None = None) -> PdfDocument:
         if page_count > lim.max_pages:
             raise OaPdfParseError("PDF exceeds page count limit")
         pages: list[str] = []
+        layouts: list[list[PdfLine]] = []
         total = 0
         for page in document:
+            layout: list[PdfLine] = []
             try:
-                text = _page_text(page, fitz, lim.max_page_chars)
+                text = _page_text(page, fitz, lim.max_page_chars, layout=layout)
             except Exception as exc:  # fitz raises backend-specific exceptions
                 raise OaPdfParseError(f"PDF text extraction failed: {exc}") from exc
             if len(text) > lim.max_page_chars:
@@ -408,6 +471,7 @@ def parse_oa_pdf(raw: bytes, limits: OaPdfLimits | None = None) -> PdfDocument:
             if total > lim.max_total_chars:
                 raise OaPdfParseError("PDF text exceeds total text limit")
             pages.append(text)
+            layouts.append(layout)
         title, authors = _confirmed_metadata(document.metadata or {}, pages[0])
         from .pdf_metadata import first_page_metadata
 
@@ -421,7 +485,7 @@ def parse_oa_pdf(raw: bytes, limits: OaPdfLimits | None = None) -> PdfDocument:
             document.close()
 
     text = "\n\n".join(page.strip() for page in pages if page.strip()).strip()
-    sections = _sections_from_pages(pages)
+    sections = _sections_from_pages(pages, layouts)
     if not text or not sections:
         raise OaPdfParseError("PDF contains no extractable text")
     return PdfDocument(
@@ -469,8 +533,8 @@ def _required_pdf_indices(sections: tuple[PdfSection, ...], names: set[str]) -> 
     parent: tuple[str, ...] | None = None
     active = False
     for section in sections:
-        match = re.match(r"^\s*(\d+(?:\.\d+)*)(?:\.?\s+)", section.title)
-        number = tuple(match[1].split(".")) if match else None
+        match = _NUMBERING_RE.match(section.title.strip())
+        number = tuple(re.findall(r"\d+|[IVXLC]+", match[0].upper())) if match else None
         descendant = (
             active
             and parent is not None
@@ -507,7 +571,7 @@ def select_pdf_sections(
     if max_chars <= 0 or not document.sections:
         return []
     if required is True:
-        required_names = set(_CANONICAL_KINDS)
+        required_names = set(_CANONICAL_KINDS) | {"other"}
     elif required is False:
         required_names = set()
     elif isinstance(required, str):
@@ -651,7 +715,7 @@ class OaPdfFetcher:
         document = await run_blocking(parse_oa_pdf, raw, self._limits)
         required_names: set[str]
         if required is True:
-            required_names = set(_CANONICAL_KINDS)
+            required_names = set(_CANONICAL_KINDS) | {"other"}
         elif required is False:
             required_names = set()
         elif isinstance(required, str):
