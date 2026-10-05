@@ -417,7 +417,11 @@ class Worker:
     async def _drain(self) -> None:
         tasks: set[asyncio.Task] = set(self._running)
         if self._admission is not None:
-            self._admission.cancel()
+            # The execution loop may already have cancelled admission. A second
+            # immediate cancel interrupts its database invalidation/checkin;
+            # reserve further cancellation for the existing shutdown deadline.
+            if not self._admission.cancelling():
+                self._admission.cancel()
             tasks.add(self._admission)
         heartbeat = asyncio.create_task(self._drain_heartbeat(), name="worker-drain-heartbeat")
         pending = tasks
