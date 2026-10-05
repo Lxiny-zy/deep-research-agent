@@ -120,6 +120,12 @@ class OpenAlexSearch(SearchTool):
         if self._pdf_fetcher is None:
             return candidates[:requested]
 
+        from ..source_relevance import select_fulltext_candidates
+
+        candidates = await select_fulltext_candidates(
+            candidates[:requested], query, self.backend_name,
+        )
+
         async def expand(source: Source) -> list[Source]:
             try:
                 return await self._fulltext_sources(source, query)

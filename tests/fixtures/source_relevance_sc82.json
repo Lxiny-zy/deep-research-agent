@@ -1,0 +1,37 @@
+{
+  "provenance": {
+    "archive": "artifacts/sc82/run-detail.json",
+    "archive_sha256": "bee7dad698b3c48bc6cde29937287def71711a7c29bdfcb229ed40929485a04c",
+    "note": "Recorded source excerpts from the existing sc82 run; no new network or model calls. Expected relevance labels are offline test judgements."
+  },
+  "question": "查阅公开学术文献，用中文说明 split conformal prediction 对单个未来样本的边际覆盖保证、交换性假设，以及它与给定特征值的条件覆盖有什么区别。三部分都要回答，明确有限样本保证成立的条件与不能直接外推的情形，给出可追溯引用。不需要额外图示。",
+  "sources": [
+    {
+      "title": "Whatever next? Predictive brains, situated agents, and the future of cognitive science",
+      "url": "https://doi.org/10.1017/s0140525x12000477?dr_section=pdf-1",
+      "content": "Abstract: Brains, it has recently been argued, are essentially prediction machines. They are bundles of cells that support perception and\naction by constantly attempting to match incoming sensory inputs with top-down expectations or predictions. This is achieved using a\nhierarchical generative model that aims to minimize prediction error within a bidirectional cascade of cortical processing. Such\naccounts offer a unifying model of perception and action, illuminate the functional role of attention, and may neatly capture the\nspecial contribution of cortical processing to adaptive success. This target article critically examines this “hierarchical prediction\nmachine” approach, concluding that it offers the best clue yet to the shape of a uniﬁed science of mind and action. Sections 1 and 2\nlay out the key elements and implications of the approach. Section 3 explores a variety of pitfalls and challenges, spanning the\nevidential, the methodological, and the more properly conceptual. The paper ends (sections 4 and 5) by asking how such approaches\nmight impact our more general vision of mind, experience, and agency.\nKeywords: action; attention; Bayesian brain; expectation; generative model; hierarchy; perception; precision; predictive coding;\nprediction; prediction error; top-down processing",
+      "content_sha256": "9a4e419d0c52a15f8f6f941d614dce11e3d46697465f473003752dcf6bd078a9",
+      "verdict": "irrelevant",
+      "reason": "研究大脑的感知和预测编码，不能据此回答统计预测集的覆盖保证。",
+      "evidence_quote": "hierarchical generative model"
+    },
+    {
+      "title": "The conformal bootstrap: Theory, numerical techniques, and applications",
+      "url": "https://doi.org/10.1103/revmodphys.91.015002",
+      "content": "Conformal symmetry generalizes scale invariance, the hallmark of continuous phase transitions. The additional symmetry highly constrains correlation functions and imposes an infinite set of ``crossing'' relations between them. It has now become possible to calculate scaling dimensions, critical exponents, and other quantities by exploiting crossing symmetry. This bootstrap program has in some cases provided accurate predictions for critical phenomena. This review provides a state of the art picture of this program.",
+      "content_sha256": "aa618fb94ef2312cb420cc51170d1219f063239541757d71f94d09797c4e9221",
+      "verdict": "irrelevant",
+      "reason": "conformal 指物理中的共形对称性和相变，不是 conformal prediction。",
+      "evidence_quote": "Conformal symmetry generalizes scale invariance"
+    },
+    {
+      "title": "Distribution-Free Finite-Sample Guarantees and Split Conformal Prediction",
+      "url": "https://arxiv.org/abs/2210.14735v1?dr_section=0",
+      "content": "Abstract\nModern black-box predictive models are often accompanied by weak performance guarantees that only hold asymptotically in the size of the dataset or require strong parametric assumptions. In response to this, split conformal prediction represents a promising avenue to obtain finite-sample guarantees under minimal distribution-free assumptions. Although prediction set validity most often concerns marginal coverage, we explore the related but different guarantee of tolerance regions, reformulating known results in the language of nested prediction sets and extending on the duality between marginal coverage and tolerance regions. Furthermore, we highlight the connection between split conformal prediction and classical tolerance predictors developed in the 1940s, as well as recent developments in distribution-free risk control. One result that transfers from classical tolerance predictors is that the coverage of a prediction set based on order statistics, conditional on the calibration set, is a random variable stochastically dominating the Beta distribution. We demonstrate the empirical effectiveness of our findings on synthetic and real datasets using a popular split conformal prediction procedure called conformalized quantile regression (CQR).",
+      "content_sha256": "1896cc7790d00371b15d0451b1a9f510328db3af342a10d4e41599d3948685d9",
+      "verdict": "relevant",
+      "reason": "直接讨论 split conformal 的有限样本和边际覆盖保证。",
+      "evidence_quote": "split conformal prediction represents a promising avenue"
+    }
+  ]
+}

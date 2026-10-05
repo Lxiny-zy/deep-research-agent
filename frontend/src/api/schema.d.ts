@@ -2724,6 +2724,8 @@ export interface components {
             issues?: string[];
             /** Question */
             question: string;
+            /** Source Selections */
+            source_selections?: components["schemas"]["SourceSelection"][];
             /** Sources */
             sources?: components["schemas"]["Source"][];
             /**
@@ -4178,6 +4180,36 @@ export interface components {
              * @default
              */
             work_id?: string;
+        };
+        /**
+         * SourceSelection
+         * @description A question-specific metadata decision, not evidence extracted from the paper.
+         */
+        SourceSelection: {
+            /** Backend */
+            backend: string;
+            /**
+             * Evidence Quote
+             * @default
+             */
+            evidence_quote?: string;
+            /**
+             * Policy Version
+             * @default 1
+             */
+            policy_version?: number;
+            /** Question */
+            question: string;
+            /** Reason */
+            reason: string;
+            /** Search Query */
+            search_query: string;
+            source: components["schemas"]["Source"];
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "relevant" | "irrelevant" | "uncertain";
         };
         /** StepRun */
         StepRun: {

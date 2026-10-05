@@ -19,6 +19,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from ..models import Source
 from ..observability import Tracer
+from ..persistence.repository import LeaseLostError
 from .base import SearchTool
 
 logger = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ class MultiBackendSearch(SearchTool):
         variants: dict[str, list[dict[str, object]]] = {}
         for backend, result in zip(self._backends, results, strict=True):
             if isinstance(result, BaseException):
-                if isinstance(result, asyncio.CancelledError):
+                if isinstance(result, asyncio.CancelledError | LeaseLostError):
                     raise result
                 failures.append(backend.backend_name)
                 # Upstream exceptions may contain credentials or request URLs.

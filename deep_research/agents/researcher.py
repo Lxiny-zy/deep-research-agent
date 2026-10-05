@@ -247,6 +247,29 @@ class Researcher:
         sub_question: str,
         context_findings: list[Finding] | None = None,
         *,
+        require_corroboration: bool | None = None,
+        search_queries: list[str] | None = None,
+    ) -> ResearchResult | None:
+        from ..source_relevance import SourceSelector, source_selection_scope
+
+        selector = SourceSelector(self.verification_llm, sub_question, self.tracer)
+        with source_selection_scope(selector):
+            result = await self._run(
+                sub_question, context_findings,
+                require_corroboration=require_corroboration, search_queries=search_queries,
+            )
+        if result is not None and selector.records:
+            audit = result.extraction_audit or ExtractionAudit(question=sub_question)
+            result = result.model_copy(update={"extraction_audit": audit.model_copy(update={
+                "source_selections": selector.records,
+            }, deep=True)})
+        return result
+
+    async def _run(
+        self,
+        sub_question: str,
+        context_findings: list[Finding] | None = None,
+        *,
         require_corroboration: bool | None = None,  # 保留签名兼容；背景过滤不再依赖印证
         search_queries: list[str] | None = None,
     ) -> ResearchResult | None:

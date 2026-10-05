@@ -9,7 +9,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 class SubQuestion(BaseModel):
@@ -441,12 +449,36 @@ class ExtractionCandidate(BaseModel):
     quote_options: list[QuoteOption] = Field(default_factory=list)
 
 
+class SourceSelection(BaseModel):
+    """A question-specific metadata decision, not evidence extracted from the paper."""
+
+    policy_version: int = 1
+    question: str
+    search_query: str
+    backend: str
+    source: Source
+    verdict: Literal["relevant", "irrelevant", "uncertain"]
+    reason: str
+    evidence_quote: str = ""
+
+
 class ExtractionAudit(BaseModel):
     version: int = 2
     question: str
     sources: list[Source] = Field(default_factory=list)
     candidates: list[ExtractionCandidate] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
+    source_selections: list[SourceSelection] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
+        # A dict return annotation replaces the model's OpenAPI output schema.
+        # Let Pydantic preserve the declared fields while wrapping serialization.
+        data = handler(self)
+        # Adding an empty diagnostic must not alter a legacy checkpoint's digest.
+        if not self.source_selections:
+            data.pop("source_selections", None)
+        return data
 
 
 class ResearchResult(BaseModel):
