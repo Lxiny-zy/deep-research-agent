@@ -28,7 +28,10 @@ function normalizeMapped(raw: string): MappedText {
     const value = match[0].normalize('NFKC').toLowerCase()
     for (const character of value) {
       if (/[\s\u00ad]/u.test(character)) continue
-      const normalized = character.replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+      const normalized = character
+        .replace(/[‘’]/g, "'")
+        .replace(/[“”]/g, '"')
+        .replace(/−/g, '-')
       for (let unit = 0; unit < normalized.length; unit += 1) {
         chars.push(normalized[unit])
         starts.push(match.index)

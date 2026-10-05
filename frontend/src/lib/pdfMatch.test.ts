@@ -76,6 +76,25 @@ describe('findQuote', () => {
     })
   })
 
+  it.each(['4 × 10^-4', '4 × 10^{−4}', '4 × 10⁻⁴'])(
+    'locates a negative scientific exponent without losing the PDF offsets: %s',
+    (quote) => {
+      const page = ['Learning rate ', '4', ' × ', '10', '−4', ' for training.']
+      const match = findQuote([page], quote)!
+      expect(match.page).toBe(0)
+      expect(match.ranges.map((r) => page[r.item].slice(r.start, r.end))).toEqual([
+        '4', '×', '10', '−4',
+      ])
+      expect(findQuote([['Learning rate 4 × 10', '4']], quote)).toBeNull()
+    },
+  )
+
+  it('keeps negative and positive values distinct and rejects ambiguous normalized quotes', () => {
+    expect(findQuote([['value −0.4']], 'value -0.4')?.page).toBe(0)
+    expect(findQuote([['value 0.4']], 'value -0.4')).toBeNull()
+    expect(findQuote([['value −0.4'], ['value -0.4']], 'value -0.4')).toBeNull()
+  })
+
   it('keeps character offsets correct for ligatures, composed accents and astral text', () => {
     const line = 'Prefix: 😀 ﬁeld cafe\u0301. Suffix'
     const match = findQuote([[line]], '😀 field café.')!

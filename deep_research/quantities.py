@@ -172,7 +172,8 @@ _UNIT_HEADER = re.compile(
     re.IGNORECASE,
 )
 _LABELLED_VALUE = re.compile(
-    r"^\s*(?P<entity>[^,\n:=]+),\s*(?P<metric>[A-Za-z][A-Za-z0-9 _-]*?)\s*=\s*(?P<value>.+?)\s*$"
+    r"^\s*(?P<entity>[^,\n:=：]+),\s*(?P<metric>[A-Za-z][A-Za-z0-9 _-]*?)"
+    r"\s*[:=：]\s*(?P<value>.+?)\s*$"
 )
 
 
@@ -196,11 +197,13 @@ def _label_matches_header(label: str, header: str) -> bool:
 
 
 def _labelled_units(text: str) -> dict[int, tuple[int, str, str, str, str, str]]:
-    """Bind a unit only inside consecutive `method, metric=value` legend rows.
+    """Preserve explicit method/metric labels and tightly scoped header units.
 
     A free-standing unit near a number, a second axis, a caption, a blank line
     or a row for a different metric cannot extend this scope. Tables with
     several columns need explicit row/column metadata, not this heuristic.
+    A scalar row also carries its own labels without an axis header, including
+    dimensionless `method, corr: value` legends. Never infer a missing unit.
     """
     out: dict[int, tuple[int, str, str, str, str, str]] = {}
     active: tuple[str, str, str] | None = None
@@ -213,19 +216,22 @@ def _labelled_units(text: str) -> dict[int, tuple[int, str, str, str, str, str]]
                 header["slash"] or header["paren"] or header["bracket"],
                 line.strip(),
             )
-        elif active:
+        else:
             row = _LABELLED_VALUE.fullmatch(line.rstrip("\r\n"))
             scalar = _MEASUREMENT_RE.fullmatch(row["value"]) if row else None
-            if row is None or scalar is None or not _label_matches_header(row["metric"], active[0]):
+            if row is None or scalar is None:
                 active = None
-            elif not scalar["unit"]:
+            else:
+                if active and not _label_matches_header(row["metric"], active[0]):
+                    active = None
+                inherited = active if not scalar["unit"] else None
                 start = offset + row.start("value") + scalar.start()
                 out[start] = (
                     start + scalar.end(),
-                    active[1],
-                    active[0],
+                    inherited[1] if inherited else scalar["unit"] or "",
+                    inherited[0] if inherited else row["metric"],
                     row["metric"],
-                    active[2],
+                    inherited[2] if inherited else line.strip(),
                     row["entity"].strip(),
                 )
         offset += len(line)
