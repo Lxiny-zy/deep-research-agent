@@ -157,6 +157,36 @@ async def test_score_is_visible_to_coverage_but_not_treated_as_a_source_measurem
     assert "评分：7/10" in body and not log.remaining
 
 
+async def test_critical_score_conflict_converges_through_local_rating_edit(settings, monkeypatch):
+    from deep_research.workbench import prose_edit
+    from deep_research.workbench.peer_review_items import PeerReviewChecker
+    from tests.test_peer_review_items import EVIDENCE, Judge, material
+
+    draft = "## 不足\n\n发现X [1]。\n\n评分：7/10"
+    model = Model(draft)
+    bb, ctx, template, policy = inputs(settings, model, "peerReview")
+    checker = PeerReviewChecker(Judge(critical=True), EVIDENCE, 50000, query="q")
+
+    class CheckedAuditor(Auditor):
+        async def review(self, body):
+            peer = await checker.review(body, *material(body))
+            return {"issues": peer["issues"], "can_revise": peer["can_revise"],
+                    "peer_review": peer}
+
+    edits = []
+
+    async def edit(llm, reviewer, body, audit, *, local_problems):
+        assert local_problems and all("评分" in issue for _, issue in local_problems)
+        edits.append(body)
+        return body.replace("评分：7/10", "评分：5/10")
+
+    monkeypatch.setattr(prose_edit, "repair_paragraphs", edit)
+    body, log = await checked(PeerReviewer(), bb, ctx, template, policy, CheckedAuditor())
+    assert "评分：5/10" in body and not log.remaining
+    assert len(model.prompts) == len(edits) == 1
+    assert checker.llm.classifications == 1
+
+
 def test_degraded_review_does_not_append_a_rating():
     bb = Blackboard(
         query="q", scratch={"_review_score": 7, "_report_validation": {"fallback": True}}
@@ -199,9 +229,17 @@ async def test_statistical_style_advice_does_not_rewrite_verified_results(settin
     assert result.scratch["workbench"]["extras"]["revision"]["advisories"]
 
 
-async def test_peer_reviewer_step_reuses_a_bound_parent_report(settings):
+async def test_peer_reviewer_step_reuses_a_bound_parent_report(settings, tmp_path, monkeypatch):
     import hashlib
+    import json
+    from datetime import UTC, datetime
 
+    from deep_research.orchestrator import create_initial_execution
+    from deep_research.persistence.repository import RunDetail
+    from deep_research.workbench.delivery import pdf
+    from deep_research.workbench.delivery_store import build_or_load, load_version, retry_format
+    from deep_research.workbench.peer_review_items import PeerReviewChecker
+    from deep_research.workbench.publish import build_bundle
     from tests.test_workbench import WorkbenchLLM
 
     settings.quality = {
@@ -241,6 +279,39 @@ async def test_peer_reviewer_step_reuses_a_bound_parent_report(settings):
     parent = await PeerReviewer().step(initial, first_ctx)
     remaining = parent.scratch["workbench"]["extras"]["revision"]["remaining"]
     assert parent.scratch["prose_review"]["status"] == "pass", remaining
+
+    # Persist the real writer output and retry only a failed renderer. Review is frozen.
+    execution = create_initial_execution(parent.query, template.workflow, settings)
+    execution.checkpoint["scratch"] = parent.scratch.copy()
+    detail = RunDetail(
+        id="peer-frozen", query=parent.query, status="done", created_at=datetime.now(UTC),
+        report=parent.report, results=parent.results, sources=[source], orchestration=execution,
+    )
+
+    async def no_model(*args, **kwargs):
+        raise AssertionError("formatting must reuse the frozen review")
+
+    def failed_pdf(*args, **kwargs):
+        raise pdf.PdfRenderError("temporary failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(PeerReviewChecker, "review", no_model)
+        with monkeypatch.context() as render_patch:
+            render_patch.setattr(pdf, "render_pdf", failed_pdf)
+            bundle = build_or_load(detail, str(tmp_path), None, build_bundle)
+        assert next(g for g in bundle.gates if g.name == "review").status == "pass"
+        assert not bundle.render_context["blocked"]
+        structured = next(f for f in bundle.files if f.name.endswith("-review-items.json"))
+        data = json.loads(structured.data)
+        assert data["review"] == parent.scratch["prose_review"]["peer_review"]
+        assert data["evidence"] and data["delivery_blocked"] is False
+        retried = retry_format(
+            detail, str(tmp_path), None, bundle.content_version, "pdf", "peer-pdf-retry",
+        )
+        assert next(f.data for f in retried.files if f.name == structured.name) == structured.data
+        original = load_version(detail, str(tmp_path), bundle.content_version)
+        assert original.registry() == bundle.registry()
+
     child = parent.model_copy(deep=True)
     child.scratch["content_revision"] = {"parent_run_id": "parent"}
 

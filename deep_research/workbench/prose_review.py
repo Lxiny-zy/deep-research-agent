@@ -305,6 +305,15 @@ class ProseReviewer:
             check_formulas=statistics is None,
         )
         self.records: dict[str, dict[str, Any]] = {}
+        self.peer = None
+        if self.contract is not None and self.contract.template == "peerReview":
+            from .peer_review_items import PeerReviewChecker
+
+            self.peer = PeerReviewChecker(
+                llm, evidence, capacity, query=query,
+                fulltext_support=self.reviewer.fulltext_supports,
+                source_version=digest([source_version, self.reviewer.fulltext_corpus.fingerprint]),
+            )
 
     def requirement_bases(self, markdown: str, record: dict[str, Any]) -> list[dict[str, Any]]:
         from .coverage_review import material_bases
@@ -312,11 +321,30 @@ class ProseReviewer:
         return material_bases(self.material_scratch, record, self.units(markdown)[0])
 
     async def _with_requirements(self, markdown: str, record: dict[str, Any]) -> dict[str, Any]:
-        if self.coverage is None:
-            return record
-        bases = self.requirement_bases(markdown, record)
-        coverage = await self.coverage.review(markdown, bases)
-        return {**record, "requirements_review": coverage}
+        if self.coverage is not None:
+            bases = self.requirement_bases(markdown, record)
+            coverage = await self.coverage.review(markdown, bases)
+            record = {**record, "requirements_review": coverage}
+        if self.peer is not None:
+            units, locations = self.units(markdown)
+            decisions = [SupportDecision.model_validate(d) for d in record.get("decisions", [])]
+            previous = record.get("peer_review")
+            bound, _ = self.peer.bound_check(markdown, units, locations, decisions, previous)
+            peer = (
+                previous if bound and isinstance(previous, dict)
+                else await self.peer.review(markdown, units, locations, decisions)
+            )
+            original_issues = record.get("prose_issues", record["issues"])
+            original_status = record.get("prose_status", record["status"])
+            original_revise = record.get("prose_can_revise", record["can_revise"])
+            record = {**record, "peer_review": peer,
+                      "prose_issues": original_issues, "prose_status": original_status,
+                      "prose_can_revise": original_revise,
+                      "issues": list(dict.fromkeys([*original_issues, *peer["issues"]])),
+                      "status": "fail" if peer["status"] == "fail" else original_status,
+                      "can_revise": peer["can_revise"] and (
+                          original_status == "pass" or original_revise)}
+        return record
 
     def check_requirements(self, markdown: str, record: Any) -> list[str]:
         from .coverage_review import coverage_issues
@@ -337,6 +365,12 @@ class ProseReviewer:
         if not bound:
             return False
         units, _ = self.units(markdown)
+        if self.peer is not None and isinstance(record.get("peer_review"), dict):
+            self.peer.prime(
+                markdown, *self.units(markdown),
+                [SupportDecision.model_validate(d) for d in record.get("decisions", [])],
+                record["peer_review"],
+            )
         decisions = {
             item["unit_id"]: SupportDecision.model_validate(item) for item in record["decisions"]
         }
@@ -431,6 +465,8 @@ class ProseReviewer:
             {
                 "version": 4 if self.translation_citations is not None else 3,
                 "support_policy": SUPPORT_POLICY_VERSION,
+                **({"peer_review_policy": self.peer.policy_version}
+                   if self.peer is not None else {}),
                 "body": body_text(markdown, strip_references=False),
                 "evidence": self.evidence,
                 "source_version": self.source_version,
@@ -630,6 +666,13 @@ class ProseReviewer:
             if d.verdict in {"supported", "non_factual"}:
                 if issue := self.reviewer.record_issue(unit, d):
                     problems.append(f"第 {positions[d.unit_id]} 行：{issue}")
+        if self.peer is not None:
+            bound, peer_issues = self.peer.bound_check(
+                markdown, units, locations, decisions, record.get("peer_review"),
+            )
+            if not bound:
+                return False, peer_issues
+            problems.extend(peer_issues)
         return True, problems
 
 

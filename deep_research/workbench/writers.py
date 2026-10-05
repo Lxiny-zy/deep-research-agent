@@ -450,6 +450,11 @@ class TemplateWriter:
                 audit = await reviewer.review(body)
                 assessment.hard.extend(audit["issues"])
                 assessment.can_revise = audit["can_revise"]
+                peer = audit.get("peer_review") or {}
+                if peer.get("status") == "fail":
+                    local_problems.extend(tuple(item) for item in peer.get("local_problems", []))
+                    if peer.get("requires_full_revision") or not peer.get("local_problems"):
+                        local_revision = False
                 required = audit.get("requirements_review", {})
                 if required.get("status") == "fail":
                     assessment.hard.extend(required["issues"])
@@ -820,28 +825,59 @@ class TemplateWriter:
         return bb
 
 
-_SCORE_RE = re.compile(r"(?:评分|总分|Score|score)\s*[:：]?\s*\**\s*(\d{1,2})(?:\s*/\s*10)?")
+_SCORE_RE = re.compile(
+    r"(?:评分|总分|Score|score)\s*[:：]?\s*\**\s*"
+    r"(?P<number>\d+(?:\.\d+)?)(?:\s*/\s*(?P<denominator>\d+(?:\.\d+)?))?"
+)
 _SCORE_LINE_RE = re.compile(
     r"(?m)^[ \t>*-]*\**(?:评分|总分|Score|score)\s*[:：]?\s*\**\s*"
-    r"\d{1,2}(?:\s*/\s*10)?\**[^\n]*$\n?"
+    r"\d[^\n]*$\n?"
 )
 
 
 def extract_review_score(markdown: str) -> int | None:
+    scores = set()
     for match in _SCORE_RE.finditer(markdown):
-        value = int(match.group(1))
-        if 1 <= value <= 10:
-            return value
-    return None
+        number = match.group("number")
+        if not number.isdecimal() or match.group("denominator") not in {None, "10"}:
+            return None
+        value = int(number)
+        if not 1 <= value <= 10:
+            return None
+        scores.add(value)
+    return scores.pop() if len(scores) == 1 else None
 
 
 def peer_factual_body(markdown: str) -> str:
     """Remove the reviewer's subjective rating before source-number validation."""
     from ..bibliography import source_body
 
-    body = _SCORE_LINE_RE.sub("", source_body(markdown))
+    body = strip_review_scores(source_body(markdown))
     body = re.sub(r"(?m)^##[ \t]+审稿结论[ \t]*(?:\r?\n[ \t]*)*(?=^#{1,2}[ \t]+|\Z)", "", body)
     return body.strip()
+
+
+def strip_review_scores(markdown: str) -> str:
+    """Keep factual text even when an author puts it after a subjective rating."""
+    def retain_tail(match: re.Match[str]) -> str:
+        score = _SCORE_RE.search(match[0])
+        if score is None or extract_review_score(match[0]) is None:
+            return match[0]
+        tail = match[0][score.end():].rstrip("\r\n")
+        prefix = re.sub(r"^[ \t>]*(?:[-*][ \t]+)?", "", match[0][:score.end()])
+        markers: list[str] = []
+        for marker in re.findall(r"\*{1,3}", prefix):
+            if markers and markers[-1] == marker:
+                markers.pop()
+            else:
+                markers.append(marker)
+        for marker in reversed(markers):
+            if tail.startswith(marker):
+                tail = tail[len(marker):]
+        tail = tail.lstrip(" \t，,；;：:。.")
+        return tail + ("\n" if match[0].endswith("\n") else "") if tail else ""
+
+    return _SCORE_LINE_RE.sub(retain_tail, markdown)
 
 
 def peer_scored_body(markdown: str, score: Any) -> str:
@@ -925,9 +961,11 @@ class PeerReviewer(TemplateWriter):
         return await super().step(bb, ctx)
 
     def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
+        from .peer_review_items import PEER_REVIEW_RULES
+
         return super().system_prompt(template, contract) + (
             "\n总体评分单独写成‘评分：N/10’一行，不在这一行混入论文事实或评分理由；"
-            "评分是审稿人的主观结论，不能代替有出处的事实评价。"
+            "评分是审稿人的主观结论，不能代替有出处的事实评价。" + PEER_REVIEW_RULES
         )
 
     async def write(
@@ -942,7 +980,7 @@ class PeerReviewer(TemplateWriter):
         body = await super().write(bb, ctx, template, contract, material, revision)
         score = extract_review_score(body)
         bb.scratch["_review_score"] = score
-        return _SCORE_LINE_RE.sub("", body)
+        return strip_review_scores(body)
 
     def postprocess(self, bb: Blackboard, report: Report, template: TaskTemplate) -> dict[str, Any]:
         score = bb.scratch.pop("_review_score", None)

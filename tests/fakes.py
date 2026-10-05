@@ -75,6 +75,22 @@ class FakeLLM:
         self, system: str, user: str, schema, *, temperature: float = 0.2, retries: int = 2
     ):
         self.parse_calls += 1
+        if schema.__name__ == "PeerReviewClassifications":
+            data = json.loads(user)
+            items = []
+            for unit in data["items"]:
+                kind = {"strength": "strength", "weakness": "weakness",
+                        "recommendation": "recommendation"}.get(unit["role"], "comment")
+                severity = "general" if kind == "weakness" else None
+                items.append({"unit_id": unit["id"], "kind": kind, "severity": severity,
+                              "reason": "fixture classification; not a factual accuracy test"})
+            return schema.model_validate({"items": items})
+        if schema.__name__ == "PeerReviewComparisons":
+            data = json.loads(user)
+            return schema.model_validate({"pairs": [
+                {"pair_id": pair["id"], "verdict": "consistent", "reason": "fixture consistency"}
+                for pair in data["pairs"]
+            ]})
         if schema is AnalysisScope:
             data, _ = json.JSONDecoder().raw_decode(user.split("【完整数据列概况】\n", 1)[1])
             identifiers = {

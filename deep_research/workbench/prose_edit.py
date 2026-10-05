@@ -121,6 +121,9 @@ def _locate_problems(
     }
     located: dict[str, list[str]] = {}
     for excerpt, message in problems:
+        if excerpt in variants:
+            located.setdefault(excerpt, []).append(message)
+            continue
         needle = compact(excerpt.removesuffix("…"))
         matches = [
             uid for uid, texts in variants.items() if needle and any(needle in t for t in texts)
@@ -149,9 +152,15 @@ async def repair_paragraphs(
         for d in record.get("decisions", [])
         if d["verdict"] not in {"supported", "non_factual"}
     }
-    if len(record.get("issues", [])) != len(decisions):
+    prose_issues = record.get("prose_issues", record.get("issues", []))
+    if len(prose_issues) != len(decisions):
         return None
-    problems = _locate_problems(units, local_problems or [])
+    peer = record.get("peer_review") or {}
+    if peer.get("requires_full_revision"):
+        return None
+    problems = _locate_problems(
+        units, [*(local_problems or []), *(tuple(p) for p in peer.get("local_problems", []))],
+    )
     if problems is None:
         return None
     for uid, decision in decisions.items():

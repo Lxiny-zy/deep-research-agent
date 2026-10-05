@@ -403,4 +403,8 @@ async def test_peer_workflow_fills_method_gap_before_writing_and_export_gate_che
     scratch["review_coverage"]["documents"][0]["sections"][0]["status"] = "fail"
     blocked = build_bundle(detail)
     assert next(g for g in blocked.gates if g.name == "review_coverage").status == "fail"
-    assert {f.format for f in blocked.files} == {"md"}
+    assert {f.format for f in blocked.files} == {"md", "json"}
+    import json
+
+    review_data = next(f for f in blocked.files if f.name.endswith("-review-items.json"))
+    assert json.loads(review_data.data)["delivery_blocked"] is True

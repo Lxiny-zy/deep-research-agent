@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from copy import deepcopy
@@ -236,6 +237,15 @@ def render_bundle(
             "统计结果表",
             "data",
             lambda: _stats_xlsx(SimpleNamespace(**context["statistics"])),
+        )
+    peer = (extras.get("prose_review") or {}).get("peer_review")
+    if context["template"] == "peerReview" and isinstance(peer, dict):
+        render(
+            "json", "-review-items.json", "评审条目与严重度", "data",
+            lambda: json.dumps({
+                "review": peer, "evidence": context.get("evidence", []),
+                "delivery_blocked": context["blocked"],
+            }, ensure_ascii=False, indent=2).encode("utf-8"),
         )
 
     if not context["blocked"]:

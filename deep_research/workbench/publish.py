@@ -246,7 +246,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 60,
+        "format_version": 61,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -765,6 +765,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             "user_requirements",
             "table_scope",
             "table_evidence",
+            "review",
         }
         and g.status == "fail"
         for g in gates

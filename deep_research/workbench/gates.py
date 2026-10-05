@@ -193,8 +193,38 @@ def length_gate(markdown: str, template: TaskTemplate) -> GateResult:
 
 def review_gate(extras: dict[str, Any]) -> GateResult:
     score = extras.get("score")
-    if isinstance(score, int) and 1 <= score <= 10:
-        return GateResult("review", "pass", [], {"score": score})
+    if isinstance(score, int) and not isinstance(score, bool) and 1 <= score <= 10:
+        review = extras.get("prose_review") or {}
+        structured = review.get("peer_review") if isinstance(review, dict) else None
+        items = structured.get("items") if isinstance(structured, dict) else None
+        valid_items = isinstance(items, list) and bool(items) and all(
+            isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]
+            and isinstance(item.get("text"), str) and item["text"].strip()
+            and isinstance(item.get("type"), str) and item["type"] in {
+                "strength", "weakness", "comment", "question", "suggestion", "recommendation",
+            }
+            and (item.get("severity") is None or isinstance(item.get("severity"), str)
+                 and item["severity"] in {"critical", "general", "expression"})
+            and (item["type"] != "weakness" or item.get("severity") is not None)
+            and isinstance(item.get("evidence_ids"), list)
+            and all(isinstance(e, str) and e for e in item["evidence_ids"])
+            and (item.get("type") not in {"strength", "weakness"}
+                 or bool(item["evidence_ids"]) and item.get("basis_valid") is True)
+            for item in items
+        )
+        critical = structured.get("critical_count") if isinstance(structured, dict) else None
+        valid_count = type(critical) is int and critical >= 0
+        from .peer_review_items import CRITICAL_SCORE_CEILING
+
+        ceiling = CRITICAL_SCORE_CEILING if valid_count and critical else 10
+        if (isinstance(structured, dict) and structured.get("status") == "pass"
+                and type(structured.get("score")) is int
+                and structured.get("score") == score and valid_items and valid_count
+                and structured.get("score_ceiling") == ceiling and score <= ceiling
+                and not structured.get("issues")):
+            return GateResult("review", "pass", [], {"score": score,
+                "items": len(structured["items"]), "critical": structured.get("critical_count", 0)})
+        return GateResult("review", "fail", ["评审条目、严重度、一致性或评分依据尚未通过核对"])
     return GateResult("review", "fail", ["评审没有给出 1–10 的整数评分（格式：评分：N/10）"])
 
 

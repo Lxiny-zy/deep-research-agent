@@ -96,8 +96,8 @@ async def test_task_creation_execution_result_and_all_promised_downloads(
             if s.key == "translation"
             else "观察各变量的分布与关系。"
             if key == "dataAnalysis"
-            else "评审总分：7/10。\n发现X [1]。"
-            if s.key == "score"
+            else "评分：7/10\n发现X [1]。"
+            if s.key == "recommendation"
             else "发现X [1]。"
         )
         for s in template.sections
