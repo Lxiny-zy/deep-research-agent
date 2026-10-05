@@ -207,3 +207,45 @@ async def test_product_qa_persists_actual_search_queries(reader_client, monkeypa
     )
     assert repeated.status_code == response.status_code
     assert search.queries == QUERIES and len(llm.plans) == 1
+
+
+async def test_followup_stream_keeps_contextual_search_prompt_out_of_status(
+    reader_client, monkeypatch
+):
+    client, _, _ = reader_client
+    traces = []
+    llm, search = PlanningLLM(), Search()
+
+    async def build(app, settings, **kwargs):
+        agent = DeepResearchAgent(settings, llm=llm, search_tool=search)
+        agent.tracer.add_sink(traces.append)
+        return agent, None
+
+    monkeypatch.setattr(api, "_build_agent", build)
+    created = await client.post("/api/qa/conversations", headers=_headers(ALICE), json={})
+    cid = created.json()["id"]
+    first = await client.post(
+        f"/api/qa/conversations/{cid}/messages", headers=_headers(ALICE),
+        json={"query": "CASSI 重建质量采用哪些评价指标？", "sources": [],
+              "request_id": "status-context-first"},
+    )
+    assert first.status_code == 201
+    response = await client.post(
+        f"/api/qa/conversations/{cid}/messages/stream", headers=_headers(ALICE),
+        json={"query": "联网搜索2026年是否提出了新的指标", "sources": ["web"],
+              "request_id": "status-context-followup"},
+    )
+    assert response.status_code == 200
+    starts = [event for event in traces if event.type == "start" and event.stage == "RESEARCHER"]
+    assert starts and "CASSI" in starts[-1].message
+    assert "历史问题仅为上下文" in starts[-1].message
+    statuses = [
+        json.loads(line.removeprefix("data: "))["message"]
+        for block in response.text.replace("\r\n", "\n").split("\n\n")
+        if "event: status" in block
+        for line in block.splitlines() if line.startswith("data: ")
+    ]
+    assert "正在检索与本轮问题相关的资料…" in statuses
+    assert all("CASSI" not in status and "历史问题" not in status for status in statuses)
+    assert all("【最近对话" not in status and "【本轮问题】" not in status for status in statuses)
+    assert search.queries == QUERIES and len(llm.plans) == 1

@@ -289,7 +289,14 @@ async def _answer(
             if on_event:
                 on_event({"type": "usage", "llm_usage": data["llm_usage"]})
         elif event.type == "start" and on_event:
-            on_event({"type": "status", "message": event.message})
+            # Trace messages retain internal query/context for auditing. Product
+            # status text must not render that prompt or the conversation history.
+            message = (
+                "正在检索与本轮问题相关的资料…"
+                if event.stage == "RESEARCHER"
+                else "正在处理本轮问题…"
+            )
+            on_event({"type": "status", "message": message})
 
     agent.tracer.add_sink(observe)
     try:
