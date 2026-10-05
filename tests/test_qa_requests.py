@@ -359,8 +359,8 @@ def test_context_keeps_full_recent_answers_and_more_than_four_turns():
     ]
     context = dialogue_context(history, 10000)
     assert all(f"第三点关键内容-{i}" in context for i in range(7))
-    with pytest.raises(ValueError, match="完整对话"):
-        dialogue_context(history, 150)
+    narrow = dialogue_context(history, 150)
+    assert "摘录" in narrow and "摘要" in narrow and len(narrow) <= 150
 
 
 def test_context_marks_omitted_turns_without_silently_slicing_an_answer():
@@ -383,7 +383,7 @@ def test_context_keeps_contiguous_recent_turns():
         350,
     )
     assert "最新回复" in context and "最初要求" in context
-    assert "旧的短回复" not in context and "更早的 2 轮" in context
+    assert "旧的短回复" not in context and "第 1—2 轮未纳入" in context
 
 
 async def test_never_started_requests_resume_but_only_with_current_authorization(monkeypatch):

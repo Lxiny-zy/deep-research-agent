@@ -106,12 +106,28 @@ async def test_paper_verifier_failure_is_not_misreported_as_missing_evidence(set
 
 
 async def test_answer_repairs_missing_citations_before_falling_back(settings) -> None:
+    import json
+
+    from deep_research.workbench.prose_edit import ProseEdits
+
     class RepairLLM(CountingLLM):
         drafts = 0
+        edits = 0
 
         async def stream(self, system, user, **kwargs):  # type: ignore[no-untyped-def]
             self.drafts += 1
-            yield "发现X，没有引用角标的陈述。" if self.drafts == 1 else "发现X [1]。"
+            assert self.drafts == 1, "Citation repair must not regenerate the whole answer"
+            yield "发现X，没有引用角标的陈述。"
+
+        async def parse(self, system, user, schema, **kwargs):
+            if schema is ProseEdits:
+                self.edits += 1
+                paragraphs = json.loads(user.split("【只修订以下段落】\n", 1)[1])["paragraphs"]
+                assert len(paragraphs) == 1 and "没有引用" in paragraphs[0]["text"]
+                return ProseEdits(edits=[{
+                    "unit_id": paragraphs[0]["unit_id"], "replacement": "发现X [1]。",
+                }])
+            return await super().parse(system, user, schema, **kwargs)
 
     llm = RepairLLM()
     ctx = RunContext(llm=llm, search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
@@ -123,6 +139,6 @@ async def test_answer_repairs_missing_citations_before_falling_back(settings) ->
         paper_sources=await FakeSearch().search("paper"),
         on_event=events.append,
     )
-    assert llm.drafts == 2
+    assert llm.drafts == 1 and llm.edits == 1
     assert not result.fallback and result.answer == "发现X [1]。"
     assert any(event["type"] == "reset" for event in events)

@@ -7,10 +7,12 @@ from typing import cast
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ..config import Settings
+from ..generation_policy import generation_options
 from ..intent.types import IntentSlots
 from ..llm import LLM
 from ..models import ResearchPlan, SubQuestion
 from ..observability import Tracer
+from ..prompting import leaf_system_prompt
 from ..registry import register
 from ..report.hsi_tables import hsi_table_schemas
 from .base import Blackboard, RunContext, direct_system_prompt
@@ -56,14 +58,17 @@ class SearchQueryPlan(BaseModel):
 
 async def plan_search_queries(query: str, ctx: RunContext) -> list[str]:
     """Apply research query planning to one QA turn without expanding its scope."""
-    plan = await ctx.llm_for("planner").parse(
-        ctx.system_prompt(
+    llm = ctx.llm_for("planner")
+    plan = await llm.parse(
+        leaf_system_prompt(
             "为本轮学术问答规划检索式，不拆解为新的研究任务，也不生成答案。"
             "问题包含前文指代时，结合给出的原问题理解当前所问对象。"
-            + SEARCH_QUERY_RULES
+            + SEARCH_QUERY_RULES,
+            ctx.global_rules,
         ),
         f"【本轮检索问题】\n{query}",
         SearchQueryPlan,
+        **generation_options(llm, "search_query"),
     )
     return plan.search_queries
 

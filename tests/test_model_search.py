@@ -3,11 +3,120 @@ import json
 
 import httpx
 import pytest
+from openai import AsyncOpenAI
 
+from deep_research.call_budget import ModelCallBudget, ModelCallLimitExceeded
+from deep_research.llm import LLM
 from deep_research.observability import Tracer
 from deep_research.security import ProviderURLPolicyError
 from deep_research.token_budget import TokenBudget, TokenBudgetExceeded
 from deep_research.tools.model_search import ModelSearch, cited_sources
+
+
+@pytest.mark.parametrize("protocol", ["responses", "chat_search"])
+async def test_search_and_llm_share_actual_http_attempt_budget(settings, protocol):
+    tracer = Tracer()
+    tracer.call_budget = ModelCallBudget(2)
+    requests = []
+
+    def transport(request):
+        requests.append(request.url.path)
+        if request.url.path.endswith("/chat/completions"):
+            chunk = {
+                "id": "answer", "object": "chat.completion.chunk", "created": 0,
+                "model": "writer", "choices": [
+                    {"index": 0, "delta": {"content": "ready"}, "finish_reason": "stop"},
+                ],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+            }
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"},
+                content=("data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n").encode(),
+            )
+        return httpx.Response(200, json={
+            "citations": ["https://source.test/paper"], "usage": {"total_tokens": 11},
+        })
+
+    settings.llm_api_key = "test-key"
+    llm = LLM(settings, tracer)
+    await llm.client.close()
+    llm.client = AsyncOpenAI(
+        api_key="test-key", base_url="https://shared.test/v1", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(transport)),
+    )
+    search = ModelSearch(
+        "test-key", endpoint="https://shared.test/search", model="search", protocol=protocol,
+        tracer=tracer,
+    )
+    await search._client.aclose()
+    await search._pages.aclose()
+    search._client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    search._pages = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, headers={"content-type": "text/html"},
+                                text="<p>Original source evidence.</p>"),
+    ))
+    try:
+        answer, sources = await asyncio.gather(
+            llm.complete("system", "question"), search.search("q")
+        )
+        assert answer == "ready" and sources[0].content == "Original source evidence."
+        assert len(requests) == tracer.call_budget.used == 2
+        tokens_before_rejection = tracer.total_tokens
+        with pytest.raises(ModelCallLimitExceeded):
+            await search.search("next query")
+        assert tracer.total_tokens == tokens_before_rejection
+        with pytest.raises(ModelCallLimitExceeded):
+            await llm.complete("system", "next question")
+        assert len(requests) == 2 and tracer.call_budget.rejected
+        assert tracer.budget is not None and tracer.budget._reserved == 0
+    finally:
+        await llm.aclose()
+        await search.aclose()
+
+
+async def test_search_key_failover_cannot_bypass_or_reclassify_call_budget():
+    from deep_research.tools.key_health import shared_health
+    from deep_research.tools.key_pool import ApiKeyPoolSearch
+
+    tracer = Tracer()
+    tracer.call_budget = ModelCallBudget(1)
+    posts, created = [], []
+    clients = {}
+    for key in ("limited", "spare", "untouched"):
+        client = ModelSearch(
+            key, endpoint="https://budget-pool.test/search", model="search", tracer=tracer,
+        )
+        await client._client.aclose()
+
+        def fail(request, key=key):
+            posts.append(key)
+            return httpx.Response(429, json={"error": "rate limit"})
+
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
+        clients[key] = client
+
+    def factory(key):
+        created.append(key)
+        return clients[key]
+
+    pool = ApiKeyPoolSearch(
+        "responses", list(clients), factory, tracer=tracer, namespace="call-budget-test",
+    )
+    try:
+        with pytest.raises(ModelCallLimitExceeded):
+            await pool.search("q")
+        assert posts == ["limited"] and created == ["limited", "spare"]
+        assert tracer.call_budget.used == 1 and tracer.call_budget.rejected
+        assert shared_health("responses", "call-budget-test", "spare").status == "ready"
+        # Repeating the failed request still cannot rotate into a fresh paid call.
+        with pytest.raises(ModelCallLimitExceeded):
+            await pool.search("q again")
+        assert posts == ["limited"] and "untouched" not in created
+        assert tracer.total_tokens == 0
+    finally:
+        await pool.aclose()
+        for key in set(clients) - set(created):
+            await clients[key].aclose()
 
 
 async def test_search_model_reserves_parallel_budget_and_bounds_output():

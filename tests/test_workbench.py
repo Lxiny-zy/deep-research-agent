@@ -1259,7 +1259,9 @@ async def test_qa_stream_keeps_source_free_turn_on_model_knowledge_path(
     assert "text/event-stream" in response.headers["content-type"]
     assert "event: complete" in response.text
     assert detail["messages"][0]["citations"] == []
-    assert detail["messages"][0]["thoughts"][-1]["tool"] == "model_knowledge"
+    tools = {thought["tool"] for thought in detail["messages"][0]["thoughts"]}
+    assert "model_knowledge" in tools
+    assert not tools.intersection({"search_query_plan", "search_and_verify"})
 
 
 @pytest.mark.asyncio

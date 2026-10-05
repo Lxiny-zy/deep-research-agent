@@ -233,10 +233,8 @@ async def _answer(
     if not principal.can_research:
         raise HTTPException(403, "当前身份为只读，无法发起问答")
     conversation = await _owned(request, conversation_id)
-    history = [
-        {"query": message.query, "answer": message.answer}
-        for message in conversation.messages
-        if message.status in {"done", "fallback"}
+    history_messages = [
+        message for message in conversation.messages if message.status in {"done", "fallback"}
     ]
     settings = request.app.state.settings
     scope: dict[str, Any]
@@ -247,13 +245,26 @@ async def _answer(
             for i, message in enumerate(conversation.messages)
             if message.id == body.revision_message_id
         )
-        history = [
-            {"query": message.query, "answer": message.answer}
+        history_messages = [
+            message
             for message in conversation.messages[:parent_index]
             if message.status in {"done", "fallback"}
         ]
     else:
         scope = await _paper_scope(request, conversation, body)
+    history = [
+        {"id": message.id, "position": message.position,
+         "query": message.query, "answer": message.answer}
+        for message in history_messages
+    ]
+    previous_memory = next((
+        thought["memory"]
+        for message in reversed(history_messages)
+        for thought in reversed(message.thoughts)
+        if thought.get("tool") == "conversation_memory" and isinstance(thought.get("memory"), dict)
+    ), None)
+    if previous_memory is not None:
+        scope["conversation_memory"] = previous_memory
     if conversation.run_id is not None and body.revision_message_id is None:
         cache = getattr(request.app.state, "paper_evidence_cache", None)
         if cache is None:
@@ -261,6 +272,11 @@ async def _answer(
             request.app.state.paper_evidence_cache = cache
         scope.update(paper_cache=cache, cache_scope=f"{principal.id}/{conversation.run_id}")
     agent, search_tool = await api_module._build_agent(request.app, settings)
+    from ..call_budget import ModelCallBudget, ModelCallLimitExceeded
+    from .quality import coerce_policy
+
+    call_budget = ModelCallBudget(coerce_policy(settings.quality).qa_max_model_calls)
+    agent.tracer.call_budget = call_budget
     agent.tracer.cache_scope = f"qa:{principal.id}:{conversation.run_id or conversation.id}"
     reasoning: dict[str, dict[str, Any]] = {}
     usages: list[dict[str, Any]] = []
@@ -306,6 +322,12 @@ async def _answer(
         )
     except HTTPException:
         raise
+    except ModelCallLimitExceeded as exc:
+        from .qa import QaAnswer
+
+        result = QaAnswer(answer=str(exc), citations=[], findings=[], fallback=True)
+        if on_event:
+            on_event({"type": "status", "message": str(exc)})
     except Exception as exc:
         raise HTTPException(502, {"code": "qa_failed", "message": f"问答失败：{exc}"}) from exc
     finally:
@@ -314,6 +336,17 @@ async def _answer(
         if search_tool is not None:
             await search_tool.aclose()
     from .support import evidence_id
+
+    if call_budget.rejected and result.fallback and "调用上限" not in result.answer:
+        result.answer = (
+            f"本轮已达到模型调用上限（{call_budget.limit} 次），以下只保留可核验内容。\n\n"
+            + result.answer
+        )
+    result.thoughts.append({
+        "tool": "model_budget", "input": "",
+        "observation": f"本轮使用 {call_budget.used}/{call_budget.limit} 次模型请求。",
+        "used": call_budget.used, "limit": call_budget.limit, "stopped": call_budget.rejected,
+    })
 
     evidence = [
         {

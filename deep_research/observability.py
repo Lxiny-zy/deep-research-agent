@@ -17,6 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from .call_budget import ModelCallBudget
 from .token_budget import TokenBudget
 
 # Stage 不再是封闭枚举：新增角色（Critic / FactChecker / Coder 等）可直接发自己的事件，
@@ -75,6 +76,7 @@ class Tracer:
         self.total_tokens = 0
         self.estimated_tokens = 0
         self.budget: TokenBudget | None = None
+        self.call_budget: ModelCallBudget | None = None
         self.cache_scope = ""
         self.events: list[Event] = []
         self._subscribers: list[Callable[[Event], None]] = []

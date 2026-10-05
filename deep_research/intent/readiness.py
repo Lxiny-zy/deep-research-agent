@@ -34,7 +34,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ..prompting import compose_system_prompt, load_global_rules
+from ..generation_policy import generation_options
+from ..prompting import leaf_system_prompt
 from .model import normalize
 from .types import IntentDecision, IntentSlots
 
@@ -202,10 +203,11 @@ async def llm_options(
     )
     try:
         result = await llm.parse(
-            compose_system_prompt(_OPTIONS_SYSTEM, load_global_rules()),
+            leaf_system_prompt(_OPTIONS_SYSTEM),
             user,
             ClarifyOptions,
             temperature=0.0,
+            **generation_options(llm, "intent"),
         )
     except Exception as exc:
         logger.debug("clarify option generation failed: %s", exc)

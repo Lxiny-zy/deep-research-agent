@@ -54,6 +54,8 @@ class QualityPolicy(BaseModel):
     # ---- 返工与收敛 ----
     max_revisions: int = Field(2, ge=0, le=4)
     qa_claim_max_revisions: int = Field(2, ge=0, le=4)
+    qa_max_revisions: int = Field(1, ge=0, le=4)
+    qa_max_model_calls: int = Field(16, ge=1, le=128)
     extraction_max_revisions: int = Field(1, ge=0, le=4)
     review_evidence_rounds: int = Field(1, ge=0, le=4)
     fail_on_quality: bool = False
@@ -165,11 +167,30 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "返工与收敛",
         "int",
         "质量检查不合格时，把问题清单交回写作者重写的最大次数。0 表示不返工、"
-        "只标注问题。问答中仅计引用和数值等机械问题，断言问题另计轮数。"
+        "只标注问题。问答中仅计引用和数值等机械问题，断言问题另计轮数，"
+        "两者还受问答自动修订总次数约束。"
         "每次返工都会消耗额外 token；报告返工后仍取问题最少的一版交付。",
         0,
         4,
         "次",
+    ),
+    QualityField(
+        "qa_max_revisions",
+        "问答自动修订总次数",
+        "返工与收敛",
+        "int",
+        "整轮问答的局部修订总上限，默认一次；同时受机械和断言的分项上限约束。"
+        "局部修订失败不会再启动整篇重写，保留可核验内容与待确认点。",
+        0, 4, "次",
+    ),
+    QualityField(
+        "qa_max_model_calls",
+        "问答模型调用总上限",
+        "返工与收敛",
+        "int",
+        "单轮问答内所有角色共用的模型请求次数上限，包含摘要、规划、抽取、核验和重试。"
+        "到达上限不再请求模型，不会将未完成核验的草稿当作通过。",
+        1, 128, "次",
     ),
     QualityField(
         "qa_claim_max_revisions",
@@ -177,7 +198,7 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "返工与收敛",
         "int",
         "问答中结论未得到引用支持时的修订次数，与补引用、修正数值的机械修订分别计数。"
-        "0 表示仅核验不修订断言；用尽后保留可核验内容。每轮仍消耗本次任务的总 token 预算。",
+        "0 表示仅核验不修订断言；用尽后保留可核验内容。仍受问答修订总次数和调用总上限约束。",
         0,
         4,
         "次",

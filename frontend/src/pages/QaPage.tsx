@@ -4,7 +4,6 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
 import QaStreamingAnswer from '../components/QaStreamingAnswer'
-import QaAvatar from '../components/QaAvatar'
 import {
   createConversation,
   deleteConversation,
@@ -330,14 +329,12 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
               <div className="qa-question">
                 <p>{pending}</p>
               </div>
-              <div className="qa-answer-row">
-                <QaAvatar active />
-                <QaStreamingAnswer
-                  text={streamingAnswer}
-                  activity={activity}
-                  waiting={withLibrary || withWeb ? '正在检索并核验证据…' : '正在生成回答…'}
-                />
-              </div>
+              <QaStreamingAnswer
+                text={streamingAnswer}
+                activity={activity}
+                waiting={withLibrary || withWeb ? '正在检索并核验证据…' : '正在生成回答…'}
+                requiresVerification={withLibrary || withWeb}
+              />
             </article>
           )}
           {ask.isError && (

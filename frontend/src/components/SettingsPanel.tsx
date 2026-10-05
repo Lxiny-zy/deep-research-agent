@@ -71,7 +71,7 @@ export default function SettingsPanel({
         onClick={() => setOpen((o) => !o)}
       >
         <AppIcon name={open ? 'chevron-down' : 'chevron-right'} size={14} aria-hidden="true" />
-        高级设置
+        <span className="run-params-toggle-label">高级设置</span>
         <span className="hint">留空＝用服务端默认</span>
       </button>
       {open && (

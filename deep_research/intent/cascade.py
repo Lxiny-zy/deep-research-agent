@@ -32,7 +32,8 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from ..prompting import compose_system_prompt
+from ..generation_policy import generation_options
+from ..prompting import leaf_system_prompt
 from . import clarify, context, rules, telemetry
 from . import slots as slots_module
 from .model import TextClassifier, load_bundled_model
@@ -139,7 +140,7 @@ class IntentCascade:
         self._classifier = classifier if classifier is not None else load_bundled_model()
         self._llm = llm
         self._enable_llm = enable_llm
-        self._global_rules = global_rules
+        self._context_rules = global_rules
 
     # --- 输入侧 ---
 
@@ -402,10 +403,11 @@ class IntentCascade:
             return None
         try:
             return await llm.parse(
-                compose_system_prompt(_QUERY_SYSTEM, self._global_rules),
+                leaf_system_prompt(_QUERY_SYSTEM, self._context_rules),
                 f"用户请求：\n{query}",
                 QueryIntentJudgment,
                 temperature=0.0,
+                **generation_options(llm, "intent"),
             )
         except Exception as exc:
             logger.debug("intent llm tier failed: %s", exc)
@@ -461,10 +463,11 @@ class IntentCascade:
         if use_llm and self._enable_llm and self._llm is not None:
             try:
                 judgment = await self._llm.parse(
-                    compose_system_prompt(_SOURCE_SYSTEM, self._global_rules),
+                    leaf_system_prompt(_SOURCE_SYSTEM, self._context_rules),
                     f"待审查文本：\n{text[:4000]}",
                     SourceIntentJudgment,
                     temperature=0.0,
+                    **generation_options(self._llm, "intent"),
                 )
             except Exception as exc:
                 logger.debug("source intent llm tier failed: %s", exc)

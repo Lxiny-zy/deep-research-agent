@@ -3,10 +3,11 @@
    ========================================================================== */
 
 .home-page {
+  --home-actionbar-height: 96px;
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
-  padding-bottom: 88px;
+  padding-bottom: calc(var(--home-actionbar-height) + var(--space-4));
 }
 
 .home-draft {
@@ -506,6 +507,12 @@
   padding: var(--space-5);
   position: sticky;
   top: calc(var(--topbar-height) + var(--space-4));
+  max-height: calc(
+    100dvh - var(--topbar-height) - var(--home-actionbar-height) - 3 * var(--space-4)
+  );
+  min-width: 0;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .home-config-head {
@@ -631,9 +638,23 @@ span.home-option-label {
 }
 
 .run-params-toggle .hint {
+  flex: 1;
   font-size: var(--text-xs);
   font-weight: 400;
   margin-left: auto;
+  min-width: 0;
+  text-align: right;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.run-params-toggle-label {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.run-params-toggle > .app-icon {
+  flex-shrink: 0;
 }
 
 .run-params-body {
@@ -799,6 +820,14 @@ span.home-option-label {
 
   .home-config {
     position: static;
+    max-height: none;
+  }
+}
+
+@media (max-height: 600px) {
+  .home-config {
+    position: static;
+    max-height: none;
   }
 }
 
@@ -818,7 +847,15 @@ span.home-option-label {
   }
 
   .home-actionbar .btn-lg {
-    flex: 1;
+    flex: none;
+    min-height: 48px;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .home-actionbar-go {
+    flex: 1 1 100%;
+    min-width: 0;
   }
 
   .home-actionbar-status {

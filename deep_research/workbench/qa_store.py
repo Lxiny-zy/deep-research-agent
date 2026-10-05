@@ -64,7 +64,9 @@ def message_payload(message: QaMessage, *, include_private: bool = False) -> dic
             thoughts=[
                 thought
                 for thought in message.thoughts
-                if thought.get("tool") != PRIVATE_REVISION_TOOL
+                if thought.get("tool") not in {
+                    PRIVATE_REVISION_TOOL, "conversation_memory", "conversation_memory_status",
+                }
             ],
         )
     )

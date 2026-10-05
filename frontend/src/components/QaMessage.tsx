@@ -18,6 +18,12 @@ const THOUGHT_LABEL: Record<string, string> = {
   citation_check: '引用复核',
   claim_check: '结论依据核对',
   answer_revision: '回答修订',
+  conversation_context: '对话上下文',
+  model_budget: '本轮模型调用',
+  search_query_plan: '检索规划',
+  evidence_verification: '资料核验状态',
+  context_selection: '本轮证据范围',
+  partial_answer: '保留可核验内容',
 }
 
 /**

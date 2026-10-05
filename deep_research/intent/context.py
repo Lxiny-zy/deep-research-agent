@@ -28,7 +28,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ..prompting import compose_system_prompt, load_global_rules
+from ..generation_policy import generation_options
+from ..prompting import leaf_system_prompt
 from .model import normalize
 from .types import ConversationTurn, IntentSignal
 
@@ -230,10 +231,11 @@ async def resolve_followup_detailed(
 
     try:
         result = await llm.parse(
-            compose_system_prompt(_RESOLVE_SYSTEM, load_global_rules()),
+            leaf_system_prompt(_RESOLVE_SYSTEM),
             f"历史轮次：\n{render_history(history)}\n\n本轮输入：\n{query}",
             ResolvedQuery,
             temperature=0.0,
+            **generation_options(llm, "context_resolution"),
         )
     except Exception as exc:
         logger.debug("followup resolution failed: %s", exc)

@@ -21,7 +21,6 @@ from ..guardrails import (
 )
 from ..llm import LLM
 from ..models import (
-    ExtractedFindingList,
     ExtractionAudit,
     Finding,
     ResearchResult,
@@ -392,36 +391,14 @@ class Researcher:
             "选择足以支持该发现的最短连续原文，保留必要条件、归属及表头。"
             "无法在上限内支持复合结论时拆为有各自依据的事实，不能直接引用整份长来源。"
         )
-        prompt = fixed + "\n" + "\n".join(user_parts)
-        try:
-            extracted = await self.llm.parse(
-                system,
-                prompt,
-                ExtractedFindingList,
-            )
-        except LeaseLostError:
-            raise
-        except Exception as e:
-            self.tracer.emit(
-                "RESEARCHER",
-                "error",
-                f"抽取失败「{sub_question}」（{type(e).__name__}），已保留来源",
-            )
-            if self.raise_extraction_errors:
-                raise
-            return ResearchResult(
-                sub_question=sub_question,
-                findings=[],
-                extraction_audit=ExtractionAudit(
-                    question=sub_question,
-                    sources=[s.model_copy(deep=True) for s in sources],
-                    issues=[f"extraction_call_failed:{type(e).__name__}"],
-                ),
-            )
+        dynamic = "\n" + "\n".join(user_parts)
+        prompt = fixed + dynamic
+        from ..workbench.extraction import extract_with_context_budget
 
-        from ..workbench.extraction import check_extraction
-
-        result = await check_extraction(self, extracted, sources, sub_question, system, prompt)
+        result = await extract_with_context_budget(
+            self, sources, sub_question, system, prompt, dynamic,
+            allow_partition=self.source_context is None,
+        )
         findings = result.findings
         audit = result.extraction_audit
         assert audit is not None
@@ -439,7 +416,7 @@ class Researcher:
             data={
                 "sub_question": sub_question,
                 "count": len(findings),
-                "candidate_count": len(extracted.findings),
+                "candidate_count": len(audit.candidates),
                 "verified_count": admissible,
                 "report_candidate_count": admissible,
                 "semantic_counts": semantic_counts,

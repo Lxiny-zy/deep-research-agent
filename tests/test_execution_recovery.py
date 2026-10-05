@@ -32,7 +32,8 @@ def test_deadlines_follow_task_tier_and_explicit_override(monkeypatch):
     assert attempt_seconds(settings, "research_quick") == 7200
     assert attempt_seconds(settings, "paper_read") == 14400
     assert attempt_seconds(settings, "research") == 43200
-    assert attempt_seconds(settings, "qa") == 1800
+    assert attempt_seconds(settings, "qa") == 600
+    assert attempt_seconds(replace(settings, run_timeout_profiles={"qa": 120}), "qa") == 120
     assert attempt_seconds(replace(settings, research_tier="deep"), "paper_read") == 43200
     custom = replace(
         settings, run_timeout_profiles={"paper_read:deep": 60000}, research_tier="deep"

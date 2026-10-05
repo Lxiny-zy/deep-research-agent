@@ -54,7 +54,8 @@
   backdrop-filter: blur(18px);
   background: var(--glass);
   border-radius: var(--radius-sm);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .home-page .home-config-head {

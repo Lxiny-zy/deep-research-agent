@@ -43,7 +43,7 @@ def attempt_seconds(settings: Settings, workflow: str | None) -> int:
     if name in settings.run_timeout_profiles:
         return settings.run_timeout_profiles[name]
     if name in {"qa", "paper_qa"}:
-        tier, default = "qa", 1800
+        tier, default = "qa", 600
     elif settings.research_tier:
         tier = "quick" if settings.research_tier == "light" else settings.research_tier
         default = {"quick": 7200, "standard": 14400, "deep": 43200}[tier]

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import ClarifyDialog from '../components/ClarifyDialog'
@@ -48,6 +48,21 @@ export default function NewResearchPage() {
 }
 
 function ResearchComposer() {
+  const actionbarRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const bar = actionbarRef.current
+    const page = bar?.parentElement
+    if (!bar || !page) return
+    const measure = () => {
+      if (bar.offsetHeight > 0)
+        page.style.setProperty('--home-actionbar-height', `${bar.offsetHeight}px`)
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(bar)
+    return () => observer.disconnect()
+  }, [])
   const navigate = useNavigate()
   const { data: config } = useConfig()
   const [searchParams] = useSearchParams()
@@ -161,11 +176,16 @@ function ResearchComposer() {
         template: activeTemplate ? activeTemplate.key : null,
         strategy: customWorkflow ? null : strategy,
         dataset: isDataTask && datasetSheet && dataset?.mode !== 'merge' ? datasetSheet.csv : null,
-        dataset_merge: isDataTask && dataset?.mode === 'merge' ? dataset.merge?.request ?? null : null,
+        dataset_merge:
+          isDataTask && dataset?.mode === 'merge' ? (dataset.merge?.request ?? null) : null,
         dataset_source:
           isDataTask && dataset && datasetSheet
-            ? { filename: dataset.parsed.filename, sheet: datasetSheet.name,
-                file_sha256: dataset.parsed.file_sha256, input_sha256: datasetSheet.input_sha256 }
+            ? {
+                filename: dataset.parsed.filename,
+                sheet: datasetSheet.name,
+                file_sha256: dataset.parsed.file_sha256,
+                input_sha256: datasetSheet.input_sha256,
+              }
             : null,
         demo_data: isDataTask && !datasetSheet && demoData,
         tier,
@@ -183,9 +203,15 @@ function ResearchComposer() {
         thread,
         templateKey,
         tier,
-        dataset: dataset ? [dataset.parsed.filename, datasetSheet?.name ?? null,
-          dataset.parsed.file_sha256 ?? null, datasetSheet?.input_sha256 ?? null,
-          dataset.merge?.result.merge ?? null] : null,
+        dataset: dataset
+          ? [
+              dataset.parsed.filename,
+              datasetSheet?.name ?? null,
+              dataset.parsed.file_sha256 ?? null,
+              datasetSheet?.input_sha256 ?? null,
+              dataset.merge?.result.merge ?? null,
+            ]
+          : null,
         demoData,
         attachments: attachments.payloads.map((item) => item.id),
       }),
@@ -242,9 +268,11 @@ function ResearchComposer() {
       return
     }
     if (isDataTask && dataset && !datasetSheet) {
-      setError(dataset.mode === 'merge'
-        ? '请先预览合并结果，再开始分析'
-        : '这个文件有多张工作表，请先选择要分析的一张')
+      setError(
+        dataset.mode === 'merge'
+          ? '请先预览合并结果，再开始分析'
+          : '这个文件有多张工作表，请先选择要分析的一张',
+      )
       return
     }
     beginRequest()
@@ -659,7 +687,7 @@ function ResearchComposer() {
         </aside>
       </fieldset>
 
-      <div className="home-actionbar">
+      <div className="home-actionbar" ref={actionbarRef}>
         <p className="home-actionbar-motto" aria-hidden="true">
           Exploration
           <br />

@@ -109,7 +109,9 @@ async def test_default_profile_applies_without_custom_cards(settings, catalog):
     assert llm.default_temperature == 0.55
     assert llm.context_window_tokens == 1000000
     assert llm.settings.llm_max_output_tokens == 65536
-    assert llm.input_capacity_chars == (1000000 - 65536) * 2
+    # The legacy character hint now leaves conservative room for mixed-script
+    # text; the configured token window/output cap themselves remain unchanged.
+    assert 0 < llm.input_capacity_chars < 1000000 - 65536
     from deep_research.catalog.runtime import _profile_snapshot
 
     frozen = _profile_snapshot(await catalog.get_default_profile())

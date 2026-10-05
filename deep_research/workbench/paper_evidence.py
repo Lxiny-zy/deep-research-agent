@@ -16,6 +16,7 @@ from ..guardrails import report_eligible, screen_source_intent
 from ..models import Finding, Source
 from ..prompting import PrefixPrompt, structured_system_prompt
 from ..quantities import _measurement_metric_matches, normalize_unit, parse_measurements
+from .conversation_memory import History
 from .qa_context import dialogue_context
 from .support import digest
 
@@ -152,7 +153,7 @@ async def current_findings(
 async def select_findings(
     candidates: list[Finding],
     question: str,
-    history: list[dict[str, str]],
+    history: History,
     researcher: Any,
 ) -> list[Finding] | None:
     plan = await plan_findings(candidates, question, history, researcher)
@@ -162,7 +163,7 @@ async def select_findings(
 async def plan_findings(
     candidates: list[Finding],
     question: str,
-    history: list[dict[str, str]],
+    history: History,
     researcher: Any,
     sources: list[Source] | None = None,
     read_urls: set[str] | None = None,

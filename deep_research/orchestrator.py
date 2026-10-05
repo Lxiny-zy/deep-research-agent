@@ -227,6 +227,14 @@ class _LazyOwnedLLM(LLM):
     def parameter_mode(self, value: str) -> None:
         self._get().parameter_mode = value
 
+    @property
+    def context_window_tokens(self) -> int | None:
+        return getattr(self._get(), "context_window_tokens", None)
+
+    @context_window_tokens.setter
+    def context_window_tokens(self, value: int | None) -> None:
+        self._get().context_window_tokens = value
+
     async def complete(self, system: str, user: str, *, temperature: float = 0.3) -> str:
         return await self._get().complete(system, user, temperature=temperature)
 

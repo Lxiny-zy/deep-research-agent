@@ -1,4 +1,4 @@
-"""Citation fixes cannot consume the separate claim-revision allowance."""
+"""QA has a total local-edit cap plus independent citation/claim allowances."""
 
 import json
 
@@ -54,7 +54,7 @@ async def ask(settings, model):
 
 
 async def test_citation_repair_leaves_the_full_claim_budget_available(settings):
-    settings.quality = {"max_revisions": 1, "qa_claim_max_revisions": 2}
+    settings.quality = {"max_revisions": 1, "qa_claim_max_revisions": 2, "qa_max_revisions": 4}
     model = BudgetWriter()
     result = await ask(settings, model)
     assert not result.fallback and result.answer == GOOD
@@ -66,7 +66,9 @@ async def test_citation_repair_leaves_the_full_claim_budget_available(settings):
 
 @pytest.mark.parametrize("mechanical,claims", [(0, 1), (3, 0), (0, 0)])
 async def test_each_revision_allowance_can_be_disabled_independently(settings, mechanical, claims):
-    settings.quality = {"max_revisions": mechanical, "qa_claim_max_revisions": claims}
+    settings.quality = {
+        "max_revisions": mechanical, "qa_claim_max_revisions": claims, "qa_max_revisions": 4,
+    }
     model = BudgetWriter(missing_citation=False, repair_on=1)
     result = await ask(settings, model)
     assert model.stream_calls == 1 and model.local_edits == claims
@@ -81,13 +83,22 @@ async def test_claim_budget_does_not_extend_repeated_citation_repairs(settings):
 
         async def parse(self, system, user, schema, **kwargs):
             if schema is ProseEdits:
-                raise ValueError("local repair unavailable")
+                self.citation_edits += 1
+                payload = json.loads(user.split("【只修订以下段落】\n", 1)[1])
+                return ProseEdits(edits=[
+                    {"unit_id": part["unit_id"], "replacement": "现有" + BAD.replace(" [1]", "")}
+                    for part in payload["paragraphs"]
+                ])
             return await super().parse(system, user, schema, **kwargs)
 
-    settings.quality = {"max_revisions": 1, "qa_claim_max_revisions": 4}
+    settings.quality = {"max_revisions": 1, "qa_claim_max_revisions": 4, "qa_max_revisions": 4}
     model = Uncited()
     result = await ask(settings, model)
-    assert result.fallback and model.stream_calls == 2 and model.local_edits == 0
+    assert result.fallback and model.stream_calls == 1 and model.local_edits == 0
+    assert model.citation_edits == 1
+    attempts = [row for row in result.thoughts if row.get("category")]
+    assert [row["category"] for row in attempts] == ["mechanical"]
+    assert attempts[0]["counts"] == {"mechanical": 1, "claim": 0}
 
 
 async def test_exhausted_total_budget_does_not_start_an_extra_full_generation(
@@ -100,7 +111,7 @@ async def test_exhausted_total_budget_does_not_start_an_extra_full_generation(
         raise TokenBudgetExceeded("budget exhausted")
 
     monkeypatch.setattr(prose_edit, "repair_paragraphs", exhausted)
-    settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4}
+    settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4, "qa_max_revisions": 4}
     model = BudgetWriter(missing_citation=False)
     result = await ask(settings, model)
     assert result.fallback and model.stream_calls == 1
@@ -121,12 +132,13 @@ async def test_unchanged_revision_stops_without_spending_remaining_allowances(se
                 ])
             return await super().parse(system, user, schema, **kwargs)
 
-    settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4}
+    settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4, "qa_max_revisions": 4}
     model = NoProgress(missing_citation=False)
     result = await ask(settings, model)
     assert result.fallback and model.local_edits == 1
-    assert model.stream_calls == (1 if local else 2)
-    assert any("未产生新正文" in row["observation"] for row in result.thoughts)
+    assert model.stream_calls == 1
+    stop_reason = "未产生新正文" if local else "未能安全完成局部修订"
+    assert any(stop_reason in row["observation"] for row in result.thoughts)
 
 
 async def test_revision_cycle_stops_when_returning_to_a_checked_draft(settings):
@@ -142,8 +154,37 @@ async def test_revision_cycle_stops_when_returning_to_a_checked_draft(settings):
                 ])
             return await super().parse(system, user, schema, **kwargs)
 
-    settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4}
+    settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4, "qa_max_revisions": 4}
     model = CyclicWriter(missing_citation=False)
     result = await ask(settings, model)
     assert result.fallback and model.local_edits == 2 and model.stream_calls == 1
     assert any("未产生新正文" in row["observation"] for row in result.thoughts)
+
+
+@pytest.mark.parametrize("missing_citation", [True, False])
+async def test_default_total_cap_allows_only_one_local_edit(settings, missing_citation):
+    # Larger category allowances must not implicitly expand the whole-turn cap.
+    settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4}
+    model = BudgetWriter(missing_citation=missing_citation, repair_on=2)
+    result = await ask(settings, model)
+    assert result.fallback and model.stream_calls == 1
+    assert model.citation_edits == int(missing_citation)
+    assert model.local_edits == int(not missing_citation)
+    attempts = [row for row in result.thoughts if row.get("category")]
+    assert len(attempts) == 1
+    assert attempts[0]["category"] == ("mechanical" if missing_citation else "claim")
+    assert attempts[0]["total_attempts"] == 1 and attempts[0]["total_limit"] == 1
+    stop = next(row for row in result.thoughts if "本轮自动修订上限" in row["observation"])
+    assert stop["total_attempts"] == 1 and stop["total_limit"] == 1
+    assert BAD not in result.answer
+    assert "不能据此证明因果关系" in result.answer
+
+
+async def test_zero_total_cap_disables_all_edits_despite_category_allowances(settings):
+    settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4, "qa_max_revisions": 0}
+    model = BudgetWriter(missing_citation=False, repair_on=1)
+    result = await ask(settings, model)
+    assert result.fallback and model.stream_calls == 1
+    assert model.local_edits == model.citation_edits == 0
+    stop = next(row for row in result.thoughts if "本轮自动修订上限" in row["observation"])
+    assert stop["total_attempts"] == stop["total_limit"] == 0

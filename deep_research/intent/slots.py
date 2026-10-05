@@ -26,7 +26,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..prompting import compose_system_prompt, load_global_rules
+from ..generation_policy import generation_options
+from ..prompting import leaf_system_prompt
 from .model import normalize
 from .types import IntentSlots
 
@@ -225,10 +226,11 @@ async def extract_slots(
 
     try:
         result = await llm.parse(
-            compose_system_prompt(_SLOT_SYSTEM, load_global_rules()),
+            leaf_system_prompt(_SLOT_SYSTEM),
             f"用户问题：\n{text}",
             SlotExtraction,
             temperature=0.0,
+            **generation_options(llm, "extraction"),
         )
     except Exception as exc:
         logger.debug("slot extraction failed: %s", exc)

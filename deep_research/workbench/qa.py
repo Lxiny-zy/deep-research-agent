@@ -1,7 +1,7 @@
 """学术问答：多轮对话式的快速检索问答，每个回答都带已核验引用。
 
-与「深度研究」的区别在于成本与交互形态：问答是一次检索 → 一次抽取与核验 →
-一次作答，秒级返回，适合「查一下某方向最新文献」「这个指标是什么意思」这类
+与「深度研究」的区别在于成本与交互形态：问答是有界检索、分批抽取与核验后作答，
+适合「查一下某方向最新文献」「这个指标是什么意思」这类
 追问式需求；深度研究则是多子问题、反思补洞、结构化报告。
 
 问答复用研究链路里全部的证据纪律：来源门禁、逐字引文核验、语义核验，最终正文
@@ -22,25 +22,42 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ..agents.researcher import Researcher
+from ..call_budget import ModelCallLimitExceeded
+from ..context_budget import ContextBudget
+from ..generation_policy import generation_options
 from ..guardrails import report_eligible
+from ..llm import InputCapacityError
 from ..models import ExtractedFindingList, Finding, ResearchResult, Source
 from ..persistence.repository import LeaseLostError
 from ..prompting import (
     EVIDENCE_MODALITY_RULES,
     MEASUREMENT_SCOPE_RULES,
     SCIENTIFIC_MARKDOWN,
-    PrefixPrompt,
+    leaf_system_prompt,
     structured_system_prompt,
 )
 from ..report.validation import ReportCheck, validate_body
 from ..token_budget import TokenBudgetExceeded
 from ..tools.base import SearchTool
+from .conversation_memory import (
+    SUMMARY_SYSTEM,
+    ConversationMemory,
+    History,
+    SummaryDraft,
+    build_conversation_memory,
+    history_turns,
+    valid_memory,
+)
 from .qa_cache import PaperEvidenceCache, evidence_cache_key
 from .qa_context import dialogue_context
+from .qa_material_window import select_answer_findings
 from .qa_revision_state import QaRevisionState, read_revision_state
 
 _SYSTEM = (
     "你是严谨的学术问答助手。只依据【已核验素材】回答用户问题：简洁、准确、用中文。"
+    "默认先用一句话直接回答，再给最多三条必要要点；概括核心观点时不展开成完整精读报告。"
+    "每条要点只承载一个主要论断，引用紧随该论断，不把多个发现拼成更强的结论。"
+    "只有用户明确要求详细解释、逐项比较或推导时才展开；不要例行附加长背景和核查清单。"
     "引用事实时保留素材中的 [n] 角标，并紧随相应论断；不得编造论文、作者、年份或数值。"
     "纯建议、追问和本轮证据范围说明不强凑引用；其中若含事实判断，仍须逐项提供依据。"
     "历史对话只用于理解当前问题的主题和指代，不是已核验素材，也不能沿用旧回答的引用编号。"
@@ -86,12 +103,6 @@ _RESEARCH_EXTRACTION = (
     "围绕当前问题选取必要的原文证据，逐条保留作者归属、实验条件及来源。"
     "不重新开展全网研究，不把不同来源的发现拼接为同一篇论文的事实。"
 )
-_ORIGIN_TAG = {
-    "paper": "【本论文】",
-    "research": "【本次任务】",
-    "library": "【其他文献·资料库】",
-    "web": "【其他文献】",
-}
 _PAPER_FALLBACK = (
     "当前可用的原文片段不足以回答这个问题。可以补充章节或页码，或勾选资料库、联网检索后再问。"
 )
@@ -101,6 +112,10 @@ _SEARCH_FALLBACK = (
 _VERIFICATION_FALLBACK = (
     "本轮已获取资料，但模型抽取或证据核验未能完成，暂时无法提供有可靠依据的回答。"
     "请稍后重试。"
+)
+_CONTEXT_FALLBACK = (
+    "当前问题与所需完整证据超出了模型的上下文容量，暂时无法安全生成回答。"
+    "原始资料仍保留，请缩小问题范围或使用上下文容量更大的模型。"
 )
 _CASUAL_REPLY = "你好！我可以帮你查找和核对学术资料。请直接告诉我想了解的主题、方法、数据集或论文。"
 _CASUAL_RE = re.compile(
@@ -124,7 +139,8 @@ class QaAnswer:
 
 
 def _contextual_query(
-    question: str, history: list[dict[str, str]], *, max_chars: int = 8192
+    question: str, history: History, *, max_chars: int = 8192,
+    memory: ConversationMemory | None = None,
 ) -> str:
     """Keep the topic chain even when a follow-up has no explicit pronoun.
 
@@ -144,7 +160,54 @@ def _contextual_query(
         "若本轮明确更换主题或条件，以本轮为准，不把旧主题强加给新问题。"
         "历史问题仅为上下文，不是事实证据或本轮新增任务。"
     )
-    return dialogue_context(previous, max_chars - len(current)) + current
+    return dialogue_context(
+        history, max_chars - len(current), memory=memory, user_questions_only=True,
+    ) + current
+
+
+async def _prepare_memory(
+    history: History, ctx: Any, previous: dict[str, Any] | None,
+    thoughts: list[dict[str, Any]], on_event: Callable[[dict[str, Any]], None] | None,
+    *, context_chars: int,
+) -> ConversationMemory | None:
+    if not history:
+        return None
+    model = ctx.llm_for("synthesizer")
+    budget = ContextBudget.from_model(model, ctx.settings.llm_max_input_chars)
+    window_chars = min(context_chars, budget.input_capacity_chars // 4)
+    system = leaf_system_prompt(SUMMARY_SYSTEM, getattr(ctx, "global_rules", None))
+    input_chars = min(16000, budget.remaining(
+        structured_system_prompt(system, SummaryDraft), reserve_tokens=256,
+    ) // 2)
+
+    async def summarize(_system: str, user: str) -> str:
+        if not budget.fits(structured_system_prompt(system, SummaryDraft), user):
+            raise InputCapacityError("会话整理输入超过当前模型容量")
+        if on_event:
+            on_event({"type": "status", "message": "正在整理较早对话的主题和约束…"})
+        summary = await model.parse(
+            system, user, SummaryDraft, temperature=0.0, retries=0,
+            **generation_options(model, "summary"),
+        )
+        return summary.model_dump_json()
+
+    result = await build_conversation_memory(
+        history, previous=previous, summarize=summarize, max_chars=window_chars,
+        max_input_chars=input_chars, max_summary_chars=min(2400, window_chars // 3),
+    )
+    if result.memory is not None:
+        thoughts.append(result.memory.to_thought())
+    if result.model_calls or result.previous_invalidated or result.retryable:
+        thoughts.append(result.to_thought())
+        notice = (
+            "已整理较早对话背景，原始消息仍保留。"
+            if result.status == "updated"
+            else "较早对话暂未能完整整理，将参考可用摘要与近期消息。"
+        )
+        thoughts.append({"tool": "conversation_context", "input": "", "observation": notice})
+        if on_event:
+            on_event({"type": "status", "message": notice})
+    return result.memory
 
 
 async def _verified(
@@ -199,7 +262,7 @@ def _is_casual_question(question: str) -> bool:
 async def answer_question(
     question: str,
     *,
-    history: list[dict[str, str]],
+    history: History,
     ctx: Any,
     paper_sources: list[Source] | None = None,
     paper_evidence: list[Finding] | None = None,
@@ -212,6 +275,7 @@ async def answer_question(
     scope_kind: Literal["paper", "research"] = "paper",
     scope_query: str = "",
     revision_seed: dict[str, Any] | None = None,
+    conversation_memory: dict[str, Any] | None = None,
 ) -> QaAnswer:
     """一次学术问答：检索 → 核验 → 作答 → 复核。``ctx`` 为 ``RunContext``。
 
@@ -231,8 +295,25 @@ async def answer_question(
             }
         )
         return QaAnswer(answer=_CASUAL_REPLY, citations=[], findings=[], thoughts=thoughts)
+    context_roles = ["synthesizer"]
+    if paper_sources is not None or include_web or extra_search is not None:
+        context_roles.append("researcher")
+    if include_web or extra_search is not None:
+        context_roles.append("planner")
+    context_chars = min(
+        8192, *(ContextBudget.from_model(
+            ctx.llm_for(role), ctx.settings.llm_max_input_chars,
+        ).input_capacity_chars // 4 for role in context_roles)
+    )
+    memory = (
+        await _prepare_memory(
+            history, ctx, conversation_memory, thoughts, on_event, context_chars=context_chars,
+        )
+        if revision_seed is None else valid_memory(conversation_memory, history_turns(history))
+    )
     query = _contextual_query(
-        question, history, max_chars=min(8192, ctx.settings.llm_max_input_chars // 4)
+        question, history, max_chars=context_chars,
+        memory=memory,
     )
     if scope_kind == "research" and scope_query:
         query = f"绑定研究任务：{scope_query}\n本轮追问：{query}"
@@ -250,7 +331,7 @@ async def answer_question(
         if question != material.question:
             raise ValueError("修订请求与原问题不一致")
         if not material.contextual_query:
-            contextual_query = _contextual_query(question, history)
+            contextual_query = _contextual_query(question, history, memory=memory)
             if material.scope_kind == "research" and material.scope_query:
                 contextual_query = (
                     f"绑定研究任务：{material.scope_query}\n本轮追问：{contextual_query}"
@@ -277,6 +358,7 @@ async def answer_question(
             material,
             ctx=ctx,
             history=history,
+            memory=memory,
             thoughts=[
                 {
                     "tool": "answer_revision",
@@ -333,6 +415,7 @@ async def answer_question(
                         0,
                         available - len(context_for_paper(sources)) - len(query) - framing_chars,
                     ),
+                    memory=memory,
                 )
             return ""
 
@@ -519,13 +602,19 @@ async def answer_question(
         else:
             model = ctx.llm_for("synthesizer")
             capacity = getattr(model, "input_capacity_chars", ctx.settings.llm_max_input_chars)
+            knowledge_system = leaf_system_prompt(
+                _KNOWLEDGE_SYSTEM, getattr(ctx, "global_rules", None),
+            )
+            knowledge_budget = ContextBudget.from_model(model, ctx.settings.llm_max_input_chars)
             context = dialogue_context(
-                history, capacity - len(ctx.system_prompt(_KNOWLEDGE_SYSTEM)) - len(question) - 8192
+                history, min(capacity, knowledge_budget.remaining(
+                    knowledge_system, question, reserve_tokens=128,
+                ) // 2), memory=memory,
             )
             user = f"{context}\n\n【用户问题】\n{question}"
             knowledge_chunks: list[str] = []
             async for delta in ctx.llm_for("synthesizer").stream(
-                ctx.system_prompt(_KNOWLEDGE_SYSTEM), user, temperature=0.3
+                knowledge_system, user, temperature=0.3
             ):
                 knowledge_chunks.append(delta)
                 if on_delta is not None:
@@ -570,6 +659,7 @@ async def answer_question(
         material,
         ctx=ctx,
         history=history,
+        memory=memory,
         thoughts=thoughts,
         on_delta=on_delta,
         on_event=on_event,
@@ -580,11 +670,12 @@ async def _compose_answer(
     material: QaRevisionState,
     *,
     ctx: Any,
-    history: list[dict[str, str]],
+    history: History,
     thoughts: list[dict[str, Any]],
     on_delta: Callable[[str], None] | None,
     on_event: Callable[[dict[str, Any]], None] | None,
     continuing: bool = False,
+    memory: ConversationMemory | None = None,
 ) -> QaAnswer:
     question, query = material.question, material.contextual_query
     findings, origins = material.findings, material.origins
@@ -614,38 +705,17 @@ async def _compose_answer(
             unresolved_topics=unresolved_topics,
         )
 
-    url_to_idx: dict[str, int] = (
-        {url: index for index, url in enumerate(material.citations, 1)} if continuing else {}
-    )
-    lines: list[str] = []
-    for finding in findings:
-        index = url_to_idx.setdefault(finding.source_url, len(url_to_idx) + 1)
-        tag = _ORIGIN_TAG.get(origins.get(finding.source_url, "web"), "")
-        reference = finding.verification.source_reference or finding.verification.source_title
-        lines.append(
-            f"- [{index}]{tag} {finding.statement}\n  原文：{finding.evidence_quote}"
-            + (f"\n  出处：{reference}" if reference else "")
-        )
     scoped_system = _RESEARCH_SYSTEM if scope_kind == "research" else _PAPER_SYSTEM
-    system = _SYSTEM + (scoped_system if paper_sources is not None else "")
+    system = leaf_system_prompt(
+        _SYSTEM + (scoped_system if paper_sources is not None else ""),
+        getattr(ctx, "global_rules", None),
+    )
     model = ctx.llm_for("synthesizer")
-    capacity = getattr(model, "input_capacity_chars", ctx.settings.llm_max_input_chars)
     scope_context = (
         "【本次任务原问题】\n" + scope_query + "\n\n"
         if scope_kind == "research" and scope_query
         else ""
     )
-    context = scope_context + dialogue_context(
-        history,
-        capacity
-        - len(ctx.system_prompt(system))
-        - sum(map(len, lines))
-        - len(question)
-        - 8192
-        - len(scope_context),
-    )
-    if continuing and material.context is not None:
-        context = material.context
     coverage = (
         "\n\n【读取后仍待确认的方面】\n"
         + json.dumps(unresolved_topics, ensure_ascii=False)
@@ -654,19 +724,46 @@ async def _compose_answer(
         if unresolved_topics
         else ""
     )
-    # Stable evidence precedes changing dialogue and the current question.
-    user = PrefixPrompt(
-        "【已核验素材】\n" + "\n".join(lines),
-        f"\n\n{context}\n\n【用户问题】\n{question}\n\n本次可用引用编号："
-        + " ".join(
-            f"[{index}]"
-            for url, index in url_to_idx.items()
-            if any(f.source_url == url for f in findings)
-        )
-        + "。引用只选这些编号，不复制引句中原论文的文献编号。"
-        + coverage,
+    frozen_context = material.context if continuing and material.context is not None else None
+    selection = select_answer_findings(
+        findings, model=model, system=system, question=question,
+        fixed_context=(frozen_context if frozen_context is not None else scope_context) + coverage,
+        origins=origins, citations=material.citations if continuing else None,
+        reserve_dialogue_chars=2048 if history and not continuing else 0,
+        preserve_all=continuing, fallback_chars=ctx.settings.llm_max_input_chars,
     )
-    system = _SYSTEM + (scoped_system if paper_sources is not None else "")
+    if not selection.can_generate and not continuing:
+        thoughts.append({
+            "tool": "context_selection", "input": "",
+            "observation": "完整证据无法放入本轮模型窗口，已停止生成。",
+            "status": selection.status,
+        })
+        return QaAnswer(
+            answer=_CONTEXT_FALLBACK, citations=[], findings=[], thoughts=thoughts, fallback=True,
+        )
+    if continuing and not selection.can_generate:
+        thoughts.append({
+            "tool": "context_selection", "input": "",
+            "observation": "完整材料超出单次窗口，保留原引用，仅尝试可容纳的局部修订。",
+            "status": selection.status,
+        })
+    if selection.omitted_count:
+        thoughts.append({
+            "tool": "context_selection", "input": "",
+            "observation": "本轮只使用可容纳的完整核验发现，其余原始资料仍保留。",
+            "omitted_count": selection.omitted_count, "omitted_ids": selection.omitted_ids,
+        })
+        findings = selection.findings
+        material = material.model_copy(update={"findings": findings})
+    url_to_idx = selection.url_to_idx
+    dialogue = (
+        dialogue_context(history, min(8192, selection.dialogue_capacity_chars), memory=memory)
+        if not continuing else ""
+    )
+    context = frozen_context if frozen_context is not None else scope_context + dialogue
+    # A resumed answer retains all bound evidence; its local edits are budgeted
+    # by the paragraph editor, never through a whole-answer rewrite.
+    user = selection.prompt(dialogue)
     if on_event is not None:
         on_event({"type": "status", "message": "正在组织回答…"})
     if continuing:
@@ -674,7 +771,7 @@ async def _compose_answer(
     else:
         chunks: list[str] = []
         async for delta in ctx.llm_for("synthesizer").stream(
-            ctx.system_prompt(system), user, temperature=0.3
+            system, user, temperature=0.3
         ):
             chunks.append(delta)
             if on_delta is not None:
@@ -717,6 +814,7 @@ async def _compose_answer(
     policy = coerce_policy(ctx.settings.quality)
     revision_limits = {"mechanical": policy.max_revisions, "claim": policy.qa_claim_max_revisions}
     revision_counts = {"mechanical": 0, "claim": 0}
+    revision_attempts = 0
     seen_drafts = {body_text(check.body)}
 
     def repeated_draft(text: str) -> bool:
@@ -739,6 +837,13 @@ async def _compose_answer(
         support_issues = list(support.values())
         if (not check.issues and not support_issues) or (audit and not audit["can_revise"]):
             break
+        if revision_attempts >= policy.qa_max_revisions:
+            thoughts.append({
+                "tool": "answer_revision", "input": "",
+                "observation": "已到本轮自动修订上限，保留可核验内容与待确认部分。",
+                "total_attempts": revision_attempts, "total_limit": policy.qa_max_revisions,
+            })
+            break
         pending = {"mechanical"} if check.issues else set()
         if support_issues:
             pending.add("claim")
@@ -749,6 +854,7 @@ async def _compose_answer(
         }
         if not active:
             break
+        revision_attempts += 1
         for category in active:
             revision_counts[category] += 1
         category = next(iter(active)) if len(active) == 1 else "mechanical+claim"
@@ -761,6 +867,8 @@ async def _compose_answer(
                 "attempt": revision_counts.get(category),
                 "limit": revision_limits.get(category),
                 "counts": dict(revision_counts),
+                "total_attempts": revision_attempts,
+                "total_limit": policy.qa_max_revisions,
                 "input": "",
                 "observation": "按核验问题修订回答：" + "、".join([*check.issues, *support_issues]),
             }
@@ -782,12 +890,13 @@ async def _compose_answer(
             except UnchangedProseError:
                 repeated_draft(check.body)
                 break
-            except TokenBudgetExceeded:
+            except TokenBudgetExceeded as exc:
                 thoughts.append(
                     {
                         "tool": "answer_revision",
                         "input": "",
-                        "observation": "总 token 预算已用尽，停止修订并保留可核验素材",
+                        "observation": str(exc) if isinstance(exc, ModelCallLimitExceeded)
+                        else "总 token 预算已用尽，停止修订并保留可核验素材",
                     }
                 )
                 break
@@ -803,52 +912,13 @@ async def _compose_answer(
                     on_delta(body)
                 check, audit = await assess_answer(body)
                 continue
-        if pending != active:
-            # A full rewrite would also spend the disabled/exhausted category.
-            break
-        if continuing:
-            thoughts.append(
-                {
-                    "tool": "answer_revision",
-                    "input": "",
-                    "observation": "本轮未能安全完成局部修订，保留原稿与已核验内容",
-                }
-            )
-            break
-        if on_event is not None:
-            on_event({"type": "reset", "message": "正在核对引用并修订回答…"})
-        repair = (
-            user
-            + "\n\n【需要修订的回答】\n"
-            + body
-            + "\n\n【核验问题】\n"
-            + "\n".join(f"- {reason}: {excerpt}" for _code, excerpt, reason in check.problems)
-            + "\n".join(f"\n- {issue}" for issue in support_issues)
-            + "\n请直接给出修订后的完整回答，仅使用已有素材编号，不添加新事实或数值。"
-        )
-        repaired: list[str] = []
-        try:
-            async for delta in ctx.llm_for("synthesizer").stream(
-                ctx.system_prompt(system), repair, temperature=0.2
-            ):
-                repaired.append(delta)
-                if on_delta is not None:
-                    on_delta(delta)
-            body = "".join(repaired).strip()
-        except LeaseLostError:
-            raise
-        except Exception:
-            thoughts.append(
-                {
-                    "tool": "answer_revision",
-                    "input": "",
-                    "observation": "修订未完成，保留可核验的素材摘要",
-                }
-            )
-            break
-        if repeated_draft(body):
-            break
-        check, audit = await assess_answer(body)
+        # An unsafe/invalid local edit is terminal for this turn. A second,
+        # whole-answer model request would reopen already checked paragraphs.
+        thoughts.append({
+            "tool": "answer_revision", "input": "",
+            "observation": "本轮未能安全完成局部修订，保留原稿与已核验内容",
+        })
+        break
     check, audit = best_check, best_audit
     body = check.body
     semantic_failed = audit["status"] != "pass"

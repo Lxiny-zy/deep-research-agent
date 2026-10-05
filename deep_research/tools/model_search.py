@@ -143,6 +143,9 @@ class ModelSearch(SearchTool):
                 asyncio.timeout(self._timeout),
                 provider_request(self.endpoint, self._api_key),
             ):
+                call_budget = getattr(self._tracer, "call_budget", None)
+                if call_budget is not None:
+                    call_budget.reserve()
                 sent = True
                 response = await self._client.post(self.endpoint, json=body)
                 response.raise_for_status()

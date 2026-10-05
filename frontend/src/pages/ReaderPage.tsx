@@ -262,6 +262,7 @@ export default function ReaderPage() {
                 text={streamingAnswer}
                 waiting="正在翻阅原文并核验…"
                 activity={activity}
+                requiresVerification
               />
             </article>
           )}

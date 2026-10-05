@@ -21,6 +21,7 @@ from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel
 
 from .config import Settings
+from .context_budget import ContextBudget, TokenEstimator, estimate_tokens, prompt_tokens
 from .observability import Tracer
 from .prompting import prompt_messages, structured_system_prompt
 from .provider_limits import provider_request
@@ -36,9 +37,9 @@ class VerificationGenerationOptions(TypedDict, total=False):
 
 def verification_generation_options(llm: Any) -> VerificationGenerationOptions:
     """Use low reasoning for routine checks only when the profile supports it."""
-    if getattr(llm, "parameter_mode", None) == "reasoning":
-        return {"reasoning_effort": "low"}
-    return {}
+    from .generation_policy import generation_options
+
+    return generation_options(llm, "verification")
 
 
 class ModelOutputTruncated(RuntimeError):
@@ -142,11 +143,10 @@ class LLM:
 
     @property
     def input_capacity_chars(self) -> int:
-        # Same approximate character/token ratio as runtime telemetry. This is
-        # planning guidance, not the provider's tokenizer or a billing claim.
-        if self.context_window_tokens is not None:
-            return max(1, self.context_window_tokens - self.settings.llm_max_output_tokens) * 2
-        return self.settings.llm_max_input_chars
+        return ContextBudget.for_limits(
+            self.context_window_tokens, self.settings.llm_max_output_tokens,
+            self.settings.llm_max_input_chars,
+        ).input_capacity_chars
 
     @property
     def enforced_input_capacity_chars(self) -> int | None:
@@ -177,17 +177,21 @@ class LLM:
         raise AssertionError("unreachable")
 
     def _reserve(self, system: str, user: str) -> TokenReservation:
-        limit = self.enforced_input_capacity_chars
-        if limit is not None and len(system) + len(user) > limit:
-            raise InputCapacityError("模型输入超过已配置的上下文容量（字符估算）")
+        budget = ContextBudget.from_model(self, self.settings.llm_max_input_chars)
+        estimated = prompt_tokens(system, user)
+        if budget.enforced and not budget.fits(system, user):
+            raise InputCapacityError(
+                f"模型输入超过已配置的上下文容量（保守估算 {estimated} tokens，"
+                f"可用输入 {budget.input_tokens} tokens；非渠道精确分词）"
+            )
         assert self.tracer.budget is not None
         self.tracer.budget.update(self.tracer.total_tokens)
         # UTF-8 bytes plus framing are a conservative admission estimate, not a billing claim.
         return self.tracer.budget.reserve(
             # A reservation estimate is NOT sent as an output cap when the
             # profile uses the provider default. Exact usage replaces estimates.
-            len(system.encode()) + len(user.encode()) + 128,
-            self.settings.llm_max_output_tokens or 8192,
+            estimated,
+            budget.output_tokens,
         )
 
     def _output_options(self, reservation: TokenReservation) -> dict[str, Any]:
@@ -326,6 +330,9 @@ class LLM:
                     stream_options: dict[str, Any] = (
                         {"stream_options": {"include_usage": True}} if include_usage else {}
                     )
+                    call_budget = getattr(self.tracer, "call_budget", None)
+                    if call_budget is not None:
+                        call_budget.reserve()
                     resp = await self.client.chat.completions.create(
                         **{**request, **stream_options},
                     )
@@ -350,10 +357,11 @@ class LLM:
                     else:
                         raise
             usage_report = _header_usage(resp)
-            input_estimate = _estimate_tokens(system, user)
+            input_estimate = prompt_tokens(system, user)
             self.tracer.add_tokens(input_estimate, estimated=True)
             estimated_added = input_estimate
-            out_chars = accounted_output = exact_usage = 0
+            accounted_output = exact_usage = 0
+            output_estimator = TokenEstimator()
             async for chunk in resp:
                 exact_usage = _tokens(chunk) or exact_usage
                 reported = _usage_details(chunk)
@@ -379,8 +387,8 @@ class LLM:
                         flush_reasoning()
                 if delta or reasoning:
                     output_started = True
-                    out_chars += len(delta or "") + len(reasoning)
-                    output_estimate = out_chars // 2
+                    output_estimator.feed(reasoning)
+                    output_estimate = output_estimator.feed(delta or "")
                     increment = output_estimate - accounted_output
                     if increment > 0:
                         self.tracer.add_tokens(increment, estimated=True)
@@ -388,10 +396,6 @@ class LLM:
                         accounted_output = output_estimate
                     if delta:
                         yield delta
-            tail = (out_chars + 1) // 2 - accounted_output
-            if tail > 0:
-                self.tracer.add_tokens(tail, estimated=True)
-                estimated_added += tail
             if exact_usage > 0:
                 self.tracer.reconcile_tokens(estimated_added, exact_usage)
             if usage_report is not None:
@@ -523,4 +527,4 @@ def _header_usage(stream: object) -> dict[str, int | None] | None:
 
 def _estimate_tokens(*parts: str) -> int:
     """兼容中英文的保守观测估算；只用于实时 UI，绝不宣称为账单值。"""
-    return max(1, (sum(len(part) for part in parts) + 1) // 2)
+    return max(1, estimate_tokens(*parts))

@@ -7,7 +7,7 @@ LLM 被强制产出符合 schema 的 JSON，下游可直接消费而无需脆弱
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -469,6 +469,9 @@ class ExtractionAudit(BaseModel):
     candidates: list[ExtractionCandidate] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
     source_selections: list[SourceSelection] = Field(default_factory=list)
+    # Input partition provenance: original source identity/hash and character
+    # spans; full original snapshots remain in sources for citation verification.
+    context_batches: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def serialize(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
@@ -478,6 +481,8 @@ class ExtractionAudit(BaseModel):
         # Adding an empty diagnostic must not alter a legacy checkpoint's digest.
         if not self.source_selections:
             data.pop("source_selections", None)
+        if not self.context_batches:
+            data.pop("context_batches", None)
         return data
 
 

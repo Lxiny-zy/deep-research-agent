@@ -270,19 +270,31 @@ def test_pronouns_and_table_rows_keep_their_reference_context():
 
 
 async def test_qa_repairs_semantically_unsupported_answer_before_delivery(settings):
+    from deep_research.workbench.prose_edit import ProseEdits
     from deep_research.workbench.qa import answer_question
 
     class Answer(Judge):
+        edits = 0
+
         async def stream(self, *args, **kwargs):
             self.stream_calls += 1
-            yield (
-                "变量已经证明因果关系 [1]。" if self.stream_calls == 1 else "变量存在相关关系 [1]。"
-            )
+            assert self.stream_calls == 1, "Semantic repair must stay local"
+            yield "变量已经证明因果关系 [1]。"
+
+        async def parse(self, system, user, schema, **kwargs):
+            if schema is ProseEdits:
+                self.edits += 1
+                paragraphs = json.loads(user.split("【只修订以下段落】\n", 1)[1])["paragraphs"]
+                assert len(paragraphs) == 1 and "因果" in paragraphs[0]["text"]
+                return ProseEdits(edits=[{
+                    "unit_id": paragraphs[0]["unit_id"], "replacement": "变量存在相关关系 [1]。",
+                }])
+            return await super().parse(system, user, schema, **kwargs)
 
     model = Answer()
     ctx = RunContext(llm=model, search_tool=CorrelationSearch(), tracer=Tracer(), settings=settings)
     result = await answer_question("解释这些变量之间的关系", history=[], ctx=ctx, include_web=True)
-    assert model.stream_calls == 2 and not result.fallback
+    assert model.stream_calls == 1 and model.edits == 1 and not result.fallback
     binding = next(t["binding"] for t in result.thoughts if t["tool"] == "citation_binding")
     assert binding["binding_status"] == "bound" and binding["occurrences"]
     assert "#cite-o-" in binding["body"] and "#cite-o-" not in result.answer

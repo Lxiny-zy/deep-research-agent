@@ -267,6 +267,12 @@
   width: 100%;
 }
 
+.qa-draft-notice {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  margin: var(--space-2) 0;
+}
+
 .qa-answer {
   display: flex;
   flex: 1;
@@ -662,7 +668,14 @@
   }
 
   .qa-avatar {
-    display: none;
+    flex-basis: 24px;
+    height: 24px;
+    width: 24px;
+  }
+
+  .qa-avatar .brand-ring {
+    height: 22px;
+    width: 22px;
   }
 
   .qa-composer {

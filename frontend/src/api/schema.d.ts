@@ -2720,6 +2720,10 @@ export interface components {
         ExtractionAudit: {
             /** Candidates */
             candidates?: components["schemas"]["ExtractionCandidate"][];
+            /** Context Batches */
+            context_batches?: {
+                [key: string]: unknown;
+            }[];
             /** Issues */
             issues?: string[];
             /** Question */
