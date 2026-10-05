@@ -171,7 +171,46 @@ def statistic_facts(ledger: dict[str, Any]) -> list[dict[str, Any]]:
                 method=test["robust_method"],
                 robust=True,
             )
+        for diagnostic in test.get("assumptions", []):
+            diagnostic_dimensions = {
+                **dimensions,
+                "groups": [str(diagnostic["group"])]
+                if "group" in diagnostic
+                else dimensions["groups"],
+            }
+            values = {
+                key: diagnostic[key] for key in ("statistic", "p_value", "n") if key in diagnostic
+            }
+            if diagnostic.get("kind") == "variance_homogeneity" and "n" in diagnostic:
+                values["n_total"] = diagnostic["n"]
+            add(
+                "comparison",
+                values,
+                list(values),
+                **diagnostic_dimensions,
+                method=diagnostic.get("method", ""),
+                diagnostic=True,
+                robust=False,
+            )
+        for pair in test.get("posthoc", []):
+            pair_dimensions = {
+                **dimensions,
+                "groups": [str(pair["left_group"]), str(pair["right_group"])],
+                "left_group": str(pair["left_group"]),
+                "right_group": str(pair["right_group"]),
+            }
+            values = {**pair, "ci_level": pair.get("confidence_level", 0.95) * 100}
+            add(
+                "comparison",
+                values,
+                ["mean_difference", "p_value", "ci_low", "ci_high", "ci_level"],
+                **pair_dimensions,
+                method=pair["method"],
+                robust=False,
+                posthoc=True,
+            )
     for row in ledger.get("correlations", []):
+        grouping = {key: row[key] for key in ("group_column", "group") if key in row}
         add(
             "correlation",
             row,
@@ -179,6 +218,7 @@ def statistic_facts(ledger: dict[str, Any]) -> list[dict[str, Any]]:
             variable=row["a"],
             other_variable=row["b"],
             method="Pearson",
+            **grouping,
         )
     for row in ledger.get("composition", []):
         add("composition", row, ["n"], variable=row["column"], group_column=row["column"])
@@ -219,7 +259,8 @@ def _group_mentions(text: str, labels: list[str]) -> list[str]:
     for label in labels:
         if re.fullmatch(_NUMBER, label):
             pattern = (
-                rf"(?:组|group)\s*=?\s*{re.escape(label)}(?!\d)|(?<!\d){re.escape(label)}\s*组"
+                rf"(?:组|group)\s*=?\s*{re.escape(label)}(?!\d)|"
+                rf"(?<!\d){re.escape(label)}\s*组|(?<!\d){re.escape(label)}(?=\s*:)"
             )
         else:
             pattern = rf"(?<![A-Za-z0-9_]){re.escape(label)}(?![A-Za-z0-9_])"
@@ -242,7 +283,7 @@ def _can_inherit_variable(
         )
     remainder = _METRIC_PATTERN.sub(" ", remainder)
     remainder = re.sub(
-        r"分组|各组|每组|组|总体|整体|有效|样本效应量|稳健性复核|差值方向|的|在|与|和|"
+        r"分组|各组|每组|组|总体|整体|有效|样本效应量|稳健性复核|差值方向|方差分析|的|在|与|和|"
         r"\b(?:for|in|the|of|group|each|all|overall|total|pooled|combined)\b",
         " ",
         remainder,
@@ -282,8 +323,7 @@ def _matches(
             return actual == target
         tolerance = (
             Decimal(0)
-            if metric
-            in {"n", "n_total", "n_pairs", "excluded_pairs", "df", "df_between", "df_within"}
+            if metric in {"n", "n_total", "n_pairs", "excluded_pairs", "df_between"}
             else abs(Decimal(1).scaleb(exponent)) / 2
         )
         return abs(actual - target) <= tolerance
@@ -451,14 +491,25 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                     value_match = _VALUE.match(clause, implicit.start())
                     if value_match:
                         matches.append((previous_metric, implicit.start(), value_match))
+            previous_end = 0
             for metric, offset, match in matches:
                 previous_metric = metric
+                prefix = clause[previous_end:offset]
+                local_variables = _variables(prefix, variables)
+                local_groups = _group_mentions(prefix, labels)
+                if local_variables:
+                    current_variables = local_variables
+                if local_groups:
+                    current_groups = local_groups
+                claim_each = each and not local_groups
                 selected_variables = current_variables
-                if not explicit_variables and not _can_inherit_variable(
-                    clause[:offset], labels, group_columns, methods
+                if not local_variables and not _can_inherit_variable(
+                    prefix, labels, group_columns, methods
                 ):
                     selected_variables = []
                     current_variables = []
+                if not metric.startswith("ci_"):
+                    previous_end = match.end()
                 scope = "variable"
                 if metric in {
                     "p_value",
@@ -481,16 +532,18 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 if metric == "n" and paired:
                     scope = "comparison"
                 if metric == "r" or (
-                    len(selected_variables) == 2 and metric in {"n", "p_value"} and not paired
+                    len(selected_variables) == 2
+                    and metric in {"n", "p_value"}
+                    and (not current_method or current_method == "Pearson")
                 ):
                     scope = "correlation"
-                elif scope == "variable" and (current_groups or each):
+                elif scope == "variable" and (current_groups or claim_each):
                     scope = "group"
                 if (
-                    not group_names
-                    and not each
+                    not local_groups
+                    and not claim_each
                     and not total
-                    and re.search(r"组|\bgroups?\b", clause[:offset], re.I)
+                    and re.search(r"组|\bgroups?\b", prefix, re.I)
                     and scope in {"variable", "group"}
                 ):
                     scope = "unresolved_group"
@@ -522,27 +575,54 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                         candidates = [
                             row for row in candidates if row["variable"] in selected_variables
                         ]
-                if current_groups and not each and scope in {"group", "composition_group"}:
+                if current_groups and not claim_each and scope in {"group", "composition_group"}:
                     candidates = [row for row in candidates if row.get("group") in current_groups]
-                if current_group_column and scope in {"group", "comparison", "composition_group"}:
+                if (
+                    current_group_column
+                    and scope in {"group", "comparison", "composition_group", "correlation"}
+                    and (scope != "correlation" or current_groups)
+                ):
                     candidates = [
                         row for row in candidates if row.get("group_column") == current_group_column
                     ]
-                if scope == "correlation" and current_groups:
-                    candidates = [row for row in candidates if row.get("group") in current_groups]
+                if scope == "correlation":
+                    candidates = [
+                        row
+                        for row in candidates
+                        if (
+                            row.get("group") in current_groups
+                            if current_groups
+                            else "group" not in row
+                        )
+                    ]
+                    if explicit_group_columns and not current_groups and not total:
+                        candidates = []
                 if scope == "comparison":
-                    if current_groups and metric in {"p_value", "statistic"}:
+                    if current_groups and metric in {
+                        "p_value",
+                        "statistic",
+                        "mean_difference",
+                        "ci_low",
+                        "ci_high",
+                        "ci_level",
+                    }:
                         candidates = [
                             row
                             for row in candidates
                             if set(row.get("groups", [])) == set(current_groups)
                         ]
-                    if current_method and metric in {"p_value", "statistic", "n", "n_pairs", "df"}:
+                    if current_method and (
+                        line_methods or metric in {"p_value", "statistic", "n", "n_pairs", "df"}
+                    ):
                         candidates = [
                             row for row in candidates if row.get("method") == current_method
                         ]
                     else:
-                        candidates = [row for row in candidates if not row.get("robust")]
+                        candidates = [
+                            row
+                            for row in candidates
+                            if not row.get("robust") and not row.get("diagnostic")
+                        ]
                 values = [match["value"]]
                 percent = (
                     bool(re.match(r"\s*%", clause[match.end() :]))

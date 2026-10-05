@@ -20,7 +20,8 @@ def test_fallback_reports_only_executed_group_methods_and_declared_correction_po
     body = fallback_report(result)
     assert "单因素方差分析" in body and "Welch" not in body
     assert "Kruskal" in body and "多重比较校正" in result.facts()
-    assert "未执行" in result.facts()
+    assert "Tukey HSD" in result.facts() and "家族错误率" in result.facts()
+    assert "未作跨变量" in result.facts()
     assert float(result.tests[0]["eta_squared"]) == 0.9
     assert [group["n"] for group in result.tests[0]["group_summaries"]] == [3, 3, 3]
     assert result.tests[0]["n_total"] == 9 and result.tests[0]["df_within"] == 6
@@ -62,7 +63,7 @@ def test_paired_and_independent_tests_keep_their_own_assumption_statements():
         "a,b\n1,2\n2,4\n3,4\n4,7\n", "配对比较", scope=paired_scope("a", "b").model_dump()
     )
     independent = analyse("group,value\nA,1\nA,2\nA,3\nB,3\nB,5\nB,7\n", "比较两组")
-    assert "各配对对象独立" in paired.facts()
+    assert "各配对对象" in paired.facts() and "独立性依赖实验设计" in paired.facts()
     assert "各配对对象独立" not in independent.facts()
     assert "不要求两组方差相等" in independent.facts()
     assert "方差分析自由度" not in independent.facts()
@@ -81,8 +82,8 @@ def test_correlation_counts_pairwise_complete_rows_in_ledger_and_export():
     assert "有效样本量 n=4" in result.facts()
     workbook = load_workbook(io.BytesIO(_stats_xlsx(result)))
     rows = list(workbook["相关性"].values)
-    assert rows[0] == ("a", "b", "r", "p_value", "n")
-    assert {(r[0], r[1]): r[-1] for r in rows[1:]} == counts
+    assert rows[0] == ("a", "b", "r", "p_value", "n", "group_column", "group", "adjustment")
+    assert {(r[0], r[1]): r[rows[0].index("n")] for r in rows[1:]} == counts
 
 
 def test_legacy_correlation_snapshot_does_not_invent_unrecorded_counts():

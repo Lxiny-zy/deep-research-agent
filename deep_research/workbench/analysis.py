@@ -143,7 +143,12 @@ class AnalysisResult:
                         + ", ".join(f"{level['label']}: n={level['n']}" for level in item["levels"])
                     )
         if self.tests or self.correlations:
-            lines.append("- 多重比较校正：本次统计未执行，台账 p 值为未经校正的结果。")
+            lines.append(
+                "- 多重比较校正：事后比较的 p 值与区间控制各变量×分组列内的家族错误率；"
+                "总体检验与相关检验未作跨变量、多方法的多重比较校正。"
+                if any(test.get("posthoc") for test in self.tests)
+                else "- 多重比较校正：本次统计未执行，台账 p 值为未经校正的结果。"
+            )
         lines.append("\n### 描述统计")
         for row in self.describe:
             lines.append(
@@ -160,10 +165,21 @@ class AnalysisResult:
                 )
                 lines.append(
                     f"- {test['variable']} ~ {test['group']}（{test['method']}）："
-                    f"统计量={test['statistic']}, p={test['p_value']}, "
+                    f"统计量={test['statistic']}, "
+                    + (
+                        _p_text(test["p_value"])
+                        if test.get("assumptions")
+                        else f"p={test['p_value']}"
+                    )
+                    + ", "
                     f"{verdict}（α=0.05）"
                     + (
-                        f"；稳健性复核 {test['robust_method']} p={test['robust_p']}"
+                        f"；稳健性复核 {test['robust_method']} "
+                        + (
+                            _p_text(test["robust_p"])
+                            if test.get("assumptions")
+                            else f"p={test['robust_p']}"
+                        )
                         if test.get("robust_method")
                         else ""
                     )
@@ -176,10 +192,11 @@ class AnalysisResult:
                         f"差值标准差={test['difference_std']}，自由度={test['df']}，"
                         f"95% 均值差置信区间=[{test['ci_low']}, {test['ci_high']}]"
                     )
-                    lines.append(
-                        "  推断前提：各配对对象独立，差值满足配对 t 检验的分布假设；"
-                        "本轮未自动验证这些前提。"
-                    )
+                    if not test.get("assumptions"):
+                        lines.append(
+                            "  推断前提：各配对对象独立，差值满足配对 t 检验的分布假设；"
+                            "本轮未自动验证这些前提。"
+                        )
                 for summary in test.get("group_summaries", []):
                     lines.append(
                         f"  分组 {summary['label']}: n={summary['n']}, 均值={summary['mean']}, "
@@ -192,9 +209,17 @@ class AnalysisResult:
                     )
                 if test.get("df_between") is not None:
                     lines.append(
-                        f"  方差分析自由度：组间={test['df_between']}，组内={test['df_within']}。"
+                        f"  Welch ANOVA 自由度：df_between={test['df_between']}，"
+                        f"df_within={test['df_within']}（Welch 校正后的有效分母自由度）。"
+                        if test.get("method") == "Welch ANOVA"
+                        else f"  方差分析自由度：组间={test['df_between']}，"
+                        f"组内={test['df_within']}。"
                     )
-                if test.get("method") == "单因素方差分析":
+                if test.get("assumptions"):
+                    from .analysis_methods import method_notes
+
+                    lines.extend(method_notes(test))
+                elif test.get("method") == "单因素方差分析":
                     lines.append(
                         "  推断前提：观测独立、各组残差近似正态且方差齐；"
                         "本轮未自动验证这些前提，非参数复核不等于前提已成立。"
@@ -209,8 +234,14 @@ class AnalysisResult:
         if self.correlations:
             lines.append("\n### 相关性（Pearson）")
             for item in self.correlations:
+                scope_label = (
+                    f" 按 {item['group_column']} 的 {item['group']} 组"
+                    if item.get("group_column")
+                    else ""
+                )
                 lines.append(
-                    f"- {item['a']} 与 {item['b']}：r={item['r']}, p={item['p_value']}"
+                    f"- {item['a']} 与 {item['b']}{scope_label}：r={item['r']}, "
+                    + (_p_text(item["p_value"]) if item.get("method") else f"p={item['p_value']}")
                     + (f"，有效样本量 n={item['n']}" if "n" in item else "")
                 )
         if self.figures:
@@ -285,6 +316,21 @@ def _fmt(value: float) -> float | str:
     return round(float(value), 4)
 
 
+def _fmt_p(value: float) -> float | str:
+    if not math.isfinite(value) or not 0 <= value <= 1:
+        return "NA"
+    rounded = float(f"{value:.8g}")
+    if any(
+        (rounded < threshold) != (value < threshold) for threshold in (0.05, 0.01, 0.001, 0.0001)
+    ):
+        return value
+    return rounded
+
+
+def _p_text(value: Any) -> str:
+    return "p<0.0001（数值计算返回 0）" if value == 0 else f"p={value}"
+
+
 def _synthetic_csv() -> str:
     import numpy as np
 
@@ -309,7 +355,9 @@ def parse_dataset(csv_text: str) -> Any:
         normalized, notes = normalize_missing_markers(text, delimiter)
         columns = pd.read_csv(io.StringIO(normalized), sep=delimiter, nrows=0).columns
         frame = pd.read_csv(
-            io.StringIO(normalized), sep=delimiter, nrows=MAX_ROWS + 1,
+            io.StringIO(normalized),
+            sep=delimiter,
+            nrows=MAX_ROWS + 1,
             dtype={column: str for column in columns if identifier_column(str(column))},
         )
     except Exception as exc:
@@ -396,6 +444,10 @@ def analyse(
     if frozen and frozen.get("input_sha256") and frozen["input_sha256"] != input_sha256:
         raise DatasetError("输入数据与任务统计快照不一致，需要重新执行分析，不能与旧报告混用")
     frame = parse_dataset(input_text)
+    reuse_statistics = frozen is not None and all(
+        isinstance(frozen.get(key), list)
+        for key in ("describe", "tests", "correlations", "columns")
+    )
     if frozen is not None:
         # Preserve a saved numerical role when newer parsing rules recognize
         # the column name as an identifier. New analyses still reject it.
@@ -438,7 +490,8 @@ def analyse(
 
         selected = AnalysisScope.model_validate(scope)
         validate_scope(
-            frame, selected,
+            frame,
+            selected,
             question=question if frozen is None and question.strip() else None,
             historical=frozen is not None,
         )
@@ -455,7 +508,7 @@ def analyse(
     if source and frozen is None:
         issues.extend(source.get("merge", {}).get("notes", []))
     describe: list[dict[str, Any]] = []
-    for column in numeric:
+    for column in [] if reuse_statistics else numeric:
         series = frame[column].dropna()
         if series.empty:
             continue
@@ -473,7 +526,7 @@ def analyse(
 
     paired_requested = pairing is not None
     tests: list[dict[str, Any]] = []
-    for group in [] if paired_requested or repeated else categorical:
+    for group in [] if paired_requested or repeated or reuse_statistics else categorical:
         for variable in numeric:
             grouped = [
                 (str(label), values.dropna().to_numpy())
@@ -485,14 +538,34 @@ def analyse(
                     f"{variable} 按 {group} 的检验未执行：至少两组，且每组至少两条有效观测"
                 )
                 continue
-            method = "Welch t 检验" if len(samples) == 2 else "单因素方差分析"
+            from .analysis_methods import (
+                group_assumptions,
+                group_summaries,
+                posthoc_comparisons,
+                welch_denominator_df,
+            )
+
+            assumptions = group_assumptions(grouped, variable, group)
+            equal_var = (
+                next(item for item in assumptions if item["kind"] == "variance_homogeneity")[
+                    "status"
+                ]
+                == "not_rejected"
+            )
+            method = (
+                "Welch t 检验"
+                if len(samples) == 2
+                else "单因素方差分析"
+                if equal_var
+                else "Welch ANOVA"
+            )
             try:
                 if len(samples) == 2:
                     result = stats.ttest_ind(samples[0], samples[1], equal_var=False)
                     robust = stats.mannwhitneyu(samples[0], samples[1])
                     robust_name = "Mann–Whitney U"
                 else:
-                    result = stats.f_oneway(*samples)
+                    result = stats.f_oneway(*samples, equal_var=equal_var)
                     robust = stats.kruskal(*samples)
                     robust_name = "Kruskal–Wallis"
                 if not all(
@@ -513,6 +586,9 @@ def analyse(
                         "significant": None,
                         "groups": len(samples),
                         "reason": reason,
+                        "assumptions": assumptions,
+                        "posthoc": [],
+                        "group_summaries": group_summaries(grouped),
                     }
                 )
                 continue
@@ -528,35 +604,43 @@ def analyse(
                 if total_ss > 0 and math.isfinite(total_ss) and math.isfinite(between_ss)
                 else None
             )
+            posthoc = []
+            posthoc_error = ""
+            if len(samples) > 2:
+                try:
+                    posthoc = posthoc_comparisons(grouped, equal_var=equal_var)
+                except (ValueError, FloatingPointError) as exc:
+                    posthoc_error = f"事后比较未完成：{exc}"
+                    issues.append(f"{variable} 按 {group} 的{posthoc_error}")
             tests.append(
                 {
                     "variable": variable,
                     "group": group,
                     "method": method,
                     "statistic": _fmt(float(result.statistic)),
-                    "p_value": _fmt(p_value),
+                    "p_value": _fmt_p(p_value),
                     "significant": bool(p_value < 0.05),
                     "robust_method": robust_name,
-                    "robust_p": _fmt(float(robust.pvalue)),
+                    "robust_p": _fmt_p(float(robust.pvalue)),
                     "groups": int(len(samples)),
                     "n_total": n_total,
                     "df_between": len(samples) - 1 if len(samples) > 2 else None,
-                    "df_within": n_total - len(samples) if len(samples) > 2 else None,
+                    "df_within": (
+                        n_total - len(samples) if equal_var else _fmt(welch_denominator_df(samples))
+                    )
+                    if len(samples) > 2
+                    else None,
                     "eta_squared": _fmt(eta_squared) if eta_squared is not None else None,
-                    "group_summaries": [
-                        {
-                            "label": label,
-                            "n": len(sample),
-                            "mean": _fmt(float(np.mean(sample))),
-                            "std": _fmt(float(np.std(sample, ddof=1))),
-                            "median": _fmt(float(np.median(sample))),
-                        }
-                        for label, sample in grouped
-                    ],
+                    "assumptions": assumptions,
+                    "posthoc": posthoc,
+                    "posthoc_error": posthoc_error,
+                    "group_summaries": group_summaries(grouped),
                 }
             )
 
-    if pairing is not None and not repeated:
+    if pairing is not None and not repeated and not reuse_statistics:
+        from .analysis_methods import normality
+
         left, right = pairing.left.column, pairing.right.column
         pairs = frame[[left, right]].dropna()
         difference = pairs[right] - pairs[left]
@@ -586,7 +670,7 @@ def analyse(
                 "group": "同一行配对",
                 "method": "配对 t 检验",
                 "statistic": _fmt(statistic),
-                "p_value": _fmt(pvalue),
+                "p_value": _fmt_p(pvalue),
                 "significant": bool(pvalue < 0.05) if math.isfinite(pvalue) else None,
                 "n_pairs": n,
                 "excluded_pairs": len(frame) - n,
@@ -597,14 +681,33 @@ def analyse(
                 "ci_low": _fmt(lower),
                 "ci_high": _fmt(upper),
                 "reason": reason,
+                "assumptions": [
+                    normality(
+                        difference.to_numpy(),
+                        variable=f"{right} − {left}",
+                        group_column="同一行配对",
+                        scope="paired_difference",
+                    ),
+                    {
+                        "kind": "independence",
+                        "method": "design_requirement",
+                        "status": "not_assessed",
+                        "reason": "各配对对象之间的独立性依赖实验设计，不能由正态性检验确认",
+                    },
+                ],
             }
         )
 
     correlations: list[dict[str, Any]] = []
-    for i, left in enumerate(numeric if not repeated else []):
+    for i, left in enumerate(numeric if not repeated and not reuse_statistics else []):
         for right in numeric[i + 1 :]:
+            from .analysis_methods import within_group_correlations
+
+            within, correlation_issues = within_group_correlations(frame, left, right, categorical)
+            issues.extend(correlation_issues)
             pair = frame[[left, right]].dropna()
             if len(pair) < 3 or pair[left].nunique() < 2 or pair[right].nunique() < 2:
+                correlations.extend(within)
                 continue
             r, p = stats.pearsonr(pair[left], pair[right])
             correlations.append(
@@ -612,17 +715,17 @@ def analyse(
                     "a": left,
                     "b": right,
                     "r": _fmt(float(r)),
-                    "p_value": _fmt(float(p)),
+                    "p_value": _fmt_p(float(p)),
                     "n": len(pair),
+                    "method": "Pearson",
+                    "adjustment": "none",
                 }
             )
+            correlations.extend(within)
 
     # Downloads must use the ledger that produced the report. In particular,
     # upgrading the analysis code must not add new tests to an old narrative.
-    if frozen and all(
-        isinstance(frozen.get(key), list)
-        for key in ("describe", "tests", "correlations", "columns")
-    ):
+    if frozen is not None and reuse_statistics:
         if list(frozen["columns"]) != list(frame.columns) or frozen.get("rows") != len(frame):
             raise DatasetError("数据表结构与统计快照不一致，不能与旧报告混用")
         describe, tests, correlations = frozen["describe"], frozen["tests"], frozen["correlations"]
@@ -710,7 +813,13 @@ def analyse(
                 title="测量分布与逐对连线",
                 caption=(
                     f"同一行配对；n={test['n_pairs']}；差值方向 {test['right']} − {test['left']}；"
-                    f"配对 t 检验 p={test['p_value']}。箱线图用全部完整配对，连线展示 {shown} 对；"
+                    f"配对 t 检验 "
+                    + (
+                        _p_text(test["p_value"])
+                        if test.get("assumptions")
+                        else f"p={test['p_value']}"
+                    )
+                    + f"。箱线图用全部完整配对，连线展示 {shown} 对；"
                     "纵轴单位同输入测量值，不表示差值分布"
                 ),
                 png=_png_cached(fig, name, png_cache),
@@ -764,7 +873,9 @@ def analyse(
         correlations=correlations,
         figures=figures,
         synthetic=synthetic,
-        source={} if synthetic else dict(source or {}),
+        source={}
+        if synthetic
+        else dict(source if source is not None else (frozen or {}).get("source", {})),
         issues=issues,
         input_sha256=input_sha256,
         figure_policy=figure_policy,
@@ -853,19 +964,44 @@ def fallback_report(result: AnalysisResult) -> str:
             if test["significant"] is False
             else "未完成差异检验"
         )
+        if test.get("posthoc") and test["significant"] is True:
+            verdict = "总体检验提示至少一组均值存在差异，具体两两差异见事后比较"
         conclusions.append(
             f"- {test['variable']} 在不同 {test['group']} 之间{verdict}"
-            f"（{test['method']}，p={test['p_value']}"
+            f"（{test['method']}，"
+            + (_p_text(test["p_value"]) if test.get("assumptions") else f"p={test['p_value']}")
             + (
-                f"；{test['robust_method']} p={test['robust_p']}"
+                f"；{test['robust_method']} "
+                + (
+                    _p_text(test["robust_p"])
+                    if test.get("assumptions")
+                    else f"p={test['robust_p']}"
+                )
                 if test.get("robust_method") and test.get("robust_p") is not None
                 else ""
             )
             + "）。"
         )
+        for pair in test.get("posthoc", []):
+            verdict = (
+                "差异达到统计显著"
+                if pair["significant"] is True
+                else "未发现显著差异"
+                if pair["significant"] is False
+                else "事后比较不可估计"
+            )
+            conclusions.append(
+                f"- {test['variable']} 按 {test['group']}，"
+                f"{pair['left_group']} 与 {pair['right_group']}"
+                f"{verdict}（{pair['method']}，{_p_text(pair['p_value'])}）。"
+            )
     for item in result.correlations:
+        group = (
+            f" 按 {item['group_column']} 的 {item['group']} 组" if item.get("group_column") else ""
+        )
         conclusions.append(
-            f"- {item['a']} 与 {item['b']} 的 Pearson r={item['r']}（p={item['p_value']}）。"
+            f"- {item['a']} 与 {item['b']}{group} 的 Pearson r={item['r']}"
+            f"（{_p_text(item['p_value'])}）。"
         )
     if not conclusions:
         conclusions.append(

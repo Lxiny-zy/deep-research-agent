@@ -1,0 +1,15 @@
+{
+  "source": "artifacts/sc75/dataAnalysis/local-detail.pickle",
+  "extraction": "Read the embedded CSV string with pickletools.genops; no pickle object was executed.",
+  "rows": 344,
+  "stripped_utf8_sha256": "5e92de59b614baa4a3cc585fd3a567f8ddc8e8dfd81b9517df9b151fde99499d",
+  "group_n_body_mass_g": [151, 68, 123],
+  "reference_levene_median_p": 0.006445082805324008,
+  "reference_tukey_adelie_chinstrap_p": 0.8806665865088705,
+  "reference_games_howell_adelie_chinstrap_p": 0.8501540239730266,
+  "reference_flipper_mass_r_by_species": {
+    "Adelie": 0.4682016942179394,
+    "Chinstrap": 0.6415594129316966,
+    "Gentoo": 0.7026665243575183
+  }
+}

@@ -480,7 +480,8 @@ def test_statistics_review_uses_the_writer_ledger_and_distinguishes_input_origin
     from tests.test_analysis_pairing import paired_scope
 
     result = analyse(
-        "a,b\n1,2\n2,3.1\n3,4.2\n4,5.3", "比较同一场景的配对差异，数据由用户合成",
+        "a,b\n1,2\n2,3.1\n3,4.2\n4,5.3",
+        "比较同一场景的配对差异，数据由用户合成",
         scope=paired_scope("a", "b").model_dump(),
     )
     frozen = result.snapshot()
@@ -499,7 +500,7 @@ def test_statistics_review_uses_the_writer_ledger_and_distinguishes_input_origin
         200000,
     )
     text = checker.evidence[0]["quote"]
-    assert "未自动验证这些前提" in text
+    assert "独立性依赖实验设计" in text
     assert "用户提供的数据" in text and "不判断用户数据来自真实测量还是合成" in text
     assert '"synthetic": false' not in text
 

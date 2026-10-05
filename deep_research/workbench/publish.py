@@ -914,9 +914,59 @@ def _stats_xlsx(result: Any) -> bytes:
                     ]
                 )
     corr = workbook.create_sheet("相关性")
-    corr.append(["a", "b", "r", "p_value", "n"])
+    correlation_headers = ["a", "b", "r", "p_value", "n", "group_column", "group", "adjustment"]
+    corr.append(correlation_headers)
     for row in result.correlations:
-        corr.append([row.get(key) for key in ("a", "b", "r", "p_value", "n")])
+        corr.append([row.get(key) for key in correlation_headers])
+    if any(row.get("assumptions") for row in result.tests):
+        assumptions = workbook.create_sheet("统计前提")
+        assumption_headers = [
+            "kind",
+            "group",
+            "method",
+            "n",
+            "statistic",
+            "p_value",
+            "status",
+            "reason",
+        ]
+        assumptions.append(["variable", "group_column", *assumption_headers])
+        for test in result.tests:
+            for item in test.get("assumptions", []):
+                assumptions.append(
+                    [
+                        test["variable"],
+                        test["group"],
+                        *[item.get(key) for key in assumption_headers],
+                    ]
+                )
+    if any(row.get("posthoc") for row in result.tests):
+        comparisons = workbook.create_sheet("事后比较")
+        comparison_headers = [
+            "left_group",
+            "right_group",
+            "method",
+            "n_left",
+            "n_right",
+            "mean_difference",
+            "p_value",
+            "significant",
+            "ci_low",
+            "ci_high",
+            "confidence_level",
+            "adjustment",
+            "reason",
+        ]
+        comparisons.append(["variable", "group_column", *comparison_headers])
+        for test in result.tests:
+            for item in test.get("posthoc", []):
+                comparisons.append(
+                    [
+                        test["variable"],
+                        test["group"],
+                        *[item.get(key) for key in comparison_headers],
+                    ]
+                )
     if getattr(result, "scope", None) is not None:
         scope = workbook.create_sheet("分析范围")
         scope.append(["列名", "用途"])
