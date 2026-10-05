@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ..config import Settings
 from ..intent.types import IntentSlots
 from ..llm import LLM
-from ..models import ResearchPlan
+from ..models import ResearchPlan, SubQuestion
 from ..observability import Tracer
 from ..registry import register
 from ..report.hsi_tables import hsi_table_schemas
@@ -23,19 +23,50 @@ from .intent_router import (
     INTENT_SUB_QUESTION_KEY,
 )
 
+SEARCH_QUERY_RULES = (
+    "search_queries 是实际发送给搜索引擎的检索式。通常用 1–3 条简洁、互补的关键词组，"
+    "不要把长问句、回答格式说明或所有细节塞进一个查询。"
+    "国际学术主题优先使用通行的英文术语；地域性事务和中文专名保留合适的中文关键词。"
+    "明确指定的年份、地域、对象与任务范围不能丢失；不同具名方法需要分别检索时分成不同查询，"
+    "不要把它们强行组合成必须同时出现的条件，不猜论文标题、作者或 DOI。"
+)
+
 SYSTEM = (
     "你是一名资深研究规划师。把用户的研究问题拆解为若干互补、可独立检索的子问题，"
     "覆盖问题的不同侧面（现状、关键玩家、技术/方法、争议或风险、趋势等），子问题之间尽量不重叠。"
     "若某子问题必须先得到另一子问题的检索结果才能展开（例如先确定主流框架，再逐一比较其取舍），"
     "在其 depends_on 中填写所依赖子问题的序号（基于本次输出列表的 0 起始下标）；无依赖则留空。"
     "依赖关系应尽量简单且无环。"
-    "question 保留完整的研究问题与条件；每个子问题另外给出 search_queries，"
-    "它们才是实际发送给搜索引擎的检索式。通常用 1–3 条简洁、互补的关键词组，"
-    "不要把长问句、回答格式说明或所有细节塞进一个查询。"
-    "国际学术主题优先使用通行的英文术语；地域性事务和中文专名保留合适的中文关键词。"
-    "明确指定的年份、地域、对象与任务范围不能丢失；不同具名方法需要分别检索时分成不同查询，"
-    "不要把它们强行组合成必须同时出现的条件，不猜论文标题、作者或 DOI。"
+    "question 保留完整的研究问题与条件；每个子问题另外给出 search_queries。"
+    + SEARCH_QUERY_RULES
 )
+
+
+class SearchQueryPlan(BaseModel):
+    search_queries: list[str] = Field(min_length=1, description="本轮问答实际检索的关键词组")
+
+    @field_validator("search_queries")
+    @classmethod
+    def clean_queries(cls, queries: list[str]) -> list[str]:
+        cleaned = SubQuestion.clean_search_queries(queries)
+        if not cleaned:
+            raise ValueError("检索计划必须包含非空检索式")
+        return cleaned
+
+
+async def plan_search_queries(query: str, ctx: RunContext) -> list[str]:
+    """Apply research query planning to one QA turn without expanding its scope."""
+    plan = await ctx.llm_for("planner").parse(
+        ctx.system_prompt(
+            "为本轮学术问答规划检索式，不拆解为新的研究任务，也不生成答案。"
+            "问题包含前文指代时，结合给出的原问题理解当前所问对象。"
+            + SEARCH_QUERY_RULES
+        ),
+        f"【本轮检索问题】\n{query}",
+        SearchQueryPlan,
+    )
+    return plan.search_queries
+
 
 _HSI_WORKFLOW = "hsi_review"
 _HSI_ANSWER_MODES = frozenset(

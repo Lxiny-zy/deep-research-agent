@@ -133,9 +133,13 @@ def _contextual_query(question: str, history: list[dict[str, str]]) -> str:
 
 
 async def _verified(
-    researcher: Researcher, query: str, thoughts: list[dict[str, Any]] | None = None
+    researcher: Researcher, query: str, thoughts: list[dict[str, Any]] | None = None,
+    *, search_queries: list[str] | None = None,
 ) -> tuple[list[Finding], int]:
-    result = await researcher.run(query)
+    result = (
+        await researcher.run(query, search_queries=search_queries)
+        if search_queries else await researcher.run(query)
+    )
     raw = result.findings if result else []
     if result and result.extraction_audit is not None and thoughts is not None:
         thoughts.append(
@@ -342,7 +346,9 @@ async def answer_question(
                     paper_findings = selection.findings
                     unresolved_topics = selection.missing_topics
                     break
-                remaining = [s for s in paper_sources if s.url not in read_urls]
+                remaining = [
+                    s for s in paper_sources if s.url not in read_urls and s.content.strip()
+                ]
                 if not remaining:
                     paper_findings = collected
                     unresolved_topics = selection.missing_topics or [question]
@@ -445,12 +451,18 @@ async def answer_question(
     if extra_search is not None:
         backends.append(extra_search)
     if backends:
+        from ..agents.planner import plan_search_queries
         from ..tools.composite import MultiBackendSearch
 
+        queries = await plan_search_queries(query, ctx)
+        thoughts.append({
+            "tool": "search_query_plan", "input": query,
+            "observation": "规划本轮学术检索式", "queries": queries,
+        })
         researcher.source_context = None
         researcher.raise_extraction_errors = False
         researcher.search = backends[0] if len(backends) == 1 else MultiBackendSearch(backends)
-        other, raw = await _verified(researcher, query, thoughts)
+        other, raw = await _verified(researcher, query, thoughts, search_queries=queries)
         other = [f for f in other if f.source_url not in origins]
         for finding in other:
             origins.setdefault(finding.source_url, _origin(finding.source_url))

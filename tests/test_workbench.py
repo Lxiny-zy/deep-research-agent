@@ -1094,6 +1094,7 @@ async def test_answer_question_verifies_and_cites(settings) -> None:
     assert "[1]" in result.answer and not result.fallback
     assert [t["tool"] for t in result.thoughts] == [
         "rewrite",
+        "search_query_plan",
         "extraction_audit",
         "search_and_verify",
         "claim_check",

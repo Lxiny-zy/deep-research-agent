@@ -52,6 +52,8 @@ _SYSTEM = (
     "你负责选择本轮论文问答所需的已核验证据，不重新生成事实。"
     "返回候选编号及必要的补读来源 URL，不能添加候选以外的结论。"
     "候选包含不同章节的已核验论断和原文引句，来源目录只供定位，不是事实证据。"
+    "目录的 content_chars 是去除首尾空白后的片段字符数；很短的片段可能只是标题，"
+    "需要细节时同时选择相关正文或相邻片段。长度不代表事实质量，不能仅因片段短而忽略它。"
     "判断这些候选能否完整覆盖当前问题：涉及多个方面时必须全部覆盖，不能用相似话题代替。"
     "回答创新点需要作者归属与原创贡献的依据；使用已有方法不等于发明。"
     "候选未覆盖的细节不代表全文不存在；不确定、缺乏直接依据或缺少任一所问方面时，"
@@ -167,6 +169,8 @@ async def plan_findings(
 ) -> EvidencePlan:
     if not candidates:
         return EvidencePlan()
+    if sources is not None:
+        sources = [source for source in sources if source.content.strip()]
     gaps = _measurement_gaps(candidates, sources or [])
     records: list[dict[str, Any]] = [
         {
@@ -191,6 +195,7 @@ async def plan_findings(
                 "url": source.url,
                 "title": source.title,
                 "locator": source.locator,
+                "content_chars": len(source.content.strip()),
                 "section": source.scholarly.section if source.scholarly else "",
                 "figures_tables": sorted(
                     set(

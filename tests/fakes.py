@@ -75,6 +75,10 @@ class FakeLLM:
         self, system: str, user: str, schema, *, temperature: float = 0.2, retries: int = 2
     ):
         self.parse_calls += 1
+        if schema.__name__ == "SearchQueryPlan":
+            # Default fixtures preserve their deterministic search lookup; query
+            # quality and propagation use explicit plans in dedicated tests.
+            return schema(search_queries=[user.split("【本轮检索问题】\n", 1)[1]])
         if schema.__name__ == "PeerReviewClassifications":
             data = json.loads(user)
             items = []
