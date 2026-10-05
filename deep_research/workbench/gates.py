@@ -114,6 +114,8 @@ def citation_gate(
 
 
 def markdown_gate(markdown: str) -> GateResult:
+    from .delivery.math_residual import raw_tex_fragments
+
     issues: list[str] = []
     raw = _RAW_TAG.findall(markdown)
     if raw:
@@ -122,7 +124,12 @@ def markdown_gate(markdown: str) -> GateResult:
         issues.append("含页内锚点链接（跨格式交付后失效）")
     if markdown.count("```") % 2:
         issues.append("存在未闭合的代码块")
-    return GateResult("markdown", "fail" if raw else ("warn" if issues else "pass"), issues)
+    bare_math = raw_tex_fragments(citation_text(markdown, mask_escapes=False))
+    if bare_math:
+        issues.append("公式缺少数学标记：" + "、".join(fragment[:60] for fragment in bare_math[:3]))
+    return GateResult(
+        "markdown", "fail" if raw or bare_math else ("warn" if issues else "pass"), issues,
+    )
 
 
 def _normalize(title: str) -> str:
@@ -237,6 +244,8 @@ def mindmap_composition_gate(model: Any) -> GateResult:
 
 def consistency_gate(markdown: str, files: dict[str, bytes]) -> GateResult:
     """同源多格式交叉计数。只比对实际生成了的格式。"""
+    from .delivery.math_residual import residual_math_issues
+
     issues: list[str] = []
     metrics: dict[str, Any] = {}
     failed: set[str] = set()
@@ -278,6 +287,16 @@ def consistency_gate(markdown: str, files: dict[str, bytes]) -> GateResult:
         except Exception as exc:
             issues.append(f"PDF 自检失败：{exc}")
             failed.add("pdf")
+    for fmt, data in (("html", html), ("docx", docx), ("pdf", pdf)):
+        if data is None:
+            continue
+        try:
+            residue = residual_math_issues(fmt, data)
+        except Exception as exc:
+            residue = [f"{fmt.upper()} 公式检查失败：{type(exc).__name__}"]
+        if residue:
+            issues.extend(residue)
+            failed.add(fmt)
     metrics["failed_formats"] = sorted(failed)
     return GateResult("consistency", "fail" if issues else "pass", issues, metrics)
 

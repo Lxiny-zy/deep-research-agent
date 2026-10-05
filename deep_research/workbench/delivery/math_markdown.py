@@ -114,7 +114,7 @@ def math_plugin(md: MarkdownIt) -> None:
     )
 
 
-def citation_text(text: str) -> str:
+def citation_text(text: str, *, mask_escapes: bool = True) -> str:
     """Mask non-prose without changing offsets, for both checking and rewriting.
 
     Parse block boundaries first, then inline rules over the masked source.
@@ -152,6 +152,8 @@ def citation_text(text: str) -> str:
     names = md.inline.ruler.get_active_rules()
     rules = md.inline.ruler.getRules("")
     for name, rule in zip(names, rules, strict=True):
+        if name == "escape" and not mask_escapes:
+            continue
         if name in {
             "math_inline",
             "bracket_math",
