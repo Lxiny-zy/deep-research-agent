@@ -33,6 +33,9 @@ def make_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
         # 并开启外键强制（默认关闭），使 ondelete=CASCADE 在删除 run 时真正级联清子表
         @sa_event.listens_for(engine.sync_engine, "connect")
         def _sqlite_pragma(dbapi_conn: Any, _record: Any) -> None:
+            from .sqlite_lifecycle import guard_sqlite_stop
+
+            guard_sqlite_stop(getattr(dbapi_conn, "driver_connection", None))
             cursor = dbapi_conn.cursor()
             journal_mode = os.getenv("SQLITE_JOURNAL_MODE", "WAL").strip().upper()
             if journal_mode not in _SQLITE_JOURNAL_MODES:
