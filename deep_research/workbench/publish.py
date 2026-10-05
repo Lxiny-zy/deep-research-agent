@@ -246,7 +246,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 58,
+        "format_version": 59,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -775,9 +775,15 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         bibliography = catalog
         markdown = display_markdown
 
+    from ..reading_limits import append_reading_limits, collect_reading_limits
+
+    reading_limits = collect_reading_limits(detail.sources, detail.results)
+    markdown = append_reading_limits(markdown, reading_limits)
+
     context = {
         "markdown": markdown,
         "canonical_markdown": canonical_markdown,
+        "reading_limits": reading_limits,
         "bibliography": bibliography.model_dump(mode="json") if bibliography else None,
         "title": title,
         "meta": meta,

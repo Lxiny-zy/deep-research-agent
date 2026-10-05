@@ -48,9 +48,15 @@ class ReportService:
         if detail is None:
             raise ReportNotFoundError(run_id)
         events = await self.repo.get_events(run_id, limit=self.event_limit)
+        from ..reading_limits import append_reading_limits, collect_reading_limits
+
+        reading_limits = await run_blocking(collect_reading_limits, detail.sources, detail.results)
+        displayed_report = detail.report.model_copy(update={
+            "markdown": append_reading_limits(detail.report.markdown, reading_limits),
+        }) if detail.report is not None else None
         document = await run_blocking(
             self.assembler,
-            detail.report,
+            displayed_report,
             detail.results,
             events=events,
             query=detail.query,
@@ -58,13 +64,13 @@ class ReportService:
             include_hsi_tables=include_hsi_tables,
         )
         scratch = detail.orchestration.checkpoint.get("scratch", {}) if detail.orchestration else {}
-        if detail.report is not None:
+        if displayed_report is not None:
             from ..bibliography import build_bibliography
             from ..workbench.reader import paper_sources
 
             document.bibliography = build_bibliography(
-                detail.report.markdown,
-                detail.report.citations,
+                displayed_report.markdown,
+                displayed_report.citations,
                 [finding for result in detail.results for finding in result.findings],
                 [*detail.sources, *paper_sources(detail)],
                 extra_citations=table_citations(document.blocks),
