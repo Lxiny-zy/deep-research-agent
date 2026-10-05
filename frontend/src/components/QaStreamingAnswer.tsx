@@ -19,7 +19,7 @@ export default function QaStreamingAnswer({
     <div className="qa-answer">
       <div className="qa-answer-pending" role="status">
         <AppIcon name="loader" size={15} className="spin" aria-hidden="true" />
-        {text ? '正在生成回答，完成后核对引用…' : stage?.message || waiting}
+        {stage?.message || (text ? '正在生成回答…' : waiting)}
       </div>
       <QaActivityView items={activity} live />
       {text && (

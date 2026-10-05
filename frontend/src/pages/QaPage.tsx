@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
 import QaStreamingAnswer from '../components/QaStreamingAnswer'
+import QaAvatar from '../components/QaAvatar'
 import {
   createConversation,
   deleteConversation,
@@ -330,9 +331,7 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
                 <p>{pending}</p>
               </div>
               <div className="qa-answer-row">
-                <span className="qa-avatar" aria-hidden="true">
-                  <AppIcon name="network" size={14} strokeWidth={2} />
-                </span>
+                <QaAvatar active />
                 <QaStreamingAnswer
                   text={streamingAnswer}
                   activity={activity}

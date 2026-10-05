@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -221,6 +222,7 @@ class SupportReviewer:
         self.fulltext_records: dict[str, dict[str, Any]] = {}
         self.check_formulas = check_formulas
         self.formula_records: dict[str, dict[str, Any]] = {}
+        self.on_progress: Callable[[str], None] | None = None
 
     def formula_scope_hash(self, unit: SupportUnit) -> str | None:
         from .formula_review import input_hash, requires_formula, source_packets
@@ -371,7 +373,9 @@ class SupportReviewer:
             or record.get("unit_hash") != current
             or record.get("corpus_hash") != self.fulltext_corpus.fingerprint
         ):
-            checker = FullTextReviewer(self.llm, self.fulltext_corpus, self.capacity)
+            checker = FullTextReviewer(
+                self.llm, self.fulltext_corpus, self.capacity, on_progress=self.on_progress
+            )
             record = await checker.review(unit)
         self.fulltext_records[unit.id] = record
         status = record["status"]
@@ -407,7 +411,9 @@ class SupportReviewer:
         pending: list[SupportUnit] = []
         keys: dict[str, str] = {}
         known_citations = {e["citation"] for e in self.evidence}
-        for unit in units:
+        for index, unit in enumerate(units, 1):
+            if self.on_progress is not None:
+                self.on_progress(f"正在核对回答依据（第 {index}/{len(units)} 段）…")
             selected = [e for e in self.evidence if e["citation"] in unit.citations]
             key = digest([asdict(unit), selected])
             keys[unit.id] = key
@@ -474,7 +480,10 @@ class SupportReviewer:
                 )
             else:
                 fitting.append(unit)
-        for batch in self._batches(fitting, system_size):
+        batches = self._batches(fitting, system_size)
+        for index, batch in enumerate(batches, 1):
+            if self.on_progress is not None:
+                self.on_progress(f"正在核对引用支持（第 {index}/{len(batches)} 批）…")
             results.update(await self._judge(batch))
         for unit in units:
             decision = results[unit.id]

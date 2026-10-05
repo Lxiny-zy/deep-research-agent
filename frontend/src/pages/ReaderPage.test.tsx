@@ -233,7 +233,7 @@ describe('ReaderPage', () => {
     expect(await screen.findByText('已核验的精读结论')).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByTestId('qa-streaming-answer')).not.toBeInTheDocument())
     expect(screen.getByText('接口返回的思考片段')).toBeInTheDocument()
-    expect(screen.getByText('模型返回的思考内容').closest('details')).not.toHaveAttribute('open')
+    expect(screen.getByText('思考过程').closest('details')).not.toHaveAttribute('open')
   })
 
   it('does not allow questions until the paper intake run is done', async () => {

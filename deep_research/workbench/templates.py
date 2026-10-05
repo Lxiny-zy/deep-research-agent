@@ -192,7 +192,7 @@ LIT_REVIEW = TaskTemplate(
     ),
     writer_brief=(
         "以学术综述文体写作：按主题而不是按论文逐篇罗列；每个主题说明问题、"
-        "代表方法、各自假设与局限；方法对比优先用 Markdown 表格。"
+        "代表方法、各自假设与局限；方法对比优先用 evidence-table 结构化表格规格。"
     ),
     min_length=1500,
     min_citations=6,

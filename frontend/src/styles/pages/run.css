@@ -1066,23 +1066,91 @@
 
 /* ---- 证据抽屉 ---- */
 .model-reasoning-panel {
-  background: var(--primary-soft);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--primary);
-  border-radius: var(--radius-md);
-  color: var(--primary-text);
-  margin-bottom: var(--space-3);
-  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.model-reasoning-panel summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  list-style: none;
+  padding: 10px 12px;
+}
+
+.model-reasoning-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.model-reasoning-panel summary:hover {
+  background: color-mix(in srgb, var(--surface-3) 55%, transparent);
+}
+
+.model-reasoning-panel summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -3px;
+}
+
+.model-reasoning-panel details[open] > summary .reasoning-chevron,
+.model-reasoning-panel[open] > summary .reasoning-chevron {
+  transform: rotate(90deg);
+}
+
+.reasoning-chevron {
+  flex-shrink: 0;
+}
+
+.model-reasoning-heading {
+  font-weight: 500;
+}
+
+.model-reasoning-count,
+.model-reasoning-model,
+.model-reasoning-state {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.model-reasoning-count,
+.model-reasoning-state {
+  margin-left: auto;
+}
+
+.model-reasoning-calls {
+  border-top: 1px solid var(--border);
+  max-height: 400px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.model-reasoning-call + .model-reasoning-call {
+  border-top: 1px solid var(--border);
+}
+
+.model-reasoning-state.is-active {
+  color: var(--text-2);
 }
 
 .model-reasoning-text {
-  color: var(--primary-text);
-  font-size: 0.9em;
-  line-height: 1.7;
-  max-height: 360px;
+  border-left: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  line-height: 1.8;
+  margin: 0 12px 12px 18px;
+  max-height: 240px;
   overflow: auto;
   overflow-wrap: anywhere;
-  padding: var(--space-3) 0;
+  overscroll-behavior: contain;
+  padding: 0 12px;
   white-space: pre-wrap;
 }
 

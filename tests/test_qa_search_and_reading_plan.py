@@ -75,6 +75,28 @@ async def test_qa_plans_terms_once_and_keeps_question_for_reading(settings, back
     assert any(t.get("queries") == QUERIES for t in answer.thoughts)
 
 
+@pytest.mark.parametrize("intermediate", [[], [{"query": "有哪些常用指标？", "answer": "PSNR"}]])
+async def test_long_followup_keeps_original_topic_through_search_and_extraction(
+    settings, intermediate
+):
+    llm, planner, search = PlanningLLM(), PlanningLLM(), Search()
+    ctx = RunContext(
+        llm=llm, search_tool=search, tracer=Tracer(), settings=settings,
+        llm_resolver=lambda role: planner if role == "planner" else llm,
+    )
+    topic = "CASSI 重建质量采用哪些评价指标？"
+    question = "联网搜索2026年是否提出了新的指标"
+    history = [{"query": topic, "answer": "历史答案不是证据"}, *intermediate]
+    await answer_question(question, history=history, ctx=ctx, include_web=True)
+    assert len(planner.plans) == 1
+    prompts = [planner.plans[0][1], *llm.extractions]
+    assert llm.extractions
+    assert all(topic in prompt and question in prompt for prompt in prompts)
+    assert all("历史答案不是证据" not in prompt for prompt in prompts)
+    if intermediate:
+        assert all(intermediate[0]["query"] in prompt for prompt in prompts)
+
+
 @pytest.mark.parametrize("mode", ["paper", "knowledge", "greeting"])
 async def test_closed_or_nonresearch_qa_does_not_plan_search(settings, mode):
     llm, search = PlanningLLM(AssertionError("unexpected planner")), Search()

@@ -104,3 +104,46 @@ async def test_exhausted_total_budget_does_not_start_an_extra_full_generation(
     model = BudgetWriter(missing_citation=False)
     result = await ask(settings, model)
     assert result.fallback and model.stream_calls == 1
+
+
+@pytest.mark.parametrize("local", [True, False])
+async def test_unchanged_revision_stops_without_spending_remaining_allowances(settings, local):
+    class NoProgress(BudgetWriter):
+        async def parse(self, system, user, schema, **kwargs):
+            if schema is ProseEdits:
+                self.local_edits += 1
+                if not local:
+                    raise ValueError("local repair unavailable")
+                payload = json.loads(user.split("【只修订以下段落】\n", 1)[1])
+                return ProseEdits(edits=[
+                    {"unit_id": part["unit_id"], "replacement": part["text"]}
+                    for part in payload["paragraphs"]
+                ])
+            return await super().parse(system, user, schema, **kwargs)
+
+    settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4}
+    model = NoProgress(missing_citation=False)
+    result = await ask(settings, model)
+    assert result.fallback and model.local_edits == 1
+    assert model.stream_calls == (1 if local else 2)
+    assert any("未产生新正文" in row["observation"] for row in result.thoughts)
+
+
+async def test_revision_cycle_stops_when_returning_to_a_checked_draft(settings):
+    class CyclicWriter(BudgetWriter):
+        async def parse(self, system, user, schema, **kwargs):
+            if schema is ProseEdits:
+                self.local_edits += 1
+                payload = json.loads(user.split("【只修订以下段落】\n", 1)[1])
+                return ProseEdits(edits=[
+                    {"unit_id": part["unit_id"],
+                     "replacement": "现有" + BAD if self.local_edits % 2 else BAD}
+                    for part in payload["paragraphs"]
+                ])
+            return await super().parse(system, user, schema, **kwargs)
+
+    settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4}
+    model = CyclicWriter(missing_citation=False)
+    result = await ask(settings, model)
+    assert result.fallback and model.local_edits == 2 and model.stream_calls == 1
+    assert any("未产生新正文" in row["observation"] for row in result.thoughts)

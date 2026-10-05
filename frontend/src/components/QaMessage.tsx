@@ -1,5 +1,6 @@
 import QaAnswerBody from './QaAnswerBody'
 import QaActivityView from './QaActivityView'
+import QaAvatar from './QaAvatar'
 import { savedQaActivity } from '../lib/qaActivity'
 import { verificationText } from '../lib/verificationText'
 import { AppIcon } from './AppIcon'
@@ -54,9 +55,7 @@ export default function QaMessageView({
         <p>{message.query}</p>
       </div>
       <div className="qa-answer-row">
-        <span className="qa-avatar" aria-hidden="true">
-          <AppIcon name="network" size={14} strokeWidth={2} />
-        </span>
+        <QaAvatar active={message.status === 'pending' || message.status === 'running'} />
         <div className={`qa-answer${message.status === 'fallback' ? ' is-fallback' : ''}`}>
           {(message.status === 'pending' || message.status === 'running') && (
             <div role="status">

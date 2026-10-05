@@ -152,6 +152,11 @@ async def test_writer_uses_selected_scope_and_recovery_does_not_replan(settings)
 
     class ScopedWriter(Judge):
         scope_calls = 0
+        writer_prompts: list[str]
+
+        def __init__(self):
+            super().__init__()
+            self.writer_prompts = []
 
         async def parse(self, system, user, schema, **kwargs):
             if schema is AnalysisScope:
@@ -160,6 +165,7 @@ async def test_writer_uses_selected_scope_and_recovery_does_not_replan(settings)
             return await super().parse(system, user, schema, **kwargs)
 
         async def stream(self, system, user, **kwargs):
+            self.writer_prompts.append(system)
             yield "\n\n".join(
                 f"## {section.title}\n变量存在相关关系。" for section in DATA_ANALYSIS.sections
             )
@@ -172,6 +178,14 @@ async def test_writer_uses_selected_scope_and_recovery_does_not_replan(settings)
     llm = ScopedWriter()
     ctx = RunContext(llm=llm, search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
     await DataAnalyst().step(bb, ctx)
+    prompt = llm.writer_prompts[0]
+    assert "【统计台账】" in prompt and "不得计算、改写或编造任何数字" in prompt
+    assert "ledger_path" in prompt
+    # Ledger tables must not inherit the incompatible paper-finding schema or
+    # instructions to compute derived values and cite nonexistent references.
+    assert "source_finding_id" not in prompt and "发现 ID 数组" not in prompt
+    assert "写出带引用的显式算式" not in prompt
+    assert "表格的每个事实或数据行都要有本次 [n] 引用" not in prompt
     frozen = copy.deepcopy(bb.scratch["analysis"])
     assert frozen["scope"] == SCOPE.model_dump()
     assert frozen["numeric"] == ["mass", "length"]

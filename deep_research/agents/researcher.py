@@ -105,6 +105,7 @@ class Researcher:
         self.system = SYSTEM  # 可被角色卡片覆盖
         # Paper conversations supply a deterministic context AFTER source policy.
         self.source_context: Callable[[list[Source]], str] | None = None
+        self.question_context: Callable[[list[Source]], str] | None = None
         self.raise_extraction_errors = False
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
@@ -381,6 +382,8 @@ class Researcher:
                     f"\n【前驱子问题已得到的发现（仅供背景参考，不可当作新发现的来源）】\n{prior}"
                 )
         user_parts.append(f"\n子问题：{sub_question}")
+        if self.question_context is not None:
+            user_parts.append(self.question_context(sources))
 
         from ..workbench.quality import policy_from
 

@@ -223,6 +223,43 @@ async def test_all_bytes_are_checked_when_a_document_needs_multiple_model_reques
     assert validate_fulltext_record(unit, record, corpus)
 
 
+async def test_fulltext_progress_reports_actual_batches_without_skipping_sources():
+    source = mark_complete_sources([
+        Source(url="https://example.org/progress.pdf", content="Ordinary text. " * 1200)
+    ])[0]
+    corpus = FullTextCorpus([source], {})
+    llm, progress = FullTextJudge(), []
+    unit = SupportUnit("u", "本次取得的全文文本中未见 dropout 设置。", kind="prose")
+    record = await FullTextReviewer(
+        llm, corpus, 7000, on_progress=progress.append
+    ).review(unit)
+    assert record["status"] == "absence_confirmed"
+    assert validate_fulltext_record(unit, record, corpus) is None
+    assert len(progress) == llm.calls
+    assert progress[0] == "正在定位需回查全文的断言与文献…"
+    batches = llm.calls - 1
+    assert batches > 1
+    assert progress[1:] == [
+        f"正在回查原文（第 {index}/{batches} 批）…" for index in range(1, batches + 1)
+    ]
+
+
+async def test_fulltext_transport_failure_does_not_request_answer_revisions():
+    from deep_research.workbench.prose_review import can_revise
+
+    class Unavailable(FullTextJudge):
+        async def parse(self, *args, **kwargs):
+            self.calls += 1
+            raise TimeoutError("upstream timed out")
+
+    _, corpus = make_corpus(complete=True)
+    llm = Unavailable()
+    reviewer = SupportReviewer(llm, [], 20000, fulltext_corpus=corpus)
+    decisions = await reviewer.review([SupportUnit("u", SC32_CLAIM)])
+    assert decisions[0].verdict == "uncertain" and llm.calls == 1
+    assert not can_revise(decisions)
+
+
 @pytest.mark.asyncio
 async def test_factual_criticism_is_checked_but_pure_advice_can_be_exempted():
     quote = "Evaluation uses only one scene."

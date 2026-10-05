@@ -1155,8 +1155,11 @@ def test_followup_query_uses_previous_turn() -> None:
     from deep_research.workbench.qa import _contextual_query
 
     history = [{"query": "DOE 光谱成像误差补偿", "answer": "..."}]
-    assert _contextual_query("第二篇呢", history).startswith("DOE 光谱成像误差补偿")
-    assert _contextual_query("深度展开网络在压缩感知中的作用是什么", history).startswith("深度")
+    for question in ("第二篇呢", "深度展开网络在压缩感知中的作用是什么"):
+        contextual = _contextual_query(question, history)
+        assert "DOE 光谱成像误差补偿" in contextual
+        assert f"【本轮问题】\n{question}" in contextual
+        assert "以本轮为准" in contextual
 
 
 @pytest.mark.asyncio
@@ -1189,7 +1192,9 @@ async def test_qa_endpoints_round_trip_and_isolate_owners(api_repo, monkeypatch)
         gone = await client.get(f"/api/qa/conversations/{cid}")
     assert answer.status_code == 201 and answer.json()["citations"] == ["https://a.com"]
     assert follow.json()["position"] == 1
-    assert follow.json()["thoughts"][0]["observation"].startswith("CASSI")
+    contextual = follow.json()["thoughts"][0]["observation"]
+    assert "CASSI 是什么？" in contextual
+    assert "【本轮问题】\n第二篇呢" in contextual
     assert [m["query"] for m in detail["messages"]] == ["CASSI 是什么？", "第二篇呢"]
     assert listing[0]["message_count"] == 2 and "owner_id" not in listing[0]
     assert missing.status_code == 404

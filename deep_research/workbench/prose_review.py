@@ -252,6 +252,7 @@ def can_revise(decisions: list[SupportDecision]) -> bool:
                 "核验未提供本节点可用的证据映射",
                 "缺少完整摘要原文",
                 "公式专门核验未完成",
+                "全文核查未完成",
             )
         )
         for d in decisions

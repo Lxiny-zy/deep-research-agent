@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any, Literal
 
@@ -204,9 +205,13 @@ def fulltext_supports(unit: Any, record: Any, corpus: FullTextCorpus) -> bool:
 
 
 class FullTextReviewer:
-    def __init__(self, llm: Any, corpus: FullTextCorpus, capacity: int) -> None:
+    def __init__(
+        self, llm: Any, corpus: FullTextCorpus, capacity: int,
+        *, on_progress: Callable[[str], None] | None = None,
+    ) -> None:
         self.llm, self.corpus = llm, corpus
         self.capacity = getattr(llm, "enforced_input_capacity_chars", capacity) or capacity
+        self.on_progress = on_progress
 
     async def review(self, unit: Any) -> dict[str, Any]:
         record: dict[str, Any] = {
@@ -228,6 +233,8 @@ class FullTextReviewer:
                 > self.capacity
             ):
                 raise ValueError("全文核查目录超过模型容量")
+            if self.on_progress is not None:
+                self.on_progress("正在定位需回查全文的断言与文献…")
             target = await self.llm.parse(_TARGET_SYSTEM, prompt, FullTextTarget, temperature=0.0)
             record["target"] = target.model_dump(mode="json")
             if target.kind == "not_applicable":
@@ -297,7 +304,9 @@ class FullTextReviewer:
                     ):
                         raise ValueError("全文核查分段超过模型容量，未丢弃内容")
                     batches.append([part])
-            for batch in batches:
+            for index, batch in enumerate(batches, 1):
+                if self.on_progress is not None:
+                    self.on_progress(f"正在回查原文（第 {index}/{len(batches)} 批）…")
                 response = await self.llm.parse(
                     _CHECK_SYSTEM,
                     json.dumps({**base, "parts": batch}, ensure_ascii=False),

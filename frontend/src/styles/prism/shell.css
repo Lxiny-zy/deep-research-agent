@@ -14,8 +14,8 @@
 }
 
 /* 品牌标：一枚旋转的虹彩细环 */
-.sidebar-logo {
-  animation: iris-spin 14s linear infinite;
+.sidebar-logo,
+.brand-ring {
   background: var(--iris);
   border-radius: 50%;
   box-shadow: none;
@@ -23,6 +23,14 @@
   -webkit-mask: radial-gradient(farthest-side, transparent 80%, #000 86%, #000 94%, transparent);
   mask: radial-gradient(farthest-side, transparent 80%, #000 86%, #000 94%, transparent);
   width: 38px;
+}
+
+.sidebar-logo {
+  animation: iris-spin 14s linear infinite;
+}
+
+.brand-ring.is-active {
+  animation: iris-spin 9s linear infinite;
 }
 
 .sidebar-brand-text strong {

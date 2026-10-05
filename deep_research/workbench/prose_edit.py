@@ -30,6 +30,10 @@ class ProseEdits(BaseModel):
     edits: list[ProseEdit]
 
 
+class UnchangedProseError(ValueError):
+    """The proposed repair repeats rejected content; another review cannot help."""
+
+
 _SYSTEM = (
     "你只修订指定的报告段落，不重写全文。逐条解决核验指出的问题，保留原段已有且有依据的内容。"
     "删除或收窄无依据的解释，不加入新事实，不把相关关系写成因果。"
@@ -264,7 +268,7 @@ async def repair_paragraphs(
         if not replacement or _shape(by_unit[edit.unit_id], replacement) != shapes[edit.unit_id]:
             raise ValueError("局部修订改变了段落结构，未替换原文")
         if re.sub(r"\W", "", replacement) == re.sub(r"\W", "", original):
-            raise ValueError("局部修订未修改被拒绝的内容，未重新抽签核验")
+            raise UnchangedProseError("局部修订未修改被拒绝的内容，未重新抽签核验")
         cited = {
             int(n)
             for group in re.findall(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]", citation_text(replacement))

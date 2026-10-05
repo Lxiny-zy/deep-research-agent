@@ -45,6 +45,7 @@
 /* 减少动态效果：关闭旋转、漂移、流光与抬升，只保留配色与层次 */
 @media (prefers-reduced-motion: reduce) {
   .sidebar-logo,
+  .brand-ring,
   .identity-avatar,
   .backdrop-leak,
   .home-hero-word.is-spectral,

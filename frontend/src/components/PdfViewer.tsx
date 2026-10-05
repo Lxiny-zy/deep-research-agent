@@ -175,7 +175,9 @@ export default function PdfViewer({
   const [error, setError] = useState<string | null>(null)
   const [zoom, setZoom] = useState<number | 'fit'>('fit')
   const [width, setWidth] = useState(0)
+  const [height, setHeight] = useState(0)
   const [marks, setMarks] = useState<Map<number, Rect[]> | null>(null)
+  const centeredMarks = useRef<Map<number, Rect[]> | null>(null)
   const [locateStatus, setLocateStatus] = useState('')
   const [attempt, setAttempt] = useState(0)
   const [phase, setPhase] = useState<'download' | 'parse'>('download')
@@ -245,6 +247,7 @@ export default function PdfViewer({
     // A hidden report/PDF tab must not reset fit zoom and rerender every page.
     const measure = () => {
       if (element.clientWidth > 0) setWidth(Math.max(element.clientWidth - 32, 0))
+      if (element.clientHeight > 0) setHeight(element.clientHeight)
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return
@@ -255,8 +258,6 @@ export default function PdfViewer({
 
   const fitScale = sizes[0] && width ? Math.min(width / sizes[0].width, 2.5) : 1
   const scale = zoom === 'fit' ? fitScale : zoom
-  const scaleRef = useRef(scale)
-  scaleRef.current = scale
 
   const quote = highlight?.quote
   const token = highlight?.token
@@ -342,11 +343,14 @@ export default function PdfViewer({
     container.scrollTo?.({
       top: Math.max(
         0,
-        pageTop + ((top + bottom) / 2) * scaleRef.current - container.clientHeight / 2,
+        pageTop + ((top + bottom) / 2) * scale - container.clientHeight / 2,
       ),
-      behavior: 'smooth',
+      // Drawer transitions can change fit zoom over several frames. Correct
+      // layout changes immediately instead of racing an earlier smooth scroll.
+      behavior: centeredMarks.current === marks ? 'instant' : 'smooth',
     })
-  }, [marks])
+    centeredMarks.current = marks
+  }, [marks, scale, height])
 
   const pages = useMemo(() => sizes.map((size, index) => ({ size, number: index + 1 })), [sizes])
   const zoomIn = () => setZoom(ZOOM_STEPS.find((step) => step > scale + 0.01) ?? scale)

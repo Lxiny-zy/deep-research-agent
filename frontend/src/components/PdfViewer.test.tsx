@@ -84,6 +84,65 @@ it('clears old highlights when a different quote cannot be located', async () =>
   expect(container.querySelectorAll('.pdf-highlight')).toHaveLength(0)
 })
 
+it('keeps the chosen quotation centered when the evidence drawer changes the PDF viewport', async () => {
+  let resize!: () => void
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      constructor(callback: () => void) {
+        resize = callback
+      }
+      observe() {}
+      disconnect() {}
+    },
+  )
+  const getTextContent = vi.fn(async () => ({ items: [{ str: 'target quote' }] }))
+  mocks.getDocument.mockReturnValue({
+    promise: Promise.resolve({
+      numPages: 3,
+      getPage: async (number: number) => ({
+        ...firstPage,
+        getTextContent:
+          number === 3 ? getTextContent : async () => ({ items: [{ str: `Page ${number}` }] }),
+      }),
+    }),
+    destroy: vi.fn().mockResolvedValue(undefined),
+  })
+  const { container, rerender } = render(<PdfViewer runId="r" documentId="d" />)
+  await screen.findByText('共 3 页')
+  const scroller = container.querySelector('.pdf-scroller') as HTMLDivElement
+  const holders = [...container.querySelectorAll<HTMLDivElement>('.pdf-page')]
+  let width = 632
+  let height = 600
+  Object.defineProperty(scroller, 'clientWidth', { get: () => width })
+  Object.defineProperty(scroller, 'clientHeight', { get: () => height })
+  vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect)
+  vi.spyOn(holders[2], 'getBoundingClientRect').mockImplementation(
+    () => ({ top: 2 * parseFloat(holders[0].style.height) }) as DOMRect,
+  )
+  const scrollTo = vi.fn()
+  scroller.scrollTo = scrollTo
+  await act(async () => resize())
+  rerender(<PdfViewer runId="r" documentId="d" highlight={{ quote: 'target quote', token: 1 }} />)
+  await screen.findByText('已定位完整引文 · 第 3 页')
+  expect(scrollTo).toHaveBeenLastCalledWith({ top: 1505.75, behavior: 'smooth' })
+
+  scrollTo.mockClear()
+  width = 932
+  await act(async () => resize())
+  expect(scrollTo).toHaveBeenLastCalledWith({ top: 2408.625, behavior: 'instant' })
+
+  width = 332
+  await act(async () => resize())
+  expect(scrollTo).toHaveBeenLastCalledWith({ top: 602.875, behavior: 'instant' })
+
+  height = 400
+  await act(async () => resize())
+  expect(scrollTo).toHaveBeenLastCalledWith({ top: 702.875, behavior: 'instant' })
+  expect(getTextContent).toHaveBeenCalledTimes(1)
+  expect(mocks.quoteRects).toHaveBeenCalledTimes(1)
+})
+
 it('centers a distant quotation after committing the actual sizes of unrendered pages', async () => {
   vi.stubGlobal(
     'IntersectionObserver',

@@ -58,5 +58,46 @@ it('groups supplied reasoning per call and leaves the panel collapsed', () => {
   )
   expect(screen.getByText('第一个片段，后续内容')).toBeInTheDocument()
   expect(screen.getByText('另一次调用')).toBeInTheDocument()
+  expect(screen.getByText('2 次模型调用')).toBeInTheDocument()
   expect(container.querySelector('details')).not.toHaveAttribute('open')
+})
+
+it('ends a model thinking indicator once that call reports usage, while the request continues', () => {
+  const reasoning = {
+    type: 'reasoning' as const,
+    call_id: 'one',
+    model: 'test',
+    reasoning_delta: '先分析',
+  }
+  const { rerender } = render(<QaActivityView items={[reasoning]} live />)
+  expect(screen.getByText('思考中')).toBeInTheDocument()
+  rerender(
+    <QaActivityView
+      items={[
+        reasoning,
+        { type: 'usage', llm_usage: { call_id: 'one', input_tokens: 100 } },
+        { type: 'status', message: '正在核对结论是否得到引用支持…' },
+      ]}
+      live
+    />,
+  )
+  expect(screen.queryByText('思考中')).not.toBeInTheDocument()
+  expect(screen.getByText('已结束')).toBeInTheDocument()
+  expect(screen.getByText('模型调用 1').closest('details')).not.toHaveAttribute('open')
+})
+
+it('does not let the previous call usage end a later active call', () => {
+  render(
+    <ModelReasoningPanel
+      events={[
+        event({ call_id: 'one', model: 'test', reasoning_delta: '第一轮' }),
+        event({ call_id: 'two', model: 'test', reasoning_delta: '第二轮' }),
+        event({ llm_usage: { call_id: 'one' } }),
+      ]}
+      live
+    />,
+  )
+  expect(screen.getByText('模型调用 1').closest('details')).not.toHaveAttribute('open')
+  expect(screen.getByText('模型调用 2').closest('details')).toHaveAttribute('open')
+  expect(screen.getAllByText('思考中')).toHaveLength(1)
 })
