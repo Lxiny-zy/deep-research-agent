@@ -246,7 +246,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 57,
+        "format_version": 58,
         "support_policy": SUPPORT_POLICY_VERSION,
         "query": detail.query,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
@@ -547,6 +547,11 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                     "scope",
                     "composition",
                     "columns",
+                    "rows",
+                    "missing",
+                    "source",
+                    "synthetic",
+                    "input_sha256",
                 )
             }
 
@@ -860,6 +865,66 @@ def plain(inlines):  # type: ignore[no-untyped-def]
     return _plain(inlines)
 
 
+def _xlsx_input_sheets(workbook: Any, result: Any) -> None:
+    """Export frozen provenance and all columns, including those outside the analysis scope."""
+    unknown = "未记录"
+    source = getattr(result, "source", {}) or {}
+    synthetic = bool(getattr(result, "synthetic", False))
+    columns = getattr(result, "columns", [])
+    rows = getattr(result, "rows", None)
+    overview = workbook.create_sheet("输入概况", 0)
+    overview.append(["项目", "值"])
+    for key, value in (
+        ("数据类型", "合成示例数据" if synthetic else "用户提供的数据"),
+        ("来源文件", source.get("filename") or unknown),
+        ("工作表", source.get("sheet") or unknown),
+        ("总行数", rows if rows is not None else unknown),
+        ("总列数", len(columns)),
+        ("行数口径", "解析后的分析输入表行数，不含表头；不代表独立样本量或每项检验的有效样本量"),
+        ("原始文件字节 SHA-256", source.get("file_sha256") or unknown),
+        ("文件哈希口径", "上传解析时按原文件字节计算并随来源提交；未上传文件或历史未记录时不补造"),
+        ("分析输入文本 SHA-256", getattr(result, "input_sha256", "") or unknown),
+        ("文本哈希口径", "实际分析的 CSV/TSV 文本去除首尾空白后按 UTF-8 编码；多表时为合并结果"),
+        ("缺失统计口径", "按每列本身计数，包含背景列和未选列；不同变量或检验的有效行可能不同"),
+    ):
+        overview.append([key, value])
+    missing_sheet = workbook.create_sheet("缺失概况", 1)
+    missing_sheet.append(["列名", "总行数", "非缺失数", "缺失数"])
+    missing = getattr(result, "missing", {}) or {}
+    for column in columns:
+        count = missing.get(column)
+        observed: int | str = unknown
+        if isinstance(count, int) and isinstance(rows, int) and 0 <= count <= rows:
+            observed = rows - count
+        else:
+            count = unknown
+        missing_sheet.append([
+            column, rows if rows is not None else unknown, observed, count,
+        ])
+    merge = source.get("merge")
+    if merge:
+        overview.append(["合并主表", merge.get("base", unknown)])
+        tables = workbook.create_sheet("合并来源")
+        tables.append(["工作表", "总行数", "输入文本 SHA-256"])
+        for table in merge.get("tables", []):
+            tables.append([table.get(key, unknown) for key in ("name", "rows", "input_sha256")])
+        joins = workbook.create_sheet("连接计划")
+        joins.append([
+            "步骤", "右表", "主表键", "右表键", "连接方式", "关系", "连接前主表行数",
+            "右表行数", "结果行数", "主表未匹配行数", "右表未匹配行数",
+        ])
+        for index, join in enumerate(merge.get("joins", []), 1):
+            joins.append([
+                index, join.get("sheet", unknown),
+                *[json.dumps(join[key], ensure_ascii=False) if key in join else unknown
+                  for key in ("left_keys", "right_keys")],
+                *[join.get(key, unknown) for key in (
+                    "how", "relationship", "left_rows", "right_rows", "rows",
+                    "unmatched_left", "unmatched_right",
+                )],
+            ])
+
+
 def _stats_xlsx(result: Any) -> bytes:
     import io
 
@@ -991,10 +1056,17 @@ def _stats_xlsx(result: Any) -> bytes:
             for level in item["levels"] or [{"label": None, "n": None}]:
                 composition.append([*totals, level["label"], level["n"]])
     if result.issues:
-        notices = workbook.create_sheet("未完成分析")
+        notices = workbook.create_sheet("分析提示")
         notices.append(["说明"])
         for issue in result.issues:
             notices.append([issue])
+    _xlsx_input_sheets(workbook, result)
+    # Every string is data, including names beginning with '='; never execute it as a formula.
+    for worksheet in workbook:
+        for cells in worksheet:
+            for cell in cells:
+                if isinstance(cell.value, str):
+                    cell.data_type = "s"
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()

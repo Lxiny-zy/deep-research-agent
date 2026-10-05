@@ -164,7 +164,8 @@ function ResearchComposer() {
         dataset_merge: isDataTask && dataset?.mode === 'merge' ? dataset.merge?.request ?? null : null,
         dataset_source:
           isDataTask && dataset && datasetSheet
-            ? { filename: dataset.parsed.filename, sheet: datasetSheet.name }
+            ? { filename: dataset.parsed.filename, sheet: datasetSheet.name,
+                file_sha256: dataset.parsed.file_sha256, input_sha256: datasetSheet.input_sha256 }
             : null,
         demo_data: isDataTask && !datasetSheet && demoData,
         tier,
@@ -183,6 +184,7 @@ function ResearchComposer() {
         templateKey,
         tier,
         dataset: dataset ? [dataset.parsed.filename, datasetSheet?.name ?? null,
+          dataset.parsed.file_sha256 ?? null, datasetSheet?.input_sha256 ?? null,
           dataset.merge?.result.merge ?? null] : null,
         demoData,
         attachments: attachments.payloads.map((item) => item.id),

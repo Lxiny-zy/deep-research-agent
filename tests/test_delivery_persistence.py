@@ -362,3 +362,25 @@ async def test_other_task_formats_retry_from_frozen_context(
         next(file.data for file in second.files if file.name == name) == data
         for name, data in before.items()
     )
+    if format == "xlsx":
+        import io
+
+        from openpyxl import load_workbook
+
+        from tests.test_analysis_xlsx import _overview
+
+        data = next(f.data for f in second.files if f.format == "xlsx")
+        workbook = load_workbook(io.BytesIO(data))
+        frozen = run.orchestration.checkpoint["scratch"]["analysis"]
+        assert _overview(workbook)["总行数"] == frozen["rows"]
+        assert _overview(workbook)["分析输入文本 SHA-256"] == frozen["input_sha256"]
+        counts = list(workbook["缺失概况"].values)[1:]
+        assert {row[0]: row[3] for row in counts} == frozen["missing"]
+        assert load_version(run, str(tmp_path), first.content_version).failures == first.failures
+        repeated = retry_format(
+            run, str(tmp_path), None, first.content_version, format, "format-retry"
+        )
+        assert repeated.content_version == second.content_version
+        assert next(f.data for f in repeated.files if f.format == "xlsx") == next(
+            f.data for f in second.files if f.format == "xlsx"
+        )

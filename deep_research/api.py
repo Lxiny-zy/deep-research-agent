@@ -190,6 +190,9 @@ class ResearchParams(BaseModel):
 class DatasetSource(BaseModel):
     filename: str = Field(default="", max_length=300)
     sheet: str = Field(default="", max_length=120)
+    # 上传解析时计算的原文件字节摘要；不等同于选中/合并后的分析文本摘要。
+    file_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    input_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class CreateRunRequest(BaseModel):
@@ -388,6 +391,10 @@ def _run_request_hash(request: CreateRunRequest) -> str:
     fields = request.model_dump(mode="json")
     if request.dataset_merge is None:
         fields.pop("dataset_merge", None)
+    if isinstance(fields.get("dataset_source"), dict):
+        for key in ("file_sha256", "input_sha256"):
+            if fields["dataset_source"].get(key) is None:
+                fields["dataset_source"].pop(key, None)
     payload = json.dumps(
         fields,
         ensure_ascii=False,
@@ -440,13 +447,25 @@ def _checked_dataset(contract: Any, submitted: str) -> Any:
         profile = profile_csv(contract.dataset_source.get("sheet", ""), contract.dataset_csv)
     except DatasetError as exc:
         raise HTTPException(422, {"code": "dataset_invalid", "message": str(exc)}) from exc
+    input_sha256 = profile.profile()["input_sha256"]
+    declared = contract.dataset_source.get("input_sha256")
+    if declared and declared != input_sha256:
+        raise HTTPException(
+            422,
+            {
+                "code": "dataset_source_mismatch",
+                "message": "数据与所选来源不一致，请重新上传或预览合并",
+            },
+        )
     source = {
         "filename": str(contract.dataset_source.get("filename", "")),
         "sheet": str(contract.dataset_source.get("sheet", "")),
         "rows": profile.rows,
         "columns": profile.columns,
-        "input_sha256": hashlib.sha256(contract.dataset_csv.strip().encode()).hexdigest(),
+        "input_sha256": input_sha256,
     }
+    if contract.dataset_source.get("file_sha256"):
+        source["file_sha256"] = contract.dataset_source["file_sha256"]
     if contract.dataset_source.get("merge"):
         source["merge"] = contract.dataset_source["merge"]
     return contract.model_copy(update={"dataset_source": source})

@@ -2210,11 +2210,15 @@ export interface components {
         };
         /** DatasetSource */
         DatasetSource: {
+            /** File Sha256 */
+            file_sha256?: string | null;
             /**
              * Filename
              * @default
              */
             filename?: string;
+            /** Input Sha256 */
+            input_sha256?: string | null;
             /**
              * Sheet
              * @default

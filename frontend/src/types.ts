@@ -875,6 +875,7 @@ export interface DatasetSheetProfile {
   rows: number
   columns: DatasetColumn[]
   chars: number
+  input_sha256?: string
 }
 
 export interface DatasetSheet extends DatasetSheetProfile {
@@ -884,6 +885,7 @@ export interface DatasetSheet extends DatasetSheetProfile {
 /** POST /api/datasets：表格文件解析结果（不落盘） */
 export interface DatasetParseResult {
   filename: string
+  file_sha256?: string
   sheets: DatasetSheet[]
   skipped: { name: string; error: string }[]
 }
@@ -894,6 +896,7 @@ export interface DatasetSourceInfo {
   rows: number
   columns: DatasetColumn[]
   input_sha256?: string
+  file_sha256?: string
   merge?: DatasetMergeInfo
 }
 

@@ -180,10 +180,19 @@ async def test_invalid_join_and_ambiguous_dual_input_do_not_create_runs(api_repo
 async def test_joined_data_reaches_inline_and_worker_analysis_and_saved_deliverables(
     scenario_app, monkeypatch, repeated,
 ):
+    import base64
+    import csv
+    import hashlib
+    import io
+
+    from openpyxl import load_workbook
+
     from deep_research.execution import RunExecutor
     from deep_research.orchestrator import DeepResearchAgent
     from deep_research.workbench.templates import get_template
     from tests.fakes import FakeSearch
+    from tests.test_analysis_xlsx import _overview
+    from tests.test_datasets import _xlsx
     from tests.test_library_task_paths import finish_run
     from tests.test_workbench import WorkbenchLLM
 
@@ -204,9 +213,22 @@ async def test_joined_data_reaches_inline_and_worker_analysis_and_saved_delivera
     if repeated:
         request["tables"][0]["csv"] = "subject_id,mass_g\n001,3200\n001,3400\n002,3600"
         request["joins"][0]["relationship"] = "many_to_one"
+    raw = _xlsx({table["name"]: list(csv.reader(io.StringIO(table["csv"])))
+                 for table in request["tables"]})
+    parsed = await client.post("/api/datasets", json={
+        "filename": "study.xlsx", "data_base64": base64.b64encode(raw).decode(),
+    })
+    assert parsed.status_code == 200, parsed.text
+    upload = parsed.json()
+    request["tables"] = [{"name": table["name"], "csv": table["csv"]} for table in upload["sheets"]]
+    preview = await client.post("/api/datasets/merge", json=request)
+    assert preview.status_code == 200, preview.text
     created = await client.post("/api/runs", json={
         "query": "描述体重分布", "template": "dataAnalysis", "clarified": True,
-        "dataset_merge": request, "dataset_source": {"filename": "study.xlsx"},
+        "dataset_merge": request, "dataset_source": {
+            "filename": "study.xlsx", "file_sha256": upload["file_sha256"],
+            "input_sha256": preview.json()["input_sha256"],
+        },
     })
     assert created.status_code == 202, created.text
     run_id = created.json()["run_id"]
@@ -227,6 +249,13 @@ async def test_joined_data_reaches_inline_and_worker_analysis_and_saved_delivera
     artifact = next(item for item in response.json()["items"] if item["format"] == "xlsx")
     downloaded = await client.get(f"/api/runs/{run_id}/deliverables/{artifact['name']}")
     assert downloaded.status_code == 200 and downloaded.content.startswith(b"PK")
+    workbook = load_workbook(io.BytesIO(downloaded.content))
+    overview = _overview(workbook)
+    assert overview["原始文件字节 SHA-256"] == hashlib.sha256(raw).hexdigest()
+    assert overview["分析输入文本 SHA-256"] == preview.json()["input_sha256"]
+    assert overview["总行数"] == 3
+    missing = {r[0]: r[3] for r in list(workbook["缺失概况"].values)[1:]}
+    assert missing == scratch["analysis"]["missing"]
 
 
 def test_single_table_request_hash_stays_compatible_with_existing_submission_ids():

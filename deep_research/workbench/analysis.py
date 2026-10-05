@@ -867,7 +867,9 @@ def analyse(
         columns=list(frame.columns),
         numeric=numeric,
         categorical=categorical,
-        missing={c: int(frame[c].isna().sum()) for c in frame.columns},
+        missing=dict(frozen.get("missing", {}))
+        if frozen is not None and reuse_statistics
+        else {c: int(frame[c].isna().sum()) for c in frame.columns},
         describe=describe,
         tests=tests,
         correlations=correlations,
@@ -877,7 +879,9 @@ def analyse(
         if synthetic
         else dict(source if source is not None else (frozen or {}).get("source", {})),
         issues=issues,
-        input_sha256=input_sha256,
+        input_sha256=str(frozen.get("input_sha256", ""))
+        if frozen is not None and reuse_statistics
+        else input_sha256,
         figure_policy=figure_policy,
         scope=scope,
         composition=composition,

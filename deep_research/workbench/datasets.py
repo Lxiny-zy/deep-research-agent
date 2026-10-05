@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
@@ -37,6 +38,7 @@ class SheetTable:
             "rows": self.rows,
             "columns": self.columns,
             "chars": len(self.csv),
+            "input_sha256": hashlib.sha256(self.csv.strip().encode("utf-8")).hexdigest(),
         }
 
 
@@ -149,6 +151,7 @@ def parse_table_file(raw: bytes, filename: str) -> dict[str, Any]:
         raise DatasetError("文件中没有可分析的表格" + (f"（{detail}）" if detail else ""))
     return {
         "filename": filename[:300],
+        "file_sha256": hashlib.sha256(raw).hexdigest(),
         "sheets": [{**table.profile(), "csv": table.csv} for table in tables],
         "skipped": problems,
     }

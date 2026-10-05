@@ -147,6 +147,7 @@ describe('NewResearchPage task templates', () => {
     mocks.createRun.mockReset()
     mocks.createRun.mockResolvedValue({ run_id: 'r1' })
     mocks.assessIntent.mockReset()
+    mocks.parseDatasetFile.mockReset()
   })
 
   it('only offers a library project to templates that consume library search', async () => {
@@ -388,7 +389,8 @@ describe('NewResearchPage task templates', () => {
     const csv = 'method,psnr\nA,30\nB,31\n'
     mocks.parseDatasetFile.mockResolvedValue({
       filename: 'psnr.csv',
-      sheets: [sheet('', csv, 2)],
+      file_sha256: 'a'.repeat(64),
+      sheets: [{ ...sheet('', csv, 2), input_sha256: 'b'.repeat(64) }],
       skipped: [],
     })
     render(
@@ -406,8 +408,44 @@ describe('NewResearchPage task templates', () => {
     expect(mocks.createRun.mock.calls[0][0]).toMatchObject({
       template: 'dataAnalysis',
       dataset: csv,
-      dataset_source: { filename: 'psnr.csv', sheet: '' },
+      dataset_source: { filename: 'psnr.csv', sheet: '',
+        file_sha256: 'a'.repeat(64), input_sha256: 'b'.repeat(64) },
       demo_data: false,
+    })
+    const identity = mocks.createRun.mock.calls[0][2]
+    expect(identity).toContain('a'.repeat(64))
+    expect(identity).toContain('b'.repeat(64))
+  })
+
+  it('changes submission identity when a same-name file is replaced after a failed request', async () => {
+    mocks.createRun.mockRejectedValueOnce(new Error('temporary failure'))
+    const csv = 'method,psnr\nA,30\nB,31\n'
+    mocks.parseDatasetFile.mockResolvedValueOnce({
+      filename: 'psnr.csv', file_sha256: 'a'.repeat(64),
+      sheets: [{ ...sheet('', csv, 2), input_sha256: 'b'.repeat(64) }], skipped: [],
+    }).mockResolvedValueOnce({
+      filename: 'psnr.csv', file_sha256: 'c'.repeat(64),
+      sheets: [{ ...sheet('', csv, 2), input_sha256: 'd'.repeat(64) }], skipped: [],
+    })
+    render(<MemoryRouter><NewResearchPage /></MemoryRouter>)
+    fireEvent.click(screen.getByLabelText(/数据分析/))
+    fireEvent.change(screen.getByLabelText(/上传 CSV/), {
+      target: { files: [new File([csv], 'psnr.csv')] },
+    })
+    await screen.findByText(/已选择 psnr.csv/)
+    fireEvent.change(screen.getByLabelText('数据分析输入'), { target: { value: '差异显著吗？' } })
+    fireEvent.click(screen.getByRole('button', { name: '开始数据分析' }))
+    await screen.findByText(/temporary failure/)
+    fireEvent.change(screen.getByLabelText('更换数据文件'), {
+      target: { files: [new File([csv], 'psnr.csv')] },
+    })
+    await waitFor(() => expect(mocks.parseDatasetFile).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByLabelText('更换数据文件')).not.toBeDisabled())
+    fireEvent.click(screen.getByRole('button', { name: '开始数据分析' }))
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(2))
+    expect(mocks.createRun.mock.calls[1][2]).not.toEqual(mocks.createRun.mock.calls[0][2])
+    expect(mocks.createRun.mock.calls[1][0].dataset_source).toMatchObject({
+      file_sha256: 'c'.repeat(64), input_sha256: 'd'.repeat(64),
     })
   })
 
@@ -457,9 +495,11 @@ describe('NewResearchPage task templates', () => {
   it('submits the source tables and join plan instead of trusting the preview CSV', async () => {
     const tables = [sheet('Left', 'method,psnr\nA,30\nB,31', 2),
       sheet('Right', 'method,psnr\nA,32\nB,33', 2)]
-    mocks.parseDatasetFile.mockResolvedValue({ filename: 'joined.xlsx', sheets: tables, skipped: [] })
+    mocks.parseDatasetFile.mockResolvedValue({ filename: 'joined.xlsx', sheets: tables, skipped: [],
+      file_sha256: 'b'.repeat(64) })
     mocks.mergeDatasetTables.mockResolvedValue({
       ...sheet('合并结果', 'preview-only', 2),
+      input_sha256: 'a'.repeat(64),
       merge: { base: 'Left', tables: [], joins: [], notes: [], input_sha256: 'a'.repeat(64) },
     })
     render(<MemoryRouter><NewResearchPage /></MemoryRouter>)
@@ -484,7 +524,8 @@ describe('NewResearchPage task templates', () => {
         base: 'Left', tables: tables.map(({ name, csv }) => ({ name, csv })),
         joins: [expect.objectContaining({ sheet: 'Right', left_keys: ['method'], right_keys: ['method'] })],
       },
-      dataset_source: { filename: 'joined.xlsx', sheet: '合并结果' },
+      dataset_source: { filename: 'joined.xlsx', sheet: '合并结果',
+        file_sha256: 'b'.repeat(64), input_sha256: 'a'.repeat(64) },
     })
   })
 })
