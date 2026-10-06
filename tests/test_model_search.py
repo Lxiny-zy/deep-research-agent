@@ -178,8 +178,11 @@ async def test_search_usage_is_charged_even_when_citations_are_invalid(usage, ex
             assert tracer.estimated_tokens == tracer.total_tokens - 5
         else:
             assert tracer.total_tokens == 5 + expected
-        assert tracer.events[0].data["usage_known"] is (expected is not None)
-        assert tracer.events[0].data["total_tokens"] == expected
+        usage_event = next(
+            event for event in tracer.events if (event.data or {}).get("category") == "search_usage"
+        )
+        assert usage_event.data["usage_known"] is (expected is not None)
+        assert usage_event.data["total_tokens"] == expected
     finally:
         await tool.aclose()
 

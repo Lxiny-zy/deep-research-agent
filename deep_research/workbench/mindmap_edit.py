@@ -26,6 +26,7 @@ class NodeEdit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     unit_id: str
     label: str = Field(min_length=1, max_length=240)
+    details: str | None = Field(default=None, max_length=2400)
     kind: Literal["concept", "claim", "question"]
     relation: str = Field(min_length=1, max_length=80, json_schema_extra={"enum": list(RELATIONS)})
     citations: list[Annotated[int, Field(ge=1)]]
@@ -46,6 +47,8 @@ _SYSTEM = (
     "引用只使用本次已核验证据中的 citation 编号，不复制原引文的文献编号。"
     "不能把资料缺失说成论文没有；无依据的结论应收窄或改成不预设答案的研究问题。"
     "保持正确内容和适用条件；修正引用范围时，可使用所给的其他已核验证据。"
+    "label是简短索引，details承载完整说明、条件和数字；二者共同接受事实核验。"
+    "缩短label时须在details保留完整含义，不得利用隐藏详情规避断言核验。"
     "比较边界先写清已经核验的具体差异，并限定所讨论的指标或排名；"
     "如果表达的是本导图的比较范围或取舍，应明确这一归属，不冒称来源论文作出的结论，"
     "也不能把不同任务的数值不宜直接排名扩大为方法设计等所有方面都不可比较。"
@@ -170,6 +173,7 @@ async def repair_nodes(
             "node": nodes[key].model_dump(mode="json"),
             "context": contexts[key],
             "problem": decision.reason,
+            "evidence_diagnostic": decision.alignment_review,
         }
         for key, decision in rejected.items()
     ]
@@ -192,19 +196,26 @@ async def repair_nodes(
     for edit in response.edits:
         original = nodes[edit.unit_id]
         label, relation = normalize(edit.label.strip()), normalize(edit.relation.strip())
+        details = normalize(edit.details.strip()) if edit.details is not None else original.details
         if not set(edit.citations).issubset(known):
             raise ValueError("局部导图修订使用未提供的引用，未替换原图")
-        if (label, relation, edit.kind, set(edit.citations)) == (
+        if (label, details, relation, edit.kind, set(edit.citations)) == (
             original.label.strip(),
+            original.details,
             original.relation.strip(),
             original.kind,
             set(original.citations),
         ):
             raise ValueError("局部导图修订没有实质修改，未重新抽签核验")
-        if original.kind == "claim" and edit.kind != "claim" and label == original.label.strip():
+        if (
+            original.kind == "claim"
+            and edit.kind != "claim"
+            and (label == original.label.strip() and details == original.details)
+        ):
             raise ValueError("不能只改变节点类型来免除事实核验")
         node = updated_nodes[edit.unit_id]
         node.label, node.kind, node.relation = label, edit.kind, relation
+        node.details = details
         node.citations = list(dict.fromkeys(edit.citations))
     if structural_issues(updated, len(citations)):
         raise ValueError("局部导图修订破坏了结构或引用，未替换原图")

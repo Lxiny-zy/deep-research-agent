@@ -962,12 +962,16 @@ app = FastAPI(title="Science Research", lifespan=lifespan)
 # 角色广场 catalog 路由（模型档案 / 角色卡片 / 搜索 key），统一套用 API key 鉴权
 from .catalog_api import router as catalog_router  # noqa: E402 避免与 app 定义循环
 from .library.api import router as library_router  # noqa: E402
+from .workbench.acceptance_api import router as acceptance_router  # noqa: E402
 from .workbench.api import router as workbench_router  # noqa: E402
+from .workbench.operations_api import router as operations_router  # noqa: E402
 from .workbench.qa_api import router as qa_router  # noqa: E402
 
 app.include_router(catalog_router, dependencies=[Depends(require_api_key)])
 app.include_router(library_router, dependencies=[Depends(require_api_key)])
 app.include_router(workbench_router, dependencies=[Depends(require_api_key)])
+app.include_router(acceptance_router, dependencies=[Depends(require_api_key)])
+app.include_router(operations_router, dependencies=[Depends(require_api_key)])
 app.include_router(qa_router, dependencies=[Depends(require_api_key)])
 
 

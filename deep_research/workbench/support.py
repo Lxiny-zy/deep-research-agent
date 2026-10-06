@@ -23,6 +23,8 @@ from ..guardrails import report_eligible
 from ..models import Finding, ResearchResult
 from ..persistence.repository import LeaseLostError
 from ..prompting import EVIDENCE_MODALITY_RULES, MEASUREMENT_SCOPE_RULES, structured_system_prompt
+from .evidence_context import measurement_context
+from .research_scope import field_absence_issue
 from .support_alignment import alignment_diagnostics, alignment_issue, numeric_fact
 
 
@@ -49,7 +51,7 @@ class SupportUnit:
     citations: list[int] = field(default_factory=list)
 
 
-SUPPORT_POLICY_VERSION = 7
+SUPPORT_POLICY_VERSION = 8
 
 
 def asserted_comparison(text: str) -> bool:
@@ -83,6 +85,8 @@ _SYSTEM = (
     "特别检查新增因果/机制、比较、作者归属、条件和数字对应；证据只说明相关不能写成因果，"
     "采用既有方法不能写成发明。只要单元内有一个未支持的事实，就不能判 supported。"
     "supported 必须列出实际支持的 evidence_ids，只能选本单元引用范围内的证据。"
+    "measurement_context保留原始数值、单位、比较符、不确定度和条件字段；"
+    "quantity_status只描述既有数值检查，不代表条件均已核验，条件仍须对照实际quote。"
     "fulltext_checks 是程序另行完成的全文回查，不是逐字引文；它只支持所查的缺失或缺陷命题。"
     "absence_confirmed 的结论必须明确限定为本次取得的全文文本中未见，不能推广到其他版本。"
     "仅有这类全文核查命题时 supported 可以不填 evidence_ids；混合单元中的其他事实仍须摘录支持。"
@@ -153,6 +157,8 @@ def evidence_records(
                     "source_hash": finding.verification.source_content_hash,
                     "reference": finding.verification.source_reference
                     or finding.verification.source_title,
+                    **({"measurement_context": context}
+                       if (context := measurement_context(finding)) is not None else {}),
                 }
             )
     return records
@@ -255,6 +261,8 @@ class SupportReviewer:
         return None
 
     def record_issue(self, unit: SupportUnit, decision: SupportDecision) -> str | None:
+        if unit.kind != "translation" and (issue := field_absence_issue(unit.text)):
+            return issue
         return self.fulltext_issue(unit, decision) or self.formula_issue(unit, decision)
 
     def alignment_issue(self, unit: SupportUnit, decision: SupportDecision) -> str | None:
@@ -363,6 +371,8 @@ class SupportReviewer:
     async def _check_fulltext(self, unit: SupportUnit, key: str) -> SupportDecision | None:
         from .fulltext_review import FullTextReviewer, fulltext_supports, requires_fulltext
 
+        if unit.kind != "translation" and (issue := field_absence_issue(unit.text)):
+            return SupportDecision(unit_id=unit.id, verdict="unsupported", reason=issue)
         if not self.check_fulltext or not requires_fulltext(unit):
             return None
         record = self.fulltext_records.get(unit.id)

@@ -252,7 +252,7 @@ async def test_peer_reviewer_step_reuses_a_bound_parent_report(settings, tmp_pat
     draft = "\n\n".join(
         f"## {section.title}\n"
         + (
-            "建议围绕发现X开展后续验证 [1]。"
+            "建议围绕发现X进行复现实验，并报告复现前后的指标差异 [1]。"
             if section.title in {"不足", "详细意见"}
             else "发现X [1]。"
         )
@@ -269,8 +269,24 @@ async def test_peer_reviewer_step_reuses_a_bound_parent_report(settings, tmp_pat
         results=[ResearchResult(sub_question="q", findings=[finding])],
         scratch={"paper_sources": [source.model_dump(mode="json")]},
     )
+    class ActionableWorkbench(WorkbenchLLM):
+        async def parse(self, system, user, schema, **kwargs):
+            response = await super().parse(system, user, schema, **kwargs)
+            if schema.__name__ == "PeerReviewClassifications":
+                from deep_research.workbench.peer_review_items import PeerReviewAction
+
+                units = {unit["id"]: unit for unit in json.loads(user)["items"]}
+                for item in response.items:
+                    if "建议围绕发现X进行复现实验" in units[item.unit_id]["text"]:
+                        item.kind, item.severity = "suggestion", None
+                        item.action = PeerReviewAction(
+                            target_quote="发现X", action_quote="进行复现实验",
+                            completion_quote="报告复现前后的指标差异",
+                        )
+            return response
+
     first_ctx = RunContext(
-        llm=WorkbenchLLM(draft),
+        llm=ActionableWorkbench(draft),
         search_tool=FakeSearch(),
         tracer=Tracer(),
         settings=settings,

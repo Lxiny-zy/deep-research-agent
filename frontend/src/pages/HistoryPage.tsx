@@ -4,6 +4,7 @@ import { AppIcon } from '../components/AppIcon'
 import StatusBadge from '../components/StatusBadge'
 import EmptyState from '../components/EmptyState'
 import Skeleton from '../components/Skeleton'
+import OperationsOverview from '../components/OperationsOverview'
 import { useBatchDeleteRuns, useDeleteRun, useRunsList, useTags } from '../hooks/useRuns'
 import type { RunStatus } from '../types'
 
@@ -160,6 +161,8 @@ export default function HistoryPage() {
           </div>
         )}
       </header>
+
+      <OperationsOverview allowWorkspace={access?.role === 'admin'} />
 
       <section className="panel history-panel" aria-label="任务列表">
         <div className="history-toolbar">

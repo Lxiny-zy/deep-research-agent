@@ -8,6 +8,8 @@ import OrchestrationPipeline from '../components/OrchestrationPipeline'
 import PrintableReport from '../components/PrintableReport'
 import ReportActions from '../components/ReportActions'
 import ReportView from '../components/ReportView'
+import AcceptancePanel from '../components/AcceptancePanel'
+import ReadingMapPanel from '../components/ReadingMapPanel'
 import StatsBar from '../components/StatsBar'
 import ModelReasoningPanel from '../components/ModelReasoningPanel'
 import StatusBadge from '../components/StatusBadge'
@@ -506,6 +508,47 @@ export default function RunPage() {
           </section>
           {!printPreview && (
             <>
+              {id && dbFinished && structuredDocument.data?.content_version && (
+                <ReadingMapPanel
+                  runId={id}
+                  documentVersion={structuredDocument.data.content_version}
+                  includeHsiTables={includeHsiTables}
+                  onRefreshVersion={() => {
+                    void structuredDocument.refetch()
+                  }}
+                  onLocate={(anchor, unitId) =>
+                    navigate(`/runs/${encodeURIComponent(id)}/read`, {
+                      state: {
+                        readingAnchor: {
+                          runId: id,
+                          documentVersion: structuredDocument.data!.content_version,
+                          includeHsiTables,
+                          unitId,
+                          anchor: {
+                            document_id: anchor.document_id,
+                            pdf_available: anchor.pdf_available,
+                            quote: anchor.quote,
+                            quote_truncated: anchor.quote_truncated,
+                            quote_redacted: anchor.quote_redacted,
+                          },
+                        },
+                      },
+                    })
+                  }
+                />
+              )}
+              {id && dbFinished && structuredDocument.data?.content_version && (
+                <AcceptancePanel
+                  key={id}
+                  runId={id}
+                  documentVersion={structuredDocument.data.content_version}
+                  deliveryVersion={deliverables.data?.content_version}
+                  includeHsiTables={includeHsiTables}
+                  onRefreshVersion={() => {
+                    void structuredDocument.refetch()
+                  }}
+                />
+              )}
               {id && dbFinished && detail.data?.report && (
                 <DeliverablesPanel
                   key={id}

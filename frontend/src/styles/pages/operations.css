@@ -1,0 +1,81 @@
+.operations-overview > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: var(--space-2);
+  list-style: none;
+}
+
+.operations-body {
+  margin-top: var(--space-4);
+  min-width: 0;
+}
+
+.operations-controls,
+.operations-totals,
+.operations-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.operations-controls {
+  align-items: end;
+}
+
+.operations-controls label {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.operations-totals {
+  margin: 0;
+}
+
+.operations-totals > div {
+  background: var(--surface-2);
+  border-radius: var(--radius-md);
+  flex: 1 1 130px;
+  padding: var(--space-3);
+}
+
+.operations-totals dt {
+  color: var(--text-3);
+  font-size: var(--text-sm);
+}
+
+.operations-totals dd {
+  font-size: var(--text-xl);
+  margin: var(--space-1) 0 0;
+}
+
+.operations-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.operations-table {
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  min-width: 540px;
+  width: 100%;
+}
+
+.operations-table caption {
+  font-weight: 600;
+  padding-bottom: var(--space-2);
+  text-align: left;
+}
+
+.operations-table th,
+.operations-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.operations-reasons,
+.operations-limitations {
+  margin: 0;
+  padding-left: 20px;
+}

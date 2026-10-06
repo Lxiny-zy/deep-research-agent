@@ -204,6 +204,35 @@ def fulltext_supports(unit: Any, record: Any, corpus: FullTextCorpus) -> bool:
     )
 
 
+def located_passages(unit: Any, record: Any, corpus: FullTextCorpus) -> list[dict[str, Any]]:
+    """Retain every checked counterexample/supporting passage with its exact origin.
+
+    These are locations from a separate full-text check, not replacement IDs
+    for admitted findings and not approval of a newly written assertion.
+    """
+    if validate_fulltext_record(unit, record, corpus) is not None or record.get("status") not in {
+        "refuted", "absence_confirmed", "critique_supported",
+    }:
+        return []
+    output = []
+    for row in record.get("scanned", []):
+        if row.get("verdict") not in {"refutes", "supports"} or not row.get("quote"):
+            continue
+        source = next(
+            source for source in corpus.documents[row["document"]].sources
+            if source.url == row["source"] and content_hash(source.content) == row["source_hash"]
+        )
+        output.append({
+            "document": row["document"], "source": row["source"],
+            "source_hash": row["source_hash"], "locator": source.locator,
+            "start": row["quote_start"], "end": row["quote_start"] + len(row["quote"]),
+            "quote": row["quote"], "verdict": row["verdict"],
+            "review_status": record["status"], "review_unit_hash": record["unit_hash"],
+            "corpus_hash": record["corpus_hash"],
+        })
+    return output
+
+
 class FullTextReviewer:
     def __init__(
         self, llm: Any, corpus: FullTextCorpus, capacity: int,

@@ -135,7 +135,12 @@ def _table(document, block: Block) -> None:  # type: ignore[no-untyped-def]
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     for row_index, row in enumerate(block.rows):
-        cells = table.add_row().cells
+        table_row = table.add_row()
+        properties = table_row._tr.get_or_add_trPr()
+        properties.append(OxmlElement("w:cantSplit"))
+        if row_index == 0:
+            properties.append(OxmlElement("w:tblHeader"))
+        cells = table_row.cells
         for col in range(width):
             paragraph = cells[col].paragraphs[0]
             _add_runs(paragraph, row[col] if col < len(row) else [])

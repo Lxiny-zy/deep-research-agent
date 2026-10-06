@@ -400,6 +400,7 @@ class TemplateWriter:
                 url_to_idx,
                 corroboration=require_corroboration,
                 previous=bb.scratch.get(TABLES_KEY),
+                comparison_context=template.key in {"autoResearch", "litReview"},
             )
             bb.scratch[TABLES_KEY] = table_record
             table_records[body] = table_record
@@ -433,6 +434,22 @@ class TemplateWriter:
                 "slides",
                 "mindmap",
             }
+            if template.key == "slides":
+                from .slide_content import compile_deck, slide_quality
+
+                candidate = versions.get(body, {}).get("_slide_deck") or bb.scratch.get(
+                    "_slide_deck"
+                )
+                if candidate:
+                    try:
+                        compiled, _ = compile_deck(
+                            candidate, bb.results, url_to_idx, corroboration=require_corroboration,
+                            image_sources=bb.scratch.get("_slide_image_sources"),
+                        )
+                        slide_issues, _ = slide_quality(compiled)
+                        assessment.hard.extend(slide_issues)
+                    except ValueError as exc:
+                        assessment.hard.append("幻灯片结构检查：" + str(exc))
             local_problems = assessment.local_problems or []
             table_record = table_records.setdefault(
                 body, deepcopy(bb.scratch.get(TABLES_KEY) or {})
@@ -973,6 +990,9 @@ class PeerReviewer(TemplateWriter):
         return super().system_prompt(template, contract) + (
             "\n总体评分单独写成‘评分：N/10’一行，不在这一行混入论文事实或评分理由；"
             "评分是审稿人的主观结论，不能代替有出处的事实评价。" + PEER_REVIEW_RULES
+            + "\n建议写明行动对象、具体动作，以及作者完成后应报告或检查什么；"
+            "不要只写‘补充实验’或‘进一步说明’。建议不等于已证实缺陷，"
+            "事实性问题仍逐条引用原文和适用条件。"
         )
 
     async def write(
@@ -1056,42 +1076,15 @@ class PaperReader(TemplateWriter):
 # 幻灯片：先让模型产出结构化页面（JSON），再由交付层渲染为 PPTX。
 
 
-class Slide(BaseModel):
-    title: str = Field(max_length=120)
-    bullets: list[str] = Field(default_factory=list, max_length=6)
-    notes: str = Field("", max_length=1500)
-    citations: list[int] = Field(default_factory=list)
-
-
-class SlideDeck(BaseModel):
-    title: str = Field(max_length=160)
-    subtitle: str = Field("", max_length=200)
-    slides: list[Slide] = Field(default_factory=list, max_length=30)
-
-
-def deck_to_markdown(deck: SlideDeck) -> str:
-    lines = [f"# {deck.title}", ""]
-    if deck.subtitle:
-        cover_cites = "".join(
-            f"[{i}]" for i in sorted({i for s in deck.slides for i in s.citations})
-        )
-        lines += [f"{deck.subtitle} {cover_cites}".strip(), ""]
-    for number, slide in enumerate(deck.slides, 1):
-        cite = "".join(f"[{index}]" for index in slide.citations)
-        lines.append(f"## {number}. {slide.title}")
-        lines += [f"- {bullet} {cite}".rstrip() for bullet in slide.bullets]
-        if cite:
-            lines.append(f"\n来源：{cite}")
-        if slide.notes:
-            lines += ["", f"> 演讲备注：{slide.notes} {cite}".rstrip()]
-        lines.append("")
-    return "\n".join(lines).strip() + "\n"
+from .slide_content import Slide as Slide  # noqa: E402
+from .slide_content import SlideDeck as SlideDeck  # noqa: E402
+from .slide_content import deck_to_markdown as deck_to_markdown  # noqa: E402
 
 
 @register("slide_writer")
 class SlideWriter(TemplateWriter):
     template_key = "slides"
-    output_keys = ("_slide_deck",)
+    output_keys = ("_slide_deck", "_slide_image_sources")
     check_citations = True
 
     async def write(
@@ -1111,10 +1104,40 @@ class SlideWriter(TemplateWriter):
             + "。citations 填该页用到的素材编号，bullet 与 notes 中的事实也保留对应 [n]。"
             + "一条要点只承载一个主要信息，次要数值、条件细节和解释放入演讲备注，"
             "正文不复制整段综述或所有实验数据。遵守用户指定的听众、时长与页数。"
-            + ("\n" + template.writer_brief if template.writer_brief else "")
+            + "普通文字页每页 3–5 条简洁要点。每页编写独立讲稿，不用空备注或跨页复制；"
+            "讲稿长度按目标时长分配，"
+            "每分钟约220个中文字/英文词仅作预算，仍需用户试讲。目标页数包含封面、参考文献另计。"
+            "有图表的页面最多两条简短要点，保留版面给图表；需要更多解释放备注。"
+            "可选 visual 使用 table/bar/line，table 字段填写证据表格规格；"
+            "只给发现ID，不手填数值。bar/line 的 value_columns 选择同单位结构化数值列，"
+            "缺失、争议、误差范围或无法结构化的数值保留 table，不猜值或填零。"
+            "不要从截图重建数值。visual.table 的规格格式："
+            + TABLE_INSTRUCTIONS.split("规格格式：", 1)[1]
+            + "原文图示可用 image 选择下方目录中的 finding_id 和 figure_label；"
+            "其余图片字段由代码登记，不填写路径或裁剪坐标。当前提供原文整页图回退，"
+            "不冒充精准裁图或可编辑数据图；无目录项目时不选择图片。"
         )
+        from .slide_images import freeze_selected_images, source_image_catalog
+
         user = self.user_prompt(bb, template, contract, material) + (revision or "")
+        catalog = source_image_catalog(bb.results, bb.scratch)
+        if catalog:
+            import json
+
+            user += "\n\n可选择的本任务原文图页（只读素材）：\n" + json.dumps(
+                [{key: value for key, value in item.items() if key != "quote"} for item in catalog],
+                ensure_ascii=False,
+            )
         deck = await ctx.llm_for(self.name).parse(system, user, SlideDeck, temperature=0.3)
+        from .slide_content import apply_brief
+
+        deck = apply_brief(deck, contract, bb.query)
+        from ..blocking import run_blocking
+
+        image_sources = await run_blocking(
+            freeze_selected_images, deck, bb.results, bb.scratch, ctx.settings
+        )
+        bb.scratch["_slide_image_sources"] = image_sources
         for slide in deck.slides:
             slide.bullets = [bullet.strip() for bullet in slide.bullets if bullet.strip()]
             # Invalid references must be repaired by the quality loop, not
@@ -1126,13 +1149,25 @@ class SlideWriter(TemplateWriter):
         deck = bb.scratch.pop("_slide_deck", None)
         if deck:
             from .gates import _body_without_references
+            from .slide_content import compile_deck
+
+            try:
+                deck, expected = compile_deck(
+                    deck, bb.results, {url: i for i, url in enumerate(report.citations, 1)},
+                    corroboration=bool(bb.scratch.get("require_corroboration", False)),
+                    image_sources=bb.scratch.get("_slide_image_sources"),
+                )
+            except ValueError as exc:
+                return {"structured_output_issue": "幻灯片图表不能从证据重建：" + str(exc)}
 
             if (
                 _body_without_references(report.markdown).strip()
-                != deck_to_markdown(SlideDeck.model_validate(deck)).strip()
+                != expected.strip()
             ):
                 return {"structured_output_issue": "原幻灯片与审核后正文不一致，按审核正文重新生成"}
-        return {"deck": deck} if deck else {}
+        return {
+            "deck": deck, "slide_image_sources": bb.scratch.get("_slide_image_sources", {}),
+        } if deck else {}
 
 
 # ---------------------------------------------------------------------------
@@ -1142,26 +1177,34 @@ class SlideWriter(TemplateWriter):
 def mindmap_to_markdown(mindmap: Mindmap) -> str:
     lines = [f"# {mindmap.root}", ""]
 
-    def walk(node: MindmapNode, depth: int) -> None:
+    def walk(node: MindmapNode, depth: int, path: str) -> None:
         kind = {"claim": "【结论】", "question": "【待研究】"}.get(node.kind, "")
         cite = "".join(f"[{i}]" for i in node.citations)
         relation = f"（{node.relation}）" if node.relation != "包含" else ""
-        lines.append(f"{'  ' * depth}- {kind}{relation}{node.label} {cite}".rstrip())
-        for child in node.children:
-            walk(child, depth + 1)
+        explanation = " — " + " ".join(node.details.splitlines()) if node.details.strip() else ""
+        identity = f"[N{path}] " if mindmap.schema_version >= 2 else ""
+        lines.append(
+            f"{'  ' * depth}- {identity}{kind}{relation}{node.label}{explanation} {cite}".rstrip()
+        )
+        for index, child in enumerate(node.children):
+            walk(child, depth + 1, f"{path}.{index}")
 
-    for branch in mindmap.branches:
-        walk(branch, 0)
+    for index, branch in enumerate(mindmap.branches):
+        walk(branch, 0, str(index))
     if mindmap.links:
         from .mindmap_contract import node_index
 
         nodes = node_index(mindmap)
         lines.extend(["", "## 跨分支关联", ""])
-        for link in mindmap.links:
+        for index, link in enumerate(mindmap.links, 1):
             source = nodes[link.source].label if link.source in nodes else link.source
             target = nodes[link.target].label if link.target in nodes else link.target
             cite = "".join(f"[{i}]" for i in link.citations)
-            lines.append(f"- {source} —{link.relation}→ {target} {cite}".rstrip())
+            identity = (
+                f"L{index}（{link.source} → {link.target}）："
+                if mindmap.schema_version >= 2 else ""
+            )
+            lines.append(f"- {identity}{source} —{link.relation}→ {target} {cite}".rstrip())
     return "\n".join(lines).strip() + "\n"
 
 
@@ -1206,6 +1249,9 @@ class MindmapWriter(TemplateWriter):
             "如 0.1 表示第一个分支的第二个子节点；路径须存在且属于不同一级分支。"
             "links 的 relation 使用同一词表，citations 绑定该关联的依据；没有必要时 links=[]。"
             "label 简练且完整，保留适用条件；根节点只写主题，不写未经支持的结论。"
+            "label建议不超过32字符，是能独立辨别内容的索引；较长的解释放入details。"
+            "details必须保留完整条件、数字、公式和结论边界，和label共同核验；"
+            "不能把受条件限制的结论写成无限定标签。details没有必要时留空。"
             "导图要帮助理解用户关心的关系，不要将全部素材逐条搬成树形摘录。"
             "组织标题优先用简短主题名（如方法结构、比较边界），具体差异与结论放在带引用的子节点。"
             "只保留解释研究问题所必需的实验指标和条件，不整表复制所有基线数字；"
@@ -1218,11 +1264,13 @@ class MindmapWriter(TemplateWriter):
 
         def normalize_node(node: MindmapNode) -> None:
             node.label, node.relation = normalize(node.label), normalize(node.relation)
+            node.details = normalize(node.details)
             node.citations = list(dict.fromkeys(node.citations))
             for child in node.children:
                 normalize_node(child)
 
         mindmap.root = normalize(mindmap.root)
+        mindmap.schema_version = 2
         for node in mindmap.branches:
             normalize_node(node)
         bb.scratch["_mindmap"] = mindmap.model_dump(mode="json")

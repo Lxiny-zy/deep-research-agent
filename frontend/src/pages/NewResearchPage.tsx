@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import ClarifyDialog from '../components/ClarifyDialog'
@@ -48,21 +48,6 @@ export default function NewResearchPage() {
 }
 
 function ResearchComposer() {
-  const actionbarRef = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => {
-    const bar = actionbarRef.current
-    const page = bar?.parentElement
-    if (!bar || !page) return
-    const measure = () => {
-      if (bar.offsetHeight > 0)
-        page.style.setProperty('--home-actionbar-height', `${bar.offsetHeight}px`)
-    }
-    measure()
-    if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(measure)
-    observer.observe(bar)
-    return () => observer.disconnect()
-  }, [])
   const navigate = useNavigate()
   const { data: config } = useConfig()
   const [searchParams] = useSearchParams()
@@ -126,6 +111,19 @@ function ResearchComposer() {
   const [submitting, setSubmitting] = useState(false)
   const [phase, setPhase] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const errorRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (error) {
+      errorRef.current?.focus({ preventScroll: true })
+      errorRef.current?.scrollIntoView?.({ block: 'nearest' })
+    }
+  }, [error])
+  useEffect(() => {
+    // A delayed contract preview can move a newly displayed submission error.
+    // Preserve its visibility only until the user focuses another control.
+    if (document.activeElement === errorRef.current)
+      errorRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [contract.data])
   const [clarify, setClarify] = useState<ClarifyState | null>(null)
   const busy = submitting || clarify !== null
   const requestRef = useRef<AbortController | null>(null)
@@ -213,7 +211,10 @@ function ResearchComposer() {
             ]
           : null,
         demoData,
-        attachments: attachments.payloads.map((item) => item.id),
+        attachments: attachments.payloads.map((item) => ({
+          id: item.id,
+          image_regions: item.image_regions ?? [],
+        })),
       }),
     )
     if (requestRef.current?.signal.aborted) return
@@ -520,6 +521,9 @@ function ResearchComposer() {
                 disabled={busy}
                 full={attachments.full}
                 error={attachments.selectionError}
+                onImageRegionsChange={
+                  templateKey === 'slides' ? attachments.setImageRegions : undefined
+                }
               />
             </div>
             {(() => {
@@ -687,7 +691,7 @@ function ResearchComposer() {
         </aside>
       </fieldset>
 
-      <div className="home-actionbar" ref={actionbarRef}>
+      <div className="home-actionbar">
         <p className="home-actionbar-motto" aria-hidden="true">
           Exploration
           <br />
@@ -703,7 +707,7 @@ function ResearchComposer() {
           <span>{statusText}</span>
         </div>
         {error && (
-          <div className="home-actionbar-error" role="alert">
+          <div className="home-actionbar-error" role="alert" ref={errorRef} tabIndex={-1}>
             <AppIcon name="circle-x" size={15} aria-hidden="true" />
             {error}。输入已保留，可重新提交。
           </div>

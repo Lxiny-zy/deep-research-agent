@@ -14,7 +14,7 @@ BODY = (
     "## 论文摘要\n本文讨论模型架构。\n\n"
     "## 优点\n- 该架构便于定位增量 [1]。\n\n"
     "## 不足\n- 该架构的增量边界不清 [1]。\n\n"
-    "## 详细意见\n建议进一步说明比较范围。\n\n"
+    "## 详细意见\n建议在方法章节明确比较对象，并报告各模块独立消融后的指标变化。\n\n"
     "## 总体推荐\n需要修订。\n\n## 审稿结论\n评分：7/10"
 )
 EVIDENCE = [
@@ -80,6 +80,13 @@ class Judge:
                         if kind == "weakness"
                         else None,
                         "reason": "影响核心结论" if self.critical else "范围说明需要完善",
+                        "action": {
+                            "target_quote": "比较对象",
+                            "action_quote": "明确比较对象",
+                            "completion_quote": "报告各模块独立消融后的指标变化",
+                        }
+                        if kind == "suggestion" and "独立消融后的指标变化" in unit["text"]
+                        else None,
                     }
                 )
             if self.mode == "omit_item":
@@ -116,6 +123,33 @@ async def test_sc39_positive_and_negative_increment_claims_cannot_both_pass():
     assert record["status"] == "fail"
     assert any("矛盾" in issue for issue in record["issues"])
     assert record["local_problems"]
+
+
+async def test_vague_suggestion_is_not_actionable_just_because_it_has_a_category():
+    body = BODY.replace(
+        "建议在方法章节明确比较对象，并报告各模块独立消融后的指标变化。", "建议进一步改善。"
+    )
+    _, _, record = await evaluate(Judge(), body)
+    assert record["status"] == "fail"
+    assert any("可执行建议" in issue for issue in record["issues"])
+    assert any(item.get("action_ready") is False for item in record["items"])
+
+
+async def test_action_quotes_are_bound_and_duplicate_groups_keep_all_source_ids():
+    body = BODY.replace(
+        "- 该架构的增量边界不清 [1]。", "- 该架构的增量边界不清 [1]。\n- 该架构的增量边界不清 [1]。"
+    )
+    checker, args, record = await evaluate(Judge(), body)
+    assert record["status"] == "pass", record["issues"]
+    duplicated = next(group for group in record["groups"] if len(group["item_ids"]) == 2)
+    assert len(set(duplicated["item_ids"])) == 2 and duplicated["evidence_ids"] == ["e-one"]
+    assert sorted(i for g in record["groups"] for i in g["item_ids"]) == sorted(
+        i["id"] for i in record["items"]
+    )
+    tampered = deepcopy(record)
+    action = next(item for item in tampered["annotations"] if item["kind"] == "suggestion")
+    action["action"]["completion_quote"] = "原文并没有写下这个检查标准"
+    assert checker.bound_check(body, *args, tampered)[0] is False
 
 
 async def test_items_include_type_severity_and_verified_evidence_ids():

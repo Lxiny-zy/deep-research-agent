@@ -329,7 +329,9 @@ def _llm(monkeypatch, outcomes):  # type: ignore[no-untyped-def]
     client = llm_module.LLM(Settings(llm_api_key="k"), Tracer())
     calls = iter(outcomes)
 
-    async def fake_stream_once(system, user, *, temperature=0.4):  # type: ignore[no-untyped-def]
+    async def fake_stream_once(  # type: ignore[no-untyped-def]
+        system, user, *, temperature=0.4, operation=None,
+    ):
         outcome = next(calls)
         for piece in outcome.get("yield", []):
             yield piece

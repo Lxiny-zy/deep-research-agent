@@ -248,7 +248,7 @@ def render_pdf(
                     next_page()
                     story, fits_here, rect = fit(part.html, cursor)
                 if not fits_here:
-                    raise PdfRenderError("参考文献条目无法完整放入页面")
+                    raise PdfRenderError("内容块无法完整放入页面")
                 story.draw(device)
                 cursor = rect.y1
                 continue
@@ -301,6 +301,37 @@ class LayoutPart:
     keep_together: bool = False
 
 
+def _math_lists(body: str) -> list[tuple[int, int, list[str]]]:
+    """Split renderer-owned lists at root items, retaining nested children and numbering."""
+    spans: list[tuple[int, int, list[str]]] = []
+    depth = 0
+    start = 0
+    opening = ""
+    item_starts: list[int] = []
+    for match in re.finditer(r"</?(?:ol|ul)>|<li>.*?</li>", body, re.S):
+        token = match[0]
+        if token.startswith("<li>"):
+            if depth == 1:
+                item_starts.append(match.start())
+            continue
+        if not token.startswith("</"):
+            if depth == 0:
+                start, opening, item_starts = match.start(), token, []
+            depth += 1
+            continue
+        depth -= 1
+        if depth or 'class="math-image"' not in body[start:match.end()]:
+            continue
+        ends = [*item_starts[1:], match.start()]
+        items = [
+            (f'<ol start="{index}">' if opening == "<ol>" else opening)
+            + body[first:last] + token
+            for index, (first, last) in enumerate(zip(item_starts, ends, strict=True), 1)
+        ]
+        spans.append((start, match.end(), items))
+    return spans
+
+
 def _layout_parts(
     body: str, page_height: float, page_width: float, heading_height: Callable[[str], float]
 ) -> list[LayoutPart]:
@@ -308,6 +339,20 @@ def _layout_parts(
     from PIL import Image
 
     parts: list[LayoutPart] = []
+    lists = _math_lists(body)
+    if lists:
+        offset = 0
+        for start, end, items in lists:
+            prefix, lead = take_trailing_heading(body[offset:start])
+            parts.extend(_layout_parts(prefix, page_height, page_width, heading_height))
+            for index, list_html in enumerate(items):
+                html = (lead if index == 0 else "") + list_html
+                parts.append(LayoutPart(
+                    html, minimum_height=heading_height(html), keep_together=True,
+                ))
+            offset = end
+        parts.extend(_layout_parts(body[offset:], page_height, page_width, heading_height))
+        return parts
     pattern = (
         r'(<div class="figure">.*?</div>|<div class="equation">.*?</div>|<table>.*?</table>'
         r'|<p class="reference">.*?</p>'

@@ -220,3 +220,45 @@ def test_paginated_table_math_coexists_with_real_figure_without_loss():
         for i in range(45):
             assert text.count(rf"x_{{{i}}}=\frac{{a+b+c+d}}{{e+f}}") == 1
         assert sum(len(page.get_image_info()) for page in pdf) == 1
+
+
+def test_long_numbered_math_footnotes_keep_equations_and_numbering_across_pages():
+    rows = [
+        rf"{i}. 注释编号 {i:03}：训练与测试条件分别保留；"
+        rf"使用完整误差表达式 $e_{{{i}}}=\frac{{a+b}}{{N}}$，不缩小页底公式。"
+        for i in range(1, 65)
+    ]
+    body = "## 条件脚注\n\n" + "\n".join(rows) + "\n\n脚注全部保留。"
+    with pymupdf.open(stream=render_pdf(body, title="公式脚注"), filetype="pdf") as pdf:
+        assert len(pdf) >= 3
+        text = "".join(page.get_text() for page in pdf)
+        for i in range(1, 65):
+            assert text.count(rf"e_{{{i}}}=\frac{{a+b}}{{N}}") == 1
+            assert re.search(rf"\b{i}\.\s*注释编号\s*{i:03}", text)
+        assert not any(page.get_image_info() for page in pdf)
+
+
+def test_nested_math_list_preserves_parent_child_text_and_parent_numbering():
+    body = (
+        "1. Parent A\n   - Child formula $x_i=\\frac{a}{b}$\n"
+        "2. Parent B\n   - Child result $y_i^2$\n\nComplete ending."
+    )
+    with pymupdf.open(stream=render_pdf(body, title="Nested"), filetype="pdf") as pdf:
+        text = "".join(page.get_text() for page in pdf)
+        assert re.search(r"1\.\s*Parent A", text)
+        assert re.search(r"2\.\s*Parent B", text)
+        assert "Child formula" in text and "Child result" in text
+        assert text.count(r"x_i=\frac{a}{b}") == 1 and text.count("y_i^2") == 1
+
+
+def test_word_long_math_table_repeats_headers_and_keeps_rows_intact():
+    rows = [rf"| Item {i} | $e_{{{i}}}=\frac{{a+b}}{{N}}$ |" for i in range(40)]
+    body = "| Item | Expression |\n|---|---|\n" + "\n".join(rows)
+    root = ET.fromstring(ZipFile(io.BytesIO(render_docx(body, title="Long table"))).read(
+        "word/document.xml"
+    ))
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+          "m": "http://schemas.openxmlformats.org/officeDocument/2006/math"}
+    assert len(root.findall(".//w:tblHeader", ns)) == 1
+    assert len(root.findall(".//w:cantSplit", ns)) == 41
+    assert len(root.findall(".//m:oMath", ns)) == 40

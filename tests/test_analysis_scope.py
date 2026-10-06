@@ -56,7 +56,7 @@ def test_selected_roles_control_statistics_figures_and_keep_all_input_columns(re
 def test_selected_scope_and_composition_survive_frozen_restore_and_spreadsheet(result):
     frozen = result.snapshot()
     restored = analyse(CSV, result.question, frozen=frozen)
-    assert frozen["version"] == 5
+    assert frozen["version"] == 6
     assert restored.snapshot() == frozen
     assert restored.figures == result.figures
     without_facts = {k: v for k, v in frozen.items() if k != "facts"}

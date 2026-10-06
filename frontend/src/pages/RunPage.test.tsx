@@ -38,6 +38,8 @@ vi.mock('../components/StatusBadge', () => ({
   default: ({ status }: { status: string }) => <div data-testid="status">{status}</div>,
 }))
 vi.mock('../components/TagEditor', () => ({ default: () => null }))
+vi.mock('../components/AcceptancePanel', () => ({ default: () => null }))
+vi.mock('../components/ReadingMapPanel', () => ({ default: () => null }))
 vi.mock('../components/ReportView', () => ({
   default: ({
     markdown,

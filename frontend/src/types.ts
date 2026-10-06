@@ -996,18 +996,20 @@ export interface QaThought {
   observation: string
   call_id?: string
   usage?: Record<string, unknown>
+  call?: Record<string, unknown>
   binding?: ReportBibliography
   unresolved_topics?: string[]
 }
 
 export interface QaActivity {
-  type: 'reasoning' | 'usage' | 'status' | 'cache' | 'reset'
+  type: 'reasoning' | 'usage' | 'status' | 'cache' | 'reset' | 'model_call'
   message?: string
   hit?: boolean
   call_id?: string
   model?: string
   reasoning_delta?: string
   llm_usage?: Record<string, unknown>
+  model_call?: Record<string, unknown>
   replay?: boolean
 }
 

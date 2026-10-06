@@ -29,6 +29,7 @@ from .support import (
 
 TABLES_KEY = "_evidence_tables"
 TABLES_VERSION = 1
+COMPARISON_CONTEXT_VERSION = 1
 TABLE_RULES = (
     "逐格核对表格。每个单元格只允许使用指定的发现，不得借其他格的证据。"
     "同时检查表题、行名、列名、单位与口径。训练块尺寸不能放在仿真输入尺寸列，"
@@ -196,6 +197,7 @@ def render_table(
     *,
     corroboration: bool = False,
     ledger: dict[str, Any] | None = None,
+    comparison_context: bool = False,
 ) -> RenderedTable:
     findings = admitted_findings(results, mapping, corroboration)
     rendered = RenderedTable(TableBlock(id=spec.id, title=spec.title))
@@ -363,6 +365,20 @@ def render_table(
                     cell = TableCell(value="；".join(dict.fromkeys(values)), citations=citations)
                 if selected and cell.reported:
                     contexts = list(dict.fromkeys(f.statement for f in selected))
+                    condition_text = ""
+                    if comparison_context and column.field == "quantity":
+                        condition_text = "；".join(dict.fromkeys(
+                            f.conditions.describe() for f in selected
+                            if f.conditions is not None and not f.conditions.is_empty()
+                        ))
+                        note = (
+                            f"{row.label} / {column.label}：实验条件：{condition_text}"
+                            if condition_text else
+                            f"{row.label} / {column.label}：本次数值没有已记录的实验条件，"
+                            "暂不建立跨行可比性。"
+                        )
+                        block.notes.append(note + " " + " ".join(f"[{i}]" for i in citations))
+                        cell.note_ref = len(block.notes)
                     if column.field != "statement":
                         note = (
                             row.label
@@ -374,7 +390,10 @@ def render_table(
                             + " ".join(f"[{i}]" for i in citations)
                         )
                         block.notes.append(note)
-                    _unit(rendered, row.label, column.label, cell.value, ids, citations)
+                    checked_value = cell.value + (
+                        f"；实验条件：{condition_text}" if condition_text else ""
+                    )
+                    _unit(rendered, row.label, column.label, checked_value, ids, citations)
                 cells[column.key] = cell
             block.rows.append(TableRow(label=row.label, cells=cells))
         block.caption = (
@@ -417,6 +436,7 @@ def render_specs(
     corroboration: bool = False,
     previous: dict[str, Any] | None = None,
     ledger: dict[str, Any] | None = None,
+    comparison_context: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     lines = markdown.splitlines(keepends=True)
     tokens = [
@@ -426,13 +446,21 @@ def render_specs(
     ]
     if not tokens:
         return markdown, previous or {"version": TABLES_VERSION, "specs": [], "errors": []}
-    record: dict[str, Any] = {"version": TABLES_VERSION, "specs": [], "errors": []}
+    record: dict[str, Any] = {
+        "version": TABLES_VERSION, "specs": [], "errors": [],
+        **(
+            {"comparison_context_version": COMPARISON_CONTEXT_VERSION} if comparison_context else {}
+        ),
+    }
     replacements: list[tuple[int, int, str]] = []
     for token in tokens:
         assert token.map is not None
         try:
             spec = TableSpec.model_validate_json(token.content)
-            table = render_table(spec, results, mapping, corroboration=corroboration, ledger=ledger)
+            table = render_table(
+                spec, results, mapping, corroboration=corroboration, ledger=ledger,
+                comparison_context=comparison_context,
+            )
             record["specs"].append(spec.model_dump(mode="json"))
             replacements.append((token.map[0], token.map[1], table.markdown + "\n"))
         except ValueError as exc:
@@ -449,11 +477,18 @@ def _compiled(
     corroboration: bool,
     ledger: dict[str, Any] | None = None,
 ) -> list[RenderedTable]:
+    if record.get("comparison_context_version") not in {None, COMPARISON_CONTEXT_VERSION}:
+        raise ValueError("比较条件展示版本不受支持")
     specs = [TableSpec.model_validate(spec) for spec in record["specs"]]
     if len({spec.id for spec in specs}) != len(specs):
         raise ValueError("表格规格编号重复")
     return [
-        render_table(spec, results, mapping, corroboration=corroboration, ledger=ledger)
+        render_table(
+            spec, results, mapping, corroboration=corroboration, ledger=ledger,
+            comparison_context=(
+                record.get("comparison_context_version") == COMPARISON_CONTEXT_VERSION
+            ),
+        )
         for spec in specs
     ]
 

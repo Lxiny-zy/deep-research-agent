@@ -142,7 +142,7 @@ def test_pptx_has_notes_on_every_slide_and_fit_check_flags_walls() -> None:
     data = render_pptx(deck, citations=["https://a.com"])
     stats = pptx_stats(data)
     assert stats["slides"] == 6  # 内容溢出自动续页，保留全部要点
-    assert stats["with_notes"] == stats["slides"]
+    assert stats["with_notes"] == 3  # 封面、背景和参考文献；空讲稿不能靠占位伪装
     assert [p["slide"] for p in fit_report(deck)] == [3]
 
 
@@ -235,7 +235,10 @@ class WorkbenchLLM(FakeLLM):
             return SlideDeck(
                 title="组会汇报",
                 slides=[
-                    {"title": name, "bullets": ["发现X [1]"], "notes": "讲解", "citations": [1]}
+                    {
+                        "title": name, "bullets": ["发现X [1]"],
+                        "notes": f"讲解{name}", "citations": [1],
+                    }
                     for name in (
                         "背景与动机",
                         "问题与目标",
@@ -548,7 +551,7 @@ async def test_closed_visual_workflow_reads_each_file_once_and_requires_every_in
                         {
                             "title": title,
                             "bullets": [s.content for s in sources],
-                            "notes": "讨论两类方法。",
+                            "notes": f"本页讨论{title}。",
                             "citations": [1, 2],
                         }
                         for title in get_template(key).section_titles()[1:]

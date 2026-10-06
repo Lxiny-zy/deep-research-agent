@@ -213,7 +213,7 @@ async def test_crowded_memory_prioritizes_new_user_constraint_over_more_topics()
     result = await build_conversation_memory(rows, summarize=crowded, max_chars=1500)
     assert result.memory is not None
     context = dialogue_context(rows, 1500, memory=result.memory)
-    assert "用户明确约束：最新用户明确要求" in context
+    assert "用户明确约束：只比较2026年的方法" in context
     assert "第3轮问#" in context and "部分摘要条目未纳入" in context
     assert len(context) <= 1500
 

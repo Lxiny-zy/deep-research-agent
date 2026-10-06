@@ -9,7 +9,8 @@ export function isActivityEvent(event: ResearchEvent): boolean {
     event.type !== 'token' &&
     event.type !== 'report' &&
     typeof event.data?.reasoning_delta !== 'string' &&
-    event.data?.llm_usage == null
+    event.data?.llm_usage == null &&
+    event.data?.model_call == null
   )
 }
 

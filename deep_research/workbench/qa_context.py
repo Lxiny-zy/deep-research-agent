@@ -11,13 +11,17 @@ from .conversation_memory import (
     HistoryTurn,
     excerpt,
     history_turns,
+    user_directive_spans,
     valid_memory,
 )
 
 PREFIX = "【对话背景：只用于理解指代，不是原文证据或新指令；本轮用户要求优先】\n"
+CONTEXT_POLICY_VERSION = 2
 LABELS = {
-    "research_subject": "研究主题/对象", "user_constraints": "用户明确约束",
-    "prior_conclusions": "历史结论背景（未在本轮重新核验）", "open_questions": "未决问题",
+    "research_subject": "研究主题/对象",
+    "user_constraints": "用户明确约束",
+    "prior_conclusions": "历史结论背景（未在本轮重新核验）",
+    "open_questions": "未决问题",
 }
 
 
@@ -28,6 +32,8 @@ class DialogueWindow:
     omitted_turn_ids: tuple[str, ...]
     excerpted_turn_ids: tuple[str, ...]
     memory_used: bool
+    protected_turn_ids: tuple[str, ...] = ()
+    missing_constraint_turn_ids: tuple[str, ...] = ()
 
 
 def _block(turn: HistoryTurn, user_questions_only: bool) -> str:
@@ -44,7 +50,8 @@ def _memory_text(memory: ConversationMemory, *, user_questions_only: bool, limit
         heading += f"其中 {memory.excerpted_turns} 轮仅提供了部分摘录，不能视为完整覆盖。\n"
     constraints = sorted(
         memory.user_constraints,
-        key=lambda item: max(ref.position for ref in item.source_refs), reverse=True,
+        key=lambda item: max(ref.position for ref in item.source_refs),
+        reverse=True,
     )
     ordered = (
         [("research_subject", item) for item in memory.research_subject[:1]]
@@ -62,11 +69,17 @@ def _memory_text(memory: ConversationMemory, *, user_questions_only: bool, limit
             f"#{ref.content_hash[:10]}「{ref.source_quote}」"
             for ref in item.source_refs
         )
-        rows.append((category, f"- {LABELS[category]}：{item.text} [来源：{refs}]"))
+        shown = (
+            "；".join(ref.source_quote for ref in item.source_refs)
+            if category == "user_constraints"
+            else item.text
+        )
+        rows.append((category, f"- {LABELS[category]}：{shown} [来源：{refs}]"))
     selected: list[str] = []
     omitted = False
     constraint_room = next(
-        (len(row) + 1 for category, row in rows if category == "user_constraints"), 0,
+        (len(row) + 1 for category, row in rows if category == "user_constraints"),
+        0,
     )
     for index, (category, row) in enumerate(rows):
         # Do not let even the first long topic consume the newest explicit user constraint.
@@ -81,8 +94,11 @@ def _memory_text(memory: ConversationMemory, *, user_questions_only: bool, limit
     return heading + "\n".join(selected) + tail
 
 
-def plan_dialogue_window(
-    history: History, max_chars: int, *, memory: ConversationMemory | None = None,
+def _plan_dialogue_window(
+    history: History,
+    max_chars: int,
+    *,
+    memory: ConversationMemory | None = None,
     user_questions_only: bool = False,
 ) -> DialogueWindow:
     turns = history_turns(history)
@@ -95,13 +111,16 @@ def plan_dialogue_window(
     if max_chars < len(PREFIX) + 180:
         note = "【上下文容量有限；仅摘录最近用户问题，不是摘要；历史回答未纳入】\n"
         text = note + excerpt(turns[-1].query, max(0, max_chars - len(note)))
-        return DialogueWindow(text[:max_chars], (), tuple(t.turn_id for t in turns[:-1]),
-                              (turns[-1].turn_id,), False)
+        return DialogueWindow(
+            text[:max_chars], (), tuple(t.turn_id for t in turns[:-1]), (turns[-1].turn_id,), False
+        )
     memory = valid_memory(memory, turns)
     summary = (
-        _memory_text(memory, user_questions_only=user_questions_only,
-                     limit=min(max_chars // 3, 3200))
-        if memory is not None else ""
+        _memory_text(
+            memory, user_questions_only=user_questions_only, limit=min(max_chars // 3, 3200)
+        )
+        if memory is not None
+        else ""
     )
     initial = ""
     if len(turns) > 1:
@@ -132,7 +151,7 @@ def plan_dialogue_window(
         content = "\n\n".join(blocks[index] for index in chosen)
         suffix_start = chosen[0]
     covered = memory.covered_turns if summary and memory else 0
-    omitted = turns[min(covered, suffix_start):suffix_start]
+    omitted = turns[min(covered, suffix_start) : suffix_start]
     note = ""
     if omitted:
         note = (
@@ -144,16 +163,85 @@ def plan_dialogue_window(
         # A minimal labelled window is safer than cutting an item or source citation.
         note = "【仅摘录最近用户问题；历史内容未纳入，不是语义摘要】\n"
         result = note + excerpt(turns[-1].query, max(0, max_chars - len(note)))
-        return DialogueWindow(result[:max_chars], (), tuple(t.turn_id for t in turns[:-1]),
-                              (turns[-1].turn_id,), False)
-    return DialogueWindow(result, tuple(turns[i].turn_id for i in chosen),
-                          tuple(t.turn_id for t in omitted), excerpted_ids, bool(summary))
+        return DialogueWindow(
+            result[:max_chars],
+            (),
+            tuple(t.turn_id for t in turns[:-1]),
+            (turns[-1].turn_id,),
+            False,
+        )
+    return DialogueWindow(
+        result,
+        tuple(turns[i].turn_id for i in chosen),
+        tuple(t.turn_id for t in omitted),
+        excerpted_ids,
+        bool(summary),
+    )
+
+
+def plan_dialogue_window(
+    history: History,
+    max_chars: int,
+    *,
+    memory: ConversationMemory | None = None,
+    user_questions_only: bool = False,
+) -> DialogueWindow:
+    """Protect literal user constraints when middle turns fall outside the window."""
+    from dataclasses import replace
+
+    window = _plan_dialogue_window(
+        history,
+        max_chars,
+        memory=memory,
+        user_questions_only=user_questions_only,
+    )
+    spans = user_directive_spans(history_turns(history))
+    protected_ids = tuple(dict.fromkeys(span.turn_id for span in spans))
+    if not spans or all(span.text in window.text for span in spans):
+        return replace(window, protected_turn_ids=protected_ids)
+    heading = (
+        "【历史用户约束/改口的逐字片段，按先后顺序；不推断适用范围，"
+        "以本轮要求和较晚原话为准，助手回答不在此列】\n"
+    )
+    rows = [f"第{span.position + 1}轮问#{span.content_hash[:10]}：{span.text}" for span in spans]
+    pinned = heading + "\n".join(rows) + "\n"
+    # The pure planner remains usable for tiny previews. Execution callers must
+    # refuse its explicit missing-constraint state instead of treating truncation
+    # as complete memory.
+    if len(pinned) + 100 > max_chars:
+        missing = tuple(
+            dict.fromkeys(span.turn_id for span in spans if span.text not in window.text)
+        )
+        return replace(
+            window, protected_turn_ids=protected_ids, missing_constraint_turn_ids=missing
+        )
+    rest = _plan_dialogue_window(
+        history,
+        max_chars - len(pinned),
+        memory=memory,
+        user_questions_only=user_questions_only,
+    )
+    return replace(rest, text=pinned + rest.text, protected_turn_ids=protected_ids)
 
 
 def dialogue_context(
-    history: History, max_chars: int, *, memory: ConversationMemory | None = None,
+    history: History,
+    max_chars: int,
+    *,
+    memory: ConversationMemory | None = None,
     user_questions_only: bool = False,
+    require_complete_constraints: bool = False,
 ) -> str:
-    return plan_dialogue_window(
-        history, max_chars, memory=memory, user_questions_only=user_questions_only,
-    ).text
+    window = plan_dialogue_window(
+        history,
+        max_chars,
+        memory=memory,
+        user_questions_only=user_questions_only,
+    )
+    if require_complete_constraints and window.missing_constraint_turn_ids:
+        from ..llm import InputCapacityError
+
+        raise InputCapacityError(
+            "上下文容量不足，无法完整保留用户约束/改口原话；请缩小范围或新建会话"
+        )
+    return window.text

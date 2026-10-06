@@ -29,6 +29,7 @@ _STRUCTURAL_REF = re.compile(
     r"\s*\(?[A-Z]?\d+(?:[.-]\d+)*[a-z]?\)?",
     re.I,
 )
+_TABLE_NOTE_REF = re.compile(r"[（(]\s*注\s*\d+\s*[）)]")
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,11 @@ def _numbers(text: str) -> set[Decimal]:
     text = re.sub(r"(?m)^\s*(?:\*\*|__)?\d+[.)、]\s+", "", text)
     # Figure/table/equation references are document labels, not measurements.
     # Mask only prose positions so numerical expressions inside math stay checked.
-    for match in reversed(list(_STRUCTURAL_REF.finditer(citation_text(text)))):
+    markers = [
+        *list(_STRUCTURAL_REF.finditer(citation_text(text))),
+        *list(_TABLE_NOTE_REF.finditer(citation_text(text))),
+    ]
+    for match in sorted(markers, key=lambda item: item.start(), reverse=True):
         text = text[: match.start()] + " " * len(match[0]) + text[match.end() :]
     values = set()
     for raw in _NUMBER.findall(text):

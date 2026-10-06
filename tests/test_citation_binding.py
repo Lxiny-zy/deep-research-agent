@@ -65,6 +65,32 @@ async def test_same_location_in_different_paragraphs_keeps_distinct_selected_quo
     assert f"#cite-o-{a.id}" in catalog.body and f"#cite-o-{b.id}" in catalog.body
 
 
+async def test_only_exact_trusted_record_suffix_can_follow_audited_body():
+    from deep_research.workbench.presentation_notes import record_references
+
+    results = material()
+    url = results[0].findings[0].source_url
+    original = "CLAIM-A [1]."
+    checker = ProseReviewer.research(Judge(), results, {url: 1}, 50000)
+    record = await checker.review(original)
+    base = build_bibliography(original, [url], results[0].findings)
+    assert bind_review(base, checker, original, record)
+    suffix = "\n\n## 阅读记录\n\n" + record_references("记录来自[1]；数学范围 $x\\in[0,1]$。")
+    assert "$x\\in[0,1]$" in suffix and "原记录来源位置 1" in suffix
+    shown = build_bibliography(original + suffix, [url], results[0].findings)
+    assert not bind_review(shown, checker, original, record)
+    assert bind_review(shown, checker, original, record, trusted_display_suffix=suffix)
+    assert shown.occurrences == base.occurrences
+    assert "阅读记录" in shown.body
+    changed = build_bibliography("Changed " + original + suffix, [url], results[0].findings)
+    assert not bind_review(changed, checker, original, record, trusted_display_suffix=suffix)
+    citation_suffix = "\n\nUnchecked new claim [1]."
+    changed = build_bibliography(original + citation_suffix, [url], results[0].findings)
+    assert not bind_review(
+        changed, checker, original, record, trusted_display_suffix=citation_suffix
+    )
+
+
 async def test_table_rows_and_crlf_use_their_own_review_decisions():
     results = material()
     url = results[0].findings[0].source_url

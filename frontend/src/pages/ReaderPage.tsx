@@ -1,11 +1,17 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { createConversation, getConversation, getReader, listConversations } from '../api/client'
 import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
 import QaStreamingAnswer from '../components/QaStreamingAnswer'
 import ReportView from '../components/ReportView'
+import ReadingMapPanel from '../components/ReadingMapPanel'
+import {
+  canLocateReadingAnchor,
+  readingNavigation,
+  type ReadingNavigation,
+} from '../api/readingMap'
 import type { PdfHighlight } from '../components/PdfViewer'
 import { useProjects } from '../hooks/useLibrary'
 import { useRunDetail, useRunDocument } from '../hooks/useRuns'
@@ -27,6 +33,15 @@ function isActive(status: string | undefined): boolean {
 
 export default function ReaderPage() {
   const { id = '' } = useParams<{ id: string }>()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const navigation = readingNavigation(
+    (location.state as { readingAnchor?: unknown } | null)?.readingAnchor,
+  )
+  const [includeHsiTables] = useState(navigation?.includeHsiTables ?? false)
+  const [mapInitialUnit] = useState(navigation?.unitId || '')
+  const [mapOpened, setMapOpened] = useState(false)
+  const [mapNotice, setMapNotice] = useState('')
   const queryClient = useQueryClient()
   const reader = useQuery({
     queryKey: ['reader', id],
@@ -37,7 +52,10 @@ export default function ReaderPage() {
   })
   const running = isActive(reader.data?.status)
   const detail = useRunDetail(id, { refetchInterval: running ? 5000 : false })
-  const reportDocument = useRunDocument(id, { enabled: !running && Boolean(detail.data?.report) })
+  const reportDocument = useRunDocument(id, {
+    enabled: !running && Boolean(detail.data?.report),
+    includeHsiTables,
+  })
   const projects = useProjects()
   const conversations = useQuery({
     queryKey: ['qa-conversations', 'run', id],
@@ -87,7 +105,7 @@ export default function ReaderPage() {
   const [withLibrary, setWithLibrary] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [withWeb, setWithWeb] = useState(false)
-  const [pane, setPane] = useState<'pdf' | 'report'>('pdf')
+  const [pane, setPane] = useState<'pdf' | 'report' | 'map'>('pdf')
   const [documentId, setDocumentId] = useState<string>()
   const [highlight, setHighlight] = useState<PdfHighlight | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
@@ -101,6 +119,47 @@ export default function ReaderPage() {
   const libraryReady = !withLibrary || Boolean(projectId)
   const paperReady = reader.data?.status === 'done' || reader.data?.status === 'needs_review'
   const canAsk = paperReady && reader.data?.can_ask !== false
+  const consumedNavigation = useRef('')
+  useEffect(() => {
+    if (!navigation || consumedNavigation.current === location.key || !reader.data || !detail.data)
+      return
+    if (!reportDocument.data && !reportDocument.isError && detail.data.report) return
+    consumedNavigation.current = location.key
+    const target = reader.data.documents.find(
+      (item) => item.id === navigation.anchor.document_id && item.pdf,
+    )
+    if (
+      navigation.runId !== id ||
+      navigation.documentVersion !== reportDocument.data?.content_version
+    ) {
+      setHighlight(null)
+      setMapNotice('报告版本已变化，请重新选择当前版本的原文依据。')
+    } else if (!target) {
+      setHighlight(null)
+      setMapNotice('这条依据没有可确认的原版 PDF，请查看来源记录。')
+    } else {
+      setDocumentId(target.id)
+      setPane('pdf')
+      setMapNotice('')
+      setHighlight((previous) => ({
+        quote: navigation.anchor.quote,
+        token: (previous?.token ?? 0) + 1,
+      }))
+    }
+    // Quotes stay out of URLs and are removed from navigation state after use.
+    navigate(location.pathname + location.search, { replace: true, state: null })
+  }, [
+    navigation,
+    location.key,
+    location.pathname,
+    location.search,
+    reader.data,
+    detail.data,
+    reportDocument.data,
+    reportDocument.isError,
+    id,
+    navigate,
+  ])
 
   const ask = useMutation({
     mutationFn: async (text: string) => {
@@ -212,6 +271,18 @@ export default function ReaderPage() {
       quote: evidence.evidence_quote,
       token: (previous?.token ?? 0) + 1,
     }))
+  }
+  function locateReading(anchor: ReadingNavigation['anchor']) {
+    const target = documents.find((item) => item.id === anchor.document_id && item.pdf)
+    if (!target || !canLocateReadingAnchor(anchor)) {
+      setHighlight(null)
+      setMapNotice('这条依据不能可靠定位到原版 PDF，请查看来源记录。')
+      return
+    }
+    setDocumentId(target.id)
+    setPane('pdf')
+    setMapNotice('')
+    setHighlight((previous) => ({ quote: anchor.quote, token: (previous?.token ?? 0) + 1 }))
   }
 
   if (reader.isError) {
@@ -454,6 +525,22 @@ export default function ReaderPage() {
             <AppIcon name="book" size={14} aria-hidden="true" />
             精读报告
           </button>
+          {reportDocument.data?.content_version && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={pane === 'map'}
+              className={`reader-tab reader-tab-map${pane === 'map' ? ' is-active' : ''}`}
+              onClick={() => {
+                setPane('map')
+                setMapOpened(true)
+                setHighlight(null)
+                setMapNotice('')
+              }}
+            >
+              阅读导览
+            </button>
+          )}
           {pane === 'pdf' && documents.length > 1 && (
             <select
               className="reader-doc-select"
@@ -472,6 +559,12 @@ export default function ReaderPage() {
             </select>
           )}
         </div>
+
+        {mapNotice && (
+          <p className="reader-note hint" role="status">
+            {mapNotice}
+          </p>
+        )}
 
         <div className="reader-pane-body" role="tabpanel" hidden={pane !== 'pdf'} aria-label="原文">
           {!current ? (
@@ -538,6 +631,31 @@ export default function ReaderPage() {
                 {running ? '精读报告还在撰写，写好后会出现在这里。' : '这次任务没有生成精读报告。'}
               </p>
             ))}
+        </div>
+        <div
+          className="reader-pane-body"
+          role="tabpanel"
+          hidden={pane !== 'map'}
+          aria-label="阅读导览"
+        >
+          {mapOpened && reportDocument.data?.content_version && (
+            <ReadingMapPanel
+              runId={id}
+              documentVersion={reportDocument.data.content_version}
+              includeHsiTables={includeHsiTables}
+              embedded
+              active={pane === 'map'}
+              initialUnitId={mapInitialUnit}
+              onLocate={(anchor) => locateReading(anchor)}
+              onClearLocate={() => {
+                setHighlight(null)
+                setMapNotice('')
+              }}
+              onRefreshVersion={() => {
+                void reportDocument.refetch()
+              }}
+            />
+          )}
         </div>
       </section>
     </div>

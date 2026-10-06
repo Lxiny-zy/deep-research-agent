@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any
+from typing import Annotated, Any, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..models import ScholarlyMetadata, Source
 from ..upload_limits import DOCUMENT_LIMIT_LABEL, DOCUMENT_MAX_BYTES
@@ -64,6 +64,34 @@ class AttachmentChunk(BaseModel):
     page: int | None = Field(default=None, ge=1)
 
 
+class ImageRegion(BaseModel):
+    """Explicit user selection in visible-page coordinates; never model output."""
+
+    model_config = {"extra": "forbid"}
+    page: int = Field(ge=1)
+    figure_label: str = Field(
+        min_length=2, max_length=40,
+        pattern=r"(?i)^(?:fig(?:ure)?\.?\s*\d+[a-z]?|图\s*\d+[a-z]?)$",
+    )
+    bounds: tuple[
+        Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)],
+        Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)],
+        Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)],
+        Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)],
+    ]
+
+    @model_validator(mode="after")
+    def ordered_bounds(self) -> Self:
+        x0, y0, x1, y1 = self.bounds
+        if x1 - x0 < 0.01 or y1 - y0 < 0.01:
+            raise ValueError("图片区域须有正面积，且宽高不少于页面的 1%")
+        return self
+
+
+def figure_label_key(label: str) -> str:
+    return re.sub(r"[\s.]", "", label).casefold().replace("figure", "fig")
+
+
 class Attachment(BaseModel):
     """一个已解析的上传文件。``id`` 是内容摘要，同一文件重复上传得到同一 id。"""
 
@@ -80,6 +108,18 @@ class Attachment(BaseModel):
     authors: list[str] = Field(default_factory=list, max_length=32)
     scholarly: ScholarlyMetadata | None = None
     chunks: list[AttachmentChunk] = Field(default_factory=list, max_length=MAX_CHUNKS_PER_FILE)
+    image_regions: list[ImageRegion] = Field(default_factory=list, max_length=4)
+
+    @model_validator(mode="after")
+    def image_selection(self) -> Self:
+        if self.image_regions and (self.kind != "pdf" or not self.stored):
+            raise ValueError("只能在已保存的 PDF 附件上选择图片区域")
+        keys = [
+            (region.page, figure_label_key(region.figure_label)) for region in self.image_regions
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("同一页的同一图号只能指定一个图片区域")
+        return self
 
     def preview(self, limit: int = 240) -> str:
         text = self.chunks[0].content if self.chunks else ""
@@ -287,8 +327,12 @@ def limit_attachments(items: list[Attachment]) -> list[Attachment]:
     seen: set[str] = set()
     kept: list[Attachment] = []
     total_chars = 0
+    region_count = 0
     for item in items:
         if item.id in seen:
+            previous = next(kept_item for kept_item in kept if kept_item.id == item.id)
+            if previous.image_regions != item.image_regions:
+                raise AttachmentError("重复附件的图片区域不一致，请保留一个明确版本")
             continue
         if len(kept) >= MAX_ATTACHMENTS:
             raise AttachmentError(f"最多提交 {MAX_ATTACHMENTS} 个文件，请减少文件数量后重试")
@@ -300,6 +344,9 @@ def limit_attachments(items: list[Attachment]) -> list[Attachment]:
         total_chars += chars
         if total_chars > MAX_TOTAL_PARSED_CHARS:
             raise AttachmentError("附件合计文本超过 800 万字符，未创建任务；请减少文件或分批处理")
+        region_count += len(item.image_regions)
+        if region_count > 4:
+            raise AttachmentError("每个任务最多指定四个原文图片区域")
         seen.add(item.id)
         kept.append(item)
     return kept

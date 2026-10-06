@@ -46,6 +46,7 @@ class _RunRecord:
     owner_id: str | None = None
     project_id: str | None = None
     status: str = "pending"
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     cancel_requested_at: datetime | None = None
     interpretation: str = ""
     sub_questions: list[SubQuestion] = field(default_factory=list)
@@ -636,6 +637,7 @@ class InMemoryRepository:
                 status=rec.status,
                 owner_id=rec.owner_id,
                 project_id=rec.project_id,
+                created_at=rec.created_at,
                 total_tokens=rec.total_tokens,
                 elapsed=rec.elapsed,
                 tags=list(rec.tags),
@@ -654,6 +656,7 @@ class InMemoryRepository:
             owner_id=rec.owner_id,
             cancel_requested_at=rec.cancel_requested_at,
             project_id=rec.project_id,
+            created_at=rec.created_at,
             interpretation=rec.interpretation,
             sub_questions=list(rec.sub_questions),
             results=list(rec.results),

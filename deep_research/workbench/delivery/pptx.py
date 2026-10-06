@@ -1,8 +1,6 @@
 """SlideDeck → PPTX（python-pptx，16:9，统一版式，每页附演讲备注）。
 
-版式是固定的设计系统，不是模型自由发挥：标题页、内容页、结束页三种布局，
-同一套配色与字号。模型只决定每页写什么，不决定字号和位置——这样每份交付
-都「演示就绪」，不会出现文字溢出或一页十几条要点的墙。
+版式由代码控制，模型提供内容。行数和时长均为估算；实际应用渲染和试讲仍须验收。
 
 ``fit_report`` 是版面自检：每条要点的估算行数、每页总行数是否超出文本框容量。
 验收门据此报告溢出页，而不是等用户打开才发现。
@@ -12,6 +10,7 @@ from __future__ import annotations
 
 import io
 import math
+import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -22,6 +21,7 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Emu, Pt
 
+from ..slide_content import meaningful_notes
 from .markdown import _inlines, _parser
 from .math import MathRenderError, math_asset, office_math
 
@@ -181,10 +181,16 @@ def fit_report(deck: dict[str, Any]) -> list[dict[str, Any]]:
     problems: list[dict[str, Any]] = []
     for number, slide in enumerate(deck.get("slides", []), 1 if _has_title_slide(deck) else 2):
         bullets = slide.get("bullets", [])
+        heading_lines = _estimated_lines(str(slide.get("title", "")), width=60)
+        if heading_lines > 2:
+            problems.append({"slide": number, "lines": heading_lines,
+                             "bullets": len(bullets), "title": True})
+        visual = slide.get("visual_data") or slide.get("visual")
+        limit = 3 if visual else _MAX_LINES
         lines = sum(_estimated_lines(bullet) for bullet in bullets)
-        if lines > _MAX_LINES or len(bullets) > 5:
+        if lines > limit or len(bullets) > (2 if visual else 5):
             problems.append({"slide": number, "lines": lines, "bullets": len(bullets)})
-        if not bullets:
+        if not bullets and not visual:
             problems.append({"slide": number, "lines": 0, "bullets": 0, "empty": True})
     return problems
 
@@ -269,21 +275,26 @@ def reference_pages(references: list[str]) -> list[list[str]]:
 
 def paginate_deck(deck: dict[str, Any]) -> dict[str, Any]:
     """Continue overflowing content on another slide, preserving notes/citations."""
+    if deck.get("_paginated"):
+        return deck
     slides: list[dict[str, Any]] = []
-    for spec in deck.get("slides", []):
+    for source_index, spec in enumerate(deck.get("slides", [])):
+        visual = spec.get("visual_data")
+        visual_rows = visual.get("rows", []) if visual and visual["kind"] == "table" else []
+        limit = 3 if visual or spec.get("visual") else _MAX_LINES
         pages: list[list[str]] = [[]]
         lines = 0
         for bullet in spec.get("bullets", []):
-            for piece in _split_bullet(str(bullet)):
+            for piece in _split_bullet(str(bullet), max_lines=min(4, limit)):
                 needed = _estimated_lines(piece)
-                if pages[-1] and (len(pages[-1]) >= 5 or lines + needed > _MAX_LINES):
+                if pages[-1] and (len(pages[-1]) >= 5 or lines + needed > limit):
                     pages.append([])
                     lines = 0
                 pages[-1].append(piece)
                 lines += needed
         # Avoid a dense page followed by a one-item continuation when the same
         # ordered content can be distributed more evenly without adding pages.
-        for index in range(len(pages) - 2, -1, -1):
+        for index in range(len(pages) - 2, -1, -1) if not visual else []:
             left, right = pages[index], pages[index + 1]
             if len(right) != 1:
                 continue
@@ -296,18 +307,42 @@ def paginate_deck(deck: dict[str, Any]) -> dict[str, Any]:
                 ) >= abs(left_lines - right_lines):
                     break
                 right.insert(0, left.pop())
+        if visual_rows:
+            while len(pages) < math.ceil(len(visual_rows) / 6):
+                pages.append([])
+        # Keep sentence order and every character, but never copy a whole script
+        # to every continuation. Insufficient scripts remain visibly incomplete.
+        chunks = re.findall(
+            r".+?(?:[。！？!?]+|\.(?=\s|$)|\n|$)", str(spec.get("notes", "")), re.S
+        )
+        notes = [""] * len(pages)
+        for index, chunk in enumerate(chunks):
+            notes[min(len(pages) - 1, index * len(pages) // max(1, len(chunks)))] += chunk
         for index, bullets in enumerate(pages):
+            page_visual = None
+            if visual and visual_rows and index * 6 < len(visual_rows):
+                page_visual = {**visual, "rows": visual_rows[index * 6 : (index + 1) * 6]}
+            elif visual and not visual_rows and index == 0:
+                page_visual = visual
             slides.append(
                 {
                     **spec,
                     "bullets": bullets,
+                    "notes": notes[index],
+                    "visual_data": page_visual,
+                    "_source_index": source_index,
                     "title": str(spec.get("title", "")) + (f"（续 {index + 1}）" if index else ""),
                 }
             )
-    return {**deck, "slides": slides}
+    return {**deck, "slides": slides, "_paginated": True}
 
 
-def render_pptx(deck: dict[str, Any], *, citations: list[str] | None = None) -> bytes:
+def render_pptx(
+    deck: dict[str, Any],
+    *,
+    citations: list[str] | None = None,
+    images: dict[str, bytes] | None = None,
+) -> bytes:
     deck = paginate_deck(deck)
     presentation = Presentation()
     presentation.slide_width, presentation.slide_height = _W, _H
@@ -351,8 +386,12 @@ def render_pptx(deck: dict[str, Any], *, citations: list[str] | None = None) -> 
             )
             _text(sub.text_frame, subtitle, size=12, color=_MUTED)
             body_top = max(body_top, 1200000 + subtitle_height + 80000)
+        visual = spec.get("visual_data")
         body = slide.shapes.add_textbox(
-            Emu(700000), Emu(body_top), Emu(10800000), Emu(6050000 - body_top)
+            Emu(700000),
+            Emu(body_top),
+            Emu(10800000),
+            Emu(1200000 if visual else 6050000 - body_top),
         )
         frame = body.text_frame
         frame.word_wrap = True
@@ -361,6 +400,12 @@ def render_pptx(deck: dict[str, Any], *, citations: list[str] | None = None) -> 
             paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
             _paragraph(paragraph, f"•  {bullet}", size=_BULLET_PT)
             paragraph.space_after = Pt(10)
+        if visual:
+            from .pptx_visuals import draw_visual
+
+            draw_visual(
+                slide, visual, images or {}, top=2750000 if spec.get("bullets") else 1400000
+            )
         cites = [int(i) for i in spec.get("citations", []) if isinstance(i, int)]
         if cites:
             foot = slide.shapes.add_textbox(Emu(700000), Emu(6250000), Emu(10800000), Emu(400000))
@@ -370,7 +415,8 @@ def render_pptx(deck: dict[str, Any], *, citations: list[str] | None = None) -> 
         page = slide.shapes.add_textbox(Emu(11000000), Emu(6300000), Emu(900000), Emu(350000))
         _text(page.text_frame, str(number), size=11, color=_MUTED)
         page.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
-        slide.notes_slide.notes_text_frame.text = spec.get("notes", "") or "（无备注）"
+        note = str(spec.get("notes", ""))
+        slide.notes_slide.notes_text_frame.text = note if meaningful_notes(note) else ""
 
     for page_index, references in enumerate(reference_pages(citations or [])):
         refs = presentation.slides.add_slide(blank)
@@ -400,7 +446,7 @@ def pptx_stats(data: bytes) -> dict[str, int]:
     notes = sum(
         1
         for slide in presentation.slides
-        if slide.has_notes_slide and slide.notes_slide.notes_text_frame.text.strip()
+        if slide.has_notes_slide and meaningful_notes(slide.notes_slide.notes_text_frame.text)
     )
     return {"slides": len(presentation.slides), "with_notes": notes}
 

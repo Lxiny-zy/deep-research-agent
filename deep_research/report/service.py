@@ -51,8 +51,13 @@ class ReportService:
         from ..reading_limits import append_reading_limits, collect_reading_limits
 
         reading_limits = await run_blocking(collect_reading_limits, detail.sources, detail.results)
+        from ..workbench.presentation_notes import append_presentation
+
+        displayed_markdown = await run_blocking(
+            append_presentation, detail.report.markdown, detail
+        ) if detail.report is not None else ""
         displayed_report = detail.report.model_copy(update={
-            "markdown": append_reading_limits(detail.report.markdown, reading_limits),
+            "markdown": append_reading_limits(displayed_markdown, reading_limits),
         }) if detail.report is not None else None
         document = await run_blocking(
             self.assembler,
@@ -94,8 +99,19 @@ class ReportService:
             record = stored_review(scratch)
             if document.bibliography is not None:
                 from ..workbench.citation_binding import bind_review
+                from ..workbench.prose_review import body_text
 
-                bind_review(document.bibliography, checker, detail.report.markdown, record)
+                original_body = body_text(detail.report.markdown)
+                displayed_body = body_text(document.bibliography.source_body)
+                # The source report remains the only audited body. Only our
+                # exact append-only, citation-free record display may follow it.
+                suffix = displayed_body[len(original_body):] if displayed_body.startswith(
+                    original_body
+                ) else None
+                bind_review(
+                    document.bibliography, checker, detail.report.markdown, record,
+                    trusted_display_suffix=suffix,
+                )
             if checker is not None and record is not None:
                 bound, issues = checker.check(detail.report.markdown, record)
                 document.final_validation = FinalReportValidation(

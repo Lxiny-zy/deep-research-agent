@@ -342,14 +342,25 @@ async def _answer(
     call_budget = ModelCallBudget(coerce_policy(settings.quality).qa_max_model_calls)
     agent.tracer.call_budget = call_budget
     agent.tracer.cache_scope = f"qa:{principal.id}:{conversation.run_id or conversation.id}"
+    agent.tracer.run_id = conversation.run_id
+    agent.tracer.conversation_id = conversation.id
+    agent.tracer.request_id = body.request_id
     reasoning: dict[str, dict[str, Any]] = {}
     usages: list[dict[str, Any]] = []
+    calls: dict[str, dict[str, Any]] = {}
 
     def observe(event: Event) -> None:
         data = event.data or {}
         delta = data.get("reasoning_delta")
         call_id = data.get("call_id")
-        if isinstance(delta, str) and isinstance(call_id, str):
+        call = data.get("model_call")
+        if isinstance(call, dict) and isinstance(call.get("call_id"), str):
+            calls[call["call_id"]] = {
+                "tool": "model_call", "input": "", "observation": "", "call": call,
+            }
+            if on_event:
+                on_event({"type": "model_call", "model_call": call})
+        elif isinstance(delta, str) and isinstance(call_id, str):
             thought = reasoning.setdefault(
                 call_id,
                 {
@@ -381,10 +392,13 @@ async def _answer(
     agent.tracer.add_sink(observe)
     try:
         ctx = await agent.one_shot_context()
+        from .qa_context import CONTEXT_POLICY_VERSION
+
         roles = ("planner", "researcher", "synthesizer", "evidence_verifier")
         runtime = getattr(agent, "_catalog_runtime", None)
         execution_context = environment_hash(
             {
+                "context_policy": CONTEXT_POLICY_VERSION,
                 "settings": asdict(ctx.settings),
                 "global_rules": getattr(ctx, "global_rules", None),
                 "catalog": runtime.snapshot(roles).model_dump(mode="json")
@@ -487,7 +501,7 @@ async def _answer(
         answer=result.answer,
         citations=result.citations,
         evidence=evidence,
-        thoughts=[*result.thoughts, *reasoning.values(), *usages, *private],
+        thoughts=[*result.thoughts, *reasoning.values(), *usages, *calls.values(), *private],
         status="fallback" if result.fallback else "done",
         tokens=agent.tracer.total_tokens,
     )
@@ -684,6 +698,7 @@ async def _recovery_environment(
     from ..guardrails import SemanticEvidenceVerifier
     from ..prompting import load_global_rules
     from .prose_review import SUPPORT_POLICY_VERSION
+    from .qa_context import CONTEXT_POLICY_VERSION
 
     catalog = getattr(request.app.state, "catalog", None)
     catalog_state = None
@@ -720,6 +735,7 @@ async def _recovery_environment(
         {
             "contract": 1,
             "support_policy": SUPPORT_POLICY_VERSION,
+            "context_policy": CONTEXT_POLICY_VERSION,
             "evidence_policy": environment_hash(SemanticEvidenceVerifier._SYSTEM),
             "actor": principal_for(request).id,
             "request": body.model_dump(exclude={"request_id", "resume_message_id"}),

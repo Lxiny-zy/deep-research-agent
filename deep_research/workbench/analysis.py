@@ -81,12 +81,15 @@ class AnalysisResult:
     figure_policy: int = 2
     scope: dict[str, Any] | None = None
     composition: list[dict[str, Any]] = field(default_factory=list)
+    design: dict[str, Any] | None = None
+    lineage: dict[str, Any] | None = None
 
     def snapshot(self) -> dict[str, Any]:
         """Freeze computed values; plots can be redrawn from these and the same input."""
         return {
-            "version": 5 if self.scope is not None else 4,
+            "version": 6 if self.design is not None else 5 if self.scope is not None else 4,
             "facts": self.facts(),
+            **({"design": self.design, "lineage": self.lineage} if self.design is not None else {}),
             **(
                 {"scope": self.scope, "composition": self.composition}
                 if self.scope is not None
@@ -154,7 +157,16 @@ class AnalysisResult:
                     lines.append(
                         f"- {item['column']}: 有效 n={item['n']}，缺失={item['missing']}，"
                         f"不同取值数={item['distinct']}；构成="
-                        + ", ".join(f"{level['label']}: n={level['n']}" for level in item["levels"])
+                        + (
+                            ", ".join(
+                                f"{level['label']}: n={level['n']}" for level in item["levels"]
+                            )
+                            or {
+                                "withheld_identifiers": "标识取值未展示，仅保留计数",
+                                "not_expanded": "类别较多，未逐项展开",
+                                "complete": "无非缺失取值",
+                            }.get(str(item.get("levels_status", "")), "未记录明细")
+                        )
                     )
         if self.tests or self.correlations:
             lines.append(
@@ -163,6 +175,10 @@ class AnalysisResult:
                 if any(test.get("posthoc") for test in self.tests)
                 else "- 多重比较校正：本次统计未执行，台账 p 值为未经校正的结果。"
             )
+        if self.design is not None:
+            from .analysis_lineage import design_markdown
+
+            lines.extend(["", design_markdown(self.design, self.lineage)])
         lines.append("\n### 描述统计")
         for row in self.describe:
             lines.append(
@@ -313,6 +329,8 @@ def ledger_facts(snapshot: dict[str, Any]) -> str:
         issues=list(snapshot.get("issues", [])),
         scope=snapshot.get("scope"),
         composition=list(snapshot.get("composition", [])),
+        design=snapshot.get("design"),
+        lineage=snapshot.get("lineage"),
     )
     result.figures = [
         Figure(name=f["name"], title=f["title"], caption=f["caption"], png=b"")
@@ -510,7 +528,9 @@ def analyse(
             historical=frozen is not None,
         )
         numeric, categorical = list(selected.measures), list(selected.groups)
-        composition = background_summary(frame, selected.groups + selected.background)
+        composition = background_summary(
+            frame, selected.groups + selected.background, private_columns=selected.subject_columns
+        )
         pairing = selected.pairing
         subjects = selected.subject_columns
         if frozen is None:
@@ -875,7 +895,7 @@ def analyse(
             )
         )
 
-    return AnalysisResult(
+    analysis_result = AnalysisResult(
         question=question,
         rows=int(len(frame)),
         columns=list(frame.columns),
@@ -900,6 +920,17 @@ def analyse(
         scope=scope,
         composition=composition,
     )
+    if frozen is not None:
+        from copy import deepcopy
+
+        analysis_result.design = deepcopy(frozen.get("design"))
+        analysis_result.lineage = deepcopy(frozen.get("lineage"))
+    else:
+        from .analysis_lineage import build_lineage, describe_design
+
+        analysis_result.design = describe_design(analysis_result, repeated=bool(repeated))
+        analysis_result.lineage = build_lineage(frame, analysis_result)
+    return analysis_result
 
 
 def allows_synthetic(contract: TaskContract | None) -> bool:
@@ -1212,6 +1243,9 @@ class DataAnalyst:
                 ledger=result.snapshot(),
                 previous=bb.scratch.get(TABLES_KEY),
             )
+            from .analysis_lineage import attach_design
+
+            body = attach_design(body, result.design, result.lineage)
             table_records[body] = table_record
             bb.scratch[TABLES_KEY] = table_record
             if body != "".join(chunks).strip():

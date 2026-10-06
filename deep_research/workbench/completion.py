@@ -189,9 +189,28 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
     source = delivery_fingerprint(detail)
     if bundle.input_version != source:
         issues.append("交付文件与当前定稿版本不一致")
+    status = "needs_review" if issues else "done"
+    checked_at = datetime.now(UTC).isoformat()
+    previous = detail.completion or scratch.get(COMPLETION_KEY)
+    previous = previous if isinstance(previous, dict) else {}
+    first_result = previous.get("first_result")
+    if not (
+        isinstance(first_result, dict)
+        and first_result.get("version") == 1
+        and first_result.get("run_id") == detail.id
+        and first_result.get("status") in {"done", "needs_review"}
+    ):
+        first_result = None
+        # Historical final states cannot prove their first delivery outcome.
+        # Capture only the first assessment of a newly executing task.
+        if not previous.get("status") and detail.status == "running":
+            first_result = {
+                "version": 1, "run_id": detail.id, "status": status,
+                "input_version": source, "checked_at": checked_at,
+            }
     return {
         "policy_version": COMPLETION_POLICY_VERSION,
-        "status": "needs_review" if issues else "done",
+        "status": status,
         "scope": "frozen_task_delivery",
         "input_version": source,
         "content_version": bundle.content_version,
@@ -200,7 +219,8 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
         "issues": list(dict.fromkeys(issues)),
         "advisories": list(dict.fromkeys(advisories)),
         "gates": [gate.to_dict() for gate in bundle.gates],
-        "checked_at": datetime.now(UTC).isoformat(),
+        "checked_at": checked_at,
+        "first_result": first_result,
     }
 
 

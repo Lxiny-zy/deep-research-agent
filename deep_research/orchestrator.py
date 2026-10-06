@@ -215,6 +215,16 @@ class _LazyOwnedLLM(LLM):
             self._value = self._factory()
         return self._value
 
+    def for_role(self, role: str) -> LLM:
+        # Copying an uninitialized lazy proxy invokes __getattr__ before its
+        # factory exists. Keep the proxy lazy and bind the realized client.
+        def resolve() -> LLM:
+            value = self._get()
+            bind = getattr(value, "for_role", None)
+            return bind(role) if callable(bind) else value
+
+        return _LazyOwnedLLM(resolve)
+
     def __getattr__(self, name: str) -> Any:
         return getattr(self._get(), name)
 
@@ -332,6 +342,7 @@ class DeepResearchAgent:
         self.repo = repo
         self._run_id = run_id
         self.tracer.cache_scope = f"run:{run_id}" if run_id else ""
+        self.tracer.run_id = run_id
         self._workflow_name = workflow
         # 用户**显式**指定的工作流，与上面解析后的 workflow 区分开。
         # 二者混用是个真实的坑：意图预路由会把 workflow 改写成推断结果，
@@ -512,6 +523,7 @@ class DeepResearchAgent:
                     run_id = await self.repo.create_run(query)
                 await self.repo.set_status(run_id, "running", lease_owner=self._lease_owner)
                 self.tracer.cache_scope = f"run:{run_id}"
+                self.tracer.run_id = run_id
 
                 async def flush_live_events() -> None:
                     while True:

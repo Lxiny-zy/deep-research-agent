@@ -29,25 +29,28 @@ def _grams(text: str) -> set[str]:
 
 
 def duplicate_nodes(model: Any) -> list[dict[str, Any]]:
+    from .mindmap_contract import node_text
+
     nodes: list[dict[str, Any]] = []
 
     def walk(children: Any, prefix: str, ancestors: str) -> None:
         for index, node in enumerate(children):
             path = f"{prefix}.{index}" if prefix else str(index)
-            context = ancestors + " / " + node.label
+            meaning = node_text(node)
+            context = ancestors + " / " + meaning
             nodes.append(
                 {
                     "id": path,
                     "parent": prefix,
                     "label": node.label,
-                    "text": _plain(node.label),
+                    "text": _plain(meaning),
                     "kind": node.kind,
                     "citations": set(node.citations),
                     "entities": {v.casefold() for v in _ENTITY.findall(context)},
-                    "numbers": {v.replace("−", "-") for v in _NUMBER.findall(node.label)},
+                    "numbers": {v.replace("−", "-") for v in _NUMBER.findall(meaning)},
                     "splits": set(_SPLIT.findall(context.casefold())),
-                    "causal": bool(_CAUSAL.search(node.label)),
-                    "correlation": bool(_CORRELATION.search(node.label)),
+                    "causal": bool(_CAUSAL.search(meaning)),
+                    "correlation": bool(_CORRELATION.search(meaning)),
                 }
             )
             walk(node.children, path, context)

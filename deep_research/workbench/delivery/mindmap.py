@@ -19,6 +19,14 @@ from urllib.parse import urlsplit
 _PALETTE = ("#1f5f8b", "#2e8b57", "#b5651d", "#7b4fa0", "#b03a48", "#3a7d7c", "#8a6d1f", "#4a5d9e")
 
 
+def _rich_text(text: str) -> str:
+    from .html import _inline_html
+    from .markdown import _inlines, _parser
+
+    tokens = _parser().parseInline(text)
+    return _inline_html(_inlines(tokens[0])) if tokens else escape(text)
+
+
 def _label(node: dict[str, Any]) -> str:
     kind = {"claim": "【结论】", "question": "【待研究】"}.get(node.get("kind", ""), "")
     citations = "".join(
@@ -55,7 +63,7 @@ def _layout(mindmap: dict[str, Any]) -> tuple[list[dict[str, Any]], list[tuple[i
     def measure(raw: dict, depth: int, branch: int, path: str = "root") -> int:
         label = _label(raw)
         lines = _wrap(label)
-        size = 18 if depth == 0 else 14
+        size = 18 if depth == 0 or mindmap.get("view") == "overview" else 14
         width = max(
             130,
             max(
@@ -80,6 +88,7 @@ def _layout(mindmap: dict[str, Any]) -> tuple[list[dict[str, Any]], list[tuple[i
             "citations": raw.get("citations", []),
             "path": path,
             "raw_label": str(raw.get("label", "")),
+            "details": str(raw.get("details", "")),
         }
         nodes.append(node)
         columns[depth] = max(columns.get(depth, 0), width)
@@ -222,15 +231,25 @@ def render_svg(mindmap: dict[str, Any]) -> str:
             f'<tspan x="{x:.1f}" y="{first_y + i * size * 1.5:.1f}">{escape(line)}</tspan>'
             for i, line in enumerate(node["lines"])
         )
+        text_markup = (
+            f'<foreignObject x="{x - width / 2 + 12:.1f}" y="{y - height / 2 + 10:.1f}" '
+            f'width="{width - 24:.1f}" height="{height - 20:.1f}">'
+            '<div xmlns="http://www.w3.org/1999/xhtml" '
+            f'style="text-align:center;font-size:{size}px;'
+            f'color:{text_color};line-height:1.5">{_rich_text(node["label"])}</div></foreignObject>'
+            if "$" in node["label"] or r"\(" in node["label"]
+            else f'<text x="{x:.1f}" y="{y + size * 0.36:.1f}" font-size="{size}" '
+            f'text-anchor="middle" fill="{text_color}">{spans}</text>'
+        )
+        full_label = node["label"] + (" — " + node["details"] if node["details"] else "")
         parts.append(
             f'<g class="{cls}" data-branch="{node["branch"]}" data-depth="{depth}" '
             f'data-node-path="{node["path"]}">'
-            f"<title>{escape(node['label'])}</title>"
+            f"<title>{escape(full_label)}</title>"
             f'<rect x="{x - width / 2:.1f}" y="{y - height / 2:.1f}" '
             f'width="{width:.1f}" height="{height:.1f}" '
             f'rx="{size:.0f}" fill="{fill}" stroke="{color}" stroke-width="1.2"/>'
-            f'<text x="{x:.1f}" y="{y + size * 0.36:.1f}" font-size="{size}" '
-            f'text-anchor="middle" fill="{text_color}">{spans}</text></g>'
+            f"{text_markup}</g>"
         )
     for note in notes:
         for index, line in enumerate(note["lines"]):
@@ -311,11 +330,58 @@ document.querySelectorAll('g.node.d1').forEach(function(g){
     if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle();}
   });
 });
+function showNode(path){
+  var item=document.getElementById('outline-'+path);
+  if(!item)return;
+  var content=item.querySelector('.node-content');
+  if(content)document.getElementById('node-inspector').innerHTML=content.innerHTML;
+}
+svg.querySelectorAll('g.node').forEach(function(g){
+  g.setAttribute('role','button');g.setAttribute('tabindex','0');
+  g.setAttribute('aria-label','查看节点 '+g.getAttribute('data-node-path')+' 的完整说明');
+  g.addEventListener('click',function(){showNode(g.getAttribute('data-node-path'));});
+  g.addEventListener('keydown',function(event){
+    if(event.key==='Enter'||event.key===' '){
+      event.preventDefault();showNode(g.getAttribute('data-node-path'));
+    }
+  });
+});
+document.addEventListener('click',function(event){
+  if(!event.target||!event.target.closest)return;
+  var a=event.target.closest('a');var href=a&&a.getAttribute('href');
+  if(href&&/^#(?:outline-|cite-|source-)/.test(href)){
+    document.getElementById('complete-outline').open=true;
+  }
+});
 overview();
 """
 
 
 def render_mindmap_html(mindmap: dict[str, Any], *, title: str) -> str:
+    import json
+
+    from ..mindmap_delivery import delivery_index
+
+    index = delivery_index(mindmap)
+    version = index["mindmap_version"]
+    candidates = "".join(
+        f'<li><a href="#outline-{item["left"]}">节点 {item["left"]}</a> / '
+        f'<a href="#outline-{item["right"]}">节点 {item["right"]}</a>：'
+        f"{'相同文字' if item['exact'] else '疑似重复'}，相似度 {item['similarity']:.0%}；"
+        "保留原节点，请核对条件与证据后决定。</li>"
+        for item in index["duplicate_candidates"]
+    )
+    inspection = (
+        '<details class="map-review"><summary>关系与重复检查</summary>'
+        f"<p>记录状态：{escape(index['review_status'])}；{len(index['links'])} 条跨分支关联，"
+        f"{len(index['duplicate_candidates'])} 组重复候选。</p>"
+        + (
+            f"<ul>{candidates}</ul>"
+            if candidates
+            else "<p>未发现现有规则覆盖的重复候选；这不代表人工验收通过。</p>"
+        )
+        + "<p>全部关系及其引用见完整大纲；相似度不用于自动合并或删除科学内容。</p></details>"
+    )
     svg = render_svg(mindmap)
     outline = _outline_html(mindmap)
     branches = "".join(
@@ -326,10 +392,13 @@ def render_mindmap_html(mindmap: dict[str, Any], *, title: str) -> str:
     return (
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        f'<meta name="deep-research-mindmap-version" content="{version}">'
         f"<title>{escape(title)}</title><style>{_CSS}</style></head><body>"
         f"<header><h1>{escape(title)}</h1>"
         '<div class="hint">选择分支定位，缩放查看完整标签；点击一级分支可折叠或展开。'
-        "结论带引用，待研究问题不代表已证实。</div></header>"
+        "结论带引用，待研究问题不代表已证实。选择节点查看完整说明，"
+        "PNG 总览只显示一级分支，完整内容见分支页。</div></header>"
+        f'<p class="version">导图内容版本 {version}</p>'
         '<nav class="map-controls" aria-label="导图视图">'
         '<button type="button" data-zoom="fit">总览</button>'
         '<button type="button" data-zoom="actual">原始大小</button>'
@@ -338,7 +407,13 @@ def render_mindmap_html(mindmap: dict[str, Any], *, title: str) -> str:
         '<button type="button" data-zoom="in" aria-label="放大导图">+</button></nav>'
         f'<nav class="map-branches" aria-label="导图分支">{branches}</nav>'
         f'<div class="canvas">{svg}</div>'
-        f"<details><summary>完整大纲与引用</summary>{outline}</details>"
+        '<aside id="node-inspector" class="node-inspector" aria-live="polite">'
+        '选择节点查看完整说明与引用。</aside>'
+        f'{inspection}<details id="complete-outline"><summary>完整大纲与引用'
+        f'（{index["node_count"]} 个节点）</summary>{outline}</details>'
+        '<script type="application/json" id="mindmap-index">'
+        + json.dumps(index, ensure_ascii=False).replace("<", "\\u003c")
+        + "</script>"
         f"<script>{_SCRIPT}</script></body></html>\n"
     )
 
@@ -347,21 +422,29 @@ _CSS = """
 body{margin:0;background:#f6f8fb;color:#14222f;
   font:15px/1.6 'Microsoft YaHei','Noto Sans SC',sans-serif}
 header{padding:20px 28px;border-bottom:1px solid #dfe4ea;background:#fff}
-h1{margin:0;font-size:22px}
+h1{margin:0;font-size:22px;overflow-wrap:anywhere}
 .hint{color:#5b6675;font-size:13px}
 .map-controls,.map-branches{display:flex;flex-wrap:wrap;gap:8px;padding:10px 28px}
 .map-controls{align-items:center}
+.map-branches button{max-width:100%;box-sizing:border-box;overflow-wrap:anywhere}
 button{border:1px solid #b9c9d6;border-radius:6px;padding:6px 10px;
   background:#fff;color:#18354a;font:inherit;cursor:pointer}
 button:focus-visible,g[role=button]:focus-visible{outline:3px solid #3478a5;outline-offset:2px}
+.node-inspector{margin:12px 28px;padding:14px 18px;border:1px solid #c6d5e3;
+  background:#fff;border-radius:8px;overflow-x:auto}
+.node-path,.version{color:#52616d;font-size:12px;overflow-wrap:anywhere}
+.version{padding:0 28px}.node-details{white-space:normal;margin:5px 0}
+.math-svg{display:inline-block}.math-svg svg{max-width:100%;border:0;background:transparent}
+.math-accessible{display:none}
 .canvas{padding:16px;overflow:auto;height:72vh;min-height:360px;box-sizing:border-box}
 svg{max-width:none;background:#fff;border:1px solid #dfe4ea;
   border-radius:12px}
 g.collapsed rect{stroke-dasharray:4 3}
 details{margin:16px 28px 40px;background:#fff;border:1px solid #dfe4ea;border-radius:10px;
-  padding:12px 18px}
+  padding:12px 18px;overflow-x:auto}
 @media (prefers-color-scheme:dark){body{background:#12161c;color:#e6e9ee}
-  header,details{background:#1a2029;border-color:#2c3440}}
+  header,details,.node-inspector{background:#1a2029;border-color:#2c3440}
+  .hint,.version,.node-path{color:#a7b8ca}a{color:#92bde8}}
 """
 
 
@@ -378,7 +461,9 @@ def _outline_html(mindmap: dict[str, Any]) -> str:
     documents = {item.index: item.document for item in catalog.locations} if catalog else {}
 
     def label(node: dict) -> str:
-        text = escape(_label({**node, "citations": [], "display_citations": []}))
+        text = _rich_text(_label({**node, "citations": [], "display_citations": []}))
+        if node.get("details"):
+            text += '<div class="node-details">' + _rich_text(str(node["details"])) + "</div>"
         if catalog:
             grouped: dict[int, list[int]] = {}
             for index in node.get("citations", []):
@@ -399,10 +484,17 @@ def _outline_html(mindmap: dict[str, Any]) -> str:
             )
         return text
 
-    def walk(nodes: list[dict[str, Any]]) -> str:
+    def walk(nodes: list[dict[str, Any]], prefix: str = "") -> str:
         if not nodes:
             return ""
-        items = "".join(f"<li>{label(node)}{walk(node.get('children', []))}</li>" for node in nodes)
+        items = ""
+        for i, node in enumerate(nodes):
+            path = f"{prefix}.{i}" if prefix else str(i)
+            items += (
+                f'<li id="outline-{path}"><div class="node-content">'
+                f'<span class="node-path">节点 {path} · </span>'
+                f"{label(node)}</div>{walk(node.get('children', []), path)}</li>"
+            )
         return f"<ul>{items}</ul>"
 
     links = _cross_links(mindmap, _layout(mindmap)[0])

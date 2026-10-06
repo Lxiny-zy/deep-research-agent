@@ -244,10 +244,11 @@ _DELIVERY_RUNTIME_KEYS = frozenset(
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     from .mindmap_contract import MINDMAP_POLICY_VERSION
+    from .slide_content import SLIDE_POLICY_VERSION
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 64,
+        "format_version": 65,
         "support_policy": SUPPORT_POLICY_VERSION,
         "mindmap_policy": MINDMAP_POLICY_VERSION,
         "query": detail.query,
@@ -264,6 +265,12 @@ def delivery_fingerprint(detail: RunDetail) -> str:
         },
         "sources": [source.model_dump(mode="json") for source in detail.sources],
     }
+    if "pptx" in resolve_template(detail).deliverables:
+        payload["slide_policy"] = SLIDE_POLICY_VERSION
+    if resolve_template(detail).key in {"autoResearch", "litReview", "peerReview", "paperRead"}:
+        from .presentation_notes import PRESENTATION_POLICY_VERSION
+
+        payload["presentation_policy"] = PRESENTATION_POLICY_VERSION
     if isinstance(_scratch(detail).get("analysis"), dict):
         from .analysis_review import STATISTICS_POLICY_VERSION
 
@@ -305,7 +312,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         title = paper_report_title(markdown, title, detail.query, label=template.title)
     created_at = detail.created_at
     created = created_at.isoformat() if created_at is not None else ""
-    from ..bibliography import build_bibliography, present_markdown, work_keys
+    from ..bibliography import build_bibliography, present_markdown, project_citations, work_keys
     from .reader import paper_sources
     from .scholarly import source_counts
 
@@ -363,11 +370,20 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     statistics: dict[str, Any] | None = None
     input_gates: list[GateResult] = []
     if template.key == "slides" and extras.get("deck"):
+        from ..report.service import requires_corroboration
         from .gates import _body_without_references
-        from .writers import SlideDeck, deck_to_markdown
+        from .slide_content import compile_deck
 
-        projected = deck_to_markdown(SlideDeck.model_validate(extras["deck"])).strip()
-        if projected != _body_without_references(markdown).strip():
+        try:
+            compiled_deck, projected = compile_deck(
+                extras["deck"], detail.results, {url: i for i, url in enumerate(citations, 1)},
+                corroboration=requires_corroboration(detail),
+                image_sources=extras.get("slide_image_sources"),
+            )
+            extras = {**extras, "deck": compiled_deck}
+        except ValueError:
+            projected = ""
+        if projected.strip() != _body_without_references(markdown).strip():
             extras = {**extras}
             extras.pop("deck", None)
             extras["structured_output_issue"] = (
@@ -377,6 +393,35 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         input_gates.append(
             GateResult("structured_content", "warn", [str(extras["structured_output_issue"])])
         )
+
+    if template.key == "slides" and extras.get("deck"):
+        from .slide_images import render_registered_page
+
+        for slide in extras["deck"].get("slides", []):
+            visual = slide.get("visual_data")
+            if not visual or visual.get("kind") != "source_image":
+                continue
+            asset = visual["asset"]
+            if asset in images:
+                visual["sha256"] = hashlib.sha256(images[asset]).hexdigest()
+                continue
+            try:
+                def source_page(key: str = visual["id"]) -> bytes:
+                    return render_registered_page(extras["slide_image_sources"], key)
+
+                source_file = render_file(
+                    "figures/" + asset, "png", visual["caption"], "figure",
+                    source_page,
+                )
+                images[asset] = source_file.data
+                files.append(source_file)
+                visual["sha256"] = hashlib.sha256(source_file.data).hexdigest()
+            except RenderProgressError:
+                raise
+            except (ValueError, KeyError, OSError) as exc:
+                input_gates.append(GateResult(
+                    "figure_evidence", "fail", ["原文图页未生成：" + str(exc)]
+                ))
 
     # 概念图：写作者整理的结构描述 → 确定性示意图，插在正文第一个二级标题之后
     raw_figure = extras.get("concept_figure") if isinstance(extras, dict) else None
@@ -554,8 +599,11 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                     "source",
                     "synthetic",
                     "input_sha256",
+                    "design",
+                    "lineage",
                 )
             }
+            statistics["report_markdown"] = report.markdown if report is not None else markdown
 
     from .quality import coerce_policy
 
@@ -695,6 +743,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                         "fail" if issues or not bound else "pass",
                         issues,
                         {
+                            "review_bound": bound,
                             "units": len(record.get("units", [])),
                             "method": "not_reviewed"
                             if record.get("model_review_skipped")
@@ -777,8 +826,14 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
 
     from ..report.service import requires_corroboration
     from .delivery_render import render_bundle
+    from .presentation_notes import presentation_markdown
     from .support import evidence_records
 
+    notes = presentation_markdown(detail)
+    if notes:
+        markdown = markdown.rstrip() + "\n\n" + notes + "\n"
+        display_notes = project_citations(notes, catalog) if citations else notes
+        display_markdown = display_markdown.rstrip() + "\n\n" + display_notes + "\n"
     bibliography = None
     canonical_markdown = markdown
     if citations:
@@ -792,6 +847,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
 
     context = {
         "markdown": markdown,
+        "presentation_notes": notes,
+        "review_bound": next((bool(g.metrics.get("review_bound")) for g in gates
+                              if g.name == "prose_evidence"), False),
         "canonical_markdown": canonical_markdown,
         "reading_limits": reading_limits,
         "bibliography": bibliography.model_dump(mode="json") if bibliography else None,
@@ -1069,7 +1127,11 @@ def _stats_xlsx(result: Any) -> bytes:
         composition.append(["列名", "有效数", "缺失数", "不同取值数", "取值", "构成数"])
         for item in result.composition:
             totals = [item[k] for k in ("column", "n", "missing", "distinct")]
-            for level in item["levels"] or [{"label": None, "n": None}]:
+            omitted = {
+                "withheld_identifiers": "标识取值未展示，仅保留计数",
+                "not_expanded": "类别较多，未逐项展开",
+            }.get(item.get("levels_status"))
+            for level in item["levels"] or [{"label": omitted, "n": None}]:
                 composition.append([*totals, level["label"], level["n"]])
     if result.issues:
         notices = workbook.create_sheet("分析提示")
@@ -1077,6 +1139,9 @@ def _stats_xlsx(result: Any) -> bytes:
         for issue in result.issues:
             notices.append([issue])
     _xlsx_input_sheets(workbook, result)
+    from .analysis_lineage import add_xlsx_traceability
+
+    add_xlsx_traceability(workbook, result)
     # Every string is data, including names beginning with '='; never execute it as a formula.
     for worksheet in workbook:
         for cells in worksheet:

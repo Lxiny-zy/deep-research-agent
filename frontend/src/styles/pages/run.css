@@ -1065,6 +1065,34 @@
 }
 
 /* ---- 证据抽屉 ---- */
+.model-call-note {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  margin: 0;
+  padding: 0 12px 10px;
+}
+
+.model-call-list {
+  list-style: none;
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 0;
+}
+
+.model-call-list > li {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+}
+
+.model-call-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  justify-content: space-between;
+  overflow-wrap: anywhere;
+}
+
 .model-reasoning-panel {
   background: color-mix(in srgb, var(--surface-2) 55%, transparent);
   border: 1px solid var(--border);

@@ -1,5 +1,21 @@
 /* 工作台首页 · 研究问题区、示例、任务配置与底部操作行 */
 
+.home-page {
+  --glass-fill: 88%;
+  --glass-inner: 92%;
+}
+
+.app-shell:has(.home-page) .backdrop {
+  opacity: 0.55;
+}
+
+.home-page .home-section-motto,
+.home-page .home-config-motto,
+.home-page .home-actionbar-motto,
+.home-page .home-actionbar-status::before {
+  display: none;
+}
+
 .home-section-head {
   align-items: baseline;
   display: flex;
@@ -136,5 +152,12 @@
   .home-actionbar-motto,
   .home-page .home-actionbar-status::before {
     display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .home-page .home-actionbar {
+    gap: var(--space-3);
+    padding: 10px;
   }
 }

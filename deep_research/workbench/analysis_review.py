@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-STATISTICS_POLICY_VERSION = 3
+STATISTICS_POLICY_VERSION = 4
 STATISTICS_RULES = (
     "本任务是统计解释核验。数字在台账出现并不代表任意位置都能使用："
     "必须同时对应变量、分组、统计量、有效观测范围与检验方法。"
@@ -17,6 +17,7 @@ STATISTICS_RULES = (
     "具体组间差异须使用对应事后比较及其调整后的 p 值，不得用总体 p 值替代。"
     "方差齐性未确认时以 Welch/Games-Howell 为主；未拒绝正态性或方差齐性不是证明前提成立。"
     "正态性检验不验证观测独立，组内相关不能用总体相关代替；未显著不等于证明相同或等效。"
+    "相关的正负方向与所选总体/组内记录一致；相关系数和显著性均不能证明因果。"
 )
 
 
@@ -113,6 +114,7 @@ def statistic_scope_issues(markdown: str, ledger: dict[str, Any]) -> list[str]:
                 *bind_statistics(markdown, ledger)["issues"],
                 *posthoc_scope_issues(markdown, ledger),
                 *assumption_scope_issues(markdown, ledger),
+                *correlation_interpretation_issues(markdown, ledger),
             ]
         )
     )
@@ -386,4 +388,70 @@ def assumption_scope_issues(markdown: str, ledger: dict[str, Any]) -> list[str]:
             issues.append(
                 f"第 {line_number} 行：分布前提结论与已记录的 {kind} 检查不一致或不可确认"
             )
+    return list(dict.fromkeys(issues))
+
+
+def correlation_interpretation_issues(markdown: str, ledger: dict[str, Any]) -> list[str]:
+    """Narrow direction/significance checks, not a replacement for semantic review."""
+    from .statistic_bindings import _group_mentions, _variables
+
+    records = ledger.get("correlations", [])
+    variables = list(dict.fromkeys(name for row in records for name in (row["a"], row["b"])))
+    group_names = list(dict.fromkeys(str(row["group"]) for row in records if "group" in row))
+    issues = []
+    fenced = False
+    for number, line in enumerate(markdown.splitlines(), 1):
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if fenced or line.lstrip().startswith("|"):
+            continue
+        for clause in re.split(r"[。；;]", line):
+            if re.search(
+                r"不能|无法|不意味着|不代表|并非|不可|不支持|不足以|假设|如果|是否|尚待验证|[?？]",
+                clause,
+            ):
+                continue
+            selected = _variables(clause, variables)
+            causal = re.search(r"导致|引起|因果(?:影响|作用|关系)|causes?|causal", clause, re.I)
+            if causal and (len(selected) >= 2 or re.search(r"相关|correlat", clause, re.I)):
+                issues.append(
+                    f"第 {number} 行：当前统计台账未建立因果设计，相关或显著性不能支持因果结论"
+                )
+            sign = re.search(
+                r"正相关|负相关|positive correlation|negative correlation", clause, re.I
+            )
+            if not sign or len(selected) != 2:
+                continue
+            named_groups = _group_mentions(clause, group_names)
+            matching = [
+                row
+                for row in records
+                if {row["a"], row["b"]} == set(selected)
+                and (
+                    str(row.get("group")) in named_groups
+                    if named_groups
+                    else not row.get("group_column")
+                )
+            ]
+            if not matching:
+                issues.append(f"第 {number} 行：相关方向缺少对应总体或组内统计记录")
+                continue
+            positive = sign[0].casefold() in {"正相关", "positive correlation"}
+            for record in matching:
+                value = record.get("r")
+                if (
+                    not isinstance(value, (int, float))
+                    or (value > 0 if positive else value < 0) is False
+                ):
+                    issues.append(f"第 {number} 行：正负相关方向与指定范围的 Pearson 记录不一致")
+                    break
+            if re.search(r"显著|significant", clause, re.I) and not re.search(
+                r"不显著|非显著|not significant", clause, re.I
+            ):
+                if any(
+                    not isinstance(row.get("p_value"), (int, float)) or row["p_value"] >= 0.05
+                    for row in matching
+                ):
+                    issues.append(f"第 {number} 行：所述相关显著性与对应记录不一致或无法确认")
     return list(dict.fromkeys(issues))

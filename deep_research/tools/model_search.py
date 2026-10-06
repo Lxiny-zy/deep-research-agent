@@ -9,6 +9,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 
+from ..model_calls import ModelCall, ModelOperation
 from ..models import Source
 from ..observability import Tracer
 from ..provider_limits import provider_request
@@ -138,6 +139,7 @@ class ModelSearch(SearchTool):
                 reservation.output_tokens
             )
         sent = accounted = False
+        call: ModelCall | None = None
         try:
             async with (
                 asyncio.timeout(self._timeout),
@@ -146,15 +148,22 @@ class ModelSearch(SearchTool):
                 call_budget = getattr(self._tracer, "call_budget", None)
                 if call_budget is not None:
                     call_budget.reserve()
+                call = ModelCall(
+                    self._tracer, self.model,
+                    operation=ModelOperation(kind="search", role="researcher"),
+                )
                 sent = True
                 response = await self._client.post(self.endpoint, json=body)
                 response.raise_for_status()
                 payload = response.json()
                 if not isinstance(payload, dict):
                     raise ValueError("搜索模型响应必须是 JSON 对象")
-                self._record_usage(payload, reservation)
+                usage = self._record_usage(payload, reservation, call_id=call.id)
                 accounted = True
+                call.finish(usage=usage)
         except BaseException as exc:
+            if call is not None:
+                call.finish(error=exc)
             rejected = (
                 isinstance(exc, httpx.HTTPStatusError) and 400 <= exc.response.status_code < 500
             )
@@ -170,9 +179,9 @@ class ModelSearch(SearchTool):
             raise ValueError("搜索模型未返回结构化引用 URL；请使用支持联网引用的模型与协议")
         return await self.hydrate(sources)
 
-    def _record_usage(self, payload: dict, reservation: TokenReservation) -> None:
-        if self._tracer is None:
-            return
+    def _record_usage(
+        self, payload: dict, reservation: TokenReservation, *, call_id: str | None = None,
+    ) -> dict[str, int | None]:
         usage = payload.get("usage")
         usage = usage if isinstance(usage, dict) else {}
 
@@ -190,6 +199,11 @@ class ModelSearch(SearchTool):
         if total is None and input_tokens is not None and output_tokens is not None:
             total = input_tokens + output_tokens
         charged = total if total is not None else reservation.total
+        reported = {
+            "input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total,
+        }
+        if self._tracer is None:
+            return reported
         self._tracer.add_tokens(charged, estimated=total is None)
         self._tracer.emit(
             "RESEARCHER",
@@ -207,8 +221,10 @@ class ModelSearch(SearchTool):
                 "usage_known": total is not None,
                 "charged_tokens": charged,
                 "calls": 1,
+                "call_id": call_id,
             },
         )
+        return reported
 
     async def hydrate(self, sources: list[Source]) -> list[Source]:
         async def one(source: Source) -> Source:

@@ -85,7 +85,7 @@ async def test_explicit_resume_is_owned_idempotent_and_preserves_cancelled_paren
 
 
 @pytest.mark.parametrize(
-    "change", ["settings", "history", "scope", "source_snapshot", "corruption"]
+    "change", ["settings", "history", "scope", "source_snapshot", "context_policy", "corruption"]
 )
 async def test_resume_rejects_changed_context_before_any_model_build(
     reader_client, monkeypatch, change
@@ -102,6 +102,12 @@ async def test_resume_rejects_changed_context_before_any_model_build(
         )
     elif change == "scope":
         payload["sources"] = []
+    elif change == "context_policy":
+        from deep_research.workbench import qa_context
+
+        monkeypatch.setattr(
+            qa_context, "CONTEXT_POLICY_VERSION", qa_context.CONTEXT_POLICY_VERSION + 1,
+        )
     elif change == "source_snapshot":
         from deep_research.models import Source
         from deep_research.workbench import qa_api

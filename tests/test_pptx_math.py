@@ -106,7 +106,8 @@ def test_one_item_continuation_is_balanced_without_reordering_or_losing_text():
     pages = paginate_deck(deck)["slides"]
     assert len(pages) == 2 and all(len(page["bullets"]) >= 2 for page in pages)
     assert [text for page in pages for text in page["bullets"]] == bullets
-    assert all(page["notes"] == "备注" and page["citations"] == [1] for page in pages)
+    assert "".join(page["notes"] for page in pages) == "备注"
+    assert all(page["citations"] == [1] for page in pages)
 
 
 def test_math_rules_do_not_convert_literal_prices_or_code_and_handle_brackets():

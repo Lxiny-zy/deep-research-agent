@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { uploadAttachment } from '../api/client'
 import type { AttachmentPayload, AttachmentSummary } from '../types'
 import { DOCUMENT_LIMIT_LABEL, DOCUMENT_MAX_BYTES } from '../lib/uploadLimits'
+import type { PdfImageRegion } from '../lib/pdfRegions'
 
 export const MAX_ATTACHMENTS = 8
 export const MAX_ATTACHMENT_BYTES = DOCUMENT_MAX_BYTES
@@ -28,6 +29,8 @@ export interface AttachmentItem {
   error?: string
   summary?: AttachmentSummary
   payload?: AttachmentPayload
+  /** Local preview only: never serialized into the submitted attachment payload. */
+  file?: File
 }
 
 export function toBase64(file: File): Promise<string> {
@@ -120,6 +123,7 @@ export function useAttachments() {
           size: file.size,
           status: problem ? 'error' : 'queued',
           error: problem ?? undefined,
+          file: !problem && file.name.toLowerCase().endsWith('.pdf') ? file : undefined,
         }
         return { item, file, problem }
       })
@@ -149,11 +153,27 @@ export function useAttachments() {
   }, [])
 
   const ready = items.filter((item) => item.status === 'ready' && item.payload)
+  const setImageRegions = useCallback((key: string, regions: PdfImageRegion[]) => {
+    setItems((current) =>
+      current.map((item) =>
+        item.key === key && item.payload
+          ? {
+              ...item,
+              payload: {
+                ...item.payload,
+                image_regions: regions.map((region) => ({ ...region, bounds: [...region.bounds] })),
+              },
+            }
+          : item,
+      ),
+    )
+  }, [])
   return {
     items,
     add,
     remove,
     clear,
+    setImageRegions,
     payloads: ready.map((item) => item.payload as AttachmentPayload),
     uploading: items.some((item) => item.status === 'uploading' || item.status === 'queued'),
     full: items.length >= MAX_ATTACHMENTS,

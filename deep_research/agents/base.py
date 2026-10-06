@@ -108,8 +108,8 @@ class RunContext:
         if self._llm_resolver is not None:
             resolved = self._llm_resolver(agent_name)
             if resolved is not None:
-                return resolved
-        return self.llm
+                return resolved.for_role(agent_name) if isinstance(resolved, LLM) else resolved
+        return self.llm.for_role(agent_name) if isinstance(self.llm, LLM) else self.llm
 
     async def search_for(self, agent_name: str) -> SearchTool:
         resolved = None

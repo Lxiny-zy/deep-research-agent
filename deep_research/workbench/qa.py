@@ -169,6 +169,7 @@ def _contextual_query(
             max_chars - len(current),
             memory=memory,
             user_questions_only=True,
+            require_complete_constraints=True,
         )
         + current
     )
@@ -697,6 +698,7 @@ async def answer_question(
                     // 2,
                 ),
                 memory=memory,
+                require_complete_constraints=True,
             )
             user = f"{context}\n\n【用户问题】\n{question}"
             knowledge_chunks: list[str] = []
@@ -888,7 +890,10 @@ async def _compose_answer(
         material = material.model_copy(update={"findings": findings})
     url_to_idx = selection.url_to_idx
     dialogue = (
-        dialogue_context(history, min(8192, selection.dialogue_capacity_chars), memory=memory)
+        dialogue_context(
+            history, min(8192, selection.dialogue_capacity_chars), memory=memory,
+            require_complete_constraints=True,
+        )
         if not continuing
         else ""
     )

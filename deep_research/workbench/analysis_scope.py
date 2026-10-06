@@ -150,17 +150,25 @@ def validate_scope(
             raise DatasetError(f"配对列 {item.column} 的单位声明与原始列名不一致")
 
 
-def background_summary(frame: Any, columns: list[str]) -> list[dict[str, Any]]:
+def background_summary(
+    frame: Any, columns: list[str], *, private_columns: list[str] | None = None
+) -> list[dict[str, Any]]:
+    from .analysis_inputs import identifier_column
+
     return [
         {
             "column": c,
             "n": int(frame[c].count()),
             "missing": int(frame[c].isna().sum()),
             "distinct": int(frame[c].nunique(dropna=True)),
+            "levels_status": "withheld_identifiers"
+            if c in (private_columns or []) or identifier_column(c)
+            else "not_expanded" if frame[c].nunique(dropna=True) > 20 else "complete",
             "levels": [
                 {"label": str(label), "n": int(n)} for label, n in frame[c].value_counts().items()
             ]
             if frame[c].nunique(dropna=True) <= 20
+            and c not in (private_columns or []) and not identifier_column(c)
             else [],
         }
         for c in columns

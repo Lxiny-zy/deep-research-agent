@@ -172,6 +172,45 @@ async def test_interrupted_stream_trace_is_readable_but_not_writable_and_deletes
             assert await session.scalar(select(func.count()).select_from(QaStreamEventRow)) == 0
 
 
+async def test_model_call_journal_survives_failure_and_completed_records_survive_reconnect(stores):
+    store, jobs, other, cid = stores
+    rid = "request-model-calls"
+    call = {"call_id": "actual-call", "operation_id": "operation", "status": "started"}
+    await jobs.reserve(cid, rid, rid, {"query": "q"})
+    assert await jobs.claim(cid, rid, "owner", 90)
+    events = [
+        ("model_call", {"type": "model_call", "model_call": call}),
+        ("model_call", {"type": "model_call", "model_call": {**call, "status": "failed"}}),
+    ]
+    assert await jobs.append_events(cid, rid, "owner", events)
+    assert await jobs.update(cid, rid, "owner", error="interrupted")
+    replay = await other.events(cid, rid, 0)
+    assert [row[2]["model_call"]["status"] for row in replay] == ["started", "failed"]
+    assert not await other.append_events(cid, rid, "owner", events)
+
+    rid = "request-model-calls-complete"
+    await jobs.reserve(cid, rid, rid, {"query": "q"})
+    assert await jobs.claim(cid, rid, "owner", 90)
+    thought = {"tool": "model_call", "input": "", "observation": "", "call": call}
+    assert await jobs.update(cid, rid, "owner", result={"answer": "ok", "thoughts": [thought]})
+    assert (await other.get(cid, rid)).thoughts == [thought]
+
+
+def test_live_call_replay_is_one_latest_record_per_actual_request():
+    from deep_research.workbench.qa_jobs import LiveTurn
+
+    turn = LiveTurn()
+    call = {"call_id": "one", "status": "started"}
+    turn.emit("model_call", {"type": "model_call", "model_call": call})
+    turn.emit("model_call", {"type": "model_call", "model_call": {**call, "status": "failed"}})
+    queue = turn.attach()
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    replay = [payload["model_call"] for kind, payload in events if kind == "model_call"]
+    assert replay == [{**call, "status": "failed"}]
+
+
 async def test_another_api_instance_receives_live_reasoning_resets_and_text_before_completion(
     stores, monkeypatch
 ):

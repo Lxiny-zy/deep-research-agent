@@ -1,6 +1,8 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { ResearchEvent } from '../types'
 import { AppIcon } from './AppIcon'
+import ModelCallSummary from './ModelCallSummary'
+import { modelCalls } from '../lib/modelCalls'
 
 function ReasoningCall({
   model,
@@ -60,6 +62,9 @@ export default function ModelReasoningPanel({
 }) {
   const calls = new Map<string, { model: string; text: string }>()
   const completed = new Set<string>()
+  for (const call of modelCalls(events)) {
+    if (call.status !== 'started') completed.add(call.call_id)
+  }
   for (const event of events) {
     const data = event.data
     const usage = data?.llm_usage
@@ -78,8 +83,10 @@ export default function ModelReasoningPanel({
     call.text += data.reasoning_delta
     calls.set(data.call_id, call)
   }
-  if (!calls.size) return null
+  if (!calls.size) return <ModelCallSummary events={events} live={live} />
   return (
+    <>
+    <ModelCallSummary events={events} live={live} />
     <details className="model-reasoning-panel" open={live}>
       <summary className="model-reasoning-heading">
         <AppIcon name="chevron-right" size={14} className="reasoning-chevron" aria-hidden="true" />
@@ -104,5 +111,6 @@ export default function ModelReasoningPanel({
         ))}
       </div>
     </details>
+    </>
   )
 }

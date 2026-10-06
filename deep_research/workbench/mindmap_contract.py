@@ -20,13 +20,18 @@ from .support import (
 )
 
 RELATIONS = ("包含", "导致", "依赖", "对比", "改进", "前提", "应用于")
-MINDMAP_POLICY_VERSION = 3
+MINDMAP_POLICY_VERSION = 4
+MINDMAP_REVIEW_VERSION = 3
+LABEL_SOFT_LIMIT = 32
 FACTUAL_RELATIONS = frozenset(RELATIONS) - {"包含", "对比"}
 MAX_CROSS_LINKS = 8
 
 
 class MindmapNode(BaseModel):
     label: str = Field(min_length=1, max_length=240)
+    details: str = Field(
+        default="", max_length=2400, description="完整说明、必要条件与数字；与label共同核验"
+    )
     kind: Literal["concept", "claim", "question"] = "concept"
     # Keep legacy values readable so they can receive a review issue rather than a 500.
     relation: str = Field("包含", max_length=80, json_schema_extra={"enum": list(RELATIONS)})
@@ -42,12 +47,33 @@ class MindmapLink(BaseModel):
 
 
 class Mindmap(BaseModel):
+    schema_version: Literal[1, 2] = 1
     root: str = Field(min_length=1, max_length=240)
     branches: list[MindmapNode] = Field(default_factory=list)
     links: list[MindmapLink] = Field(
         default_factory=list,
         json_schema_extra={"maxItems": MAX_CROSS_LINKS},
     )
+
+
+def node_text(node: MindmapNode) -> str:
+    return node.label + ("\n" + node.details if node.details.strip() else "")
+
+
+def semantic_payload(model: Mindmap) -> dict[str, Any]:
+    """Keep old empty-detail records byte-compatible in the review fingerprint."""
+    payload = model.model_dump(mode="json")
+    if payload["schema_version"] == 1:
+        payload.pop("schema_version")
+
+    def walk(nodes: list[dict]) -> None:
+        for node in nodes:
+            if not node["details"]:
+                node.pop("details")
+            walk(node["children"])
+
+    walk(payload["branches"])
+    return payload
 
 
 def node_index(mindmap: Mindmap) -> dict[str, MindmapNode]:
@@ -68,6 +94,12 @@ def composition(mindmap: Mindmap) -> tuple[dict[str, Any], list[str]]:
     claims = sum(node.kind == "claim" for node in nodes)
     ratio = claims / len(nodes) if nodes else 0.0
     advice = []
+    long_labels = sum(len(node.label) > LABEL_SOFT_LIMIT for node in nodes)
+    if long_labels:
+        advice.append(
+            f"{long_labels} 个标签超过 {LABEL_SOFT_LIMIT} 字符软预算；"
+            "可将完整说明放入 details，但不能删去数字、条件或改变结论"
+        )
     if len(nodes) >= 10 and ratio > 0.7:
         advice.append(
             f"结论节点 {claims}/{len(nodes)}（{ratio:.0%}），建议用主题与关系组织必要结论，"
@@ -78,6 +110,8 @@ def composition(mindmap: Mindmap) -> tuple[dict[str, Any], list[str]]:
         "claims": claims,
         "claim_ratio": ratio,
         "cross_links": len(mindmap.links),
+        "long_labels": long_labels,
+        "detailed_nodes": sum(bool(node.details.strip()) for node in nodes),
     }, advice
 
 
@@ -89,31 +123,31 @@ def units(mindmap: Mindmap) -> list[SupportUnit]:
         output.append(
             SupportUnit(
                 path,
-                node.label,
-                context=f"{parent} —{node.relation}→ {node.label}",
+                node_text(node),
+                context=f"{parent} —{node.relation}→ {node_text(node)}",
                 kind=node.kind,
                 citations=node.citations,
             )
         )
         if node.relation != "包含":
-            source = nodes[path.rsplit(".", 1)[0]].label if "." in path else mindmap.root
+            source = node_text(nodes[path.rsplit(".", 1)[0]]) if "." in path else mindmap.root
             output.append(
                 SupportUnit(
                     "relation:" + path,
-                    f"{source} —{node.relation}→ {node.label}",
+                    f"{source} —{node.relation}→ {node_text(node)}",
                     context="有方向的父子关系，来源须支持这条关系本身，不能仅分别提及两个节点。",
                     kind="claim" if node.relation in FACTUAL_RELATIONS else "concept",
                     citations=node.citations,
                 )
             )
         for i, child in enumerate(node.children):
-            walk(child, f"{path}.{i}", f"{parent} / {node.label}")
+            walk(child, f"{path}.{i}", f"{parent} / {node_text(node)}")
 
     for i, branch in enumerate(mindmap.branches):
         walk(branch, str(i), mindmap.root)
     for i, link in enumerate(mindmap.links):
-        source = nodes[link.source].label if link.source in nodes else link.source
-        target = nodes[link.target].label if link.target in nodes else link.target
+        source = node_text(nodes[link.source]) if link.source in nodes else link.source
+        target = node_text(nodes[link.target]) if link.target in nodes else link.target
         output.append(
             SupportUnit(
                 f"link:{i}",
@@ -137,7 +171,10 @@ def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
         issues.append("导图没有内容分支，请围绕主题组织必要内容")
 
     def walk(nodes: list[MindmapNode], parent: str) -> None:
-        labels = [node.label.strip() for node in nodes]
+        labels = [
+            (node_text(node).strip(), node.kind, node.relation, tuple(sorted(node.citations)))
+            for node in nodes
+        ]
         if len(set(labels)) != len(labels):
             issues.append(f"「{parent}」下存在重复节点，请合并重复内容")
         for node in nodes:
@@ -199,9 +236,9 @@ def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
 def input_hash(raw: dict, citations: list[str], results: list[ResearchResult]) -> str:
     return digest(
         {
-            "version": MINDMAP_POLICY_VERSION,
+            "version": MINDMAP_REVIEW_VERSION,
             "policy": SUPPORT_POLICY_VERSION,
-            "mindmap": Mindmap.model_validate(raw).model_dump(mode="json"),
+            "mindmap": semantic_payload(Mindmap.model_validate(raw)),
             "citations": citations,
             "results": [r.material_data() for r in results],
         }

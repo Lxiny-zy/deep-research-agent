@@ -400,6 +400,40 @@ async def test_peer_workflow_fills_method_gap_before_writing_and_export_gate_che
     assert "7/10" in detail.report.markdown
     bundle = build_bundle(detail)
     assert next(g for g in bundle.gates if g.name == "review_coverage").status == "pass"
+    from deep_research.report.markdown import render_markdown
+    from deep_research.report.service import ReportService
+    from deep_research.workbench.presentation_notes import presentation_markdown
+
+    note = presentation_markdown(detail)
+    assert "评审覆盖与意见记录" in note
+    assert "阅读与核验记录" not in detail.report.markdown
+    source_file = next(file for file in bundle.files if file.format == "md")
+    assert note in source_file.data.decode("utf-8")
+    shown = await ReportService(repo).document(run_id)
+    assert "评审覆盖与意见记录" in render_markdown(shown)
+    if shown.final_validation.support_status == "pass":
+        assert shown.bibliography.binding_status == "bound"
+    import json
+
+    frozen_review = json.loads(
+        next(f.data for f in bundle.files if f.name.endswith("-review-items.json"))
+    )
+    assert frozen_review["reading_notes"] == note
+    assert frozen_review["review"]["items"] == (
+        scratch["workbench"]["extras"]["prose_review"]["peer_review"]["items"]
+    )
+    if any(f.format == "docx" for f in bundle.files):
+        import io
+
+        from docx import Document
+
+        word = Document(io.BytesIO(next(f.data for f in bundle.files if f.format == "docx")))
+        assert any("评审覆盖与意见记录" in paragraph.text for paragraph in word.paragraphs)
+    if any(f.format == "pdf" for f in bundle.files):
+        from deep_research.workbench.delivery.pdf import pdf_text
+
+        _, text = pdf_text(next(f.data for f in bundle.files if f.format == "pdf"))
+        assert "评审覆盖与意见记录" in text
     scratch["review_coverage"]["documents"][0]["sections"][0]["status"] = "fail"
     blocked = build_bundle(detail)
     assert next(g for g in blocked.gates if g.name == "review_coverage").status == "fail"

@@ -14,6 +14,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator, Callable, Iterable
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel
 
@@ -77,6 +78,10 @@ class Tracer:
         self.estimated_tokens = 0
         self.budget: TokenBudget | None = None
         self.call_budget: ModelCallBudget | None = None
+        self.trace_id = uuid4().hex
+        self.run_id: str | None = None
+        self.request_id: str | None = None
+        self.conversation_id: str | None = None
         self.cache_scope = ""
         self.events: list[Event] = []
         self._subscribers: list[Callable[[Event], None]] = []

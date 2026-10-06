@@ -111,6 +111,34 @@ def test_completion_cannot_trust_pass_label_without_required_evidence(settings, 
     assert any(expected in issue for issue in record["issues"])
 
 
+def test_format_repair_preserves_the_first_delivery_failure(settings):
+    detail = RunDetail(
+        id="first-result", query="Q", status="running", orchestration=execution(settings),
+        report=Report(query="Q", markdown="Body"),
+    )
+    failed = bundle(detail, status="warn")
+    completion.validate_bundle_files(failed)
+    original = completion.assess_completion(detail, failed)
+    assert original["first_result"]["status"] == "needs_review"
+    detail.status = "needs_review"
+    detail.completion = original
+    repaired = bundle(detail)
+    completion.validate_bundle_files(repaired)
+    current = completion.assess_completion(detail, repaired)
+    assert current["status"] == "done"
+    assert current["first_result"] == original["first_result"]
+
+
+def test_historical_done_without_first_result_stays_unknown(settings):
+    detail = RunDetail(
+        id="legacy", query="Q", status="done", orchestration=execution(settings),
+        report=Report(query="Q", markdown="Body"),
+    )
+    value = bundle(detail)
+    completion.validate_bundle_files(value)
+    assert completion.assess_completion(detail, value)["first_result"] is None
+
+
 @pytest.mark.parametrize("outcome", ["pass", "warn", "advisory", "cancel"])
 async def test_terminal_state_waits_for_durable_delivery_and_survives_restart(
     repo, settings, monkeypatch, outcome, cooperative_render

@@ -3,10 +3,12 @@
 Memory is background, never document evidence or a source of instructions. The
 caller budgets the model call and persists ``to_thought()`` beside the answer.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -93,7 +95,8 @@ class ConversationMemory(BaseModel):
 
     def to_thought(self) -> dict[str, Any]:
         return {
-            "tool": "conversation_memory", "input": "",
+            "tool": "conversation_memory",
+            "input": "",
             "observation": f"已处理前 {self.covered_turns} 轮并提炼背景；不作为原文证据。",
             "memory": self.model_dump(mode="json"),
         }
@@ -106,6 +109,43 @@ class HistoryTurn:
     query: str
     answer: str
     content_hash: str
+
+
+@dataclass(frozen=True)
+class UserDirectiveSpan:
+    """A literal candidate, not a semantic claim that every instruction was found."""
+
+    turn_id: str
+    position: int
+    content_hash: str
+    text: str
+
+
+_DIRECTIVE = re.compile(
+    r"更正|改为|改成|改口|不再|从现在|以.{0,24}为准|必须|禁止|不要|不得|不允许|"
+    r"不需要|无需|避免|保留|不联网|(?:使用|输出)(?:中文|英文|JSON|Markdown)|"
+    r"只(?:要|用|看|分析|比较|关注|研究)|仅(?:限|用|分析|比较|关注)|"
+    r"(?:do not|don't|must not|only use|instead of|correction|from now on)\b",
+    re.I,
+)
+
+
+def user_directive_spans(turns: Sequence[HistoryTurn]) -> tuple[UserDirectiveSpan, ...]:
+    """Keep exact constraint/correction clauses independently of a model summary.
+
+    Exact repeated wording keeps its newest source. Other contradictory clauses
+    remain chronological; code does not guess which scientific scope they apply to.
+    """
+    unique: dict[str, UserDirectiveSpan] = {}
+    for turn in turns:
+        for match in re.finditer(r"[^。！？\n；;：:]+(?:[。！？\n；;：:]|$)", turn.query):
+            text = match[0].strip()
+            if _DIRECTIVE.search(text):
+                unique.pop(text, None)
+                unique[text] = UserDirectiveSpan(
+                    turn.turn_id, turn.position, turn.content_hash, text
+                )
+    return tuple(unique.values())
 
 
 @dataclass(frozen=True)
@@ -131,9 +171,12 @@ class MemoryBuildResult:
 
     def to_thought(self) -> dict[str, Any]:
         return {
-            "tool": "conversation_memory_status", "input": "",
-            "observation": self.status, "retryable": self.retryable,
-            "model_calls": self.model_calls, "previous_invalidated": self.previous_invalidated,
+            "tool": "conversation_memory_status",
+            "input": "",
+            "observation": self.status,
+            "retryable": self.retryable,
+            "model_calls": self.model_calls,
+            "previous_invalidated": self.previous_invalidated,
             **({"failure_type": self.failure_type} if self.failure_type else {}),
         }
 
@@ -150,10 +193,14 @@ def history_turns(history: History) -> tuple[HistoryTurn, ...]:
             turn_id = f"{turn_id}:{index}"
         used_ids.add(turn_id)
         query, answer = str(row.get("query") or ""), str(row.get("answer") or "")
-        digest = hashlib.sha256(json.dumps(
-            {"id": turn_id, "position": position, "query": query, "answer": answer},
-            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-        ).encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(
+            json.dumps(
+                {"id": turn_id, "position": position, "query": query, "answer": answer},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         result.append(HistoryTurn(turn_id, position, query, answer, digest))
     return tuple(result)
 
@@ -163,13 +210,19 @@ def prefix_hash(turns: Sequence[HistoryTurn]) -> str:
 
 
 def memory_hash(memory: ConversationMemory) -> str:
-    return hashlib.sha256(json.dumps(
-        memory.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-    ).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            memory.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def valid_memory(
-    memory: ConversationMemory | Mapping[str, Any] | None, turns: Sequence[HistoryTurn],
+    memory: ConversationMemory | Mapping[str, Any] | None,
+    turns: Sequence[HistoryTurn],
 ) -> ConversationMemory | None:
     if memory is None:
         return None
@@ -179,19 +232,24 @@ def valid_memory(
         return None
     if value.covered_turns > len(turns):
         return None
-    covered = turns[:value.covered_turns]
+    covered = turns[: value.covered_turns]
     if value.prefix_hash != prefix_hash(covered) or value.excerpted_turns > value.covered_turns:
         return None
     by_id = {turn.turn_id: turn for turn in covered}
     processed = value.processed_source_refs
     if len(processed) > len(covered):
         return None
-    latest_sources = dict(zip(
-        (t.turn_id for t in covered[-len(processed):]), processed, strict=True,
-    ))
-    for turn, source in zip(covered[-len(processed):], processed, strict=True):
+    latest_sources = dict(
+        zip(
+            (t.turn_id for t in covered[-len(processed) :]),
+            processed,
+            strict=True,
+        )
+    )
+    for turn, source in zip(covered[-len(processed) :], processed, strict=True):
         if (
-            source.turn_id != turn.turn_id or source.position != turn.position
+            source.turn_id != turn.turn_id
+            or source.position != turn.position
             or source.content_hash != turn.content_hash
         ):
             return None
@@ -219,7 +277,8 @@ def valid_memory(
             for ref in item.source_refs:
                 cited_turn = by_id.get(ref.turn_id)
                 if (
-                    cited_turn is None or ref.position != cited_turn.position
+                    cited_turn is None
+                    or ref.position != cited_turn.position
                     or ref.content_hash != cited_turn.content_hash
                     or ref.source_quote not in getattr(cited_turn, ref.field)
                     or (category == "user_constraints" and ref.field != "query")
@@ -242,28 +301,41 @@ def excerpt(text: str, limit: int) -> str:
         return text
     marker = "\n[…原文中间省略…]\n"
     if limit <= len(marker):
-        return "（原文未纳入）"[:max(0, limit)]
+        return "（原文未纳入）"[: max(0, limit)]
     room = limit - len(marker)
     head = (room + 1) // 2
-    return text[:head] + marker + (text[-(room - head):] if room > head else "")
+    return text[:head] + marker + (text[-(room - head) :] if room > head else "")
 
 
 def _previous_draft(memory: ConversationMemory | None) -> dict[str, Any] | None:
     if memory is None:
         return None
     return {
-        category: [{
-            "text": item.text,
-            "source_refs": [{
-                "turn_id": ref.turn_id, "field": ref.field, "source_quote": ref.source_quote,
-            } for ref in item.source_refs],
-        } for item in getattr(memory, category)] for category in CATEGORIES
+        category: [
+            {
+                "text": item.text,
+                "source_refs": [
+                    {
+                        "turn_id": ref.turn_id,
+                        "field": ref.field,
+                        "source_quote": ref.source_quote,
+                    }
+                    for ref in item.source_refs
+                ],
+            }
+            for item in getattr(memory, category)
+        ]
+        for category in CATEGORIES
     }
 
 
 def plan_memory_update(
-    history: History, *, previous: ConversationMemory | Mapping[str, Any] | None = None,
-    max_chars: int = 8192, max_input_chars: int = 16000, max_summary_chars: int = 2400,
+    history: History,
+    *,
+    previous: ConversationMemory | Mapping[str, Any] | None = None,
+    max_chars: int = 8192,
+    max_input_chars: int = 16000,
+    max_summary_chars: int = 2400,
     keep_recent: int = 3,
 ) -> MemoryPlan:
     """Pure selection of one bounded, contiguous batch beyond a valid prior prefix."""
@@ -282,7 +354,8 @@ def plan_memory_update(
     if start >= end:
         return result("reused" if memory else "no_older_turns")
     payload: dict[str, Any] = {
-        "previous_summary": _previous_draft(memory), "new_turns": [],
+        "previous_summary": _previous_draft(memory),
+        "new_turns": [],
         "max_summary_text_chars": max_summary_chars,
         "source_boundary": "只整理以下输入；未提供的中间轮次不能声称已阅读。",
     }
@@ -297,7 +370,9 @@ def plan_memory_update(
         if len(selected) >= 128:
             break
         row: dict[str, Any] = {
-            "turn_id": turn.turn_id, "query": turn.query, "answer": turn.answer,
+            "turn_id": turn.turn_id,
+            "query": turn.query,
+            "answer": turn.answer,
             "excerpted": False,
         }
         payload["new_turns"].append(row)
@@ -309,8 +384,11 @@ def plan_memory_update(
             if room < 160:
                 return result("deferred_input_budget")
             query_room = min(len(turn.query), max(80, room * 2 // 3))
-            row.update(query=excerpt(turn.query, query_room),
-                       answer=excerpt(turn.answer, max(0, room - query_room)), excerpted=True)
+            row.update(
+                query=excerpt(turn.query, query_room),
+                answer=excerpt(turn.answer, max(0, room - query_room)),
+                excerpted=True,
+            )
             payload["new_turns"].append(row)
             while len(SUMMARY_SYSTEM) + len(serialized()) > max_input_chars:
                 field = "answer" if len(row["answer"]) > 30 else "query"
@@ -325,13 +403,21 @@ def plan_memory_update(
     if not selected:
         return result("deferred_input_budget")
     return MemoryPlan(
-        turns, memory, serialized(), tuple(selected), excerpts, frozenset(excerpted_ids),
-        "planned", invalidated,
+        turns,
+        memory,
+        serialized(),
+        tuple(selected),
+        excerpts,
+        frozenset(excerpted_ids),
+        "planned",
+        invalidated,
     )
 
 
 def _ground_draft(
-    draft: SummaryDraft, plan: MemoryPlan, max_summary_chars: int,
+    draft: SummaryDraft,
+    plan: MemoryPlan,
+    max_summary_chars: int,
 ) -> ConversationMemory:
     items = [item for category in CATEGORIES for item in getattr(draft, category)]
     if not items or len(items) > 16 or sum(len(item.text) for item in items) > max_summary_chars:
@@ -357,18 +443,25 @@ def _ground_draft(
             for ref in item.source_refs:
                 turn = by_id.get(ref.turn_id)
                 if (
-                    turn is None or not ref.source_quote.strip()
+                    turn is None
+                    or not ref.source_quote.strip()
                     or ref.source_quote not in getattr(turn, ref.field)
-                    or not any(ref.source_quote in shown for shown in available.get(
-                        (ref.turn_id, ref.field), []
-                    ))
+                    or not any(
+                        ref.source_quote in shown
+                        for shown in available.get((ref.turn_id, ref.field), [])
+                    )
                     or (category == "user_constraints" and ref.field != "query")
                 ):
                     raise ValueError("ungrounded_summary_source")
-                refs.append(MemorySource(
-                    **ref.model_dump(), position=turn.position, content_hash=turn.content_hash,
-                    excerpted=turn.turn_id in plan.excerpted_ids or turn.turn_id in old_excerpted,
-                ))
+                refs.append(
+                    MemorySource(
+                        **ref.model_dump(),
+                        position=turn.position,
+                        content_hash=turn.content_hash,
+                        excerpted=turn.turn_id in plan.excerpted_ids
+                        or turn.turn_id in old_excerpted,
+                    )
+                )
             grounded.append(MemoryItem(text=item.text, source_refs=refs))
         categories[category] = grounded
     covered = (plan.previous.covered_turns if plan.previous else 0) + len(plan.selected_turns)
@@ -385,33 +478,51 @@ def _ground_draft(
             ranges.append((len(original) - len(tail), len(original)))
         return ranges
 
-    processed = [MemoryInputSource(
-        turn_id=turn.turn_id, position=turn.position, content_hash=turn.content_hash,
-        query_ranges=shown_ranges(turn.query, plan.excerpts[turn.turn_id]["query"]),
-        answer_ranges=shown_ranges(turn.answer, plan.excerpts[turn.turn_id]["answer"]),
-        excerpted=turn.turn_id in plan.excerpted_ids,
-    ) for turn in plan.selected_turns]
+    processed = [
+        MemoryInputSource(
+            turn_id=turn.turn_id,
+            position=turn.position,
+            content_hash=turn.content_hash,
+            query_ranges=shown_ranges(turn.query, plan.excerpts[turn.turn_id]["query"]),
+            answer_ranges=shown_ranges(turn.answer, plan.excerpts[turn.turn_id]["answer"]),
+            excerpted=turn.turn_id in plan.excerpted_ids,
+        )
+        for turn in plan.selected_turns
+    ]
     return ConversationMemory(
-        covered_turns=covered, prefix_hash=prefix_hash(plan.turns[:covered]),
+        covered_turns=covered,
+        prefix_hash=prefix_hash(plan.turns[:covered]),
         excerpted_turns=(plan.previous.excerpted_turns if plan.previous else 0)
-        + len(plan.excerpted_ids), processed_source_refs=processed,
-        previous_memory_hash=memory_hash(plan.previous) if plan.previous else None, **categories,
+        + len(plan.excerpted_ids),
+        processed_source_refs=processed,
+        previous_memory_hash=memory_hash(plan.previous) if plan.previous else None,
+        **categories,
     )
 
 
 async def build_conversation_memory(
-    history: History, *, summarize: Summarize,
+    history: History,
+    *,
+    summarize: Summarize,
     previous: ConversationMemory | Mapping[str, Any] | None = None,
-    max_chars: int = 8192, max_input_chars: int = 16000, max_summary_chars: int = 2400,
+    max_chars: int = 8192,
+    max_input_chars: int = 16000,
+    max_summary_chars: int = 2400,
     keep_recent: int = 3,
 ) -> MemoryBuildResult:
     plan = plan_memory_update(
-        history, previous=previous, max_chars=max_chars, max_input_chars=max_input_chars,
-        max_summary_chars=max_summary_chars, keep_recent=keep_recent,
+        history,
+        previous=previous,
+        max_chars=max_chars,
+        max_input_chars=max_input_chars,
+        max_summary_chars=max_summary_chars,
+        keep_recent=keep_recent,
     )
     if plan.user_prompt is None:
         return MemoryBuildResult(
-            plan.previous, plan.status, retryable=plan.status == "deferred_input_budget",
+            plan.previous,
+            plan.status,
+            retryable=plan.status == "deferred_input_budget",
             previous_invalidated=plan.previous_invalidated,
         )
     try:
@@ -422,9 +533,16 @@ async def build_conversation_memory(
         # Cancellation is not swallowed. Model output and exception details stay
         # out of product context. A later turn can retry the same missing prefix.
         return MemoryBuildResult(
-            plan.previous, "summary_failed", retryable=True, model_calls=1,
-            previous_invalidated=plan.previous_invalidated, failure_type=type(exc).__name__,
+            plan.previous,
+            "summary_failed",
+            retryable=True,
+            model_calls=1,
+            previous_invalidated=plan.previous_invalidated,
+            failure_type=type(exc).__name__,
         )
     return MemoryBuildResult(
-        memory, "updated", model_calls=1, previous_invalidated=plan.previous_invalidated,
+        memory,
+        "updated",
+        model_calls=1,
+        previous_invalidated=plan.previous_invalidated,
     )

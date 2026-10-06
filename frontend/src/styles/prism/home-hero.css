@@ -1,4 +1,4 @@
-/* 工作台首页 · 杂志式标题区与任务标签页（光谱本体由背景画布绘制在标题区右侧） */
+/* 日常工作台保留品牌字样，把首屏空间留给问题与任务配置。 */
 
 .home-page .home-hero {
   align-items: start;
@@ -7,35 +7,31 @@
   border: 0;
   box-shadow: none;
   display: grid;
-  gap: var(--space-6);
-  grid-template-columns: minmax(0, 1fr) auto;
-  min-height: clamp(320px, 40vh, 440px);
+  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
   padding: 4px 0 0;
 }
 
 .home-hero-kicker,
-.home-hero-aside span {
-  color: var(--text-3);
-  display: block;
-  font-family: var(--font-display);
-  font-size: 11px;
-  letter-spacing: 0.42em;
-  line-height: 1.9;
-  text-transform: uppercase;
+.home-hero-aside {
+  display: none;
 }
 
 .home-hero-title {
   display: flex;
-  flex-direction: column;
-  margin: 26px 0 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.25em;
+  margin: 0;
 }
 
 .home-hero-word {
   font-family: var(--font-display);
-  font-size: clamp(58px, 7.4vw, 116px);
+  font-size: clamp(22px, 3.5vw, 44px);
   font-weight: 600;
   letter-spacing: -0.035em;
-  line-height: 0.86;
+  line-height: 1.1;
   text-transform: uppercase;
 }
 
@@ -67,38 +63,21 @@
 
 .home-hero-question {
   font-family: var(--font-serif);
-  font-size: clamp(26px, 2.6vw, 38px);
+  flex-basis: 100%;
+  font-size: clamp(18px, 2vw, 24px);
   font-weight: 700;
-  letter-spacing: 0.34em;
-  margin-top: 26px;
+  letter-spacing: 0.08em;
+  margin-top: 8px;
 }
 
 .home-page .home-hero-sub {
   color: var(--text-2);
   font-family: var(--font-serif);
   /* 白话说明句较长，字距收窄以免断成碎片；题句的疏朗留给上一行 */
-  letter-spacing: 0.08em;
-  margin: 14px 0 0;
-}
-
-.home-hero-aside {
-  display: flex;
-  flex-direction: column;
-  gap: 64px;
-  max-width: 11em;
-  padding-top: 64px;
-}
-
-.home-hero-aside span:last-child {
-  color: var(--primary-text);
+  letter-spacing: 0.02em;
+  margin: 10px 0 0;
 }
 
 .home-hero .home-draft {
   grid-column: 1 / -1;
-}
-
-@media (max-width: 900px) {
-  .home-hero-aside {
-    display: none;
-  }
 }

@@ -11,7 +11,8 @@ from .support import digest
 
 
 def bind_review(
-    catalog: Bibliography, reviewer: ProseReviewer | None, markdown: str, record: Any
+    catalog: Bibliography, reviewer: ProseReviewer | None, markdown: str, record: Any,
+    *, trusted_display_suffix: str | None = None,
 ) -> bool:
     catalog.occurrences = []
     catalog.binding_status = "unavailable"
@@ -23,9 +24,15 @@ def bind_review(
         catalog.binding_status = "invalid"
         return False
     checked_body = body_text(markdown)
-    if body_text(catalog.source_body) != checked_body:
-        catalog.binding_status = "invalid"
-        return False
+    displayed_body = body_text(catalog.source_body)
+    if displayed_body != checked_body:
+        if (
+            not trusted_display_suffix
+            or displayed_body != checked_body + trusted_display_suffix
+            or list(citation_runs(trusted_display_suffix))
+        ):
+            catalog.binding_status = "invalid"
+            return False
     checked_runs = list(citation_runs(checked_body))
     display_runs = list(citation_runs(catalog.source_body))
     if [re.findall(r"\d+", run[0]) for run in checked_runs] != [

@@ -1,0 +1,103 @@
+.reading-map > summary {
+  cursor: pointer;
+}
+.reading-map-body {
+  margin-top: 16px;
+  min-width: 0;
+}
+.reading-map.embedded {
+  padding: 16px;
+}
+.reading-map-review,
+.reading-peer-summary {
+  border-left: 3px solid var(--border-strong);
+  padding: 10px 12px;
+  background: var(--surface-2);
+}
+.reading-map-units,
+.reading-focus ul {
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+.reading-unit-button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.reading-unit-button[aria-pressed='true'] {
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
+}
+.reading-unit-button small,
+.reading-anchor-context {
+  color: var(--text-2);
+}
+.reading-unit-detail {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+.reading-anchor {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+.reading-anchor blockquote {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-left: 3px solid var(--primary);
+  white-space: pre-wrap;
+}
+.reading-map p,
+.reading-map span,
+.reading-map small,
+.reading-map blockquote {
+  overflow-wrap: anywhere;
+}
+.reading-focus li + li {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.reader-tabs:has(.reader-tab-map) {
+  flex-wrap: wrap;
+}
+.reading-measurement {
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+}
+.reading-measurement dl > div {
+  display: grid;
+  grid-template-columns: 6em minmax(0, 1fr);
+  gap: 8px;
+}
+.reading-measurement dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.reading-fulltext {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.reading-fulltext-passage {
+  padding: 12px;
+  border-left: 3px solid var(--warning-text);
+  background: var(--surface-2);
+}
+.reading-fulltext-passage blockquote {
+  margin: 8px 0;
+  white-space: pre-wrap;
+}

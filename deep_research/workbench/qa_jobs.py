@@ -71,6 +71,7 @@ class LiveTurn:
         self.listeners: set[asyncio.Queue] = set()
         self.draft = ""
         self.reasoning: dict[str, dict[str, Any]] = {}
+        self.model_calls: dict[str, dict[str, Any]] = {}
         self.status = "正在读取本轮任务状态…"
         self.task: asyncio.Task | None = None
         self.work: asyncio.Task | None = None
@@ -90,6 +91,10 @@ class LiveTurn:
             }
         elif kind == "status":
             self.status = str(payload.get("message", ""))
+        elif kind == "model_call":
+            call = payload.get("model_call", {})
+            if isinstance(call, dict) and isinstance(call.get("call_id"), str):
+                self.model_calls[call["call_id"]] = payload
         for queue in self.listeners:
             if queue.qsize() >= MAX_QUEUED_EVENTS:
                 # A slow browser gets the current state, not an unbounded queue
@@ -101,12 +106,14 @@ class LiveTurn:
                 queue.put_nowait((kind, payload))
 
     def _replay(self, queue: asyncio.Queue, *, force: bool = False) -> None:
-        if force or self.draft or self.reasoning:
+        if force or self.draft or self.reasoning or self.model_calls:
             queue.put_nowait(
                 ("reset", {"type": "reset", "replay": True, "message": "恢复已有生成内容"})
             )
             for data in self.reasoning.values():
                 queue.put_nowait(("reasoning", data))
+            for data in self.model_calls.values():
+                queue.put_nowait(("model_call", data))
             if self.draft:
                 queue.put_nowait(("delta", {"delta": self.draft}))
         queue.put_nowait(("status", {"type": "status", "message": self.status}))

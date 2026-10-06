@@ -1,0 +1,78 @@
+.acceptance-panel > summary {
+  cursor: pointer;
+}
+.acceptance-body {
+  margin-top: var(--space-4);
+}
+.acceptance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.acceptance-body fieldset,
+.acceptance-body label,
+.acceptance-body section {
+  min-width: 0;
+}
+.acceptance-body .textarea {
+  min-height: 88px;
+}
+.acceptance-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.acceptance-issue-editor {
+  border: 1px solid var(--border);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+}
+.acceptance-issue-editor > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.acceptance-issue-editor > .stack {
+  margin-top: var(--space-3);
+}
+.acceptance-excerpt {
+  margin: 0;
+  padding: var(--space-3);
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.acceptance-history {
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-2);
+}
+.acceptance-history .btn {
+  height: auto;
+  white-space: normal;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  text-align: left;
+}
+.acceptance-issues,
+.acceptance-engineering-notes {
+  padding-left: 20px;
+}
+.acceptance-issues li + li {
+  margin-top: var(--space-3);
+}
+.acceptance-body p,
+.acceptance-body li,
+.acceptance-body code {
+  overflow-wrap: anywhere;
+}
+.acceptance-saved {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-4);
+}
+@media (max-width: 760px) {
+  .acceptance-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

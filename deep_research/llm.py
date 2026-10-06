@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import re
@@ -21,7 +22,8 @@ from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel
 
 from .config import Settings
-from .context_budget import ContextBudget, TokenEstimator, estimate_tokens, prompt_tokens
+from .context_budget import ContextBudget, TokenEstimator, estimate_tokens, observe_context_usage
+from .model_calls import ModelCall, ModelOperation, current_operation, model_operation
 from .observability import Tracer
 from .prompting import prompt_messages, structured_system_prompt
 from .provider_limits import provider_request
@@ -77,6 +79,8 @@ class LLM:
         self.settings = settings
         self.tracer = tracer
         self.model = settings.llm_model
+        self._transport_capabilities = {"prefix_messages": True}
+        self._context_usage_calibration: dict[str, float] = {}
         if self.tracer.budget is None:
             self.tracer.budget = TokenBudget()
         self.client = AsyncOpenAI(
@@ -139,7 +143,21 @@ class LLM:
     parameter_mode: str = "temperature"
     reasoning_effort: str = "medium"
     context_window_tokens: int | None = None
-    _prefix_messages_supported: bool = True
+    _call_role: str | None = None
+
+    def for_role(self, role: str) -> LLM:
+        """Bind attribution without mutating a model shared by concurrent roles."""
+        bound = copy.copy(self)
+        bound._call_role = role
+        return bound
+
+    @property
+    def _prefix_messages_supported(self) -> bool:
+        return self._transport_capabilities["prefix_messages"]
+
+    @_prefix_messages_supported.setter
+    def _prefix_messages_supported(self, supported: bool) -> None:
+        self._transport_capabilities["prefix_messages"] = supported
 
     @property
     def input_capacity_chars(self) -> int:
@@ -167,18 +185,20 @@ class LLM:
         await self.client.close()
 
     async def complete(self, system: str, user: str, *, temperature: float = 0.3) -> str:
-        for attempt in range(3):
-            try:
-                return await self._complete_once(system, user, temperature)
-            except Exception as exc:
-                if not _retryable(exc) or attempt == 2:
-                    raise
-                await asyncio.sleep(min(2**attempt, 8))
+        with model_operation("complete", role=self._call_role) as operation:
+            for attempt in range(3):
+                try:
+                    return await self._complete_once(system, user, temperature)
+                except Exception as exc:
+                    if not _retryable(exc) or attempt == 2:
+                        raise
+                    operation.retry_reason = "transport_retry"
+                    await asyncio.sleep(min(2**attempt, 8))
         raise AssertionError("unreachable")
 
     def _reserve(self, system: str, user: str) -> TokenReservation:
         budget = ContextBudget.from_model(self, self.settings.llm_max_input_chars)
-        estimated = prompt_tokens(system, user)
+        estimated = budget.estimated_prompt(system, user)
         if budget.enforced and not budget.fits(system, user):
             raise InputCapacityError(
                 f"模型输入超过已配置的上下文容量（保守估算 {estimated} tokens，"
@@ -235,19 +255,24 @@ class LLM:
         options: VerificationGenerationOptions = (
             {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
         )
-        for attempt in range(attempts):
-            try:
-                raw = await self._complete_once(sys, user, temperature, **options)
-            except Exception as exc:
-                if _retryable(exc) and attempt < attempts - 1:
-                    await asyncio.sleep(min(2**attempt, 8))
-                    continue
-                raise  # 重试预算耗尽：原样抛出网络层异常，便于上层区分
-            try:
-                return schema.model_validate(extract_json(raw))
-            except Exception as e:  # JSON 非法或字段缺失 → 把错误回灌再试
-                err = e
-                user = user + f"\n\n（上次输出无法解析：{e}；请只输出合法 JSON）"
+        with model_operation(
+            "structured", role=self._call_role, schema=schema.__name__,
+        ) as operation:
+            for attempt in range(attempts):
+                try:
+                    raw = await self._complete_once(sys, user, temperature, **options)
+                except Exception as exc:
+                    if _retryable(exc) and attempt < attempts - 1:
+                        operation.retry_reason = "transport_retry"
+                        await asyncio.sleep(min(2**attempt, 8))
+                        continue
+                    raise  # 重试预算耗尽：原样抛出网络层异常，便于上层区分
+                try:
+                    return schema.model_validate(extract_json(raw))
+                except Exception as e:  # JSON 非法或字段缺失 → 把错误回灌再试
+                    err = e
+                    operation.retry_reason = "schema_retry"
+                    user = user + f"\n\n（上次输出无法解析：{e}；请只输出合法 JSON）"
         raise ValueError(f"结构化输出解析失败：{err}")
 
     async def stream(
@@ -255,6 +280,9 @@ class LLM:
     ) -> AsyncIterator[str]:
         # 建连阶段的瞬时故障（限流、网关超时）重试最多 3 次；一旦已经产出过增量就
         # 不再重试——重发会把半截正文重复拼进交付物，这时把异常交给调用方处理。
+        # Do not hold a ContextVar token across yields to a caller. Multiple
+        # streams may be consumed or closed in a different order in one task.
+        operation = ModelOperation(kind="stream", role=self._call_role)
         for attempt in range(3):
             emitted = False
             try:
@@ -263,7 +291,9 @@ class LLM:
                         self.settings.llm_base_url or "https://api.openai.com",
                         self.settings.llm_api_key,
                     ),
-                    aclosing(self._stream_once(system, user, temperature=temperature)) as stream,
+                    aclosing(self._stream_once(
+                        system, user, temperature=temperature, operation=operation,
+                    )) as stream,
                 ):
                     async for delta in stream:
                         emitted = True
@@ -272,11 +302,13 @@ class LLM:
             except Exception as exc:
                 if emitted or not _retryable(exc) or attempt == 2:
                     raise
+                operation.retry_reason = "transport_retry"
                 await asyncio.sleep(min(2**attempt, 8))
 
     async def _stream_once(
         self, system: str, user: str, *, temperature: float = 0.4,
         reasoning_effort: str | None = None,
+        operation: ModelOperation | None = None,
     ) -> AsyncGenerator[str, None]:
         """流式补全：逐块产出文本增量。
 
@@ -285,6 +317,7 @@ class LLM:
         token 供 UI 实时展示；若端点最终返回 usage，则自动用精确值校准。
         """
         reservation = self._reserve(system, user)
+        operation = operation or current_operation()
         assert self.tracer.budget is not None
         affinity = self._cache_affinity()
         request = {
@@ -300,6 +333,7 @@ class LLM:
         }
         resp = None
         usage_report: dict[str, int | None] | None = None
+        call: ModelCall | None = None
         call_id = uuid4().hex
         reasoning_parts: list[str] = []
         last_reasoning_emit = 0.0
@@ -325,6 +359,7 @@ class LLM:
         output_started = False
         try:
             include_usage = True
+            protocol_retry: str | None = None
             while True:
                 try:
                     stream_options: dict[str, Any] = (
@@ -333,16 +368,23 @@ class LLM:
                     call_budget = getattr(self.tracer, "call_budget", None)
                     if call_budget is not None:
                         call_budget.reserve()
+                    call = ModelCall(
+                        self.tracer, self.model, operation=operation, retry_reason=protocol_retry,
+                    )
+                    call_id = call.id
                     resp = await self.client.chat.completions.create(
                         **{**request, **stream_options},
                     )
                     break
                 except APIStatusError as exc:
+                    if call is not None:
+                        call.finish(error=exc)
                     message = str(exc).lower()
                     if exc.status_code not in {400, 422}:
                         raise
                     if include_usage and "stream_options" in message:
                         include_usage = False
+                        protocol_retry = "stream_options_unsupported"
                     elif (
                         len(request["messages"]) > 2
                         and "user" in message
@@ -354,10 +396,11 @@ class LLM:
                         # back only on an explicit pre-generation schema error.
                         self._prefix_messages_supported = False
                         request["messages"] = prompt_messages(system, user, split=False)
+                        protocol_retry = "message_roles_unsupported"
                     else:
                         raise
             usage_report = _header_usage(resp)
-            input_estimate = prompt_tokens(system, user)
+            input_estimate = reservation.input_tokens
             self.tracer.add_tokens(input_estimate, estimated=True)
             estimated_added = input_estimate
             accounted_output = exact_usage = 0
@@ -399,6 +442,7 @@ class LLM:
             if exact_usage > 0:
                 self.tracer.reconcile_tokens(estimated_added, exact_usage)
             if usage_report is not None:
+                observe_context_usage(self, system, user, usage_report.get("input_tokens"))
                 inputs = usage_report.get("input_tokens")
                 cached = usage_report.get("cached_input_tokens")
                 if inputs is not None and cached is not None and cached > inputs:
@@ -426,7 +470,11 @@ class LLM:
                 and (usage_report.get("output_tokens") or 0) >= reservation.output_tokens
             ):
                 raise ModelOutputTruncated(self.settings.llm_max_output_tokens)
+            if call is not None:
+                call.finish(usage=usage_report, finish_reason=finish_reason)
         except BaseException as exc:
+            if call is not None:
+                call.finish(error=exc, usage=usage_report, finish_reason=finish_reason)
             if isinstance(exc, (asyncio.CancelledError, GeneratorExit)) or _uncertain_usage(exc):
                 self.tracer.add_tokens(max(0, reservation.total - estimated_added), estimated=True)
             if output_started and _retryable(exc):
@@ -492,6 +540,7 @@ def _usage_details(resp: object) -> dict[str, int | None] | None:
     if inputs is not None and cached is not None and cached > inputs:
         cached = None
     return {
+        "total_tokens": count(value(usage, "total_tokens")),
         "input_tokens": inputs,
         "output_tokens": outputs,
         "cached_input_tokens": cached,

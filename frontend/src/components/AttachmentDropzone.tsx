@@ -1,8 +1,11 @@
-import { useId, useState, type DragEvent } from 'react'
+import { lazy, Suspense, useId, useState, type DragEvent } from 'react'
 import { AppIcon, type AppIconName } from './AppIcon'
 import { humanSize } from '../lib/workbench'
 import { DOCUMENT_LIMIT_LABEL } from '../lib/uploadLimits'
 import { ACCEPTED_EXTENSIONS, MAX_ATTACHMENTS, type AttachmentItem } from '../hooks/useAttachments'
+import { imageRegions, type PdfImageRegion } from '../lib/pdfRegions'
+
+const PdfRegionPicker = lazy(() => import('./PdfRegionPicker'))
 
 interface Props {
   items: AttachmentItem[]
@@ -11,6 +14,7 @@ interface Props {
   disabled?: boolean
   full?: boolean
   error?: string | null
+  onImageRegionsChange?: (key: string, regions: PdfImageRegion[]) => void
 }
 
 const KIND_ICON: Record<string, AppIconName> = {
@@ -41,9 +45,17 @@ export default function AttachmentDropzone({
   disabled,
   full,
   error,
+  onImageRegionsChange,
 }: Props) {
   const inputId = useId()
   const [dragging, setDragging] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
+  const editedItem = items.find((item) => item.key === editing)
+  const remainingRegions =
+    4 -
+    items
+      .filter((item) => item.key !== editing)
+      .reduce((count, item) => count + imageRegions(item.payload?.image_regions).length, 0)
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
@@ -139,9 +151,39 @@ export default function AttachmentDropzone({
               >
                 <AppIcon name="x" size={14} aria-hidden="true" />
               </button>
+              {onImageRegionsChange &&
+                item.status === 'ready' &&
+                item.file &&
+                item.summary?.kind === 'pdf' && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={disabled}
+                    onClick={() => setEditing(item.key)}
+                  >
+                    选择图像区域
+                    {imageRegions(item.payload?.image_regions).length
+                      ? `（${imageRegions(item.payload?.image_regions).length}）`
+                      : ''}
+                  </button>
+                )}
             </li>
           ))}
         </ul>
+      )}
+      {editedItem?.file && onImageRegionsChange && (
+        <Suspense fallback={<p role="status">正在加载图像区域选择器…</p>}>
+          <PdfRegionPicker
+            file={editedItem.file}
+            initialRegions={imageRegions(editedItem.payload?.image_regions)}
+            maxRegions={Math.max(0, remainingRegions)}
+            onClose={() => setEditing(null)}
+            onApply={(regions) => {
+              onImageRegionsChange(editedItem.key, regions)
+              setEditing(null)
+            }}
+          />
+        </Suspense>
       )}
     </div>
   )

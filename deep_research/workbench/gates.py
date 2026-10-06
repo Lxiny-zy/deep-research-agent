@@ -301,24 +301,21 @@ def consistency_gate(markdown: str, files: dict[str, bytes]) -> GateResult:
     return GateResult("consistency", "fail" if issues else "pass", issues, metrics)
 
 
-def slides_gate(pptx: bytes, deck: dict[str, Any]) -> GateResult:
+def slides_gate(pptx: bytes, deck: dict[str, Any], markdown: str | None = None) -> GateResult:
     from .delivery.pptx import fit_report, pptx_stats
+    from .delivery.pptx_visuals import visual_consistency
+    from .slide_content import slide_quality
 
     stats = pptx_stats(pptx)
     problems = fit_report(deck)
-    issues = []
+    issues, timing = slide_quality(deck)
     if stats["with_notes"] < stats["slides"]:
         issues.append(f"{stats['slides'] - stats['with_notes']} 页缺少演讲备注")
-    for problem in problems:
-        if problem.get("empty"):
-            issues.append(f"第 {problem['slide']} 页没有要点")
-        else:
-            issues.append(
-                f"第 {problem['slide']} 页约 {problem['lines']} 行 / "
-                f"{problem['bullets']} 条要点，可能溢出"
-            )
+    inconsistent = visual_consistency(pptx, deck, markdown)
+    issues.extend(inconsistent)
     return GateResult(
-        "slides", "warn" if issues else "pass", issues, {**stats, "overflow": len(problems)}
+        "slides", "fail" if inconsistent else "warn" if issues else "pass", issues,
+        {**stats, **timing, "overflow": len(problems), "visual_render_review": "pending"},
     )
 
 

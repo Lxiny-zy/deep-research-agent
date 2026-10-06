@@ -1,0 +1,104 @@
+.pdf-region-backdrop {
+  z-index: 120;
+  padding: 16px;
+}
+.pdf-region-dialog.modal {
+  width: min(1080px, 100%);
+  max-width: 1080px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 20px;
+}
+.pdf-region-dialog > .hint {
+  margin: 12px 0;
+}
+.pdf-region-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 320px);
+  gap: 20px;
+  align-items: start;
+}
+.pdf-region-preview {
+  min-width: 0;
+  overflow: hidden;
+}
+.pdf-region-toolbar {
+  margin-bottom: 12px;
+}
+.pdf-region-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pdf-region-toolbar .input {
+  width: 72px;
+}
+.pdf-region-surface {
+  position: relative;
+  max-width: 100%;
+  background: white;
+  box-shadow: 0 0 0 1px var(--border);
+  touch-action: pan-y;
+}
+.pdf-region-surface.is-drawing {
+  cursor: crosshair;
+  touch-action: none;
+}
+.pdf-region-surface canvas {
+  display: block;
+  max-width: 100%;
+}
+.pdf-region-box {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid var(--primary);
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+.pdf-region-box.is-saved {
+  border-color: var(--success-text);
+  background: color-mix(in srgb, var(--success-text) 10%, transparent);
+}
+.pdf-region-box > span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: var(--surface-solid);
+  color: var(--text);
+  padding: 2px 5px;
+  font-size: 12px;
+}
+.pdf-region-coordinates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.pdf-region-list {
+  padding-left: 20px;
+  margin: 0;
+}
+.pdf-region-list li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.pdf-region-controls {
+  min-width: 0;
+}
+.pdf-region-context {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}
+.attach-item:has(.btn-secondary) {
+  flex-wrap: wrap;
+}
+@media (max-width: 760px) {
+  .pdf-region-dialog.modal {
+    padding: 12px;
+  }
+  .pdf-region-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -190,6 +190,8 @@ async def repair_paragraphs(
     needed: dict[bool, set[int]] = {}
     shapes = {}
     for unit in targets:
+        from .fulltext_review import located_passages
+
         shape = _shape(unit, unit.text)
         if shape is None:
             return None
@@ -227,6 +229,10 @@ async def repair_paragraphs(
                 "context": unit.context,
                 "problem": "\n".join(problems[unit.id]),
                 "structure": shape[0],
+                "located_fulltext_passages": located_passages(
+                    unit, decisions.get(unit.id, {}).get("fulltext_review"),
+                    reviewer.reviewer.fulltext_corpus,
+                ),
                 **(
                     {"evidence_diagnostic": decisions[unit.id]["alignment_review"]}
                     if decisions.get(unit.id, {}).get("alignment_review")
@@ -246,6 +252,13 @@ async def repair_paragraphs(
             {"query": reviewer.query, "paragraphs": group}, ensure_ascii=False
         )
         rules = _SYSTEM
+        if any(part.get("located_fulltext_passages") for part in group):
+            rules += (
+                "located_fulltext_passages 是已完成的全文回查所定位的互补原文与反例，"
+                "保留了来源哈希和位置；据此撤回或修正被原文反驳的缺失判断。"
+                "它们不是可冒用的已有 evidence_id，不自动批准新断言；"
+                "新写的事实仍必须使用已有有效证据映射重新核验，不能把一个片段扩大为全文或领域结论。"
+            )
         if any(part.get("evidence_diagnostic") for part in group):
             rules += (
                 "evidence_diagnostic 保留上次实际选择的摘录编号、未匹配专名/数值及引用范围。"

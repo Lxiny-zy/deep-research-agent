@@ -1281,7 +1281,7 @@ async function askQuestionStream(
             flushDeltas()
             return JSON.parse(data) as QaMessage
           }
-          if (event && ['reasoning', 'usage', 'status', 'cache', 'reset'].includes(event) && data) {
+          if (event && ['reasoning', 'usage', 'status', 'cache', 'reset', 'model_call'].includes(event) && data) {
             const payload = JSON.parse(data) as Record<string, unknown>
             if (payload && typeof payload === 'object') {
               if (event === 'reset') flushDeltas()

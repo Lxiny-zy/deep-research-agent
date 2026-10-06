@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import replace
+from functools import partial
 from types import SimpleNamespace
 from typing import Any
 
@@ -138,12 +139,16 @@ def render_bundle(
         return render_pdf(body, title=title, meta=context["meta"], images=images)
 
     def deck() -> dict:
-        from .delivery.pptx import paginate_deck
-
         value = deepcopy(
             extras.get("deck")
             or _deck_from_markdown(context.get("canonical_markdown", markdown), title)
         )
+        for spec in value.get("slides", []):
+            visual = spec.get("visual_data")
+            if visual and visual["kind"] == "source_image":
+                if not visual.get("sha256"):
+                    raise ValueError("原文图页缺少冻结图片哈希")
+                visual["kind"] = "image"
         if bibliography:
             for spec in value.get("slides", []):
                 for key in ("title", "notes"):
@@ -156,7 +161,73 @@ def render_bundle(
                 spec["citations"] = list(
                     dict.fromkeys(document_by_location.get(i, i) for i in spec.get("citations", []))
                 )
-        return paginate_deck(value)
+                visual = spec.get("visual_data")
+                if visual and visual["kind"] != "image":
+                    visual["headers"] = [
+                        project_citations(x, bibliography, links=False) for x in visual["headers"]
+                    ]
+                    visual["rows"] = [
+                        [project_citations(x, bibliography, links=False) for x in row]
+                        for row in visual["rows"]
+                    ]
+                    visual["markdown"] = project_citations(
+                        visual["markdown"], bibliography, links=False
+                    )
+                    spec["citations"] = sorted(set(spec["citations"]) | {
+                        document_by_location.get(i, i) for i in visual["citations"]
+                    })
+        # Only already admitted, frozen assets enter PPTX. No URL fetches or
+        # model-authored image paths are used by the renderer.
+        import hashlib
+
+        from .delivery.markdown import parse_blocks
+
+        for index, block in enumerate(parse_blocks(body)):
+            if block.kind != "image":
+                continue
+            asset = block.src.removeprefix("figures/")
+            if any(
+                (spec.get("visual_data") or {}).get("asset") == asset
+                for spec in value.get("slides", [])
+            ):
+                continue
+            if asset not in images:
+                raise ValueError("幻灯片引用的图片未在冻结交付中登记")
+            # The current source pipeline admits a checked concept image. Other
+            # original paper bitmaps need their own bound asset record first.
+            if asset != "fig_concept.png" or not any(
+                gate.name == "figure_evidence" and gate.status == "pass" for gate in gates
+            ):
+                raise ValueError("图片缺少与当前素材绑定的依据登记")
+
+            def image_citations(item: Any) -> set[int]:
+                found: set[int] = set()
+                if isinstance(item, dict):
+                    found.update(
+                        i for i in item.get("citations", [])
+                        if isinstance(i, int) and not isinstance(i, bool)
+                    )
+                    for child in item.values():
+                        found.update(image_citations(child))
+                elif isinstance(item, list):
+                    for child in item:
+                        found.update(image_citations(child))
+                return found
+
+            used = sorted({
+                document_by_location.get(i, i)
+                for i in image_citations(extras.get("concept_figure"))
+            })
+            if not used:
+                raise ValueError("幻灯片图片缺少冻结引用")
+            caption = block.text or "配套图示"
+            value["slides"].append({
+                "title": "配套图示", "bullets": [], "notes": caption, "citations": used,
+                "visual_data": {"kind": "image", "id": f"asset-{index}", "asset": asset,
+                                "sha256": hashlib.sha256(images[asset]).hexdigest(),
+                                "caption": caption, "citations": used},
+            })
+        return value
 
     def pptx() -> bytes:
         from .delivery.pptx import render_pptx
@@ -166,6 +237,7 @@ def render_bundle(
             citations=[entry.reference for entry in cited_references(bibliography)]
             if bibliography
             else citations,
+            images=images,
         )
 
     def mindmap() -> dict:
@@ -176,6 +248,7 @@ def render_bundle(
         }
         value = {
             **extras["mindmap"],
+            "node_review": extras.get("node_review") or {},
             "sources": [
                 {
                     "index": i,
@@ -218,10 +291,18 @@ def render_bundle(
 
         return render_mindmap_html(mindmap(), title=title).encode()
 
-    def map_png() -> bytes:
-        from .delivery.mindmap import render_mindmap_png
+    overview_assets: list[tuple[str, bytes]] | None = None
 
-        return render_mindmap_png(mindmap())
+    def map_overviews() -> list[tuple[str, bytes]]:
+        nonlocal overview_assets
+        from .mindmap_delivery import overview_pages
+
+        if overview_assets is None:
+            overview_assets = list(overview_pages(mindmap()))
+        return overview_assets
+
+    def map_png() -> bytes:
+        return map_overviews()[0][1]
 
     for fmt, suffix, label, role, build in (
         ("html", ".html", "阅读版", "reading", html),
@@ -232,8 +313,46 @@ def render_bundle(
         if fmt in wants:
             render(fmt, suffix, f"{title}（{label}）", role, build)
     if "mindmap" in wants and extras.get("mindmap"):
+        from .mindmap_delivery import (
+            MAX_PNG_PAGES,
+            MindmapImageLimit,
+            branch_png_pages,
+            delivery_index,
+        )
+
         render("html", "-mindmap.html", f"{title}（交互导图）", "reading", map_html)
-        render("png", "-mindmap.png", f"{title}（导图图片）", "figure", map_png)
+        render("png", "-mindmap.png", f"{title}（一级分支总览）", "figure", map_png)
+        if not context["blocked"]:
+            render(
+                "json", "-mindmap-index.json", f"{title}（节点与关系索引）", "data",
+                lambda: json.dumps(
+                    delivery_index(mindmap()), ensure_ascii=False, indent=2
+                ).encode(),
+            )
+        if not context["blocked"] and retry_format in {None, "png"}:
+            try:
+                for page, (suffix, data) in enumerate(map_overviews()[1:], 2):
+                    render(
+                        "png", suffix, f"{title}（总览第 {page} 页）", "figure",
+                        partial(bytes, data),
+                    )
+                pages = len(map_overviews())
+                raw_map = mindmap()
+                for branch in range(len(raw_map.get("branches", []))):
+                    for page, (suffix, data) in enumerate(
+                        branch_png_pages(raw_map, branch, max_pages=MAX_PNG_PAGES-pages), 1,
+                    ):
+                        pages += 1
+                        render(
+                            "png", suffix, f"{title}（分支 {branch+1} · 第 {page} 页）",
+                            "figure", partial(bytes, data),
+                        )
+            except MindmapImageLimit as exc:
+                failed("png", "分支图片", [str(exc)], retryable=False)
+            except RenderProgressError:
+                raise
+            except Exception as exc:
+                failed("png", "分支图片", [f"生成失败：{type(exc).__name__}: {exc}"[:300]])
     if context.get("statistics") is not None:
         render(
             "xlsx",
@@ -249,6 +368,8 @@ def render_bundle(
             lambda: json.dumps({
                 "review": peer, "evidence": context.get("evidence", []),
                 "delivery_blocked": context["blocked"],
+                "review_bound": context.get("review_bound", False),
+                "reading_notes": context.get("presentation_notes", ""),
             }, ensure_ascii=False, indent=2).encode("utf-8"),
         )
 
@@ -259,7 +380,10 @@ def render_bundle(
             failed(fmt, fmt.upper(), check.issues)
         for file in files:
             if file.format == "pptx":
-                gates.append(slides_gate(file.data, deck()))
+                slide_check = slides_gate(file.data, deck(), markdown)
+                gates.append(slide_check)
+                if slide_check.status == "fail":
+                    failed("pptx", "演示文稿", slide_check.issues, retryable=False)
     if failures:
         gates.append(
             GateResult(

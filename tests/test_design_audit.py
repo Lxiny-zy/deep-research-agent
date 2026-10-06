@@ -214,7 +214,8 @@ def test_pptx_continuation_preserves_every_bullet_note_and_citation():
     assert deck == before
     assert "".join(b for page in pages["slides"] for b in page["bullets"]) == "".join(bullets)
     assert not fit_report(pages)
-    assert all(p["notes"] == "完整备注" and p["citations"] == [1] for p in pages["slides"])
+    assert "".join(p["notes"] for p in pages["slides"]) == "完整备注"
+    assert all(p["citations"] == [1] for p in pages["slides"])
     presentation = Presentation(io.BytesIO(render_pptx(deck)))
     text = "\n".join(
         shape.text

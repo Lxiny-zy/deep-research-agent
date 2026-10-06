@@ -349,6 +349,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Operations */
+        get: operations["operations_api_operations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects": {
         parameters: {
             query?: never;
@@ -718,6 +735,160 @@ export interface paths {
         post?: never;
         /** Delete Run */
         delete: operations["delete_run_api_runs__run_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/acceptance/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Context */
+        get: operations["get_context_api_runs__run_id__acceptance_context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/acceptance/evidence/{evidence_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Evidence */
+        get: operations["get_evidence_api_runs__run_id__acceptance_evidence__evidence_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/acceptance/locations/{location_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Location */
+        get: operations["get_location_api_runs__run_id__acceptance_locations__location_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/acceptance/reading-map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Reading Map */
+        get: operations["get_reading_map_api_runs__run_id__acceptance_reading_map_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/acceptance/reading-map/units/{location_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Reading Unit */
+        get: operations["get_reading_unit_api_runs__run_id__acceptance_reading_map_units__location_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/acceptance/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Records */
+        get: operations["get_records_api_runs__run_id__acceptance_records_get"];
+        put?: never;
+        /** Create Record */
+        post: operations["create_record_api_runs__run_id__acceptance_records_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/acceptance/records/{record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Record */
+        get: operations["get_record_api_runs__run_id__acceptance_records__record_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/acceptance/records/{record_id}/package": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Package */
+        get: operations["download_package_api_runs__run_id__acceptance_records__record_id__package_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/acceptance/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Template */
+        get: operations["get_template_api_runs__run_id__acceptance_template_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1634,6 +1805,80 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AcceptanceIssue */
+        AcceptanceIssue: {
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "correctness" | "coverage" | "citation" | "format" | "layout" | "interaction" | "context" | "performance" | "other";
+            /**
+             * Conclusion
+             * @default pending
+             * @enum {string}
+             */
+            conclusion?: "pending" | "pass" | "fail" | "uncertain";
+            /** Evidence Selections */
+            evidence_selections?: components["schemas"]["EvidenceSelection"][];
+            /**
+             * Excerpt
+             * @default
+             */
+            excerpt?: string;
+            /** Location Id */
+            location_id?: string | null;
+            /** Next Work */
+            next_work?: ("N1" | "N2" | "N3" | "N4" | "N5" | "N6" | "N7" | "N8" | "N9" | "N10" | "N11")[];
+            /** Observation */
+            observation: string;
+            /** Requirement Ids */
+            requirement_ids?: string[];
+            /** Source Ids */
+            source_ids?: string[];
+            /** Todo Id */
+            todo_id?: string | null;
+        };
+        /** AcceptanceRequest */
+        AcceptanceRequest: {
+            /**
+             * Conclusion
+             * @default pending
+             * @enum {string}
+             */
+            conclusion?: "pending" | "pass" | "fail" | "mixed" | "uncertain";
+            /** Delivery Version */
+            delivery_version?: string | null;
+            /** Document Version */
+            document_version: string;
+            /**
+             * First Attempt Status
+             * @default unknown
+             * @enum {string}
+             */
+            first_attempt_status?: "unknown" | "done" | "needs_review" | "error" | "cancelled";
+            /**
+             * Include Hsi Tables
+             * @default false
+             */
+            include_hsi_tables?: boolean;
+            /** Issues */
+            issues?: components["schemas"]["AcceptanceIssue"][];
+            /**
+             * Note
+             * @default
+             */
+            note?: string;
+            /** Parent Record Id */
+            parent_record_id?: string | null;
+            /**
+             * Phase
+             * @default initial
+             * @enum {string}
+             */
+            phase?: "initial" | "recovery";
+            /** Request Id */
+            request_id: string;
+        };
         /** AgentCardCreate */
         AgentCardCreate: {
             /** Behavior */
@@ -2516,6 +2761,13 @@ export interface components {
              * @default
              */
             verification_reason?: string;
+        };
+        /** EvidenceSelection */
+        EvidenceSelection: {
+            /** Evidence Id */
+            evidence_id: string;
+            /** Excerpt */
+            excerpt: string;
         };
         /**
          * EvidenceVerification
@@ -3680,6 +3932,185 @@ export interface components {
             start: number;
             /** Text */
             text: string;
+        };
+        /** ReadingAnchor */
+        ReadingAnchor: {
+            /** Context After */
+            context_after: string;
+            /** Context Before */
+            context_before: string;
+            /**
+             * Coordinate System
+             * @default source_text_characters_not_pdf_geometry
+             */
+            coordinate_system?: string;
+            /** Document Id */
+            document_id: string | null;
+            /** End */
+            end: number;
+            /** Evidence Id */
+            evidence_id: string;
+            /** Id */
+            id: string;
+            /** Locator */
+            locator: string;
+            /** Match Kind */
+            match_kind: string;
+            /** Page Hint */
+            page_hint: number | null;
+            /**
+             * Pdf Available
+             * @default false
+             */
+            pdf_available?: boolean;
+            /** Quote */
+            quote: string;
+            /**
+             * Quote Redacted
+             * @default false
+             */
+            quote_redacted?: boolean;
+            /** Quote Total Chars */
+            quote_total_chars: number;
+            /** Quote Truncated */
+            quote_truncated: boolean;
+            /** Source Binding */
+            source_binding: string;
+            /** Source Hash */
+            source_hash: string;
+            /** Source Url */
+            source_url: string;
+            /** Start */
+            start: number;
+        };
+        /** ReadingMapPage */
+        ReadingMapPage: {
+            /** Document Version */
+            document_version: string;
+            /** Focus Items */
+            focus_items: {
+                [key: string]: unknown;
+            }[];
+            /** Focus Total */
+            focus_total: number;
+            /** Focus Truncated */
+            focus_truncated: boolean;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Peer Review */
+            peer_review?: {
+                [key: string]: unknown;
+            } | null;
+            /** Review Bound */
+            review_bound: boolean;
+            /** Review Issues */
+            review_issues: string[];
+            /** Source Version */
+            source_version: string;
+            /** Template */
+            template: string | null;
+            /** Total */
+            total: number;
+            /** Units */
+            units: components["schemas"]["ReadingUnitPreview"][];
+        };
+        /** ReadingUnitDetail */
+        ReadingUnitDetail: {
+            /** Anchor Limit */
+            anchor_limit: number;
+            /** Anchor Offset */
+            anchor_offset: number;
+            /** Anchor Total */
+            anchor_total: number;
+            /** Anchors */
+            anchors: components["schemas"]["ReadingAnchor"][];
+            /** Document Version */
+            document_version: string;
+            /** Evidence Status */
+            evidence_status: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Evidence Status Total
+             * @default 0
+             */
+            evidence_status_total?: number;
+            /**
+             * Evidence Status Truncated
+             * @default false
+             */
+            evidence_status_truncated?: boolean;
+            /**
+             * Fulltext Limit
+             * @default 8
+             */
+            fulltext_limit?: number;
+            /**
+             * Fulltext Offset
+             * @default 0
+             */
+            fulltext_offset?: number;
+            /** Fulltext Passages */
+            fulltext_passages?: {
+                [key: string]: unknown;
+            }[];
+            /** Fulltext Status */
+            fulltext_status?: string | null;
+            /**
+             * Fulltext Total
+             * @default 0
+             */
+            fulltext_total?: number;
+            /** Measurement Context */
+            measurement_context?: {
+                [key: string]: unknown;
+            }[];
+            /** Peer Item */
+            peer_item?: {
+                [key: string]: unknown;
+            } | null;
+            /** Review Bound */
+            review_bound: boolean;
+            /** Text */
+            text: string;
+            /** Text Offset */
+            text_offset: number;
+            /**
+             * Text Redacted
+             * @default false
+             */
+            text_redacted?: boolean;
+            /** Text Total Chars */
+            text_total_chars: number;
+            /** Text Truncated */
+            text_truncated: boolean;
+            unit: components["schemas"]["ReadingUnitPreview"];
+        };
+        /** ReadingUnitPreview */
+        ReadingUnitPreview: {
+            /** Evidence Count */
+            evidence_count: number;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @default prose
+             */
+            kind?: string;
+            /** Peer Type */
+            peer_type?: string | null;
+            /** Preview */
+            preview: string;
+            /** Section */
+            section: string;
+            /** Severity */
+            severity?: string | null;
+            /** Unit Id */
+            unit_id: string;
+            /** Verification Status */
+            verification_status: string;
         };
         /** ReferenceDocument */
         ReferenceDocument: {
@@ -5518,6 +5949,43 @@ export interface operations {
             };
         };
     };
+    operations_api_operations_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                scope?: "mine" | "workspace";
+            };
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_projects_api_projects_get: {
         parameters: {
             query?: never;
@@ -6517,6 +6985,399 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_context_api_runs__run_id__acceptance_context_get: {
+        parameters: {
+            query: {
+                version: string;
+                include_hsi_tables?: boolean;
+            };
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_evidence_api_runs__run_id__acceptance_evidence__evidence_id__get: {
+        parameters: {
+            query: {
+                version: string;
+                include_hsi_tables?: boolean;
+                offset?: number;
+                length?: number;
+            };
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_location_api_runs__run_id__acceptance_locations__location_id__get: {
+        parameters: {
+            query: {
+                version: string;
+                include_hsi_tables?: boolean;
+                offset?: number;
+                length?: number;
+            };
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+                location_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_reading_map_api_runs__run_id__acceptance_reading_map_get: {
+        parameters: {
+            query: {
+                version: string;
+                include_hsi_tables?: boolean;
+                offset?: number;
+                limit?: number;
+            };
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadingMapPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_reading_unit_api_runs__run_id__acceptance_reading_map_units__location_id__get: {
+        parameters: {
+            query: {
+                version: string;
+                include_hsi_tables?: boolean;
+                text_offset?: number;
+                text_length?: number;
+                anchor_offset?: number;
+                anchor_limit?: number;
+                fulltext_offset?: number;
+                fulltext_limit?: number;
+            };
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+                location_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadingUnitDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_records_api_runs__run_id__acceptance_records_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_record_api_runs__run_id__acceptance_records_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptanceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_record_api_runs__run_id__acceptance_records__record_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_package_api_runs__run_id__acceptance_records__record_id__package_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_template_api_runs__run_id__acceptance_template_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
             };
             /** @description Validation Error */
             422: {
