@@ -13,7 +13,20 @@ from typing import BinaryIO
 
 from .artifacts import ArtifactStore, _validate_component
 
-RENDER_CAPACITY = 2
+
+def _configured_capacity() -> int:
+    try:
+        value = int(os.environ.get("DR_RENDER_MAX_PROCESSES", "2"))
+    except ValueError as exc:
+        raise ValueError("DR_RENDER_MAX_PROCESSES must be a positive integer") from exc
+    if value < 1:
+        raise ValueError("DR_RENDER_MAX_PROCESSES must be a positive integer")
+    return value
+
+
+# Every API/worker and its children must use the same deployment-level limit.
+# The dispatcher and the physical file locks consume this same value.
+RENDER_CAPACITY = _configured_capacity()
 _guard: ContextVar[Callable[[], None] | None] = ContextVar("render_publication_guard", default=None)
 
 
