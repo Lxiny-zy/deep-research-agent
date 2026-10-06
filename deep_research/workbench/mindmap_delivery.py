@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -17,6 +18,12 @@ PNG_DPI = 120
 
 class MindmapImageLimit(ValueError):
     pass
+
+
+def _node_heading_paths(text: str) -> set[str]:
+    # Noto CJK PDF extraction uses NBSP where other fonts return ASCII spaces.
+    # Match complete generated headings, never a prefix such as 0.1 in 0.10.
+    return set(re.findall(r"(?m)^\s*节点\s+(\d+(?:\.\d+)*)\s+·", text))
 
 
 def graph_version(raw: dict[str, Any]) -> str:
@@ -303,8 +310,9 @@ def branch_png_pages(
         if document.page_count > max_pages:
             raise MindmapImageLimit("分支超过剩余图片页数上限，请查看完整 HTML 与大纲")
         # Validate that every node heading was actually laid out before publishing any page.
-        text = "\n".join(page.get_text() for page in document)
-        if any(f"节点 {path} " not in text.replace("\n", " ") for path in selected["node_paths"]):
+        page_paths = [_node_heading_paths(page.get_text()) for page in document]
+        found_paths = set().union(*page_paths)
+        if not set(selected["node_paths"]) <= found_paths:
             raise ValueError("分支图片缺少节点定位标识，未交付不完整图片")
         for page_index, page in enumerate(document):
             pix = page.get_pixmap(dpi=PNG_DPI, alpha=False)
@@ -324,7 +332,7 @@ def branch_png_pages(
                         "page_node_starts": [
                             path
                             for path in selected["node_paths"]
-                            if f"节点 {path} " in page.get_text().replace("\n", " ")
+                            if path in page_paths[page_index]
                         ],
                         "cross_link_ids": [
                             link["id"]

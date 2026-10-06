@@ -337,3 +337,11 @@ async def test_writer_to_frozen_delivery_publishes_index_and_branch_files(
             assert response.status_code == 200 and response.content == file.data
             assert response.headers["x-content-version"] == bundle.content_version
             assert response.headers["x-content-sha256"] == file.sha256
+def test_pdf_node_headings_accept_unicode_spaces_without_matching_path_prefixes():
+    from deep_research.workbench.mindmap_delivery import _node_heading_paths
+
+    text = "节点\u00a00\u00a0·\u00a0根分支\n节点\u00a00.10\u00a0·\u00a0完整标签\n"
+    assert _node_heading_paths(text) == {"0", "0.10"}
+    assert "0.1" not in _node_heading_paths(text)
+    assert _node_heading_paths("跨分支链接：节点 0.1 · 不冒充标题") == set()
+    assert _node_heading_paths("节点 0.1 · 已有标题\n节点\n0.2\n· 换行标题") == {"0.1", "0.2"}
