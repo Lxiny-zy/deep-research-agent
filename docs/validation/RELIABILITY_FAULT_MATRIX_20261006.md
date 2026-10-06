@@ -1,5 +1,7 @@
 # 可靠性故障场景矩阵（本地）
 
+历史证据：以下部署状态指记录产生时的阶段，不代表当前线上状态；最新版本见 [发布记录](../RELEASE.md)。
+
 本表记录本地取得证据的交付、展示、队列和进程故障场景。本阶段未部署；
 全量集成结果另见本目录 `backend-upgrade*.xml`，第一次失败与最终重跑须分开阅读。
 
@@ -15,10 +17,10 @@
 | D3 | 重启后导出文件或回执别名损坏 | 导出拒绝；别名校验失败返回 409，不创建替代操作 | `test_receipt_and_alias_survive_sql_repository_restart` | 文件完整性失败需显式处理，不能自动覆盖原版本 |
 | D3 | 同内容不同标签请求、队列满 | 不同 request_id 的相同内容复用一个 job；不同格式的新工作在队列已满时 503 | `test_duplicate_content_reuses_queue_slot_while_distinct_work_is_bounded` | 回执控制文件还受现有存储配额约束 |
 | D3 | 读者或其他租户访问回执 | 读者仅可导出自己的任务，bundle/retry 403；其他属主查询状态/别名 404 | `test_render_receipt_enforces_owner_and_reader_kind_permissions`；`test_access_control.py` | 完成任务载荷也校验 payload_hash 与 run_id；不返回内部路径和原始 payload |
-| S1 | 真实单元 p-8d500939cf20f72e2733-0 的保守拒绝 | 原文与所选短摘录覆盖范围分开记录；未自动把完整原文当作现有引文的支持；保留机械拒绝中的原选 IDs 与未锚定 IDs | `docs/SCIENTIFIC_SUPPORT_CALIBRATION_20261006.md`；`test_real_candidate_rejection_preserves_specific_selected_excerpts` | 旧版本未保存确切原选 IDs，重放选择明确标为候选；生产历史 fallback 未修改 |
+| S1 | 真实单元 p-8d500939cf20f72e2733-0 的保守拒绝 | 原文与所选短摘录覆盖范围分开记录；未自动把完整原文当作现有引文的支持；保留机械拒绝中的原选 IDs 与未锚定 IDs | [历史科学核验记录](https://github.com/Lxiny-zy/deep-research-agent/blob/88fbc72b5ff5de2b13a148747e2c6a793373b3eb/docs/SCIENTIFIC_SUPPORT_CALIBRATION_20261006.md)；`test_real_candidate_rejection_preserves_specific_selected_excerpts` | 旧版本未保存确切原选 IDs，重放选择明确标为候选；生产历史 fallback 未修改 |
 | S1 | 局部修订只收到泛化错误，无法修正复合句引用 | 修订器收到具体引用/数值/专名诊断，按现有短摘录在原段内拆句或收窄；修改后重新过原门 | `test_repair_receives_binding_diagnostics_then_rechecks_accurate_revision` | 不放宽门限，不自动扩展/编造摘录，不删除必要条件规避检查 |
 | S1 | 数值/专名/条件/因果/多来源正负案例 | 12 案例机械判定符合标签；条件替换、相关转因果、假设转事实明确要求独立语义判定 | `python -m eval.scientific_support_cases`；`test_scientific_support_calibration.py` | 离线语义标签用于检查流程，不当作真实模型正确率；本阶段未重新发起付费模型测量 |
-| U1/U2 | 窄屏宽表、多系列图、数学和引用交互 | 五类 SVG 图形、数学排版与可访问源表；键盘/触摸可横向查看末组数据；引用进入既有证据面板并恢复焦点 | `RELIABILITY_FRONTEND_EVIDENCE_20261006.md`；`frontend/scripts/verify-scientific-ui.js`；三尺寸截图 | 使用明确标注的合成科学数据验证真实组件，未声称所有论文表格自动解析正确 |
+| U1/U2 | 窄屏宽表、多系列图、数学和引用交互 | 五类 SVG 图形、数学排版与可访问源表；键盘/触摸可横向查看末组数据；引用进入既有证据面板并恢复焦点 | [历史前端证据](https://github.com/Lxiny-zy/deep-research-agent/blob/88fbc72b5ff5de2b13a148747e2c6a793373b3eb/docs/RELIABILITY_FRONTEND_EVIDENCE_20261006.md)；`frontend/scripts/verify-scientific-ui.js`；三尺寸截图 | 使用明确标注的合成科学数据验证真实组件，未声称所有论文表格自动解析正确 |
 | D3/U3 | 导出响应丢失后刷新、旧内容版本变化、离线副本 | 按同一 request_id 查询回执并验证文件 hash；版本冲突不偷换内容；离线 Markdown 自带版本和降级说明 | `frontend/scripts/verify-delivery-reconnect.js`；`artifacts/reliability-ui/fixed-version.md`、`offline-copy.md` | 浏览器网络故障由受控 HTTP fixture 注入；后端真实文件/队列测试独立覆盖 |
 | P1 | sleep/CPU 卡死、异常退出、取消/完成竞争 | 子进程被终止，物理槽归还，完整检查点保留，未完成文件不能发布 | `test_render_process.py`；Windows 97 项及 Linux 23 项日志 | Linux 使用本地断网、只读源码临时容器；不修改生产服务 |
 | P2 | dispatcher/worker/数据库清理不响应取消；取消过程中又登记任务 | 全部关闭阶段共用绝对期限；反复收拢新登记任务；worker CLI 明确退出；API 保留监管终止边界 | `test_shutdown_deadline.py`、`test_api.py::test_lifespan_stops_recovery_before_snapshotting_workers`；`lifecycle-regression-20261006.txt` | 任意不响应取消的 Python 扩展不能靠 asyncio 强制结束，API 最终进程终止由外部 supervisor 负责 |

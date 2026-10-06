@@ -18,7 +18,7 @@
 | 人工观察 | 具体发现：；结论 pending/pass/fail/uncertain： |
 | 后续任务 | N1–N11：；todo_id：；预期改动： |
 
-后续任务默认沿用主计划：课题调研 N1、综述 N2、评审 N3、精读 N4、数据分析 N5、幻灯片 N6、
+后续任务默认沿用 [主计划](IMPROVEMENT_PLAN.md)：课题调研 N1、综述 N2、评审 N3、精读 N4、数据分析 N5、幻灯片 N6、
 导图 N7、上下文 N8、交互/登录态 N9、调用或性能 N10、布局阅读 N11。用户可以明确调整该分类。
 
 ## 实际使用路径
@@ -29,8 +29,9 @@
    一致传 `include_hsi_tables=true`。
 2. `GET /api/runs/{run_id}/acceptance/template`：取得完整请求 schema、默认模板和分类。
 3. `GET /api/runs/{run_id}/acceptance/context?version={content_version}`：取得已有要求、正文位置、
-   来源标识及核验记录的关联。`not_checked` 不等于通过；`review_bound` 仅表示版本匹配，
-   还需查看 `coverage_issues` / `prose_review_issues`。材料和覆盖状态分别呈现，不能把未读取等同于论文未报告。
+   来源标识及核验记录的关联。`not_checked` 不等于通过；顶层 `coverage_review_bound` 与
+   `prose_review_bound` 仅表示相应核验记录与版本匹配，还需分别查看 `coverage_issues` / `prose_review_issues`。
+   材料和覆盖状态分别呈现，不能把未读取等同于论文未报告。
 4. 根据选中的 ID，读取 `/acceptance/locations/{location_id}?version=...` 或
    `/acceptance/evidence/{evidence_id}?version=...`。两者支持 offset/length，单次最多 1,200 字符。
 5. `POST /api/runs/{run_id}/acceptance/records` 保存下方 JSON。
@@ -77,5 +78,6 @@
 `revision=null` 表示部署没有提供 `DR_APP_REVISION`。`package_code_sha256` 是当前安装 Python 包源码的
 指纹，不冒充 Git commit，也不代表前端构建版本；部署需精确关联 commit 时可注入非秘密的 `DR_APP_REVISION`。
 
-当前后端工程 API 与[业务页面入口](N0_FRONTEND_ACCEPTANCE_20261006.md)均已本地实现，并完成受控及隔离真实 API 浏览器验证；尚未部署。没有发起新模型调用，未改变正式核验结果，
-新产物的事实质量与阅读体验仍由用户逐项评价。
+当前后端 API 与业务页面入口均已上线，版本和验证结果见 [发布记录](RELEASE.md)，页面使用说明见
+[研究工作台](RESEARCH_WORKBENCH.md)。登记操作不触发新模型调用，不改变正式核验结果；
+新产物的事实质量与阅读体验仍由用户逐项评价，未评价的项目保持“待人工验收”。

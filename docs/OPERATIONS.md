@@ -2,6 +2,12 @@
 
 升级前先取得一致备份，并以 `alembic heads` 查看当前代码要求的迁移版本；不要使用历史文档中的版本号判断数据库已是最新。本地验证不需要连接实验室服务器。
 
+当前线上基线为 `8edb37e`：单个 API、`DR_EXECUTION_MODE=inline`、
+`MAX_ACTIVE_RUNS=1`、`DR_RENDER_MAX_PROCESSES=1`、API 容器内存上限 **1 GiB**，
+PostgreSQL schema 为 `0041`。这是已部署配置，仓库的默认并发与内存值不等于线上值。
+发布结果、验证数字及备份位置统一记录在 [发布记录](RELEASE.md)；待办和人工验收范围见
+[改进计划](IMPROVEMENT_PLAN.md)。本页维护可重复的运行协议与故障处理边界。
+
 ## 部署能力
 
 | 能力 | 源码安装 | 隔离安装 wheel | 基础 Docker 镜像 |
@@ -48,12 +54,12 @@ SQL 部署的在线设置以数据库不可变版本为准。密钥由 `CATALOG_
 会放大队列容量。满载时新提交返回 503；相同身份、同一逻辑提交的幂等重试仍返回原 run。
 客户端保留待定提交 key，用于响应丢失后的恢复。
 
-本地 `2b204ea` 起（尚未部署），inline 与 worker 都先入持久队列再领取：按任务所有者轮转，
+inline 与 worker 都先入持久队列再领取：按任务所有者轮转，
 按入队时冻结的成本和轻/重类别分配。`MAX_ACTIVE_RUNS` ≥ 2 时重任务最多占用其中 N−1 个
 槽，为轻任务保留一个；设为 1 时无法抢占已在运行的长任务。学术问答走独立的请求队列，
 不经过此调度。调度使用迁移 0038；取消超时提示另需迁移 0039，原子保存首次取消时间，
 旧任务保持未知时间。详情中的 `status_notice` 在取消等待超过默认执行租约 TTL（120 秒）后提示检查执行服务，
-不代替消费者结算、不证明 worker 已离线。详见 [公平调度记录](FAIR_SCHEDULING_20261004.md)。
+不代替消费者结算、不证明执行进程已离线。当前线上为 inline，检查对象是 API 内嵌执行者。
 
 `DR_PROVIDER_MAX_CONCURRENCY`、`DR_PROVIDER_REQUESTS_PER_MINUTE` 对同一供应商凭据
 共享调用租约、滚动窗口请求计数和冷却。LLM 与主要付费检索适配器接入此边界；第三方工具
@@ -72,8 +78,8 @@ LLM 根据流式 usage 结算；无 usage 或无法确定的调用明确标为�
 
 `cancelled`、`done` 和 `needs_review` 是终态；`/resume` 返回 409。`needs_review` 表示任务保留了
 结果但未通过交付验收，应使用内容修订或格式重试。新契约任务的 `done` 必须在承诺格式生成、
-质量检查与可读取性检查通过后写入；历史无契约记录不批量追溯改写，详见
-[完成状态与交付记录](DELIVERY_COMPLETION_20261004.md)。崩溃任务由租约过期后的执行者接管；
+质量检查与可读取性检查通过后写入；历史无契约记录不批量追溯改写。产物与验收说明见
+[研究工作台](RESEARCH_WORKBENCH.md)。崩溃任务由租约过期后的执行者接管；
 普通进程中断不会续期任务最终截止时间。故障状态的显式 `/resume` 授权新的有界执行窗口，
 累计耗时、token、证据和原始输入仍保留。超过异常领取上限会熔断；已经登记的自动恢复
 另按恢复上限计数，不误计为 worker 崩溃。
@@ -82,17 +88,101 @@ LLM 根据流式 usage 结算；无 usage 或无法确定的调用明确标为�
 `MAX_RUN_SECONDS=0` 按任务/档位选择尝试期限；正数明确覆盖。`MAX_TASK_SECONDS` 默认
 48 小时，`MAX_RUN_RECOVERIES` 默认 6 次，`MAX_NO_PROGRESS_ATTEMPTS` 默认 2 次。
 `DR_RUN_TIMEOUT_PROFILES` 可覆盖档位、工作流或 `工作流:档位`。已有数据库在线设置中的
-正数优先于新环境默认值；升级不会覆盖已有配置。参数与恢复验证见
-[长任务恢复记录](LONG_TASK_RECOVERY_20261004.md)。
+正数优先于新环境默认值；升级不会覆盖已有配置。恢复时应同时检查执行租约、任务截止时间、
+已保存检查点与无进展次数，不能仅凭界面仍显示“运行中”就重复提交。
 
-`DR_WORKER_SHUTDOWN_GRACE_SECONDS` 默认 20 秒；停止领取后等待在途任务，再提供最多
-5 秒清理和 5 秒注销时间。仅清理不响应时使用进程退出兜底，未完成任务保留租约供 TTL
-到期后接管；部署 `stop_grace_period` 应大于配置宽限加 10 秒。冷交付与格式重试独立使用
-两个渲染槽，普通文件读取等操作保留另两个槽；这是每 API 进程的隔离，尚非持久化交付队列。
+独立 worker 是可选拓扑。只有完成资源核定、共享产物存储与故障接管验证后，才配置
+`DR_EXECUTION_MODE=worker` 并启用 Compose 的 `worker` profile。增加 worker 数不会改变
+数据库协调的任务上限，也不会自动增加渲染物理槽。不要把启用多个 worker 当作当前
+1 GiB、单任务部署的默认升级步骤。
 
-生产拓扑建议在资源核定后使用 `DR_EXECUTION_MODE=worker`，执行
-`docker compose --profile worker up -d --build --scale worker=2`。本地验证不代替生产切换、
-共享产物存储和故障接管验收；部署操作仍需按当前发布授权执行。
+## 模型请求记录与上下文
+
+“模型请求记录”统计实际发出的模型请求，和提供方返回的思考内容分开展示。普通补全、
+结构化补全、流式补全和模型搜索都在实际 SDK 请求入口登记唯一 `call_id`；网络重试、
+JSON 格式修正及协议兼容重试各自登记。同一逻辑操作共享 `operation_id`。来源读取、
+流式文本片段、渲染和纯解析不算模型请求，调用上限拒绝的请求也不计入实际尝试次数。
+
+记录包含角色、运行/会话/请求标识、模型、开始与终态、耗时及提供方返回的用量。
+QA 实时 SSE、订阅回放、持久化事件和最终 thoughts 都保留记录，刷新按 `call_id` 去重。
+迟到的开始事件不能覆盖终态；没有确认结束的历史请求显示“状态未确认”。界面只统计
+已加载记录，未知用量不显示成零。部分 usage 只保留已知字段，没有价格和计量时不估算费用。
+
+检查疑似循环时，先区分同一 `call_id` 的事件回放与不同 `call_id` 的真实重试，再按
+`operation_id`、结果、耗时和已保存进度定位。单次输出上限不等于整个任务的调用次数。
+同一 QA 请求受调用次数、修订次数和截止时间约束；显式“继续”是新请求，并继承已经消耗的
+修订次数，不把旧请求的整段 HTTP 调用预算机械累加。无进展和协议重试仍有各自上限。
+
+输入容量使用模型/端点档案与保守估计；真正收到输入 usage 后才校准，角色共享同一档案的
+校准字典，不额外调用模型。校准只上调安全余量，不是精确分词，也不写入恢复语义指纹。
+QA 检查点和恢复环境绑定 `CONTEXT_POLICY_VERSION`；上下文缩减保护已识别的原始约束和
+纠正，必要内容仍放不下时显式报容量错误，不把模型改写当作用户指令。支持范围见
+[研究工作台](RESEARCH_WORKBENCH.md)。
+
+请求元数据不含提示词、完整私人正文、API key 或原始异常文本，错误仅保留类型。
+Prometheus 复用现有 registry，按操作种类和结果汇总请求次数与耗时，不用请求 ID、模型名
+等高基数字段作标签。管理员可通过 `/metrics` 观察服务状态，`/api/operations` 提供有
+权限范围的运行汇总；这些统计不等于研究正确率评估。
+
+## 渲染队列、进度与关闭
+
+### 持久队列与版本
+
+schema `0041` 提供持久化渲染队列。`RenderService` 领取任务后启动独立 Python 子进程，
+保留既有输入 fingerprint、逐格式检查点、SHA-256、质量门、不可变版本及每个 run 的文件锁。
+冷交付和格式重试不再只是 API 进程内的线程槽。`DR_RENDER_MAX_PROCESSES` 同时约束队列
+领取和共享文件锁保护的物理槽；API、worker 与渲染子进程必须使用相同值和一致产物挂载。
+当前线上设为 1。提高并发前须在实际镜像内同时核对峰值内存、API/问答余量、产物与进程回收，
+不能只以“没有 OOM”判定容量足够。
+
+`POST /api/runs/{run_id}/render-operations` 使用稳定 `request_id` 和当前文档版本提交，
+返回回执后按 `status_url` 查询，完成后读取 `result_url`。响应丢失时通过请求标识找回回执，
+不要制造新的逻辑请求。旧版本提交或当前文档读取返回 409 时先重新取得版本；已经冻结的
+旧导出回执与验收包仍按原版本返回原字节。HSI 等输出选项也必须保持一致。
+
+### 子进程执行边界
+
+Windows 在接收任务前将隐藏窗口子进程加入启用 `KILL_ON_JOB_CLOSE` 的 Job Object；
+Linux 使用独立进程组，取消时终止进程组，父进程死亡时以 `PDEATHSIG` 终止主渲染进程。
+原生库阻塞或持续占用 CPU 的循环不能仅靠续租无限占槽。
+
+子进程仅接收 JSON，不接收闭包、pickle 或数据库连接。发布检查通过私有管道询问父进程，
+由父进程核对实际租约和运行状态。随机 nonce、递增序号、单行 64 KiB 上限和每任务最多
+10000 次授权限制使协议异常时停止执行。管道断开、非协议输出均不会授权继续发布；
+诊断输出与授权协议分离。
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `DR_RENDER_EXECUTION_TIMEOUT_SECONDS` | 600 秒 | 整次渲染子进程尝试的期限 |
+| `DR_RENDER_PROGRESS_TIMEOUT_SECONDS` | 180 秒 | 没有新增持久化格式检查点的期限 |
+| `DR_RENDER_PROGRESS_POLL_SECONDS` | 1 秒 | 检查持久化进度的间隔 |
+
+CPU 活跃和租约心跳不是交付进展。合法但长于进展期限的单格式生成同样会被停止，需根据
+实际格式耗时调整配置；总执行期限独立生效。连续三次无进展进入既有失败边界，已完成格式
+可以从检查点恢复。残缺 bundle 不应成为当前可用版本，不能通过删质量门或延长无限等待解决。
+
+失败日志按 job ID、attempt、父/子执行位置关联，最多保留 4 层异常类型及每层 24 个文件
+basename、行号、函数名；不记录原始异常文本、局部变量、源码行或完整路径。这些诊断
+不会加入公开 job error。排查时结合回执状态、最后检查点与受保护日志，不复制私人正文。
+
+### 停止与恢复
+
+`DR_WORKER_SHUTDOWN_GRACE_SECONDS` 默认 20 秒。Worker 从首次停止请求起共享
+“宽限 + 5 秒清理”的单调时钟期限；领取循环、运行任务、心跳注销、渲染 dispatcher、
+渲染关闭和 engine dispose 共用剩余时间，各步骤不能重新取得完整宽限。专用 worker CLI
+超过期限进入强制退出分支，未完成任务保留租约，等待 TTL 后接管。
+
+API 关闭先发起各类任务停止，再按共享期限等待；不合作的 dispatcher 不会阻挡 QA 或渲染
+收到停止信号。期限结束记录 `shutdown_incomplete`，不以无界 gather 卡住 lifespan。
+API 库不调用 `os._exit`；原生渲染子进程主动终止，其他不合作的 Python 清理仍由部署
+supervisor 执行最终进程终止。`stop_grace_period` 应大于应用总清理期限，并留退出余量。
+
+QA 的模型执行、流式事件落库和完成事务共享单轮截止时间；停止后不再续租，并在 5 秒
+清理预算内尝试保存中断状态。未响应取消的子任务保留登记，API 关闭时再次扫描。数据库
+完全不可用时返回状态待确认并等待租约失效，不伪造已保存终态，也不自动重发模型请求。
+
+回归测试驱动应先在自己的执行期限内等待 worker 任务完成，再调用关闭清理；`_drain()`
+是关机协议，不能用它立即驱动正常任务，否则会误用生产关机宽限截断测试。
 
 ## 文件与命令
 
@@ -185,7 +275,110 @@ sha256sum "$backup_dir"/*.dump "$backup_dir"/*.tar.gz > "$backup_dir/SHA256SUMS"
 CI 覆盖静态检查、80% 覆盖率门槛、PostgreSQL 迁移往返、前端契约生成/体积门槛、浏览器
 实际 204/键盘/布局、独立 API/worker HTTP 流程、wheel 隔离安装、Docker 导出及 Linux
 沙箱探针。`scripts/verify_worker_http.py` 的配额耗尽日志是故障注入场景，随后验证恢复。
+当前发布实际通过的检查、尚存基线问题与线上冒烟结果以 [发布记录](RELEASE.md) 为准，
+不能把测试命令清单当成一次全绿结果。
 
 这些验收使用合成供应商，只证明工程行为。最终报告校验覆盖引用映射、缺失引用段落和
 关键数值；界面显示检查范围与回退状态，不宣称所有段落经过语义证明。实际研究质量需要
 冻结来源与人工复核的评估基线，见 `eval/baselines/README.md`。
+
+### 后端回归命令
+
+在仓库根目录执行。PostgreSQL 套件只连接已明确隔离的测试库，通过测试环境注入
+`DATABASE_URL`；不读取或复制生产凭据。Windows 为长产物路径选用短的 `--basetemp`。
+
+```powershell
+python -m ruff check deep_research tests alembic scripts eval
+python -m ruff format --check deep_research tests alembic scripts eval
+python -m mypy deep_research
+python -m pytest -q -m "not pg" --basetemp D:/tmp/dr-nonpg --cov=deep_research --cov-report=term-missing --cov-fail-under=80
+python -m pytest -q -m pg --basetemp D:/tmp/dr-pg
+```
+
+全量执行时冻结源码，保留退出码、覆盖率、提交号与完整日志。修复后不能用不同源码版本
+上的零散通过代替同一候选版本的完整结果；按变更范围追加定向检查时也应说明覆盖边界。
+已有格式基线问题应如实登记，不能为发布顺手改写大量无关文件。
+
+以下定向检查用于定位渲染进程、关闭期限、模型请求和上下文问题，不代替完整发布门：
+
+```powershell
+python -m pytest -q --basetemp D:/tmp/dr-render tests/test_render_process.py tests/test_shutdown_deadline.py tests/test_render_restart.py tests/test_render_progress.py tests/test_render_capacity.py tests/test_render_service.py tests/test_worker_admission_cleanup.py tests/test_worker_embedded.py tests/test_qa_deadline.py
+python -m pytest -q --basetemp D:/tmp/dr-model tests/test_model_call_lifecycle.py tests/test_llm_usage.py tests/test_llm_retries.py tests/test_llm_parameter_modes.py tests/test_context_budget.py tests/test_qa_context_budget.py tests/test_qa_recovery_api.py
+```
+
+进程测试真实覆盖原生阻塞、CPU 循环、异常退出、取消竞争、子孙进程回收、协议错误、
+执行与进展超时、物理槽释放及检查点继续。父进程 monkeypatch 所需的 `cooperative_render`
+夹具不代表真实子进程测试。Windows 的通过也不替代实际 Linux 镜像、生产等价内存/权限
+限制下的容量与导出验证。Linux 临时容器应与现有服务隔离，使用非 root、只读根目录及
+受限临时目录；不向测试挂入生产卷或真实凭据。
+
+### 浏览器验证的三层边界
+
+| 层次 | 验证内容 | 不证明的内容 |
+| --- | --- | --- |
+| 受控浏览器 | 真实 React/CSS、键盘与布局、任务输入、身份切换呈现、Reader/QA 图标、增量 SSE、刷新与请求去重 | 后端认证、数据库隔离、模型内容正确性 |
+| 自动隔离真实 API | 真实认证、SQLite、文件上传解析、PDF.js 定位、版本检查、验收记录、导出回执及原字节下载 | PostgreSQL 部署状态、付费模型与真实研究质量 |
+| 隔离真实 API 只读 smoke | 匿名拒绝、测试身份登录及刷新后登录保持 | 研究执行、问答执行、导出任务与保存产物全链 |
+
+在 `frontend` 目录执行常规受控套件：
+
+```powershell
+npm ci
+npm run test:browser:install
+npm run test:browser:check
+npm run test:browser
+```
+
+[Playwright 配置](../frontend/playwright.config.ts) 自动启动独立 `127.0.0.1:5199` Vite，
+使用无界面 Chromium，退出后关闭服务与 context；端口占用直接失败，不复用未知服务。
+API 请求须有显式夹具，未声明的 API、外网请求与未捕获 JS 异常使测试失败。QA SSE 由
+临时 localhost HTTP 服务逐段发送，在显式发布 complete 前必须能看到未完成片段，
+不能用一次性完整响应代替增量链路。
+
+按实际改动选择定向场景：
+
+```powershell
+npm run test:browser -- controlled-layout.spec.ts
+npm run test:browser -- controlled-qa.spec.ts
+npm run test:browser -- controlled-identity.spec.ts
+npm run test:browser -- controlled-composer.spec.ts
+npm run test:browser:report
+```
+
+布局检查包括桌面、窄屏、手机、低高度视口及明暗模式，检查滚动中的配置区、主体与
+操作条遮挡、错误完整可见、控件命中与焦点、横向溢出及晚到响应。边界坐标只容许
+1 CSS 像素舍入误差，不把错误“部分露出”当作通过。Vitest 与浏览器测试分别发现、
+分别类型检查，浏览器用例不混入 jsdom 单测。
+
+自动隔离真实 API 套件：
+
+```powershell
+npm run test:browser:integration
+```
+
+[启动器](../frontend/scripts/browser-integration.mjs) 构建前端后创建全新临时目录和 SQLite，
+使用真实 FastAPI lifespan 与文件渲染进程，监听 `127.0.0.1:5208`。只继承系统运行所需
+环境，不继承模型密钥/数据库配置，不读取 `.env`；身份与记录均为自有合成数据，模型
+执行入口被禁止。fixture 拒绝在非隔离目录启动；端口占用即失败，结束只清理自身资源。
+这一层不拦截真实 API 响应。
+
+受控结果保存在 `artifacts/browser-regression/`，真实 API 集成结果保存在
+`artifacts/browser-integration/`，包含 `results.json` 与相应报告/日志。指定 `.spec.ts`、
+`--grep` 或 `--last-failed` 的范围运行写入各层 `targeted/`，不能覆盖完整回归证据。
+发布归档应核对 JSON 的 `scope=full` 并绑定候选提交。检查 sticky 元素时使用当前视口
+截图；整页截图不能替代实际滚动位置的可见性断言。
+
+只读 smoke 默认不发现、不执行，使用 [real-api.spec.ts](../frontend/tests/browser/real-api.spec.ts)。
+先启动隔离后端与测试访问身份，确保 loopback 地址同时托管前端；由安全测试环境注入
+`DR_BROWSER_TEST_KEY`，禁止使用生产身份，不把 key 写入命令或报告：
+
+```powershell
+$env:DR_BROWSER_REAL_API = '1'
+$env:DR_BROWSER_BASE_URL = 'http://127.0.0.1:8008'
+try { npm run test:browser }
+finally { Remove-Item Env:DR_BROWSER_REAL_API, Env:DR_BROWSER_BASE_URL -ErrorAction SilentlyContinue }
+```
+
+此模式拒绝非 loopback URL，不自动启动 Vite，不安装受控 API 响应，关闭 trace/自动截图，
+浏览器阻止 API 写入与外网请求。生产验收须使用当前发布的单独检查步骤，不能把本地
+只读 smoke 当成线上全链验收。尚未覆盖的产品场景统一维护在 [改进计划](IMPROVEMENT_PLAN.md)。

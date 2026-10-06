@@ -1,13 +1,13 @@
 # 问答容量、停止与显式恢复
 
-本地升级分支实现，尚未发布；生产数据库与运行服务保持现状。无数据库迁移，
-阶段快照保存在已有 `qa_message.request_payload` 的私有 `_checkpoint` 字段。
+本页维护当前问答接单、停止、租约和显式恢复的 API 契约；线上版本及验证结果见
+[发布记录](RELEASE.md)。阶段快照保存在 `qa_message.request_payload` 的私有 `_checkpoint` 字段。
 公开 API 不返回快照、原始模型配置、密钥或执行租约。
 
 ## 接单和领取
 
 `QA_MAX_ACTIVE=4`、`QA_MAX_ACTIVE_PER_OWNER=2`、`QA_MAX_PENDING=64`、
-`QA_MAX_PENDING_PER_OWNER=16` 均为正整数。SQL 实现在共享数据库事务锁内检查和登记，
+`QA_MAX_PENDING_PER_OWNER=16` 是默认值，配置均须为正整数。SQL 实现在共享数据库事务锁内检查和登记，
 上限不会乘以 API 副本数；按会话归属统计用户额度，管理员代操作不绕过会话用户额度。
 满队列对新请求返回 `429 qa_queue_full` 和 `Retry-After: 5`；同一请求的幂等读取仍有效。
 
@@ -40,28 +40,32 @@
 已开始局部修订前先保存修订次数，恢复不会重置自动修订额度。
 
 继续前和实际执行前均校验原问题、来源选项、任务材料、资料库来源版本、历史对话、身份、
-当前配置、角色广场模型/提示词、全局规则与核验规则指纹。还比较实际解析后的执行上下文，
+当前配置、角色广场模型/提示词、全局规则、核验规则及 `CONTEXT_POLICY_VERSION` 指纹。
+还比较实际解析后的执行上下文，
 防止接单与运行之间的模型配置变化。接单时发生变化或快照校验失败返回 `409 qa_recovery_unavailable`，
 已接单后才发现执行上下文变化时，保存该轮错误并返回失败，模型请求不会继续。
 不默默改用新材料。网页引用复用已保存的原文快照，不声称网页现在仍未变化。
 
-## 当前验证证据
+## 执行期限与租约
 
-- `tests/test_qa_queue_fairness.py`：两个会话合计 398 条旧积压不遮挡独立会话；过期前驱不重发。
+工作、流记录落盘和完成事务共用一个执行期限；停止时立即停止续租，并在额外 5 秒清理预算内
+尝试保存终态。仍未退出的协程继续登记在应用任务集合中，由 API 总关闭期限与进程监管处理。
+若数据库也无法及时响应，则明确返回状态尚未确认，等待租约过期后检查，不伪造完成。
+
+生产时钟在取得事务锁和读取行后采样；即使等待连接池或锁期间跨过租约期限，旧执行者也不能
+继续续租或写完成。测试注入时钟仍保留确定性。API 和 worker 的总关闭协议见
+[运行指南](OPERATIONS.md#停止与恢复)。
+
+## 验证入口与边界
+
+- `tests/test_qa_queue_fairness.py`：多个会话的大量积压不遮挡独立会话；过期前驱不重发。
 - `tests/test_qa_admission.py`：多个管理器同时 reserve/claim、全局/用户上限、满队列幂等读取。
 - `tests/test_qa_stop_recovery.py`：取消/完成竞争、跨实例停止、落盘阶段复用与篡改拒绝。
 - `tests/test_qa_recovery_api.py`：真实 ASGI 权限、重复继续、旧请求重连不重做、配置/来源/历史失效。
 - `tests/test_qa_reliability_pg.py`：独立 PostgreSQL 连接池复用同一组队列/停止不变量。
-  本地隔离 PostgreSQL 16 容器运行 7 项通过，结果 `validation/qa-reliability-pg.xml`。
+- `tests/test_qa_deadline.py`：模型任务拒绝取消、写流记录卡死、完成写入期间停止及状态待确认。
+- `tests/test_qa_clock_fencing.py`：SQLite/PostgreSQL 事务锁和连接池等待跨过租约期限后的写入隔离。
 
-`tests/test_qa_deadline.py` 覆盖不响应取消的模型任务、写流记录卡死、完成写入期间停止等情况。
-工作、流记录落盘和完成事务共用一个执行期限；停止时立即停止续租，并在额外 5 秒清理预算内
-保存终态。仍未退出的协程继续登记在应用任务集合中，由 API 总关闭期限与进程监管处理。
-若数据库也无法及时响应，则明确返回状态尚未确认，等待租约过期后检查，不伪造完成。
-
-`tests/test_qa_clock_fencing.py` 在 SQLite/PostgreSQL 的真实事务锁、连接池等待跨过租约期限后，
-验证旧执行者不能续租或写完成。生产时钟在取得锁和读取行后采样；注入测试时钟仍保留确定性。
-独立运行 8 项通过，日志 `validation/qa-clock-fencing-20261006.txt`。
-
-完整前端双页停止、继续及刷新证据见 [前端验收](RELIABILITY_FRONTEND_EVIDENCE_20261006.md)。
-整体验收状态以 [升级计划](RELIABILITY_UPGRADE_PLAN_20261006.md) 和最终全量结果为准。
+可重复命令与浏览器验证层次见 [运行指南](OPERATIONS.md#发布验收)，页面使用说明见
+[研究工作台](RESEARCH_WORKBENCH.md)。测试证明请求生命周期与存储边界，不能代替模型内容质量
+或人工阅读评价；待完善范围统一维护在 [改进计划](IMPROVEMENT_PLAN.md)。

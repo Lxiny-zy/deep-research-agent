@@ -1,8 +1,8 @@
 # Science Research · 科研工作台
 
-部署与一致备份步骤见 [运行指南](docs/OPERATIONS.md)。
+当前上线版本与验证结果见 [发布记录](docs/RELEASE.md)，部署与一致备份步骤见 [运行指南](docs/OPERATIONS.md)。
 当前计划与进度见 [后续改进计划](docs/IMPROVEMENT_PLAN.md)，依赖文件说明见 [供应链指南](docs/SUPPLY_CHAIN.md)。
-早期面试题库和简历说明保留在 [历史资料归档](docs/archive/README.md)，不作为当前验收依据。
+其他使用说明、技术协议和验收入口见 [文档索引](docs/README.md)。
 
 面向技术调研与科学文献审查的证据研究工作台：把「一个问题」自动**拆解 →
 检索项目资料与外部来源 → 验证原文证据 → 反思补洞 → 综合成可追溯报告**。
@@ -185,8 +185,8 @@ make down       # 停止服务，保留数据库与运行时配置
 
 ### 水平扩展：API 与执行分离
 
-默认 `inline`：API 进程自己执行研究任务，单容器即可跑通。改成 worker 拓扑后，API 只负责入队，
-执行交给独立进程，可在宿主机资源允许的范围内扩副本：
+当前线上采用 `inline`，实际并发和资源限制见 [发布记录](docs/RELEASE.md)。独立 worker 是可选拓扑；
+完成资源与共享存储验证后，API 可只负责入队，执行交给独立进程，再按核定容量扩副本：
 
 ```bash
 # .env 里设 DR_EXECUTION_MODE=worker，然后启用 worker profile
@@ -199,7 +199,7 @@ DR_EXECUTION_MODE=worker docker compose --profile worker up --build --scale work
 - **谁执行**：inline 与 worker 都先把任务写入持久队列，inline 由 API 内嵌的队列消费者领取。
   领取按任务所有者公平轮转，入队时冻结任务成本和轻/重类别，执行上限 ≥ 2 时为轻任务保留
   一个槽；最终仍由条件租约更新仲裁。调度只决定顺序，租约才是跨进程的唯一裁决者——与崩溃
-  恢复完全同源。详见 [公平调度记录](docs/FAIR_SCHEDULING_20261004.md)。
+  恢复完全同源。详见 [容量、流式与恢复规则](docs/OPERATIONS.md#容量流式与恢复规则)。
 - **取消与 SSE**：取消经数据库状态生效（执行侧看到 `cancelling` 后收尾）；合并后的 token
   增量与计数落库，SSE 使用稳定事件序号续传。`cancelled`、`done`、`needs_review` 为终态，
   不能 `/resume`；`needs_review` 表示结果已保留但未通过交付验收，应使用内容修订或格式重试。
@@ -207,13 +207,11 @@ DR_EXECUTION_MODE=worker docker compose --profile worker up --build --scale work
   证据和原始输入保留。
 - **毒任务熔断**：同一 run 被领取超过 `DR_MAX_CLAIM_ATTEMPTS`（默认 3）次仍失败即置终态，
   原因 `poison_run` 入审计，避免必然崩溃的任务在 worker 之间无限传递。
-- **优雅退出**：worker 收到 SIGTERM 后停止领取但**不打断**在跑的研究；被强杀也无妨，
-  租约到期后由其他副本从 checkpoint 接管。
+- **优雅退出**：worker 收到 SIGTERM 后停止领取，在有界宽限内等待任务，再按共享清理期限停止执行；
+  未完成任务保留租约，到期后可由执行者从 checkpoint 接管。详见 [停止与恢复](docs/OPERATIONS.md#停止与恢复)。
 
-历史合成演示（`make chaos-demo-worker`，不代表生产恢复时间承诺；deep 工作流跑到第 3 层时硬杀 worker）：
-**API 全程 /healthz 200，新 worker 启动后 4.7s 接管**，planner/researcher 两层断点续跑跳过，
-**节省 66.7% token**（对照全量 9000，恢复后仅新增 3000）。
-对照组 `make chaos-demo`（inline，杀 API 后重启）接管 2.3s、同样节省 66.7%。
+`make chaos-demo-worker` 与 `make chaos-demo` 提供合成故障恢复演示，不代表生产恢复时间承诺。
+当前版本的实际验证结果统一记录在 [发布记录](docs/RELEASE.md)。
 
 两个服务均使用 Docker `local` 日志驱动，每个日志文件上限 10 MB、最多保留 5 个，避免访问日志或数据库日志无限占满宿主机磁盘；需要长期审计时应接入集中日志系统。
 

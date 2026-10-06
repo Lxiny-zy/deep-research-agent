@@ -1,6 +1,6 @@
 # 参考产品功能覆盖清单
 
-本清单主要核对实现入口与相关测试，不能等同于完整业务或科研质量验收。最新已修复缺陷、真实任务验证及未解决设计问题以 [后续改进计划](IMPROVEMENT_PLAN.md) 和 [跨模块设计审查](DESIGN_AUDIT_20261001.md) 为准；累计 token 预算和每日 token 配额已取消。
+本清单主要核对实现入口与相关测试，不能等同于完整业务或科研质量验收。当前上线版本与验证结果以 [发布记录](RELEASE.md) 为准，剩余工作与人工验收范围统一维护在 [后续改进计划](IMPROVEMENT_PLAN.md)；累计 token 预算和每日 token 配额已取消。
 
 > **机械核对**：`python scripts/check_workbench_coverage.py` 直接从资料包的原始文件中抽取功能清单，逐项核对本项目中的实体（模板、路由、门函数、模块、计划字段、步骤状态），当前结果为 **66/66 项覆盖或已说明不适用**（其中 6 项不适用：积分计费、订阅计费、实验套件/GPU、运行期装包、品牌样式门、外部进程等待），退出码为 0。抽取范围包括：任务清单里出现过的全部 `template_key`、设计文档架构图列出的全部平台端点、`_shared/scripts` 下的全部门脚本、`.claude/skills` 下的全部技能目录、真实 `vela-steps.json` 中的全部步骤字段与状态值。资料包新增条目而映射表未跟上时，脚本会报「未映射」并失败。下表是这份结果的可读版本。
 
@@ -42,7 +42,7 @@
 | GPU 确认与 GPU 步骤执行 | 不适用 | 部署只通过 API 调用云端 LLM，不调度 GPU；声明 GPU 的计划步骤在入口返回 422 `gpu_unsupported`，执行层同样拒绝 | `test_gpu_plans_are_rejected_*` |
 | 每步一次性容器 | ⚙ | `CommandRunner` 子进程 + 可选命名空间隔离（`runner_isolation=required`） | `test_runner*` |
 | 步骤级质量检查 enable_check / max_check_attempts | ✅ | `ExecutionStep.enable_check`；`PlanExecutor._checked` 复核产物（非空、Markdown 卫生、地名规范），不合格则带问题清单重做，仍不合格按 partial 交给重规划 | `test_enable_check_reruns_step_until_artifacts_pass` |
-| 执行纪律（超时、禁 pkill -f、障碍预算） | ⚙ | 引擎级超时 / 重试 / 退避上限、token 预算、runner 超时回收 | `test_workflow*`, `test_budget_enforcement` |
+| 执行纪律（超时、禁 pkill -f、障碍预算） | ⚙ | 引擎级超时 / 重试 / 退避上限、调用次数边界、runner 超时回收；token 仅计量 | `test_workflow*`, `test_budget_enforcement` |
 
 备注：参考产品为每步起一个 K8s Pod 并调度 GPU。本项目只调用云端 LLM，交付物生成等本地步骤用「子进程 + 可选命名空间隔离」执行。
 
@@ -96,7 +96,7 @@
 | 参考功能 | 状态 | 实现 | 测试 |
 |---|---|---|---|
 | 每事件 / 每运行 token 计量 | ✅ | Tracer 累计、`RunSummary.total_tokens` | `test_budget_enforcement` |
-| 额度（配额） | ✅ | `DAILY_RUN_QUOTA` / `DAILY_TOKEN_QUOTA`，`/api/usage`，前端显示用量 | `test_daily_quota_*` |
-| 积分定价 | ⚙ | 不做积分计费；用量只按运行次数与 token 额度统计（`/api/usage`） | — |
-| 订阅计费 | ⚙ | 自部署工作台没有收费主体，不做订阅结算；额度由运行次数与 token 额度承担 | — |
+| 额度（配额） | ⚙ | `DAILY_RUN_QUOTA` 限制每日运行次数；`/api/usage` 展示用量，token 不设每日配额 | `test_daily_quota_*` |
+| 积分定价 | ⚙ | 不做积分计费；`/api/usage` 统计运行次数与 token 消耗 | — |
+| 订阅计费 | ⚙ | 自部署工作台不做订阅结算；运行次数限制与消耗统计不代表收费额度 | — |
 | 登录鉴权 | ✅ | API Key / 多身份角色（admin / researcher / reader） | `test_access_control*` |

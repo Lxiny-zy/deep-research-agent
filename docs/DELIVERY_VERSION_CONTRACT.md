@@ -1,6 +1,10 @@
 # 文档版本与渲染回执
 
-本次变更仅在本地升级工作树实现，未部署。
+本页维护当前文档投影、不可变交付版本与异步渲染回执的 API 契约。
+线上版本和验证结果见 [发布记录](RELEASE.md)，渲染容量、进程及关闭边界见
+[运行指南](OPERATIONS.md#渲染队列进度与关闭)。
+
+## 版本标识与读取
 
 - `GET /api/runs/{run_id}/document` 的 `content_version` 是规范化 ReportDocument SHA-256，
   计算时排除该字段自身；`source_version` 对应交付登记的 `input_version`，用于检查同源。
@@ -13,6 +17,8 @@
   `GET /deliverables.zip?version=...` 校验全部文件，包内 manifest 记录文件哈希。
   修复生成新版本，原文件和旧版本登记保持原样。
 
+## 提交与幂等回执
+
 `POST /api/runs/{run_id}/render-operations` 返回 202 回执，参数如下：
 
 ```json
@@ -20,6 +26,13 @@
 ```
 
 `kind` 可为 `bundle`、`retry`、`export`；后两者必须提供 `version` 与 `format`。
+
+| kind | version 的含义 | 冲突处理 |
+| --- | --- | --- |
+| bundle | 可省略；提供时须匹配当前 `input_version` | 输入变化时拒绝按旧输入生成 |
+| retry | 当前交付登记的 `delivery_version` | 已非当前版本时返回 `409 / delivery_version_changed` |
+| export | 当前文档投影的 `content_version` | 投影变化时返回 `409 / document_version_changed` |
+
 可选导出字段为 `include_hsi_tables`、`table_id`、`profile`、`template`。
 读者只能提交自己有权读取任务的 `export`，生成与修复仍需研究权限。
 
@@ -31,7 +44,9 @@
 
 同 request_id 不同参数返回 409；同内容不同 request_id 共用规范队列任务。
 回执别名采用受路径约束、受存储配额约束的原子控制文件，实际执行状态沿用现有持久 RenderJob。
-队列仍受已有 admission 上限约束。进程重启后的 PostgreSQL/SQLite任务仍可查询；内存仓库不具备跨进程持久性。
+队列仍受已有 admission 上限约束。进程重启后的 PostgreSQL/SQLite 任务仍可查询；内存仓库不具备跨进程持久性。
+
+## 冻结结果与验证入口
 
 导出完成后 `result_url` 返回冻结文件并校验文件 SHA-256，响应带 `X-Content-Version` 与
 `X-Content-SHA256`；生成/修复的 result_url 返回指定版本的交付登记。
@@ -41,3 +56,6 @@ Markdown 文件自身包含文档版本、核验范围和格式缺失范围，ZI
 跨标签版本变化、历史回执导出、不同请求复用、SQLite 重启、权限隔离），配合现有
 `test_delivery_persistence.py`、`test_delivery_retry_api.py`、`test_delivery_input_snapshot.py`、
 `test_access_control.py` 和 `test_api.py` 导出测试。
+
+浏览器和后端验证命令见 [运行指南](OPERATIONS.md#发布验收)。人工登记使用
+[验收记录模板](N0_ACCEPTANCE_RECORD_TEMPLATE.md)，后续变更范围见 [改进计划](IMPROVEMENT_PLAN.md)。
