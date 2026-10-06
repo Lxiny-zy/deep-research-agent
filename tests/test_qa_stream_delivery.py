@@ -18,7 +18,7 @@ async def test_qa_deltas_arrive_before_final_answer(monkeypatch, disconnect) -> 
     release = asyncio.Event()
     saved: list[str] = []
 
-    async def answer(cid, body, request, *, on_delta=None, on_event=None):  # type: ignore[no-untyped-def]
+    async def answer(cid, body, request, *, on_delta=None, on_event=None, on_checkpoint=None):
         on_event(
             {"type": "reasoning", "call_id": "test", "reasoning_delta": "provider-visible text"}
         )
@@ -69,7 +69,7 @@ async def test_reconnect_replays_snapshot_and_shares_the_original_model_task(mon
     release = asyncio.Event()
     calls = 0
 
-    async def answer(cid, body, request, *, on_delta=None, on_event=None):
+    async def answer(cid, body, request, *, on_delta=None, on_event=None, on_checkpoint=None):
         nonlocal calls
         calls += 1
         on_event({"type": "reasoning", "call_id": "one", "reasoning_delta": "thinking"})

@@ -203,6 +203,7 @@ function normalizeEvidence(raw: unknown, fallbackCitation: number): ReportEviden
   const independentSourceCount = integerValue(raw.independent_source_count, 0) ?? 0
   return {
     citation: positiveInteger(raw.citation, fallbackCitation) ?? fallbackCitation,
+    ...(typeof raw.support_id === 'string' ? { support_id: raw.support_id } : {}),
     claim_id: stringValue(raw.claim_id),
     statement: stringValue(raw.statement),
     quote: stringValue(raw.quote, stringValue(raw.evidence_quote)),
@@ -307,6 +308,25 @@ export function normalizeReportDocument(payload: unknown): ReportDocument | null
     .filter((section): section is PaperSection => section != null)
   return {
     schema_version: schemaVersion,
+    ...(typeof payload.source_version === 'string'
+      ? { source_version: payload.source_version }
+      : {}),
+    ...(typeof payload.content_version === 'string'
+      ? { content_version: payload.content_version }
+      : {}),
+    ...(isRecord(payload.bibliography) &&
+    Array.isArray(payload.bibliography.locations) &&
+    Array.isArray(payload.bibliography.documents) &&
+    typeof payload.bibliography.source_body === 'string' &&
+    typeof payload.bibliography.body === 'string'
+      ? { bibliography: payload.bibliography as unknown as ReportDocument['bibliography'] }
+      : {}),
+    ...(isRecord(payload.final_validation)
+      ? {
+          final_validation:
+            payload.final_validation as unknown as ReportDocument['final_validation'],
+        }
+      : {}),
     query,
     ...(typeof payload.title === 'string' ? { title: payload.title } : {}),
     ...(typeof payload.abstract === 'string' ? { abstract: payload.abstract } : {}),

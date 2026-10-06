@@ -11,7 +11,7 @@ from tests.test_workbench import api_repo as api_repo
 
 
 async def test_format_retry_updates_cached_registry_and_keeps_versioned_downloads(
-    api_repo, monkeypatch
+    api_repo, monkeypatch, cooperative_render
 ):
     api, repo = api_repo
     _, execution = _execution("q", "autoResearch", api.app.state.settings)

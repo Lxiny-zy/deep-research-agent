@@ -14,6 +14,8 @@ from deep_research.blocking import run_blocking
 from deep_research.persistence.memory_repository import InMemoryRepository
 from deep_research.report import capabilities
 
+pytestmark = pytest.mark.usefixtures("cooperative_render")
+
 
 @pytest.mark.parametrize(
     ("suffix", "renderer", "payload"),

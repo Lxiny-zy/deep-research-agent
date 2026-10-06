@@ -22,7 +22,15 @@ from starlette.responses import StreamingResponse
 from ..http.auth import principal_for
 from ..observability import Event
 from .qa import answer_question
+from .qa_admission import QaLimits, QaQueueFull
 from .qa_cache import PaperEvidenceCache
+from .qa_checkpoint import (
+    MAX_CHECKPOINT_BYTES,
+    CheckpointWriter,
+    QaCheckpoint,
+    environment_hash,
+    read_checkpoint,
+)
 from .qa_jobs import start_turn
 from .qa_requests import INTERRUPTED, MemoryQaRequests, RequestConflict, SqlQaRequests
 from .qa_store import (
@@ -52,6 +60,7 @@ class AskRequest(BaseModel):
     project_id: str | None = Field(None, max_length=64)
     request_id: str | None = Field(None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     revision_message_id: str | None = Field(None, min_length=1, max_length=64)
+    resume_message_id: str | None = Field(None, min_length=1, max_length=64)
 
     @field_validator("query")
     @classmethod
@@ -83,10 +92,11 @@ def _requests(request: Request) -> Any:
     store = _store(request)
     requests = getattr(request.app.state, "qa_requests", None)
     if requests is None or getattr(request.app.state, "qa_requests_store", None) is not store:
+        limits = QaLimits.from_settings(request.app.state.settings)
         if isinstance(store, SqlQaStore):
-            requests = SqlQaRequests(store._sm)
+            requests = SqlQaRequests(store._sm, limits)
         elif isinstance(store, InMemoryQaStore):
-            requests = MemoryQaRequests(store)
+            requests = MemoryQaRequests(store, limits)
         else:
             raise TypeError("问答存储未实现请求生命周期")
         request.app.state.qa_requests = requests
@@ -177,6 +187,8 @@ async def _prepare_turn(cid: str, body: AskRequest, request: Request) -> Any:
     if body.revision_message_id is None:
         # Preserve hashes of requests reserved before revision support existed.
         payload.pop("revision_message_id", None)
+    if body.resume_message_id is None:
+        payload.pop("resume_message_id", None)
     digest = hashlib.sha256(
         json.dumps({"actor": principal.id, **payload}, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
@@ -184,12 +196,18 @@ async def _prepare_turn(cid: str, body: AskRequest, request: Request) -> Any:
     existing = await requests.get(cid, request_id)
     if existing is None:
         await api_module._check_rate_limit(request)
-        if body.revision_message_id is not None:
+        if body.resume_message_id is not None:
+            await _resume_state(request, conversation, body)
+        elif body.revision_message_id is not None:
             await _revision_seed(request, conversation, body)
         else:
             await _paper_scope(request, conversation, body)
     try:
         await requests.reserve(cid, request_id, digest, {**payload, "_actor": principal.id})
+    except QaQueueFull as exc:
+        raise HTTPException(
+            429, {"code": "qa_queue_full", "message": str(exc)}, headers={"Retry-After": "5"}
+        ) from exc
     except (RequestConflict, ConversationFullError) as exc:
         raise HTTPException(409, str(exc)) from exc
     except KeyError as exc:
@@ -207,6 +225,7 @@ async def _prepare_turn(cid: str, body: AskRequest, request: Request) -> Any:
         request_id,
         execute,
         attempt_seconds(request.app.state.settings, "qa"),
+        checkpoints=True,
     )
 
 
@@ -219,6 +238,21 @@ async def request_status(conversation_id: str, request_id: str, request: Request
     return message_payload(row)
 
 
+@router.post("/conversations/{conversation_id}/requests/{request_id}/cancel")
+async def cancel_request(conversation_id: str, request_id: str, request: Request) -> dict[str, Any]:
+    await _owned(request, conversation_id)
+    if not principal_for(request).can_research:
+        raise HTTPException(403, "当前身份为只读，无法停止问答")
+    row = await _requests(request).cancel(conversation_id, request_id)
+    if row is None:
+        raise HTTPException(404, "request not found")
+    runtime = getattr(request.app.state, "qa_live_turns", {}).get((conversation_id, request_id))
+    if row.status == "cancelled" and runtime is not None and runtime.work is not None:
+        runtime.stop_requested.set()
+        runtime.work.cancel()
+    return message_payload(row)
+
+
 async def _answer(
     conversation_id: str,
     body: AskRequest,
@@ -226,6 +260,7 @@ async def _answer(
     *,
     on_delta: Callable[[str], None] | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,
+    on_checkpoint: CheckpointWriter | None = None,
 ) -> dict[str, Any]:
     from .. import api as api_module
 
@@ -253,16 +288,45 @@ async def _answer(
     else:
         scope = await _paper_scope(request, conversation, body)
     history = [
-        {"id": message.id, "position": message.position,
-         "query": message.query, "answer": message.answer}
+        {
+            "id": message.id,
+            "position": message.position,
+            "query": message.query,
+            "answer": message.answer,
+        }
         for message in history_messages
     ]
-    previous_memory = next((
-        thought["memory"]
-        for message in reversed(history_messages)
-        for thought in reversed(message.thoughts)
-        if thought.get("tool") == "conversation_memory" and isinstance(thought.get("memory"), dict)
-    ), None)
+    environment = await _recovery_environment(request, body, scope, history)
+    if body.resume_message_id is not None:
+        scope["resume_checkpoint"] = await _resume_state(request, conversation, body)
+    execution_context = ""
+
+    async def save_checkpoint(raw: dict[str, Any]) -> None:
+        if on_checkpoint is None:
+            return
+        saved = (
+            QaCheckpoint.model_validate(raw)
+            .model_copy(update={"environment": environment, "execution_context": execution_context})
+            .sealed()
+        )
+        if len(json.dumps(saved, ensure_ascii=False).encode()) > MAX_CHECKPOINT_BYTES:
+            if on_event:
+                on_event(
+                    {"type": "status", "message": "本轮材料较大，阶段快照未保存；原始资料仍保留。"}
+                )
+            return
+        await on_checkpoint(saved)
+
+    previous_memory = next(
+        (
+            thought["memory"]
+            for message in reversed(history_messages)
+            for thought in reversed(message.thoughts)
+            if thought.get("tool") == "conversation_memory"
+            and isinstance(thought.get("memory"), dict)
+        ),
+        None,
+    )
     if previous_memory is not None:
         scope["conversation_memory"] = previous_memory
     if conversation.run_id is not None and body.revision_message_id is None:
@@ -317,8 +381,52 @@ async def _answer(
     agent.tracer.add_sink(observe)
     try:
         ctx = await agent.one_shot_context()
+        roles = ("planner", "researcher", "synthesizer", "evidence_verifier")
+        runtime = getattr(agent, "_catalog_runtime", None)
+        execution_context = environment_hash(
+            {
+                "settings": asdict(ctx.settings),
+                "global_rules": getattr(ctx, "global_rules", None),
+                "catalog": runtime.snapshot(roles).model_dump(mode="json")
+                if runtime is not None
+                else None,
+                "models": [
+                    {
+                        "role": role,
+                        **{
+                            key: getattr(ctx.llm_for(role), key, None)
+                            for key in (
+                                "model",
+                                "base_url",
+                                "parameter_mode",
+                                "context_window_tokens",
+                                "reasoning_effort",
+                            )
+                        },
+                    }
+                    for role in roles
+                ],
+            }
+        )
+        if (
+            body.resume_message_id is not None
+            and scope["resume_checkpoint"].get("execution_context") != execution_context
+        ):
+            raise HTTPException(
+                409,
+                {
+                    "code": "qa_recovery_unavailable",
+                    "message": "实际模型或角色配置已变化，原阶段结果不可继续",
+                },
+            )
         result = await answer_question(
-            body.query, history=history, ctx=ctx, on_delta=on_delta, on_event=on_event, **scope
+            body.query,
+            history=history,
+            ctx=ctx,
+            on_delta=on_delta,
+            on_event=on_event,
+            on_checkpoint=save_checkpoint,
+            **scope,
         )
     except HTTPException:
         raise
@@ -342,11 +450,16 @@ async def _answer(
             f"本轮已达到模型调用上限（{call_budget.limit} 次），以下只保留可核验内容。\n\n"
             + result.answer
         )
-    result.thoughts.append({
-        "tool": "model_budget", "input": "",
-        "observation": f"本轮使用 {call_budget.used}/{call_budget.limit} 次模型请求。",
-        "used": call_budget.used, "limit": call_budget.limit, "stopped": call_budget.rejected,
-    })
+    result.thoughts.append(
+        {
+            "tool": "model_budget",
+            "input": "",
+            "observation": f"本轮使用 {call_budget.used}/{call_budget.limit} 次模型请求。",
+            "used": call_budget.used,
+            "limit": call_budget.limit,
+            "stopped": call_budget.rejected,
+        }
+    )
 
     evidence = [
         {
@@ -562,6 +675,109 @@ async def _paper_scope(
             request.app.state.library, project.id, project.owner_id
         )
     return scope
+
+
+async def _recovery_environment(
+    request: Request, body: AskRequest, scope: dict[str, Any], history: list[dict]
+) -> str:
+    from ..catalog.runtime import create_catalog_runtime_snapshot
+    from ..guardrails import SemanticEvidenceVerifier
+    from ..prompting import load_global_rules
+    from .prose_review import SUPPORT_POLICY_VERSION
+
+    catalog = getattr(request.app.state, "catalog", None)
+    catalog_state = None
+    if catalog is not None:
+        cards = await catalog.list_agents()
+        catalog_state = (
+            await create_catalog_runtime_snapshot(
+                catalog,
+                [card.name for card in cards],
+                request.app.state.settings,
+            )
+        ).model_dump(mode="json")
+    library = []
+    if "library" in body.sources and body.project_id:
+        library = [
+            source.model_dump(mode="json")
+            for source in await request.app.state.library.list_sources(body.project_id)
+        ]
+        library.sort(key=lambda source: source["id"])
+    material = {
+        key: [item.model_dump(mode="json") for item in value] if isinstance(value, list) else value
+        for key, value in scope.items()
+        if key
+        in {
+            "paper_sources",
+            "paper_evidence",
+            "scope_kind",
+            "scope_query",
+            "include_web",
+            "revision_seed",
+        }
+    }
+    return environment_hash(
+        {
+            "contract": 1,
+            "support_policy": SUPPORT_POLICY_VERSION,
+            "evidence_policy": environment_hash(SemanticEvidenceVerifier._SYSTEM),
+            "actor": principal_for(request).id,
+            "request": body.model_dump(exclude={"request_id", "resume_message_id"}),
+            "settings": asdict(request.app.state.settings),
+            "catalog": catalog_state,
+            "global_rules": load_global_rules(),
+            "scope": material,
+            "history": history,
+            "library": library,
+        }
+    )
+
+
+async def _resume_state(
+    request: Request, conversation: QaConversation, body: AskRequest
+) -> dict[str, Any]:
+    parent = next(
+        (message for message in conversation.messages if message.id == body.resume_message_id), None
+    )
+    if parent is None:
+        raise HTTPException(404, "原问题不存在")
+    if parent.request_id:
+        parent = await _requests(request).get(conversation.id, parent.request_id)
+    try:
+        if parent is None or parent.status not in {"error", "cancelled"}:
+            raise ValueError("只能继续已停止或中断的问题")
+        original = AskRequest(**parent.request_payload)
+        if body.model_dump(exclude={"request_id", "resume_message_id"}) != original.model_dump(
+            exclude={"request_id", "resume_message_id"}
+        ):
+            raise ValueError("继续时须保留原问题和来源范围")
+        checkpoint = read_checkpoint(parent.request_payload.get("_checkpoint"))
+        scope = (
+            {"revision_seed": await _revision_seed(request, conversation, body)}
+            if body.revision_message_id
+            else await _paper_scope(request, conversation, body)
+        )
+        candidates = conversation.messages
+        if body.revision_message_id:
+            parent_index = next(
+                i for i, message in enumerate(candidates) if message.id == body.revision_message_id
+            )
+            candidates = candidates[:parent_index]
+        history = [
+            {
+                "id": message.id,
+                "position": message.position,
+                "query": message.query,
+                "answer": message.answer,
+            }
+            for message in candidates
+            if message.status in {"done", "fallback"}
+        ]
+        if checkpoint.environment != await _recovery_environment(request, body, scope, history):
+            raise ValueError("模型配置、来源范围或对话已变化，原阶段结果不可继续；请重新提问")
+        return checkpoint.sealed()
+    except ValueError as exc:
+        raise HTTPException(409, {"code": "qa_recovery_unavailable", "message": str(exc)}) from exc
 
 
 __all__ = ["router"]

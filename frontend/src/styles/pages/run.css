@@ -1793,6 +1793,7 @@
 
 /* ---- 结构化表格预览 ---- */
 .structured-document-preview {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -1824,12 +1825,17 @@
 }
 
 .structured-document-table-scroll {
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   overflow-x: auto;
 }
 
-.structured-document-table-scroll table {
+.structured-document-preview .structured-document-table-scroll table {
+  display: table;
+  overflow: visible;
+  min-width: 100%;
+  max-width: none;
   font-size: var(--text-sm);
 }
 
@@ -1873,6 +1879,71 @@
 .structured-document-notes {
   color: var(--text-3);
   font-size: var(--text-xs);
+}
+
+.structured-chart-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.structured-chart-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.structured-scroll-hint {
+  display: none;
+}
+@media (max-width: 600px) {
+  .structured-scroll-hint {
+    display: block;
+    margin: 8px 0;
+  }
+}
+.structured-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-width: 560px;
+  color: var(--text);
+}
+.structured-chart-svg text {
+  fill: currentColor;
+  font-size: 12px;
+}
+.structured-chart-grid {
+  stroke: currentColor;
+  opacity: 0.15;
+}
+.structured-chart-axis {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+.structured-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  list-style: none;
+  padding: 0;
+}
+.structured-chart-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.structured-chart-legend li > span:first-child {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+.structured-chart-data summary {
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+.structured-document-table-scroll .katex-display {
+  margin: 0;
+}
+.structured-document-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---- 右栏：文件树 ---- */

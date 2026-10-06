@@ -39,10 +39,15 @@ def render_reproducibility_bundle(
 
     safe_id = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).strip("._-") or "run"
     source_list = list(sources)
+    from .versioning import document_version
+
+    content_version = document.content_version or document_version(document)
+    document = document.model_copy(update={"content_version": content_version})
     files: dict[str, bytes] = {
         "README.txt": (
             "Deep Research reproducibility bundle\n"
             f"run_id: {safe_id}\n"
+            f"content_version: {content_version}\n"
             "Contents: report.tex, references.bib, report.md, document.json, "
             "manifest.json, sources.json, optional figures/*.svg and checksums.sha256.\n"
             "The final PDF can be compiled with XeLaTeX and latexmk using report.tex.\n"
@@ -54,7 +59,12 @@ def render_reproducibility_bundle(
         "report.md": render_markdown(document).encode("utf-8"),
         "document.json": _json(document.model_dump(mode="json")).encode("utf-8"),
         "manifest.json": _json(
-            {"run_id": run_id, "manifest": manifest.model_dump(mode="json") if manifest else None}
+            {
+                "run_id": run_id, "content_version": content_version,
+                "validation": document.final_validation.model_dump(mode="json")
+                if document.final_validation else None,
+                "manifest": manifest.model_dump(mode="json") if manifest else None,
+            }
         ).encode("utf-8"),
         "sources.json": _json([source.model_dump(mode="json") for source in source_list]).encode(
             "utf-8"

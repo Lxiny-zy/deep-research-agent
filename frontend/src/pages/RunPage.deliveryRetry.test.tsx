@@ -3,12 +3,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type { DeliverableRegistry, RunDetail } from '../types'
 import RunPage from './RunPage'
+import { webcrypto } from 'node:crypto'
 
 const api = vi.hoisted(() => ({
   getRun: vi.fn(),
   getRunDocument: vi.fn(),
   getDeliverables: vi.fn(),
-  retryDeliverable: vi.fn(),
+  createRenderOperation: vi.fn(),
   getRunTemplate: vi.fn(),
   getNarrative: vi.fn(),
   getWorkspace: vi.fn(),
@@ -39,6 +40,8 @@ vi.mock('../hooks/useResearchStream', () => ({
 
 const scrollToDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo')
 beforeEach(() => {
+  vi.stubGlobal('crypto', webcrypto)
+  localStorage.clear()
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({ matches: true })),
@@ -111,7 +114,7 @@ it('refreshes persisted run status after a format retry and removes old review d
   api.getRun.mockImplementation(async () =>
     repaired ? { ...detail, status: 'done', completion: { status: 'done', issues: [] } } : detail,
   )
-  api.getDeliverables.mockResolvedValue(registry)
+  api.getDeliverables.mockImplementation(async () => (repaired ? ready : registry))
   api.getRunDocument.mockResolvedValue({
     schema_version: 1,
     query: detail.query,
@@ -139,11 +142,19 @@ it('refreshes persisted run status after a format retry and removes old review d
     last_seq: 1,
   }))
   api.getWorkspace.mockResolvedValue(null)
-  api.retryDeliverable.mockImplementation(async () => {
+  api.createRenderOperation.mockImplementation(async (_run, request) => {
     // The retry response remains a registry; only a fresh detail read can
     // observe the backend's new durable completion state.
-    repaired = true
-    return ready
+    if (request.kind === 'retry') repaired = true
+    return {
+      id: 'operation',
+      operation_id: 'operation',
+      run_id: 'review-run',
+      kind: request.kind,
+      request_id: request.request_id,
+      status: 'done',
+      content_version: repaired ? ready.content_version : registry.content_version,
+    }
   })
 
   const client = new QueryClient({
@@ -170,11 +181,15 @@ it('refreshes persisted run status after a format retry and removes old review d
     await waitFor(() =>
       expect(view.container.querySelector('.run-head .badge')).toHaveTextContent('已完成'),
     )
-    expect(api.retryDeliverable).toHaveBeenCalledWith(
+    expect(api.createRenderOperation).toHaveBeenCalledWith(
       'review-run',
-      'a'.repeat(64),
-      'pdf',
-      expect.any(String),
+      expect.objectContaining({
+        kind: 'retry',
+        version: 'a'.repeat(64),
+        format: 'pdf',
+        request_id: expect.any(String),
+      }),
+      expect.any(AbortSignal),
     )
     expect(api.getRun.mock.calls.length).toBeGreaterThan(readsBeforeRetry)
     expect(client.getQueryData<RunDetail>(['run', 'review-run'])?.status).toBe('done')

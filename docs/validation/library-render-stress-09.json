@@ -1,0 +1,23 @@
+{
+  "iteration": 9,
+  "exit": 0,
+  "elapsed_ms": 12756,
+  "summary": "======================= 1 passed, 7 deselected in 9.34s =======================",
+  "jobs": [
+    {
+      "id": "3f51b4d6-fd0a-433a-a837-e55848cd3b81",
+      "status": "done",
+      "attempts": 1,
+      "stalls": 0,
+      "error": null
+    },
+    {
+      "id": "d7826303-3394-47af-80ab-a1e89b879952",
+      "status": "done",
+      "attempts": 1,
+      "stalls": 0,
+      "error": null
+    }
+  ],
+  "inspection_error": null
+}

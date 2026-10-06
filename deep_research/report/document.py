@@ -293,6 +293,8 @@ class ReportDocument(BaseModel):
     _bibliography_presented: bool = PrivateAttr(default=False)
 
     schema_version: int = 1
+    content_version: str = ""
+    source_version: str = ""
     query: str = ""
     # Optional publication metadata.  Keeping these fields on the shared
     # intermediate representation lets Markdown, HTML, and LaTeX exports use

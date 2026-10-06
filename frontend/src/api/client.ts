@@ -461,6 +461,7 @@ export function getRun(id: string, signal?: AbortSignal): Promise<RunDetail> {
 }
 
 export interface GetRunDocumentOptions {
+  version?: string
   includeHsiTables?: boolean
   signal?: AbortSignal
 }
@@ -471,6 +472,7 @@ export function getRunDocument(
   options: GetRunDocumentOptions = {},
 ): Promise<ReportDocument> {
   const query = new URLSearchParams()
+  if (options.version) query.set('version', options.version)
   if (options.includeHsiTables) query.set('include_hsi_tables', 'true')
   const suffix = query.toString() ? `?${query.toString()}` : ''
   return request<unknown>(`/api/runs/${encodeURIComponent(id)}/document${suffix}`, {
@@ -495,6 +497,8 @@ export type ReportExportProfile = 'academic' | 'technical' | 'executive' | 'appe
 export type LatexTemplateName = 'ctexart' | 'ctexrep' | 'ieeetran' | 'acmart'
 
 export interface RunDocumentExportOptions {
+  version?: string
+  requestId?: string
   includeHsiTables?: boolean
   tableId?: string
   profile?: ReportExportProfile
@@ -535,6 +539,7 @@ export async function downloadRunDocument(
   options: RunDocumentExportOptions = {},
 ): Promise<RunDocumentDownload> {
   const query = new URLSearchParams()
+  if (options.version) query.set('version', options.version)
   if (options.includeHsiTables) query.set('include_hsi_tables', 'true')
   if (options.profile && (format === 'tex' || format === 'paper_pdf')) {
     query.set('profile', options.profile)
@@ -575,7 +580,7 @@ export async function downloadRunDocument(
     {
       headers: {
         Accept: 'application/octet-stream',
-        'X-Render-Retry': crypto.randomUUID(),
+        ...(options.requestId ? { 'X-Render-Retry': options.requestId } : {}),
         ...(key ? { Authorization: `Bearer ${key}` } : {}),
       },
       signal: options.signal,
@@ -892,11 +897,113 @@ export function getDeliverables(
   id: string,
   signal?: AbortSignal,
   retryToken?: string,
+  version?: string,
 ): Promise<DeliverableRegistry> {
-  return request<DeliverableRegistry>(`/api/runs/${encodeURIComponent(id)}/deliverables`, {
-    signal,
-    ...(retryToken ? { headers: { 'X-Render-Retry': retryToken } } : {}),
-  })
+  return request<DeliverableRegistry>(
+    `/api/runs/${encodeURIComponent(id)}/deliverables${version ? `?version=${encodeURIComponent(version)}` : ''}`,
+    {
+      signal,
+      ...(retryToken ? { headers: { 'X-Render-Retry': retryToken } } : {}),
+    },
+  )
+}
+
+export interface RenderOperationRequest {
+  kind: 'bundle' | 'retry' | 'export'
+  request_id: string
+  version?: string
+  format?: string
+  include_hsi_tables?: boolean
+  table_id?: string
+  profile?: ReportExportProfile
+  template?: LatexTemplateName
+}
+
+export interface RenderOperationReceipt {
+  id: string
+  operation_id: string
+  run_id: string
+  kind: RenderOperationRequest['kind']
+  request_id: string
+  status: string
+  input_version?: string
+  content_version?: string
+  status_url: string
+  result_url?: string | null
+  error?: unknown
+}
+
+export function createRenderOperation(
+  runId: string,
+  body: RenderOperationRequest,
+  signal?: AbortSignal,
+) {
+  return request<RenderOperationReceipt>(
+    `/api/runs/${encodeURIComponent(runId)}/render-operations`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        ...body,
+        ...(body.format === 'paper_pdf' ? { format: 'paper-pdf' } : {}),
+      }),
+      signal,
+    },
+  )
+}
+
+export function getRenderOperation(
+  runId: string,
+  operationId: string,
+  signal?: AbortSignal,
+  requestId?: string,
+) {
+  return request<RenderOperationReceipt>(
+    `/api/runs/${encodeURIComponent(runId)}/render-operations/${encodeURIComponent(operationId)}${requestId ? `?request_id=${encodeURIComponent(requestId)}` : ''}`,
+    { signal },
+  )
+}
+
+export function downloadRenderResult(
+  runId: string,
+  receipt: RenderOperationReceipt,
+  signal?: AbortSignal,
+): Promise<RunDocumentDownload> {
+  const key = getApiKey()
+  return withResponse(
+    `/api/runs/${encodeURIComponent(runId)}/render-operations/${encodeURIComponent(receipt.operation_id || receipt.id)}/result`,
+    {
+      headers: {
+        Accept: 'application/octet-stream',
+        ...(key ? { Authorization: `Bearer ${key}` } : {}),
+      },
+      signal,
+    },
+    async (res) => {
+      if (!res.ok) {
+        if (res.status === 401) signalUnauthorized(key)
+        throw new ApiError(res.status, '无法下载已提交的渲染结果，请重新连接。')
+      }
+      if (
+        !receipt.content_version ||
+        res.headers.get('X-Content-Version') !== receipt.content_version
+      ) {
+        throw new Error('下载结果与提交的内容版本不一致。')
+      }
+      const bytes = await res.arrayBuffer()
+      const blob = new Blob([bytes], {
+        type: res.headers.get('Content-Type') ?? 'application/octet-stream',
+      })
+      const digest = await crypto.subtle.digest('SHA-256', bytes)
+      const hash = Array.from(new Uint8Array(digest), (n) => n.toString(16).padStart(2, '0')).join(
+        '',
+      )
+      if (res.headers.get('X-Content-SHA256') !== hash) throw new Error('下载文件完整性核验失败。')
+      return {
+        blob,
+        filename: downloadFilename(res.headers.get('Content-Disposition'), `research-${runId}`),
+      }
+    },
+  )
 }
 
 export function reviseRunContent(runId: string, sourceVersion: string): Promise<CreateRunResponse> {
@@ -1024,6 +1131,13 @@ export function getQaRequest(
   )
 }
 
+export function cancelQaRequest(id: string, requestId: string): Promise<QaMessage> {
+  return request<QaMessage>(
+    `/api/qa/conversations/${encodeURIComponent(id)}/requests/${encodeURIComponent(requestId)}/cancel`,
+    { method: 'POST' },
+  )
+}
+
 export function deleteConversation(id: string): Promise<void> {
   return requestVoid(`/api/qa/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
@@ -1038,6 +1152,7 @@ export function askQuestion(
     projectId?: string
     requestId?: string
     revisionMessageId?: string
+    resumeMessageId?: string
   },
   onDelta?: (delta: string) => void,
   onActivity?: (activity: QaActivity) => void,
@@ -1049,6 +1164,7 @@ export function askQuestion(
         ...(scope.projectId ? { project_id: scope.projectId } : {}),
         ...(scope.requestId ? { request_id: scope.requestId } : {}),
         ...(scope.revisionMessageId ? { revision_message_id: scope.revisionMessageId } : {}),
+        ...(scope.resumeMessageId ? { resume_message_id: scope.resumeMessageId } : {}),
       }
     : { query }
   return askQuestionStream(id, body, signal, onDelta, onActivity)
@@ -1062,6 +1178,7 @@ async function askQuestionStream(
     project_id?: string
     request_id?: string
     revision_message_id?: string
+    resume_message_id?: string
   },
   signal?: AbortSignal,
   onDelta?: (delta: string) => void,
@@ -1096,7 +1213,7 @@ async function askQuestionStream(
   refreshIdleTimer()
   try {
     const response = await fetch(
-      body.revision_message_id
+      body.revision_message_id && !body.resume_message_id
         ? `/api/qa/conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(body.revision_message_id)}/revise/stream`
         : `/api/qa/conversations/${encodeURIComponent(id)}/messages/stream`,
       {
@@ -1106,7 +1223,11 @@ async function askQuestionStream(
           'Content-Type': 'application/json',
           ...(key ? { Authorization: `Bearer ${key}` } : {}),
         },
-        body: JSON.stringify(body.revision_message_id ? { request_id: body.request_id } : body),
+        body: JSON.stringify(
+          body.revision_message_id && !body.resume_message_id
+            ? { request_id: body.request_id }
+            : body,
+        ),
         signal: controller.signal,
       },
     )
@@ -1320,10 +1441,13 @@ export function parseDatasetFile(
 }
 
 export function mergeDatasetTables(
-  body: DatasetMergeRequest, signal?: AbortSignal,
+  body: DatasetMergeRequest,
+  signal?: AbortSignal,
 ): Promise<DatasetMergeResult> {
   return request<DatasetMergeResult>('/api/datasets/merge', {
-    method: 'POST', body: JSON.stringify(body), signal,
+    method: 'POST',
+    body: JSON.stringify(body),
+    signal,
   })
 }
 

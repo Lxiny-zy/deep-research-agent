@@ -99,6 +99,8 @@ export type Report = Required<Wire<'Report'>>
 
 /** Structured report wire contract returned by GET /api/runs/{id}/document. */
 export interface ReportDocument {
+  source_version?: string
+  content_version?: string
   bibliography?: ReportBibliography | null
   final_validation?: Wire<'FinalReportValidation'> | null
   schema_version: number
@@ -907,8 +909,11 @@ export interface DatasetMergeInfo {
   base: string
   tables: { name: string; rows: number; input_sha256: string }[]
   joins: (DatasetJoinStep & {
-    left_rows: number; right_rows: number; rows: number
-    unmatched_left: number; unmatched_right: number
+    left_rows: number
+    right_rows: number
+    rows: number
+    unmatched_left: number
+    unmatched_right: number
   })[]
   notes: string[]
   input_sha256: string
@@ -930,6 +935,8 @@ export interface GateResult {
 }
 
 export interface DeliverableItem {
+  available?: boolean
+  integrity_error?: string
   name: string
   format: string
   title: string
@@ -1026,7 +1033,7 @@ export interface QaMessage {
   citations: string[]
   evidence: QaEvidence[]
   thoughts: QaThought[]
-  status: 'pending' | 'running' | 'done' | 'fallback' | 'error'
+  status: 'pending' | 'running' | 'done' | 'fallback' | 'error' | 'cancelled'
   created_at: string | null
   tokens?: number | null
   request_id?: string | null
@@ -1035,8 +1042,10 @@ export interface QaMessage {
     sources?: QaSourceOption[]
     project_id?: string | null
     revision_message_id?: string | null
+    resume_message_id?: string | null
   }
   revision?: { available: boolean; reason?: string }
+  recovery?: { available: boolean; stage?: 'evidence' | 'draft' | 'reviewed'; reason?: string }
   error?: string | null
 }
 

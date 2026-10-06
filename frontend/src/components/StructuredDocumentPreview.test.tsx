@@ -1,6 +1,8 @@
 import { render, screen, within } from '@testing-library/react'
-import type { ReportDocument } from '../types'
+import type { ReportDocument, TableBlock } from '../types'
 import StructuredDocumentPreview from './StructuredDocumentPreview'
+import ReportView from './ReportView'
+import userEvent from '@testing-library/user-event'
 
 // 这个组件的风险不是"表画得好不好看"，而是**默默丢东西**：
 // 它先前只 filter 出 table，文档里声明的 chart 在屏幕上完全不可见，
@@ -57,12 +59,15 @@ const CHART: ReportDocument['blocks'][number] = {
   caption: '柱长即数值，基线为零。',
 }
 
-describe('StructuredDocumentPreview 图块降级', () => {
-  it('图不被静默丢弃，而是降级成指向源表的一节', () => {
+describe('StructuredDocumentPreview 图形与数据后备', () => {
+  it('从源表实际绘制图形，并保留可访问的数据表', () => {
     render(<StructuredDocumentPreview document={doc({ blocks: [TABLE, CHART] })} />)
 
     const chart = screen.getByTestId('structured-chart-recon-bar')
-    expect(within(chart).getByText('PSNR 对比')).toBeInTheDocument()
+    expect(within(chart).getByRole('heading', { name: 'PSNR 对比' })).toBeInTheDocument()
+    expect(within(chart).getByRole('img')).toBeInTheDocument()
+    expect(chart.querySelector('rect')).toHaveAttribute('height')
+    expect(within(chart).getByRole('table')).toBeInTheDocument()
     // 说明必须指向源表的标题，读者才知道去哪看数字
     expect(within(chart).getByText(/《重建算法》/)).toBeInTheDocument()
     expect(within(chart).getByText('柱长即数值，基线为零。')).toBeInTheDocument()
@@ -126,4 +131,86 @@ describe('StructuredDocumentPreview 脚注与单元格标记', () => {
 
     expect(screen.getByText('未报告')).toBeInTheDocument()
   })
+})
+
+it('typesets formulas and preserves negative values, units and missing values in grouped graphs', () => {
+  const table: TableBlock = {
+    ...TABLE,
+    columns: [TABLE.columns[0], { ...TABLE.columns[0], key: 'other', label: '$\\sigma^2$' }],
+    rows: [
+      {
+        label: 'A',
+        citation: null,
+        cells: {
+          psnr: {
+            value: '$-2.5\\pm0.1$',
+            numeric: -2.5,
+            citations: [1],
+            note_ref: null,
+            disputed: false,
+          },
+          other: { value: '3.2', numeric: 3.2, citations: [], note_ref: null, disputed: false },
+        },
+      },
+      {
+        label: 'B',
+        citation: null,
+        cells: {
+          psnr: { value: '', numeric: null, citations: [], note_ref: null, disputed: false },
+        },
+      },
+    ],
+  }
+  const { container } = render(
+    <StructuredDocumentPreview
+      document={doc({
+        blocks: [table, { ...CHART, form: 'grouped_bar', value_columns: ['psnr', 'other'] }],
+      })}
+    />,
+  )
+  expect(container.querySelectorAll('.katex').length).toBeGreaterThan(2)
+  expect(container.querySelectorAll('svg rect')).toHaveLength(2)
+  expect(container.querySelector('[data-value="-2.5"]')).toBeInTheDocument()
+  expect(screen.getAllByText('未报告').length).toBeGreaterThan(0)
+  expect(container.querySelectorAll('svg [data-value="0"]')).toHaveLength(0)
+})
+
+it('does not bridge a missing observation in a line chart', () => {
+  const table = {
+    ...TABLE,
+    rows: [
+      TABLE.rows[0],
+      { label: 'Missing', citation: null, cells: {} },
+      { ...TABLE.rows[0], label: 'Last' },
+    ],
+  }
+  const { container } = render(
+    <StructuredDocumentPreview document={doc({ blocks: [table, { ...CHART, form: 'line' }] })} />,
+  )
+  expect(container.querySelector('svg path')?.getAttribute('d')?.match(/M/g)).toHaveLength(2)
+  expect(container.querySelector('svg path')?.getAttribute('d')).not.toContain('L')
+})
+
+it('opens the same evidence drawer by keyboard for table and chart citations; missing mappings stay inert', async () => {
+  const document = doc({
+    blocks: [TABLE, { ...CHART, caption: '图注 [1] 与缺失映射 [9]。' }],
+    references: [{ index: 1, url: 'https://example.test/paper', reference: '原始论文' }],
+  })
+  render(
+    <ReportView
+      markdown="正文 [1]。"
+      streaming={false}
+      citations={['https://example.test/paper']}
+      document={document}
+    />,
+  )
+  const table = screen.getByTestId('structured-table-recon')
+  const button = within(table).getByRole('button', { name: '查看引用 1 的证据' })
+  button.focus()
+  await userEvent.keyboard('{Enter}')
+  expect(screen.getByRole('dialog')).toBeInTheDocument()
+  expect(screen.getByText(/没有可呈现的证据|暂无|未.*绑定|没有.*证据/)).toBeInTheDocument()
+  const chart = screen.getByTestId('structured-chart-recon-bar')
+  expect(within(chart).queryByRole('button', { name: /引用 9/ })).not.toBeInTheDocument()
+  expect(within(chart).getByTitle('引用映射不可用，无法定位证据')).toHaveTextContent('[9]')
 })

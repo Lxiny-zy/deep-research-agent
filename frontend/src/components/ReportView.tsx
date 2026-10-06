@@ -12,7 +12,8 @@ import {
   stripTrailingReferences,
   summarizeEvidence,
 } from '../lib/evidence'
-import type { Finding, ReportBibliography } from '../types'
+import type { Finding, ReportBibliography, ReportDocument } from '../types'
+import StructuredDocumentPreview, { type CitationRenderer } from './StructuredDocumentPreview'
 import {
   catalogForReport,
   citedDocuments,
@@ -39,6 +40,7 @@ export default function ReportView({
   blockedSources = null,
   finalReview,
   bibliography,
+  document,
 }: {
   markdown: string
   streaming: boolean
@@ -48,6 +50,7 @@ export default function ReportView({
   blockedSources?: number | null
   finalReview?: { status: string; issues: string[]; fallback?: boolean }
   bibliography?: ReportBibliography | null
+  document?: ReportDocument
 }) {
   const [activeLocations, setActiveLocations] = useState<number[]>([])
   const [activeTarget, setActiveTarget] = useState<string | null>(null)
@@ -142,6 +145,44 @@ export default function ReportView({
       },
     }),
     [targets, findings, streaming, catalog],
+  )
+
+  const renderStructuredCitation = useCallback<CitationRenderer>(
+    (indices, children) => {
+      const mapped =
+        indices.length > 0 &&
+        indices.every(
+          (n) =>
+            Boolean(targets[n - 1]) &&
+            document?.references.some((ref) => ref.index === n && ref.url === targets[n - 1]),
+        )
+      if (!mapped)
+        return (
+          <span className="cite-ref inert" title="引用映射不可用，无法定位证据">
+            {children}
+          </span>
+        )
+      const link = `#cite-${indices.join('-')}`
+      return (
+        <button
+          type="button"
+          className="cite-ref"
+          aria-label={`查看引用 ${indices.map((n) => documentNumber(catalog, n)).join(', ')} 的证据`}
+          aria-controls="evidence-panel"
+          aria-expanded={activeTargetRef.current === link}
+          onClick={(event) => {
+            citationTriggerRef.current = event.currentTarget
+            setActiveLocations(indices)
+            setActiveTarget(link)
+            setSelectedOccurrenceId(null)
+            setBrowsingSource(true)
+          }}
+        >
+          {children}
+        </button>
+      )
+    },
+    [targets, document, catalog],
   )
 
   if (!markdown) {
@@ -261,6 +302,12 @@ export default function ReportView({
             </Markdown>
           )}
           {streaming && <span className="report-caret" aria-hidden="true" />}
+          {!streaming && document && (
+            <StructuredDocumentPreview
+              document={document}
+              renderCitation={renderStructuredCitation}
+            />
+          )}
           {/* 流式阶段不渲染来源节：正文还在写，此时的 citations 是残缺快照，
               先给出一份会随后变化的清单，比暂时不给更容易误导。 */}
           {!streaming && (catalog ? citedDocuments(catalog).length : cited.length) > 0 && (

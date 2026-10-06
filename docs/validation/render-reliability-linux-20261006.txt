@@ -1,0 +1,6 @@
+Local Docker Linux; read-only upgrade source; network disabled
+Command: docker run --rm --init --network none --entrypoint python -v D:/Cursor-edit/Project_test/deep-research-agent-upgrade:/workspace:ro -v D:/tmp/render-pytest-deps:/testdeps:ro -e PYTHONPATH=/workspace:/testdeps -e PYTHONDONTWRITEBYTECODE=1 -e APP_ENV=test -w /workspace deep-research-agent:release-9723575a0662 -m pytest -q -p no:cacheprovider --basetemp=/tmp/render-reliability tests/test_render_process.py tests/test_shutdown_deadline.py tests/test_render_restart.py
+.......................                                                  [100%]
+23 passed in 57.52s
+
+Exit: 0

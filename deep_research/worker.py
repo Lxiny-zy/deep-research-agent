@@ -38,6 +38,7 @@ from .observability import Event
 from .persistence.db import make_engine, make_sessionmaker, prepare_sqlite_schema
 from .persistence.repository import ClaimedRun, LeaseLostError, ResearchRepository
 from .persistence.sql_repository import SqlRepository
+from .shutdown import cancel, wait_until
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,11 @@ class Worker:
         """Wake admission after local queue/configuration changes; calls coalesce."""
         self._wake.set()
 
+    @property
+    def shutdown_deadline(self) -> float:
+        started = self._stop_started if self._stop_started is not None else time.monotonic()
+        return started + self.settings.worker_shutdown_grace_seconds + _CLEANUP_SECONDS
+
     def _notify(
         self, callback: TaskCallback | None, claimed: ClaimedRun, task: asyncio.Task[None]
     ) -> None:
@@ -130,9 +136,12 @@ class Worker:
         try:
             await self._run_execution_loop()
         finally:
-            dispatcher.cancel()
-            await asyncio.gather(dispatcher, return_exceptions=True)
-            await rendering.close()
+            self.request_stop(reason="render_dispatcher_shutdown")
+            cancel({dispatcher})
+            closing = asyncio.create_task(rendering.close(deadline=self.shutdown_deadline))
+            pending = await wait_until({dispatcher, closing}, self.shutdown_deadline)
+            cancel(pending)
+            self.requires_hard_exit |= bool(pending) or rendering.requires_hard_exit
 
     async def _run_execution_loop(self) -> None:
         logger.info(
@@ -431,7 +440,7 @@ class Worker:
             if tasks:
                 _, pending = await asyncio.wait(tasks, timeout=max(0.0, remaining))
         finally:
-            cleanup_deadline = time.monotonic() + _CLEANUP_SECONDS
+            cleanup_deadline = self.shutdown_deadline
             pending = {task for task in pending if not task.done()}
             if pending:
                 logger.warning(
@@ -442,7 +451,7 @@ class Worker:
                 )
                 for task in pending:
                     task.cancel()
-                _, pending = await asyncio.wait(pending, timeout=_CLEANUP_SECONDS)
+                pending = await wait_until(pending, cleanup_deadline)
             heartbeat.cancel()
             _, heartbeat_pending = await asyncio.wait(
                 {heartbeat}, timeout=max(0.0, cleanup_deadline - time.monotonic())
@@ -477,7 +486,7 @@ class Worker:
 
     async def _remove_registration(self) -> None:
         removal = asyncio.create_task(self.repo.remove_worker(self.name), name="worker-unregister")
-        _, pending = await asyncio.wait({removal}, timeout=_CLEANUP_SECONDS)
+        pending = await wait_until({removal}, self.shutdown_deadline)
         if pending:
             removal.cancel()
             # Give cooperative cancellation one turn without an unbounded gather.
@@ -558,14 +567,16 @@ async def main_async(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         worker.request_stop()
     finally:
+        disposal = asyncio.create_task(engine.dispose(), name="worker-engine-dispose")
+        pending = await wait_until({disposal}, worker.shutdown_deadline)
+        cancel(pending)
+        worker.requires_hard_exit |= bool(pending)
         if worker.requires_hard_exit:
             # asyncio.run() waits for all tasks even after main_async returns.
             # An uncooperative provider/cleanup task therefore needs a process
             # boundary; this only applies to the dedicated worker CLI.
             logger.error("worker %s forcing process exit after bounded shutdown", worker.name)
-            logging.shutdown()
             os._exit(0)
-        await engine.dispose()
     return 0
 
 

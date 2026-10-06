@@ -301,7 +301,9 @@ def render_latex(
 ) -> str:
     """Render a deterministic XeLaTeX source from the whitelisted template registry."""
     from .presentation import presentation_document
+    from .versioning import document_version
 
+    version = document.content_version or document_version(document)
     document = presentation_document(document)
 
     if profile not in {"academic", "technical", "executive", "appendix"}:
@@ -343,6 +345,7 @@ def render_latex(
     else:
         lines.append(r"\author{}")
     lines.extend([r"\begin{document}", r"\maketitle"])
+    lines.append(rf"\noindent{{\scriptsize Document version: \texttt{{{_escape(version)}}}}}\par")
     if document.institution:
         lines.append(rf"\begin{{center}}\small {_inline(document.institution)}\end{{center}}")
     if document.abstract:

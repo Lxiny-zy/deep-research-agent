@@ -1,27 +1,41 @@
-import { render, screen } from '@testing-library/react'
+import { webcrypto } from 'node:crypto'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { downloadRunDocument } from '../api/client'
+import {
+  ApiError,
+  createRenderOperation,
+  downloadRenderResult,
+  getRenderOperation,
+  setApiKey,
+  type RenderOperationReceipt,
+} from '../api/client'
 import { downloadBlob, downloadText } from '../lib/download'
 import ReportActions from './ReportActions'
 
-// 报告操作栏的契约：
-// - 服务端导出必须等结构化文档就绪，否则用户会拿到"成功"的空文件；
-// - 单表导出还要求真的有表；
-// - 下载 .md 优先服务端（带证据附录），失败时退化成本地正文并说明退化了什么。
-
-vi.mock('../api/client', () => ({ downloadRunDocument: vi.fn() }))
+vi.mock('../api/client', async () => ({
+  ...(await vi.importActual('../api/client')),
+  createRenderOperation: vi.fn(),
+  getRenderOperation: vi.fn(),
+  downloadRenderResult: vi.fn(),
+}))
 vi.mock('../lib/download', () => ({
   downloadBlob: vi.fn(),
   downloadText: vi.fn(),
   slugify: (s: string) => s,
 }))
-
-const downloadRunDocumentMock = vi.mocked(downloadRunDocument)
-const downloadBlobMock = vi.mocked(downloadBlob)
-const downloadTextMock = vi.mocked(downloadText)
-
-const TABLES = [{ id: 'hsi_reconstruction', label: '重建算法' }]
-
+const create = vi.mocked(createRenderOperation)
+const result = vi.mocked(downloadRenderResult)
+const status = vi.mocked(getRenderOperation)
+const receipt = (requestId: string, state = 'done'): RenderOperationReceipt => ({
+  id: 'op-1',
+  operation_id: 'op-1',
+  run_id: 'run-1',
+  kind: 'export',
+  request_id: requestId,
+  status: state,
+  status_url: '/api/runs/run-1/render-operations/op-1',
+  content_version: 'version-a',
+})
 function renderActions(over: Partial<Parameters<typeof ReportActions>[0]> = {}) {
   return render(
     <ReportActions
@@ -29,108 +43,149 @@ function renderActions(over: Partial<Parameters<typeof ReportActions>[0]> = {}) 
       query="q"
       runId="run-1"
       documentReady
-      tableOptions={TABLES}
+      contentVersion="version-a"
+      tableOptions={[{ id: 'hsi_reconstruction', label: '重建算法' }]}
       capabilities={{ pdf: true, xlsx: true }}
       {...over}
     />,
   )
 }
-
 beforeEach(() => {
+  vi.stubGlobal('crypto', webcrypto)
+  localStorage.clear()
+  sessionStorage.clear()
   vi.clearAllMocks()
-  downloadRunDocumentMock.mockResolvedValue({
-    blob: new Blob(['x']),
-    filename: 'research-run-1.md',
-  })
+  create.mockImplementation(async (_, request) => receipt(request.request_id))
+  result.mockResolvedValue({ blob: new Blob(['complete']), filename: 'report.md' })
 })
 
-describe('ReportActions 导出闸门', () => {
-  it('结构化文档未就绪时禁用服务端导出，而不是让用户导出空文件', () => {
-    renderActions({ documentReady: false })
-
-    expect(screen.getByRole('button', { name: /下载 CSV/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /下载 XLSX/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /下载 PDF/ })).toBeDisabled()
-  })
-
-  it('没有表格时禁用单表导出，但整份文档的 PDF 仍可导出', () => {
-    renderActions({ tableOptions: [] })
-
-    expect(screen.getByRole('button', { name: /下载 CSV/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /下载 XLSX/ })).toBeDisabled()
-    // PDF 渲染的是整份文档（正文 + 证据附录），没有表也有内容
-    expect(screen.getByRole('button', { name: /下载 PDF/ })).toBeEnabled()
-  })
-
-  it('文档就绪且有表时，CSV 带上所选表 id', async () => {
-    renderActions()
-
-    await userEvent.click(screen.getByRole('button', { name: /下载 CSV/ }))
-
-    expect(downloadRunDocumentMock).toHaveBeenCalledWith('run-1', 'csv', {
-      includeHsiTables: false,
-      tableId: 'hsi_reconstruction',
-    })
-    expect(downloadBlobMock).toHaveBeenCalled()
-  })
-
-  it('PDF 不带 table_id——它渲染整份文档，带上会声明一个该端点不遵守的约束', async () => {
-    renderActions()
-
-    await userEvent.click(screen.getByRole('button', { name: /下载 PDF/ }))
-
-    expect(downloadRunDocumentMock).toHaveBeenCalledWith('run-1', 'pdf', {
-      includeHsiTables: false,
-      tableId: undefined,
-    })
-  })
-
-  it('导出失败时把服务端 detail 呈现出来，而不是笼统的"失败"', async () => {
-    downloadRunDocumentMock.mockRejectedValue(new Error("install the optional 'pdf' extra"))
-    renderActions()
-
-    await userEvent.click(screen.getByRole('button', { name: /下载 PDF/ }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent("install the optional 'pdf' extra")
-  })
+it('requires a known document version and tables for table exports', () => {
+  const view = renderActions({ contentVersion: undefined })
+  expect(screen.getByRole('button', { name: /下载 PDF/ })).toBeDisabled()
+  view.rerender(
+    <ReportActions
+      markdown="x"
+      query="q"
+      runId="run-1"
+      contentVersion="v"
+      documentReady
+      capabilities={{ pdf: true }}
+    />,
+  )
+  expect(screen.getByRole('button', { name: /下载 CSV/ })).toBeDisabled()
+  expect(screen.getByRole('button', { name: /下载 PDF/ })).toBeEnabled()
 })
 
-describe('ReportActions 下载 .md', () => {
-  it('文档就绪时走服务端，拿到的是含证据附录的那一份', async () => {
+it.each(['CSV', 'PDF', '.md'])(
+  'pins %s to the preview version and downloads the submitted receipt',
+  async (format) => {
     renderActions()
+    await userEvent.click(screen.getByRole('button', { name: `下载 ${format}` }))
+    await waitFor(() => expect(downloadBlob).toHaveBeenCalled())
+    expect(create).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        kind: 'export',
+        version: 'version-a',
+        format: format === '.md' ? 'md' : format.toLowerCase(),
+        request_id: expect.any(String),
+        include_hsi_tables: false,
+        table_id: format === 'CSV' ? 'hsi_reconstruction' : undefined,
+      }),
+      expect.any(AbortSignal),
+    )
+    expect(result).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ content_version: 'version-a' }),
+    )
+  },
+)
 
-    await userEvent.click(screen.getByRole('button', { name: /下载 \.md/ }))
+it('a version conflict stays visible and never silently downloads another file', async () => {
+  create.mockRejectedValue(new ApiError(409, 'document_version_changed'))
+  renderActions()
+  await userEvent.click(screen.getByRole('button', { name: '下载 .md' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('document_version_changed')
+  expect(downloadBlob).not.toHaveBeenCalled()
+  expect(downloadText).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: '下载离线正文副本' }))
+  expect(downloadText).toHaveBeenCalledWith(
+    'q-run-1-offline.md',
+    expect.stringContaining('"content_version":"version-a"'),
+  )
+})
 
-    expect(downloadRunDocumentMock).toHaveBeenCalledWith('run-1', 'md', {
-      includeHsiTables: false,
-    })
-    expect(downloadTextMock).not.toHaveBeenCalled()
-  })
+it('offline files carry version, missing scope and verification state inside the file', async () => {
+  renderActions({ runId: undefined, documentReady: false, supportFailed: true })
+  await userEvent.click(screen.getByRole('button', { name: '下载 .md' }))
+  const [name, text] = vi.mocked(downloadText).mock.calls[0]
+  expect(name).toBe('q-offline.md')
+  expect(text).toContain('待核验草稿')
+  expect(text).toContain('evidence_appendix')
+  expect(text).toContain('file_hash_verification')
+  expect(text).toContain('# 报告')
+  expect(create).not.toHaveBeenCalled()
+})
 
-  it('没有 runId 时直接用本地正文，不发请求', async () => {
-    renderActions({ runId: undefined, documentReady: false })
+it('reconnects after a lost response with the original request id after remount', async () => {
+  create.mockRejectedValueOnce(new Error('offline'))
+  const view = renderActions()
+  await userEvent.click(screen.getByRole('button', { name: '下载 .md' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('offline')
+  const first = create.mock.calls[0][1].request_id
+  view.unmount()
+  renderActions()
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalled())
+  expect(create.mock.calls[1][1].request_id).toBe(first)
+})
 
-    await userEvent.click(screen.getByRole('button', { name: /下载 \.md/ }))
+it('reconnects a saved operation by its receipt without another POST', async () => {
+  create.mockImplementationOnce(async (_, request) => receipt(request.request_id, 'running'))
+  const view = renderActions()
+  await userEvent.click(screen.getByRole('button', { name: '下载 .md' }))
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+  await waitFor(() =>
+    expect(Object.values(localStorage).some((value) => value.includes('op-1'))).toBe(true),
+  )
+  const first = create.mock.calls[0][1].request_id
+  status.mockResolvedValue(receipt(first))
+  view.unmount()
+  renderActions()
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalled())
+  expect(create).toHaveBeenCalledTimes(1)
+  expect(status).toHaveBeenCalledWith('run-1', 'op-1', expect.any(AbortSignal), first)
+})
 
-    expect(downloadRunDocumentMock).not.toHaveBeenCalled()
-    expect(downloadTextMock).toHaveBeenCalledWith('q.md', '# 报告')
-  })
+it('does not restore another authenticated identity’s operation for the same run', async () => {
+  setApiKey('identity-one')
+  create.mockRejectedValueOnce(new Error('lost response'))
+  const view = renderActions()
+  await userEvent.click(screen.getByRole('button', { name: '下载 .md' }))
+  await screen.findByRole('alert')
+  view.unmount()
+  setApiKey('identity-two')
+  renderActions()
+  await userEvent.click(screen.getByRole('button', { name: '下载 .md' }))
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalled())
+  expect(create).toHaveBeenCalledTimes(2)
+  expect(create.mock.calls[0][1].request_id).not.toBe(create.mock.calls[1][1].request_id)
+  expect(status).not.toHaveBeenCalled()
+  expect(Object.keys(localStorage).join('')).not.toContain('identity-one')
+})
 
-  it('服务端导出失败时退化成本地正文，并说明这一份缺了什么', async () => {
-    downloadRunDocumentMock.mockRejectedValue(new Error('boom'))
-    renderActions()
-
-    await userEvent.click(screen.getByRole('button', { name: /下载 \.md/ }))
-
-    // 用户仍然拿到文件
-    expect(downloadTextMock).toHaveBeenCalled()
-    // 且被告知拿到的不是完整版
-    expect(await screen.findByRole('alert')).toHaveTextContent('不含证据附录')
-  })
-
-  it('正文为空时不可点——没有可下载的东西', () => {
-    renderActions({ markdown: '' })
-
-    expect(screen.getByRole('button', { name: /下载 \.md/ })).toBeDisabled()
-  })
+it('keeps a server failure terminal on refresh and starts a new operation only after an explicit action', async () => {
+  create.mockImplementationOnce(async (_, request) => receipt(request.request_id, 'error'))
+  const view = renderActions()
+  await userEvent.click(screen.getByRole('button', { name: '下载 .md' }))
+  await screen.findByRole('alert')
+  const failedId = create.mock.calls[0][1].request_id
+  status.mockResolvedValue(receipt(failedId, 'error'))
+  view.unmount()
+  renderActions()
+  await screen.findByRole('alert')
+  expect(create).toHaveBeenCalledTimes(1)
+  await userEvent.click(screen.getByRole('button', { name: '下载 .md' }))
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalled())
+  expect(create).toHaveBeenCalledTimes(2)
+  expect(create.mock.calls[1][1].request_id).not.toBe(failedId)
 })

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from ..shutdown import cancel, consume, wait_until
 from .qa_requests import ACTIVE, INTERRUPTED
 from .qa_store import message_payload
 
@@ -18,6 +19,7 @@ HEARTBEAT_SECONDS = 20.0
 POLL_SECONDS = 0.25
 FLUSH_SECONDS = 0.2
 MAX_QUEUED_EVENTS = 128
+CLEANUP_SECONDS = 5.0
 
 
 async def resume_pending(app: Any) -> None:
@@ -71,6 +73,8 @@ class LiveTurn:
         self.reasoning: dict[str, dict[str, Any]] = {}
         self.status = "正在读取本轮任务状态…"
         self.task: asyncio.Task | None = None
+        self.work: asyncio.Task | None = None
+        self.stop_requested = asyncio.Event()
 
     def emit(self, kind: str, payload: dict[str, Any]) -> None:
         if kind == "delta":
@@ -117,7 +121,14 @@ class LiveTurn:
 
 
 def start_turn(
-    app: Any, requests: Any, cid: str, rid: str, execute: Callable, max_seconds: float
+    app: Any,
+    requests: Any,
+    cid: str,
+    rid: str,
+    execute: Callable,
+    max_seconds: float,
+    *,
+    checkpoints: bool = False,
 ) -> LiveTurn:
     active = getattr(app.state, "qa_live_turns", None)
     if active is None:
@@ -162,8 +173,14 @@ def start_turn(
             await asyncio.sleep(POLL_SECONDS)
 
         pending: list[tuple[str, dict[str, Any]]] = []
+        accepting_events = True
+        stop_error: Exception | None = None
+        children: set[asyncio.Task] = set()
+        cleaning = False
 
         def emit(kind: str, payload: dict[str, Any]) -> None:
+            if not accepting_events:
+                return
             runtime.emit(kind, payload)
             field = (
                 "delta" if kind == "delta" else "reasoning_delta" if kind == "reasoning" else None
@@ -178,12 +195,38 @@ def start_turn(
             else:
                 pending.append((kind, dict(payload)))
 
-        work = asyncio.create_task(
-            execute(
-                on_delta=lambda text: emit("delta", {"delta": text}),
-                on_event=lambda event: emit(event["type"], event),
-            )
-        )
+        async def checkpoint(state: dict[str, Any]) -> None:
+            from ..persistence.repository import LeaseLostError
+
+            if runtime.stop_requested.is_set():
+                raise LeaseLostError("问答已经停止，阶段结果未覆盖原任务")
+            if not await requests.checkpoint(cid, rid, owner, state):
+                raise LeaseLostError("问答执行状态已改变，阶段结果未覆盖原任务")
+
+        def track(coro: Any) -> asyncio.Task:
+            task = asyncio.create_task(coro)
+            children.add(task)
+            if cleaning:
+                tasks.add(task)
+            task.add_done_callback(children.discard)
+            task.add_done_callback(tasks.discard)
+            task.add_done_callback(consume)
+            return task
+
+        def stop(exc: Exception | None = None) -> None:
+            nonlocal stop_error
+            stop_error = stop_error or exc
+            runtime.stop_requested.set()
+
+        callbacks: dict[str, Any] = {
+            "on_delta": lambda text: emit("delta", {"delta": text}),
+            "on_event": lambda event: emit(event["type"], event),
+        }
+        if checkpoints:
+            callbacks["on_checkpoint"] = checkpoint
+        deadline = asyncio.get_running_loop().time() + max_seconds
+        work = track(execute(**callbacks))
+        runtime.work = work
         stop_writing = asyncio.Event()
 
         async def persist_events() -> None:
@@ -200,36 +243,83 @@ def start_turn(
                             raise HTTPException(409, "执行状态已改变，实时内容未覆盖原任务")
                     if stop_writing.is_set():
                         return
-            except Exception:
-                work.cancel()
+            except Exception as exc:
+                stop(exc)
                 raise
 
-        writer = asyncio.create_task(persist_events())
+        writer = track(persist_events())
 
         async def heartbeat() -> None:
             try:
+                renewed = asyncio.get_running_loop().time()
                 while True:
-                    await asyncio.sleep(HEARTBEAT_SECONDS)
-                    if not await requests.update(cid, rid, owner, seconds=LEASE_SECONDS):
-                        work.cancel()
+                    await asyncio.sleep(min(HEARTBEAT_SECONDS, 1.0))
+                    current = await requests.get(cid, rid)
+                    if (
+                        current is None
+                        or current.status != "running"
+                        or current.execution_owner != owner
+                    ):
+                        stop()
                         return
-            except Exception:
-                work.cancel()
+                    now = asyncio.get_running_loop().time()
+                    if now - renewed >= HEARTBEAT_SECONDS:
+                        if not await requests.update(cid, rid, owner, seconds=LEASE_SECONDS):
+                            stop()
+                            return
+                        renewed = now
+            except Exception as exc:
+                stop(exc)
 
-        beat = asyncio.create_task(heartbeat())
+        track(heartbeat())
+        stop_waiter = track(runtime.stop_requested.wait())
+        error: str | None = None
+        interrupted = False
         try:
-            try:
-                result = await asyncio.wait_for(work, timeout=max_seconds)
-            finally:
-                # Finish the in-flight transaction before finalization. Cancelling
-                # it here could lose a batch or append it again after a commit.
-                stop_writing.set()
-                await writer
-            if not await requests.update(cid, rid, owner, result=result):
+            done, _ = await asyncio.wait(
+                {work, stop_waiter}, timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if runtime.stop_requested.is_set():
+                if stop_error is not None:
+                    raise stop_error
+                raise asyncio.CancelledError
+            if work not in done:
+                raise TimeoutError
+            result = work.result()
+            stop_writing.set()
+            # The same turn deadline includes the last event transaction. A
+            # stalled writer can never extend lease renewal indefinitely.
+            done, _ = await asyncio.wait(
+                {writer, stop_waiter},
+                timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if runtime.stop_requested.is_set():
+                if stop_error is not None:
+                    raise stop_error
+                raise asyncio.CancelledError
+            if writer not in done:
+                raise TimeoutError
+            writer.result()
+            commit = track(requests.update(cid, rid, owner, result=result))
+            done, _ = await asyncio.wait(
+                {commit, stop_waiter},
+                timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if runtime.stop_requested.is_set():
+                cancel({commit})
+                if stop_error is not None:
+                    raise stop_error
+                raise asyncio.CancelledError
+            if commit not in done:
+                cancel({commit})
+                raise TimeoutError
+            if not commit.result():
                 raise HTTPException(409, "执行状态已改变，未覆盖已有结果")
         except asyncio.CancelledError:
-            await requests.update(cid, rid, owner, error=INTERRUPTED)
-            raise
+            interrupted, error = True, INTERRUPTED
         except Exception as exc:
             if isinstance(exc, HTTPException):
                 error = (
@@ -241,13 +331,34 @@ def start_turn(
                 error = "本轮处理超时，未自动重发。可以检查已有状态后重新提问。"
             else:
                 error = f"本轮处理失败（{type(exc).__name__}），请检查配置后重试。"
-            await requests.update(cid, rid, owner, error=error)
         finally:
-            beat.cancel()
-            await asyncio.gather(beat, return_exceptions=True)
-        row = await requests.get(cid, rid)
+            cleaning = True
+            accepting_events = False
+            runtime.stop_requested.set()
+            stop_writing.set()
+            # Stop renewing immediately; uncooperative provider/DB tasks retain
+            # app.qa_tasks registrations for API shutdown and late exceptions.
+            cleanup_deadline = asyncio.get_running_loop().time() + CLEANUP_SECONDS
+            cleanup = set(children)
+            tasks.update(cleanup)
+            cancel(cleanup)
+
+            async def settle() -> Any:
+                if error is not None:
+                    await requests.update(cid, rid, owner, error=error)
+                return await requests.get(cid, rid)
+
+            settled = track(settle())
+            cleanup.add(settled)
+            remaining = await wait_until(cleanup, cleanup_deadline)
+            cancel(remaining)
+        if not settled.done() or settled.cancelled():
+            raise HTTPException(503, "停止已发起，状态写入尚未确认；租约到期后可检查结果")
+        row = settled.result()
         if row is None:
             raise HTTPException(404, "本轮问题已删除")
+        if interrupted and row.status != "cancelled":
+            raise asyncio.CancelledError
         return message_payload(row)
 
     runtime.task = asyncio.create_task(drive())

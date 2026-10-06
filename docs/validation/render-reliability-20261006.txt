@@ -1,0 +1,7 @@
+Local Windows validation
+Command: python -m pytest -q --basetemp=D:/tmp/render-reliability-final tests/test_render_process.py tests/test_shutdown_deadline.py tests/test_render_restart.py tests/test_render_progress.py tests/test_render_capacity.py tests/test_render_service.py tests/test_worker.py tests/test_worker_admission_cleanup.py tests/test_worker_embedded.py tests/test_worker_mode_api.py tests/test_rendering_isolation.py tests/test_legacy_rendering_isolation.py
+........................................................................ [ 74%]
+.........................                                                [100%]
+97 passed in 89.38s (0:01:29)
+
+Exit: 0

@@ -1,0 +1,6 @@
+Local Windows validation
+Command: python -m pytest -q --basetemp=D:/tmp/qa-deadline-final tests/test_qa_deadline.py tests/test_qa_requests.py tests/test_qa_stream_delivery.py tests/test_qa_stop_recovery.py tests/test_shutdown_deadline.py tests/test_render_service.py::test_export_load_rechecks_the_actual_returned_bytes
+................................................................         [100%]
+64 passed in 21.56s
+
+Exit: 0

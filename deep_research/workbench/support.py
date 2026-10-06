@@ -23,7 +23,7 @@ from ..guardrails import report_eligible
 from ..models import Finding, ResearchResult
 from ..persistence.repository import LeaseLostError
 from ..prompting import EVIDENCE_MODALITY_RULES, MEASUREMENT_SCOPE_RULES, structured_system_prompt
-from .support_alignment import alignment_issue, numeric_fact
+from .support_alignment import alignment_diagnostics, alignment_issue, numeric_fact
 
 
 class SupportDecision(BaseModel):
@@ -33,6 +33,7 @@ class SupportDecision(BaseModel):
     reason: str
     fulltext_review: SkipJsonSchema[dict[str, Any] | None] = None
     formula_review: SkipJsonSchema[dict[str, Any] | None] = None
+    alignment_review: SkipJsonSchema[dict[str, Any] | None] = None
 
 
 class SupportDecisions(BaseModel):
@@ -665,6 +666,7 @@ class SupportReviewer:
                     update={
                         "fulltext_review": self.fulltext_records.get(unit.id),
                         "formula_review": self.formula_records.get(unit.id),
+                        "alignment_review": None,
                     }
                 )
                 valid_ids = {e["id"] for e in self.evidence if e["citation"] in unit.citations}
@@ -705,7 +707,10 @@ class SupportReviewer:
                     )
                     if issue:
                         decision = SupportDecision(
-                            unit_id=unit.id, verdict="unsupported", reason=issue
+                            unit_id=unit.id, verdict="unsupported", reason=issue,
+                            alignment_review=alignment_diagnostics(
+                                unit.text, unit.citations, decision.evidence_ids, self.evidence
+                            ),
                         )
                 elif decision.verdict == "non_factual" and numeric_fact(unit.text):
                     decision = SupportDecision(

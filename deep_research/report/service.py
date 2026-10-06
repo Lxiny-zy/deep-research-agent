@@ -169,4 +169,8 @@ class ReportService:
                 semantic_verification=False,
                 support_status="fail",
             )
-        return document
+        from ..workbench.publish import delivery_fingerprint
+        from .versioning import stamp_document
+
+        document.source_version = delivery_fingerprint(detail)
+        return stamp_document(document)

@@ -2298,7 +2298,7 @@ async def test_report_csv_endpoint_returns_an_empty_download_before_a_table_exis
 
 
 @pytest.mark.asyncio
-async def test_report_csv_download_starts_with_a_utf8_bom(repo, monkeypatch):
+async def test_report_csv_download_starts_with_a_utf8_bom(repo, monkeypatch, cooperative_render):
     """落盘后没有 HTTP 头，中文 Windows 的 Excel 要靠 BOM 才按 UTF-8 打开。"""
     run_id = await repo.create_run("含表格")
     monkeypatch.setattr(
@@ -2346,7 +2346,7 @@ async def test_report_xlsx_endpoint_404s_for_an_unknown_run(repo):
 
 @pytest.mark.asyncio
 async def test_report_xlsx_endpoint_returns_501_when_optional_dependency_is_missing(
-    repo, monkeypatch
+    repo, monkeypatch, cooperative_render
 ):
     run_id = await repo.create_run("需要可选依赖")
 
@@ -2362,7 +2362,9 @@ async def test_report_xlsx_endpoint_returns_501_when_optional_dependency_is_miss
 
 
 @pytest.mark.asyncio
-async def test_report_pdf_endpoint_returns_optional_dependency_status(repo, monkeypatch):
+async def test_report_pdf_endpoint_returns_optional_dependency_status(
+    repo, monkeypatch, cooperative_render,
+):
     run_id = await repo.create_run("server pdf optional")
     import sys
 
@@ -2374,7 +2376,7 @@ async def test_report_pdf_endpoint_returns_optional_dependency_status(repo, monk
 
 
 @pytest.mark.asyncio
-async def test_report_pdf_endpoint_returns_renderer_failure(repo, monkeypatch):
+async def test_report_pdf_endpoint_returns_renderer_failure(repo, monkeypatch, cooperative_render):
     run_id = await repo.create_run("server pdf renderer failure")
     monkeypatch.setattr(
         report_renderers,
@@ -2390,7 +2392,9 @@ async def test_report_pdf_endpoint_returns_renderer_failure(repo, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_explicit_download_retry_is_distinct_from_a_repeated_read(repo, monkeypatch):
+async def test_explicit_download_retry_is_distinct_from_a_repeated_read(
+    repo, monkeypatch, cooperative_render,
+):
     run_id = await repo.create_run("explicit download retry")
     calls = []
 
@@ -2419,7 +2423,9 @@ async def test_report_pdf_endpoint_404s_for_an_unknown_run(repo):
 
 
 @pytest.mark.asyncio
-async def test_report_latex_source_endpoint_returns_academic_source(repo, monkeypatch):
+async def test_report_latex_source_endpoint_returns_academic_source(
+    repo, monkeypatch, cooperative_render,
+):
     run_id = await repo.create_run("academic source")
     monkeypatch.setattr(
         report_renderers, "render_latex", lambda document, *, profile: "% academic source"
@@ -2435,7 +2441,7 @@ async def test_report_latex_source_endpoint_returns_academic_source(repo, monkey
 
 
 @pytest.mark.asyncio
-async def test_report_bib_endpoint_returns_references(repo, monkeypatch):
+async def test_report_bib_endpoint_returns_references(repo, monkeypatch, cooperative_render):
     run_id = await repo.create_run("academic bib")
     monkeypatch.setattr(
         report_renderers, "render_bibtex", lambda document, *, sources: "@misc{ref1}\n"
@@ -2450,7 +2456,7 @@ async def test_report_bib_endpoint_returns_references(repo, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_report_bundle_endpoint_returns_zip(repo, monkeypatch):
+async def test_report_bundle_endpoint_returns_zip(repo, monkeypatch, cooperative_render):
     run_id = await repo.create_run("academic bundle")
     monkeypatch.setattr(
         report_renderers, "render_reproducibility_bundle", lambda *args, **kwargs: b"PK bundle"
@@ -2467,7 +2473,9 @@ async def test_report_bundle_endpoint_returns_zip(repo, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_report_paper_pdf_endpoint_exposes_missing_tex_runtime(repo, monkeypatch):
+async def test_report_paper_pdf_endpoint_exposes_missing_tex_runtime(
+    repo, monkeypatch, cooperative_render,
+):
     run_id = await repo.create_run("academic pdf")
     monkeypatch.setattr(
         report_renderers,
@@ -2485,7 +2493,9 @@ async def test_report_paper_pdf_endpoint_exposes_missing_tex_runtime(repo, monke
 
 
 @pytest.mark.asyncio
-async def test_report_export_endpoints_forward_hsi_and_table_selection(repo, monkeypatch):
+async def test_report_export_endpoints_forward_hsi_and_table_selection(
+    repo, monkeypatch, cooperative_render,
+):
     """All document exports must assemble the same opt-in HSI document."""
     from deep_research.report import ReportDocument, TableBlock
 
@@ -2546,7 +2556,9 @@ async def test_report_export_endpoints_forward_hsi_and_table_selection(repo, mon
 
 
 @pytest.mark.asyncio
-async def test_report_exports_forward_persisted_corroboration_gate(repo, monkeypatch):
+async def test_report_exports_forward_persisted_corroboration_gate(
+    repo, monkeypatch, cooperative_render,
+):
     """Strict runs must keep the corroboration gate in every export path."""
     from deep_research.report import ReportDocument
 
@@ -2582,7 +2594,7 @@ async def test_report_exports_forward_persisted_corroboration_gate(repo, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_report_table_export_maps_selection_errors(repo, monkeypatch):
+async def test_report_table_export_maps_selection_errors(repo, monkeypatch, cooperative_render):
     from deep_research.report import (
         CsvTableNotFoundError,
         CsvTableSelectionError,

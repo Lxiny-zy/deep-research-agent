@@ -1039,7 +1039,9 @@ async def test_deliverables_endpoints(api_repo) -> None:
 
 
 @pytest.mark.asyncio
-async def test_concurrent_cold_deliverable_requests_build_once(api_repo, monkeypatch) -> None:
+async def test_concurrent_cold_deliverable_requests_build_once(
+    api_repo, monkeypatch, cooperative_render
+) -> None:
     """登记表与预览同时到达冷缓存时，只生成一次交付包。"""
     api, repo = api_repo
     template, execution = _execution("研究问题", "autoResearch", api.app.state.settings)

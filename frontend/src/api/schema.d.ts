@@ -595,6 +595,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/qa/conversations/{conversation_id}/requests/{request_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Request */
+        post: operations["cancel_request_api_qa_conversations__conversation_id__requests__request_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research": {
         parameters: {
             query?: never;
@@ -735,6 +752,26 @@ export interface paths {
          * @description 交付登记：每个交付物的格式、角色、大小、哈希与验收结论，外加每道门的结果。
          */
         get: operations["get_deliverables_api_runs__run_id__deliverables_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/deliverables.zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Delivery Bundle
+         * @description A complete package requires every committed member to verify.
+         */
+        get: operations["download_delivery_bundle_api_runs__run_id__deliverables_zip_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1049,6 +1086,58 @@ export interface paths {
          * @description 原版 PDF：只接受该任务登记过的文档；归属由鉴权依赖按 run_id 校验。
          */
         get: operations["get_reader_pdf_api_runs__run_id__reader__document_id__pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/render-operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Find Render Operation */
+        get: operations["find_render_operation_api_runs__run_id__render_operations_get"];
+        put?: never;
+        /** Create Render Operation */
+        post: operations["create_render_operation_api_runs__run_id__render_operations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/render-operations/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Render Operation */
+        get: operations["get_render_operation_api_runs__run_id__render_operations__operation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{run_id}/render-operations/{operation_id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Render Operation Result */
+        get: operations["get_render_operation_result_api_runs__run_id__render_operations__operation_id__result_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1662,6 +1751,8 @@ export interface components {
             query: string;
             /** Request Id */
             request_id?: string | null;
+            /** Resume Message Id */
+            resume_message_id?: string | null;
             /** Revision Message Id */
             revision_message_id?: string | null;
             /** Sources */
@@ -2241,7 +2332,7 @@ export interface components {
              * Format
              * @enum {string}
              */
-            format: "html" | "pdf" | "docx" | "pptx" | "png" | "xlsx";
+            format: "md" | "html" | "pdf" | "docx" | "pptx" | "png" | "xlsx";
             /** Request Id */
             request_id: string;
             /** Version */
@@ -3645,6 +3736,39 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** RenderOperationRequest */
+        RenderOperationRequest: {
+            /** Format */
+            format?: ("md" | "html" | "pdf" | "docx" | "pptx" | "png" | "csv" | "xlsx" | "tex" | "bib" | "bundle" | "paper-pdf") | null;
+            /**
+             * Include Hsi Tables
+             * @default false
+             */
+            include_hsi_tables?: boolean;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "bundle" | "retry" | "export";
+            /**
+             * Profile
+             * @default academic
+             * @enum {string}
+             */
+            profile?: "academic" | "technical" | "executive" | "appendix";
+            /** Request Id */
+            request_id: string;
+            /** Table Id */
+            table_id?: string | null;
+            /**
+             * Template
+             * @default ctexart
+             * @enum {string}
+             */
+            template?: "ctexart" | "ctexrep" | "ieeetran" | "acmart";
+            /** Version */
+            version?: string | null;
+        };
         /** Report */
         Report: {
             /**
@@ -3677,6 +3801,11 @@ export interface components {
             /** Blocks */
             blocks?: (components["schemas"]["ProseBlock"] | components["schemas"]["TableBlock"] | components["schemas"]["ChartBlock"])[];
             /**
+             * Content Version
+             * @default
+             */
+            content_version?: string;
+            /**
              * Disclaimer
              * @default 本报告展示的是检索服务返回的快照上下文，不等同于来源完整正文，也不等同于事实已获证实。系统保证的是出处可追溯、引用可逐字核验、单源/双源/冲突状态可判定；不保证论断在开放世界为真。证据标签针对输入素材，正文的引用与数值检查不等同于逐段语义审核。
              */
@@ -3706,6 +3835,11 @@ export interface components {
             schema_version?: number;
             /** Sections */
             sections?: components["schemas"]["PaperSection"][];
+            /**
+             * Source Version
+             * @default
+             */
+            source_version?: string;
             /**
              * Title
              * @default
@@ -6076,6 +6210,43 @@ export interface operations {
             };
         };
     };
+    cancel_request_api_qa_conversations__conversation_id__requests__request_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     research_api_research_get: {
         parameters: {
             query: {
@@ -6394,7 +6565,9 @@ export interface operations {
     };
     get_deliverables_api_runs__run_id__deliverables_get: {
         parameters: {
-            query?: never;
+            query?: {
+                version?: string | null;
+            };
             header?: {
                 "x-api-key"?: string | null;
                 authorization?: string | null;
@@ -6415,6 +6588,42 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_delivery_bundle_api_runs__run_id__deliverables_zip_get: {
+        parameters: {
+            query?: {
+                version?: string | null;
+            };
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -6582,6 +6791,7 @@ export interface operations {
             query?: {
                 profile?: string;
                 template?: string;
+                include_hsi_tables?: boolean;
             };
             header?: {
                 "x-api-key"?: string | null;
@@ -6955,6 +7165,158 @@ export interface operations {
             path: {
                 run_id: string;
                 document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    find_render_operation_api_runs__run_id__render_operations_get: {
+        parameters: {
+            query: {
+                request_id: string;
+            };
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_render_operation_api_runs__run_id__render_operations_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenderOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_render_operation_api_runs__run_id__render_operations__operation_id__get: {
+        parameters: {
+            query?: {
+                request_id?: string | null;
+            };
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_render_operation_result_api_runs__run_id__render_operations__operation_id__result_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+                operation_id: string;
             };
             cookie?: never;
         };

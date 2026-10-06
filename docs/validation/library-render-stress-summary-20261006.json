@@ -1,0 +1,14 @@
+{
+  "runs": 10,
+  "passed": 10,
+  "render_jobs": 20,
+  "all_done_once": true,
+  "render_failure_logs": 0,
+  "inspection_errors": [],
+  "duration_ms": {
+    "min": 12538,
+    "max": 13362,
+    "total": 128407
+  },
+  "warnings": []
+}

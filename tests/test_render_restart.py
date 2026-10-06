@@ -16,7 +16,12 @@ from deep_research.workbench.support import digest
 
 def _publish_then_crash(database_url, root, marker):
     async def run():
+        import pytest
+
         from deep_research import render_service, report
+        from tests.render_helpers import use_cooperative_render
+
+        use_cooperative_render(pytest.MonkeyPatch())
 
         render_service.LEASE_SECONDS = 0.3
         render_service.HEARTBEAT_SECONDS = 0.05

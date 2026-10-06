@@ -56,8 +56,8 @@ def delivery_store(
 
 
 @contextmanager
-def _lock(store: ArtifactStore) -> Iterator[None]:
-    path = store.control_path("deliveries/render.lock")
+def _lock(store: ArtifactStore, name: str = "deliveries/render.lock") -> Iterator[None]:
+    path = store.control_path(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise ValueError("delivery lock must not be a symlink")
@@ -129,12 +129,38 @@ def _read_file(store: ArtifactStore, path: str, record: dict) -> bytes:
     return data
 
 
-def _load(store: ArtifactStore, slug: str, version: str, registry: dict) -> DeliveryBundle:
+def _validate_registry(store: ArtifactStore, slug: str, version: str, registry: dict) -> None:
     if registry.get("content_version") != version:
         raise ValueError("交付版本与登记不一致")
+    signature = registry.get("registry_sha256")
+    if signature and _digest(
+        {k: v for k, v in registry.items() if k != "registry_sha256"}
+    ) != signature:
+        raise ValueError("交付版本登记校验失败")
     context = registry.get("_render_context", {})
-    if context and _digest(context) != registry.get("render_context_sha256"):
+    if (context or registry.get("render_context_sha256")) and _digest(context) != registry.get(
+        "render_context_sha256"
+    ):
         raise ValueError("交付定稿快照校验失败")
+    names: set[str] = set()
+    for item in registry["items"]:
+        name = item["name"]
+        if name in names or name.count("/") > 1 or not all(
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,120}", part)
+            for part in name.split("/")
+        ):
+            raise ValueError("交付文件登记路径无效")
+        names.add(name)
+        _path(store, slug, version, name, registry)
+        if not re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) or item["size"] < 0:
+            raise ValueError("交付文件摘要无效")
+
+
+def _load(
+    store: ArtifactStore, slug: str, version: str, registry: dict, *, name: str | None = None
+) -> DeliveryBundle:
+    _validate_registry(store, slug, version, registry)
+    context = registry.get("_render_context", {})
     files = [
         DeliveryFile(
             name=item["name"],
@@ -146,6 +172,7 @@ def _load(store: ArtifactStore, slug: str, version: str, registry: dict) -> Deli
             issues=item.get("issues", []),
         )
         for item in registry["items"]
+        if name is None or item["name"] == name
     ]
     return DeliveryBundle(
         template=registry["template"],
@@ -163,12 +190,40 @@ def _load(store: ArtifactStore, slug: str, version: str, registry: dict) -> Deli
     )
 
 
-def load_version(detail: RunDetail, artifact_root: str, version: str) -> DeliveryBundle:
+def load_version(
+    detail: RunDetail, artifact_root: str, version: str, *, name: str | None = None
+) -> DeliveryBundle:
     store, slug = delivery_store(detail, artifact_root)
     registry = _index(store)["versions"].get(version)
     if registry is None:
         raise FileNotFoundError("交付版本不存在")
-    return _load(store, slug, version, registry)
+    return _load(store, slug, version, registry, name=name)
+
+
+def version_registry(detail: RunDetail, artifact_root: str, version: str) -> dict[str, Any]:
+    """Advertise intact entries even when another committed file is unavailable."""
+    from copy import deepcopy
+
+    store, slug = delivery_store(detail, artifact_root)
+    registry = _index(store)["versions"].get(version)
+    if registry is None:
+        raise FileNotFoundError("交付版本不存在")
+    _validate_registry(store, slug, version, registry)
+    public = deepcopy({key: value for key, value in registry.items() if not key.startswith("_")})
+    public.setdefault("failures", [])
+    for item in public["items"]:
+        try:
+            _read_file(store, _path(store, slug, version, item["name"], registry), item)
+            item["available"] = True
+        except ValueError as exc:
+            item["available"] = False
+            item["integrity_error"] = str(exc)
+            if not any(f["format"] == item["format"] for f in public["failures"]):
+                public["failures"].append({
+                    "format": item["format"], "title": item["title"],
+                    "issues": [str(exc)], "retryable": bool(registry.get("_render_context")),
+                })
+    return public
 
 
 def build_or_load(
@@ -222,6 +277,7 @@ def _commit(store: ArtifactStore, slug: str, index: dict, bundle: DeliveryBundle
             suffix += 1
             stage = f"d-{version[:16]}-{suffix}"
     registry["storage_stage"] = stage
+    registry["registry_sha256"] = _digest(registry)
     for file, item in zip(bundle.files, registry["items"], strict=True):
         if pending and pending.get("files", {}).get(file.name, {}).get("sha256") == file.sha256:
             path = store.path_for(slug, stage, file.name, area="output")
@@ -283,7 +339,21 @@ def retry_format(
         registry = index["versions"].get(version)
         if registry is None:
             raise FileNotFoundError("交付版本不存在")
-        previous = _load(store, slug, version, registry)
+        _validate_registry(store, slug, version, registry)
+        # Only the explicitly selected format may be repaired. Every preserved
+        # byte must still verify, and the original version is never rewritten.
+        preserved = []
+        damaged = False
+        for item in registry["items"]:
+            try:
+                loaded = _load(store, slug, version, registry, name=item["name"])
+                preserved.extend(loaded.files)
+            except ValueError:
+                if item["format"] != target:
+                    raise
+                damaged = True
+        previous = _load(store, slug, version, registry, name="")
+        previous.files = preserved
         source = delivery_fingerprint(detail)
         if previous.input_version != source:
             raise DeliveryConflict(
@@ -293,7 +363,9 @@ def retry_format(
             raise DeliveryConflict("delivery_version_changed", "交付物已有新版本，请刷新后再重试")
         if not previous.render_context:
             raise DeliveryConflict("delivery_legacy_version", "此历史版本没有可复用的定稿快照")
-        if not any(f["format"] == target and f.get("retryable") for f in previous.failures):
+        if not damaged and not any(
+            f["format"] == target and f.get("retryable") for f in previous.failures
+        ):
             raise DeliveryConflict(
                 "delivery_not_retryable", "该格式未生成失败，或需要先修订研究内容"
             )
@@ -326,6 +398,7 @@ def workspace_files(detail: RunDetail, artifact_root: str) -> list[dict[str, Any
     store, slug = delivery_store(detail, artifact_root)
     files = []
     for version, registry in _index(store)["versions"].items():
+        _validate_registry(store, slug, version, registry)
         for item in registry["items"]:
             files.append(
                 {
@@ -350,6 +423,7 @@ def read_workspace_file(
 ) -> tuple[bytes, str] | None:
     store, slug = delivery_store(detail, artifact_root)
     for version, registry in _index(store)["versions"].items():
+        _validate_registry(store, slug, version, registry)
         for item in registry["items"]:
             if _path(store, slug, version, item["name"], registry) == path:
                 return _read_file(store, path, item), item["mime_type"]

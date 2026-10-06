@@ -11,6 +11,8 @@ from deep_research.render_queue import MemoryRenderQueue
 from deep_research.render_service import RenderService
 from deep_research.report.document import ProseBlock, ReportDocument
 
+pytestmark = pytest.mark.usefixtures("cooperative_render")
+
 
 async def setup(tmp_path, queue=None):
     settings = Settings(artifact_root=str(tmp_path))
@@ -233,6 +235,32 @@ async def test_changed_storage_limit_reuses_completed_bytes(tmp_path, monkeypatc
         monkeypatch.setattr(report, "render_markdown", forbidden)
         other.quota = 1
         assert await other.export(detail, document, "md") == first
+    finally:
+        await service.close()
+        await other.close()
+
+
+async def test_export_load_rechecks_the_actual_returned_bytes(tmp_path, monkeypatch):
+    from deep_research import render_tasks
+    from deep_research.workbench.delivery_store import delivery_store
+
+    detail, document, service, other = await setup(tmp_path)
+    try:
+        await service.export(detail, document, "md")
+        job = next(iter(service.queue.jobs.values()))
+        original = render_tasks._cached_export
+
+        def corrupt_after_check(job, root, quota):
+            result = original(job, root, quota)
+            store, _ = delivery_store(detail, root, quota)
+            path = store.control_path(result["path"])
+            data = path.read_bytes()
+            path.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+            return result
+
+        monkeypatch.setattr(render_tasks, "_cached_export", corrupt_after_check)
+        with pytest.raises(ValueError, match="校验失败"):
+            render_tasks.load_result(job, service.root, service.quota)
     finally:
         await service.close()
         await other.close()

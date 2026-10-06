@@ -1,15 +1,11 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { AppIcon, type AppIconName } from './AppIcon'
 import InfoTip from './InfoTip'
 import { formatLabel, humanSize } from '../lib/workbench'
-import {
-  fetchDeliverable,
-  getDeliverables,
-  retryDeliverable,
-  reviseRunContent,
-} from '../api/client'
+import { fetchDeliverable, getDeliverables, reviseRunContent } from '../api/client'
 import { downloadBlob } from '../lib/download'
 import type { DeliverableItem, DeliverableRegistry, GateResult, GateStatus } from '../types'
+import { useRenderOperation } from '../hooks/useRenderOperation'
 
 const GATE_LABEL: Record<string, string> = {
   citation: '引用核查',
@@ -197,6 +193,7 @@ function showPreview(popup: Window, item: DeliverableItem, blob: Blob) {
 }
 
 interface Props {
+  sourceVersion?: string
   runId: string
   registry: DeliverableRegistry | undefined
   loading: boolean
@@ -217,22 +214,19 @@ export default function DeliverablesPanel({
   error,
   onUpdated,
   onRevisionCreated,
+  sourceVersion,
 }: Props) {
   const [busy, setBusy] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const requests = useRef(new Map<string, string>())
+  const operation = useRenderOperation(loading ? undefined : runId, 'delivery', async (receipt) => {
+    if (!receipt.content_version) throw new Error('渲染回执缺少交付版本，无法安全加载结果。')
+    onUpdated?.(await getDeliverables(runId, undefined, undefined, receipt.content_version))
+  })
+  const actionBusy = busy !== null || operation.busy
 
   async function rebuild() {
-    if (busy !== null) return
-    setBusy('build')
-    setActionError(null)
-    try {
-      onUpdated?.(await getDeliverables(runId, undefined, crypto.randomUUID()))
-    } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : '交付生成失败')
-    } finally {
-      setBusy(null)
-    }
+    if (actionBusy) return
+    await operation.start({ kind: 'bundle' })
   }
 
   async function revise() {
@@ -257,30 +251,12 @@ export default function DeliverablesPanel({
   }
 
   async function retry(format: string) {
-    if (!registry?.content_version || busy !== null) return
-    const key = `${runId}/${registry.content_version}/${format}`
-    const requestId = requests.current.get(key) ?? crypto.randomUUID()
-    requests.current.set(key, requestId)
-    setBusy(`retry:${format}`)
-    setActionError(null)
-    try {
-      const next = await retryDeliverable(runId, registry.content_version, format, requestId)
-      onUpdated?.(next)
-    } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : '重新生成失败')
-      if (cause instanceof Error && 'status' in cause && cause.status === 409) {
-        try {
-          onUpdated?.(await getDeliverables(runId))
-        } catch {
-          // Keep the original conflict/integrity error if refreshing also fails.
-        }
-      }
-    } finally {
-      setBusy(null)
-    }
+    if (!registry?.content_version || actionBusy) return
+    await operation.start({ kind: 'retry', version: registry.content_version, format })
   }
 
   async function open(item: DeliverableItem, preview: boolean) {
+    if (!registry?.content_version || item.available === false) return
     setBusy(item.name)
     setActionError(null)
     // 预览窗口必须在点击的同步阶段打开：等交付物取回（PDF 可能要生成数秒）后再开，
@@ -289,9 +265,7 @@ export default function DeliverablesPanel({
     if (popup) popup.opener = null
     try {
       if (preview && !popup) throw new Error('浏览器拦截了预览窗口，请允许本站弹出窗口后重试')
-      const file = registry?.content_version
-        ? await fetchDeliverable(runId, item.name, undefined, registry.content_version)
-        : await fetchDeliverable(runId, item.name)
+      const file = await fetchDeliverable(runId, item.name, undefined, registry.content_version)
       if (popup) {
         showPreview(popup, item, file.blob)
       } else {
@@ -325,15 +299,18 @@ export default function DeliverablesPanel({
           <button
             type="button"
             className="btn btn-secondary btn-sm"
-            disabled={busy !== null}
+            disabled={actionBusy}
             onClick={rebuild}
           >
             {busy === 'build' ? '正在生成…' : '重新尝试生成'}
           </button>
         )}
-        {actionError && (
+        {(actionError || operation.error) && (
           <p className="error-text" role="alert">
-            {actionError}
+            {actionError || operation.error}
+            <button type="button" onClick={() => void operation.reconnect()} disabled={actionBusy}>
+              重新连接操作
+            </button>
           </p>
         )}
       </section>
@@ -360,6 +337,17 @@ export default function DeliverablesPanel({
         </span>
       </div>
       <QualitySummary gates={registry.gates} />
+      <p className="hint" title={registry.content_version}>
+        交付版本 {registry.content_version?.slice(0, 12) ?? '未知（暂不可下载）'}
+        {sourceVersion &&
+          registry.input_version &&
+          (sourceVersion === registry.input_version
+            ? ' · 与当前报告同源'
+            : ' · 历史交付，与当前报告源版本不同')}
+      </p>
+      {operation.busy && (
+        <p role="status">正在恢复或执行交付操作… {operation.receipt?.request_id}</p>
+      )}
       {registry.content_revision?.available &&
         registry.can_retry !== false &&
         onRevisionCreated && (
@@ -369,7 +357,7 @@ export default function DeliverablesPanel({
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={busy !== null}
+                disabled={actionBusy}
                 onClick={revise}
               >
                 {busy === 'content-revision' ? '正在创建修订任务…' : '继续修订内容'}
@@ -397,7 +385,7 @@ export default function DeliverablesPanel({
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    disabled={busy !== null}
+                    disabled={actionBusy}
                     onClick={() => retry(failure.format)}
                   >
                     {busy === `retry:${failure.format}`
@@ -419,6 +407,8 @@ export default function DeliverablesPanel({
             <strong>{primary.title}</strong>
             <span className="hint">
               {formatLabel(primary.format)} · {humanSize(primary.size)}
+              {primary.available === false &&
+                ` · 文件不可用：${primary.integrity_error ?? '完整性检查失败'}`}
             </span>
           </div>
           <div className="run-file-actions">
@@ -426,7 +416,7 @@ export default function DeliverablesPanel({
               <button
                 type="button"
                 className="btn btn-sm"
-                disabled={busy !== null}
+                disabled={actionBusy || !registry.content_version || primary.available === false}
                 onClick={() => open(primary, true)}
               >
                 <AppIcon name="eye" size={14} aria-hidden="true" /> 预览
@@ -435,7 +425,7 @@ export default function DeliverablesPanel({
             <button
               type="button"
               className="btn btn-primary btn-sm"
-              disabled={busy !== null}
+              disabled={actionBusy || !registry.content_version || primary.available === false}
               onClick={() => open(primary, false)}
             >
               <AppIcon
@@ -461,6 +451,8 @@ export default function DeliverablesPanel({
                 <span className="hint">
                   {formatLabel(item.format)} · {humanSize(item.size)}
                   {item.status !== 'pass' && ` · ${STATUS_META[item.status].label}`}
+                  {item.available === false &&
+                    ` · 文件不可用：${item.integrity_error ?? '完整性检查失败'}`}
                 </span>
               </span>
               <span className="run-file-actions">
@@ -470,7 +462,7 @@ export default function DeliverablesPanel({
                     className="btn btn-ghost btn-sm icon-button"
                     aria-label={`预览 ${item.title}`}
                     title="预览"
-                    disabled={busy !== null}
+                    disabled={actionBusy || !registry.content_version || item.available === false}
                     onClick={() => open(item, true)}
                   >
                     <AppIcon name="eye" size={14} aria-hidden="true" />
@@ -481,7 +473,7 @@ export default function DeliverablesPanel({
                   className="btn btn-ghost btn-sm icon-button"
                   aria-label={`下载 ${item.title}`}
                   title="下载"
-                  disabled={busy !== null}
+                  disabled={actionBusy || !registry.content_version || item.available === false}
                   onClick={() => open(item, false)}
                 >
                   <AppIcon
@@ -496,9 +488,12 @@ export default function DeliverablesPanel({
           ))}
         </ul>
       )}
-      {actionError && (
+      {(actionError || operation.error) && (
         <div className="alert error" role="alert">
-          <AppIcon name="circle-x" size={14} aria-hidden="true" /> {actionError}
+          <AppIcon name="circle-x" size={14} aria-hidden="true" /> {actionError || operation.error}
+          <button type="button" onClick={() => void operation.reconnect()} disabled={actionBusy}>
+            重新连接操作
+          </button>
         </div>
       )}
       <details className="run-gates" open={registry.status !== 'pass'}>

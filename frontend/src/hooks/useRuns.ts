@@ -44,16 +44,17 @@ export function useRunDetail(id: string | undefined, opts?: { refetchInterval?: 
 
 export function useRunDocument(
   id: string | undefined,
-  opts: { enabled?: boolean; includeHsiTables?: boolean } = {},
+  opts: { enabled?: boolean; includeHsiTables?: boolean; version?: string } = {},
 ) {
   const includeHsiTables = opts.includeHsiTables ?? false
   return useQuery({
-    queryKey: ['run-document', id, { includeHsiTables }],
-    queryFn: ({ signal }) => getRunDocument(id as string, { includeHsiTables, signal }),
+    queryKey: ['run-document', id, { includeHsiTables, version: opts.version ?? 'current' }],
+    queryFn: ({ signal }) =>
+      getRunDocument(id as string, { includeHsiTables, version: opts.version, signal }),
     enabled: Boolean(id) && (opts.enabled ?? true),
-    // A completed report is immutable for the lifetime of a run. Keeping it
-    // cached avoids rebuilding the structured document on every tab revisit.
-    staleTime: Infinity,
+    staleTime: opts.version ? Infinity : 0,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   })
 }
 

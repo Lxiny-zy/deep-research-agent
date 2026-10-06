@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ReaderPage from './ReaderPage'
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   createConversation: vi.fn(),
   askQuestion: vi.fn(),
   getQaRequest: vi.fn(),
+  cancelQaRequest: vi.fn(),
 }))
 vi.mock('../api/client', async () => ({ ...(await vi.importActual('../api/client')), ...mocks }))
 vi.mock('../components/PdfViewer', () => ({
@@ -115,6 +116,99 @@ beforeEach(() => {
 })
 
 describe('ReaderPage', () => {
+  it.each(['pending', 'running', 'done', 'fallback'] as const)(
+    'hides a parent recovery action when its child is %s',
+    async (status) => {
+      const parent = {
+        ...answered.messages[0],
+        request_id: 'stopped-parent',
+        status: 'cancelled' as const,
+        recovery: { available: true, stage: 'evidence' as const },
+      }
+      const child = {
+        ...answered.messages[0],
+        id: 'child',
+        position: 1,
+        request_id: 'continued-child',
+        status,
+        request_payload: { resume_message_id: parent.id },
+      }
+      mocks.listConversations.mockResolvedValue([{ ...answered, messages: [] }])
+      mocks.getConversation.mockResolvedValue({ ...answered, messages: [parent, child] })
+      renderPage()
+      const parentView = await screen.findByRole('article', { name: '第 1 轮问答' })
+      expect(
+        within(parentView).queryByRole('button', { name: '继续未完成的回答' }),
+      ).not.toBeInTheDocument()
+      expect(parentView).toHaveTextContent(
+        ['pending', 'running'].includes(status)
+          ? '已继续，后续轮次正在处理。'
+          : '已继续，请查看后续回答。',
+      )
+    },
+  )
+
+  it.each(['error', 'cancelled'] as const)(
+    'keeps the latest %s child recoverable without marking the parent successful',
+    async (status) => {
+      const parent = {
+        ...answered.messages[0],
+        status: 'cancelled' as const,
+        recovery: { available: true, stage: 'evidence' as const },
+      }
+      const child = {
+        ...parent,
+        id: 'child',
+        position: 1,
+        status,
+        request_payload: { resume_message_id: parent.id },
+      }
+      mocks.listConversations.mockResolvedValue([{ ...answered, messages: [] }])
+      mocks.getConversation.mockResolvedValue({ ...answered, messages: [parent, child] })
+      renderPage()
+      const parentView = await screen.findByRole('article', { name: '第 1 轮问答' })
+      expect(parentView).toHaveTextContent('后续轮次尚未完成')
+      expect(
+        within(parentView).queryByRole('button', { name: '继续未完成的回答' }),
+      ).not.toBeInTheDocument()
+      expect(
+        within(screen.getByRole('article', { name: '第 2 轮问答' })).getByRole('button', {
+          name: '继续未完成的回答',
+        }),
+      ).toBeEnabled()
+    },
+  )
+
+  it('continues a cancelled round only by explicit action and preserves its paper and source scope', async () => {
+    const stopped = {
+      ...answered.messages[0],
+      request_id: 'original-request',
+      status: 'cancelled' as const,
+      recovery: { available: true, stage: 'evidence' as const },
+      request_payload: {
+        query: '原始材料问题',
+        sources: ['web' as const],
+        project_id: 'original-project',
+        revision_message_id: 'original-revision',
+      },
+    }
+    mocks.listConversations.mockResolvedValue([{ ...answered, messages: [] }])
+    mocks.getConversation.mockResolvedValue({ ...answered, messages: [stopped] })
+    renderPage()
+    const resume = await screen.findByRole('button', { name: '继续未完成的回答' })
+    expect(mocks.askQuestion).not.toHaveBeenCalled()
+    fireEvent.click(resume)
+    await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledTimes(1))
+    expect(mocks.askQuestion.mock.calls[0][1]).toBe('原始材料问题')
+    expect(mocks.askQuestion.mock.calls[0][3]).toMatchObject({
+      sources: ['web'],
+      projectId: 'original-project',
+      revisionMessageId: 'original-revision',
+      resumeMessageId: stopped.id,
+    })
+    expect(mocks.askQuestion.mock.calls[0][3].requestId).not.toBe('original-request')
+  })
+
   it('continues a failed answer from its original message without fetching more sources', async () => {
     const parent = {
       ...answered.messages[0],

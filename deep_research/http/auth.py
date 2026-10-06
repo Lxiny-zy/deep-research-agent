@@ -32,6 +32,11 @@ async def require_api_key(
     request.state.principal = principal
     path = request.url.path
     mutation = request.method not in {"GET", "HEAD", "OPTIONS"}
+    # Operation submission performs its kind-specific authorization in the
+    # handler; readers retain the existing ability to export their own runs.
+    render_operation = mutation and path.startswith("/api/runs/") and path.endswith(
+        "/render-operations"
+    )
     research_action = path in {"/api/research", "/api/intent/assess"} or (
         mutation
         and (
@@ -48,7 +53,7 @@ async def require_api_key(
             or path == "/api/datasets"
         )
     )
-    if research_action and not principal.can_research:
+    if research_action and not render_operation and not principal.can_research:
         raise HTTPException(403, "当前身份为只读，无法创建或修改研究")
     if not principal.can_manage and (path == "/metrics" or (mutation and not research_action)):
         raise HTTPException(403, "此操作需要管理员权限")

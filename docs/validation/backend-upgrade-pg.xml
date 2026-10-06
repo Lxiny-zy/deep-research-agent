@@ -1,0 +1,343 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="73" time="104.355" timestamp="2026-10-06T02:00:37.620158+08:00" hostname="WIN-CHHRJ02R9UV"><testcase classname="tests.test_cancellation_migration" name="test_postgres_cancellation_migration" time="1.714" /><testcase classname="tests.test_completion_repository" name="test_finalize_persists_completion_with_and_without_execution_lease[postgresql-None]" time="1.203" /><testcase classname="tests.test_completion_repository" name="test_finalize_persists_completion_with_and_without_execution_lease[postgresql-original]" time="1.233" /><testcase classname="tests.test_completion_repository" name="test_cancellation_wins_over_late_quality_completion[postgresql]" time="1.545" /><testcase classname="tests.test_completion_repository" name="test_lost_owner_cannot_publish_terminal_status_or_completion[postgresql]" time="1.260" /><testcase classname="tests.test_completion_repository" name="test_invalid_completion_does_not_partially_change_metrics[postgresql]" time="1.216" /><testcase classname="tests.test_completion_repository" name="test_completion_record_does_not_retain_mutable_caller_aliases[postgresql-finalize]" time="1.171" /><testcase classname="tests.test_completion_repository" name="test_completion_record_does_not_retain_mutable_caller_aliases[postgresql-update]" time="1.274" /><testcase classname="tests.test_completion_repository" name="test_retry_cas_rejects_stale_version_or_changed_source[postgresql-version]" time="1.241" /><testcase classname="tests.test_completion_repository" name="test_retry_cas_rejects_stale_version_or_changed_source[postgresql-source]" time="1.218" /><testcase classname="tests.test_completion_repository" name="test_concurrent_completion_updates_have_one_version_winner[postgresql]" time="1.398" /><testcase classname="tests.test_completion_repository" name="test_completion_retry_cannot_replace_non_delivery_terminal_decisions[postgresql-running]" time="1.483" /><testcase classname="tests.test_completion_repository" name="test_completion_retry_cannot_replace_non_delivery_terminal_decisions[postgresql-cancelling]" time="1.351" /><testcase classname="tests.test_completion_repository" name="test_completion_retry_cannot_replace_non_delivery_terminal_decisions[postgresql-cancelled]" time="1.516" /><testcase classname="tests.test_completion_repository" name="test_completion_retry_cannot_replace_non_delivery_terminal_decisions[postgresql-error]" time="1.412" /><testcase classname="tests.test_migrations_pg" name="test_postgres_explicit_resume_renews_time_atomically_and_preserves_usage[inline]" time="1.354" /><testcase classname="tests.test_migrations_pg" name="test_postgres_explicit_resume_renews_time_atomically_and_preserves_usage[worker]" time="1.263" /><testcase classname="tests.test_migrations_pg" name="test_postgres_search_reference_races_cannot_create_dangling_references" time="1.183" /><testcase classname="tests.test_migrations_pg" name="test_postgres_upgrade_0017_to_0018_preserves_historical_rows" time="0.766" /><testcase classname="tests.test_migrations_pg" name="test_postgres_migration_advisory_lock_serializes_two_sessions" time="0.119" /><testcase classname="tests.test_qa_clock_fencing" name="test_waiting_old_owner_cannot_revive_lease_or_exceed_capacity[postgres-renew]" time="1.948" /><testcase classname="tests.test_qa_clock_fencing" name="test_waiting_old_owner_cannot_revive_lease_or_exceed_capacity[postgres-complete]" time="1.902" /><testcase classname="tests.test_qa_clock_fencing" name="test_claim_lease_starts_after_waiting_for_admission_lock[postgres]" time="2.012" /><testcase classname="tests.test_qa_clock_fencing" name="test_status_read_rechecks_time_after_real_pool_checkout_wait[postgres]" time="1.660" /><testcase classname="tests.test_qa_reliability_pg" name="test_postgres_qa_reliability[test_blocked_backlogs_do_not_hide_an_independent_ready_conversation]" time="6.515" /><testcase classname="tests.test_qa_reliability_pg" name="test_postgres_qa_reliability[test_recovery_yields_one_head_and_can_settle_an_expired_predecessor]" time="1.323" /><testcase classname="tests.test_qa_reliability_pg" name="test_postgres_qa_reliability[test_reservations_obey_global_and_owner_caps_without_breaking_idempotency]" time="1.263" /><testcase classname="tests.test_qa_reliability_pg" name="test_postgres_qa_reliability[test_concurrent_claims_respect_shared_caps_and_recovery_skips_saturated_owner]" time="1.313" /><testcase classname="tests.test_qa_reliability_pg" name="test_postgres_qa_reliability[test_stop_pending_and_running_preserves_history_and_fences_late_work]" time="1.329" /><testcase classname="tests.test_qa_reliability_pg" name="test_postgres_qa_reliability[test_cross_instance_stop_interrupts_active_call_without_reexecution]" time="2.267" /><testcase classname="tests.test_qa_reliability_pg" name="test_postgres_qa_reliability[test_finish_cancel_race_has_one_terminal_result]" time="1.232" /><testcase classname="tests.test_render_queue_pg" name="test_postgres_render_queue_survives_migration_and_shares_capacity" time="2.012" /><testcase classname="tests.test_repository" name="test_postgres_schema_is_at_alembic_head" time="0.037"><failure message="sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation &quot;alembic_version&quot; does not exist&#10;[SQL: SELECT version_num FROM alembic_version]&#10;(Background on this error at: https://sqlalche.me/e/20/f405)">C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:526: in _prepare_and_execute
+    prepared_stmt, attributes = await adapt_connection._prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:773: in _prepare
+    prepared_stmt = await self._connection.prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:638: in prepare
+    return await self._prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:657: in _prepare
+    stmt = await self._get_statement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:443: in _get_statement
+    statement = await self._protocol.prepare(
+asyncpg/protocol/protocol.pyx:165: in prepare
+    ???
+E   asyncpg.exceptions.UndefinedTableError: relation "alembic_version" does not exist
+
+The above exception was the direct cause of the following exception:
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1969: in _exec_single_context
+    self.dialect.do_execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\default.py:952: in do_execute
+    cursor.execute(statement, parameters)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:585: in execute
+    self._adapt_connection.await_(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:563: in _prepare_and_execute
+    self._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:513: in _handle_exception
+    self._adapt_connection._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:797: in _handle_exception
+    raise translated_error from error
+E   sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_dbapi.ProgrammingError: &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation "alembic_version" does not exist
+
+The above exception was the direct cause of the following exception:
+tests\test_repository.py:1110: in test_postgres_schema_is_at_alembic_head
+    current = await connection.scalar(text("SELECT version_num FROM alembic_version"))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\ext\asyncio\engine.py:703: in scalar
+    result = await self.execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\ext\asyncio\engine.py:659: in execute
+    result = await greenlet_spawn(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:201: in greenlet_spawn
+    result = context.throw(*sys.exc_info())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1421: in execute
+    return meth(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\sql\elements.py:526: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1643: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1848: in _execute_context
+    return self._exec_single_context(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1988: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:2365: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1969: in _exec_single_context
+    self.dialect.do_execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\default.py:952: in do_execute
+    cursor.execute(statement, parameters)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:585: in execute
+    self._adapt_connection.await_(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:563: in _prepare_and_execute
+    self._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:513: in _handle_exception
+    self._adapt_connection._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:797: in _handle_exception
+    raise translated_error from error
+E   sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation "alembic_version" does not exist
+E   [SQL: SELECT version_num FROM alembic_version]
+E   (Background on this error at: https://sqlalche.me/e/20/f405)</failure></testcase><testcase classname="tests.test_repository" name="test_sql_repository_on_postgres" time="0.040"><failure message="sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation &quot;coordination&quot; does not exist&#10;[SQL: INSERT INTO coordination (name) VALUES ($1::VARCHAR) ON CONFLICT DO NOTHING]&#10;[parameters: ('run-admission',)]&#10;(Background on this error at: https://sqlalche.me/e/20/f405)">C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:526: in _prepare_and_execute
+    prepared_stmt, attributes = await adapt_connection._prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:773: in _prepare
+    prepared_stmt = await self._connection.prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:638: in prepare
+    return await self._prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:657: in _prepare
+    stmt = await self._get_statement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:443: in _get_statement
+    statement = await self._protocol.prepare(
+asyncpg/protocol/protocol.pyx:165: in prepare
+    ???
+E   asyncpg.exceptions.UndefinedTableError: relation "coordination" does not exist
+
+The above exception was the direct cause of the following exception:
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1969: in _exec_single_context
+    self.dialect.do_execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\default.py:952: in do_execute
+    cursor.execute(statement, parameters)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:585: in execute
+    self._adapt_connection.await_(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:563: in _prepare_and_execute
+    self._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:513: in _handle_exception
+    self._adapt_connection._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:797: in _handle_exception
+    raise translated_error from error
+E   sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_dbapi.ProgrammingError: &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation "coordination" does not exist
+
+The above exception was the direct cause of the following exception:
+tests\test_repository.py:1125: in test_sql_repository_on_postgres
+    run_id = await repo.create_run("PG 冒烟")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+deep_research\persistence\sql_repository.py:191: in create_run
+    run_id, _ = await self.create_run_once(
+deep_research\persistence\sql_repository.py:222: in create_run_once
+    await transaction_lock(s, "run-admission")
+deep_research\persistence\coordination.py:13: in transaction_lock
+    await session.execute(insert(CoordinationRow).values(name=name).on_conflict_do_nothing())
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\ext\asyncio\session.py:448: in execute
+    result = await greenlet_spawn(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:201: in greenlet_spawn
+    result = context.throw(*sys.exc_info())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\orm\session.py:2373: in execute
+    return self._execute_internal(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\orm\session.py:2271: in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\orm\bulk_persistence.py:1322: in orm_execute_statement
+    result = conn.execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1421: in execute
+    return meth(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\sql\elements.py:526: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1643: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1848: in _execute_context
+    return self._exec_single_context(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1988: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:2365: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1969: in _exec_single_context
+    self.dialect.do_execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\default.py:952: in do_execute
+    cursor.execute(statement, parameters)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:585: in execute
+    self._adapt_connection.await_(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:563: in _prepare_and_execute
+    self._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:513: in _handle_exception
+    self._adapt_connection._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:797: in _handle_exception
+    raise translated_error from error
+E   sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation "coordination" does not exist
+E   [SQL: INSERT INTO coordination (name) VALUES ($1::VARCHAR) ON CONFLICT DO NOTHING]
+E   [parameters: ('run-admission',)]
+E   (Background on this error at: https://sqlalche.me/e/20/f405)</failure></testcase><testcase classname="tests.test_repository" name="test_postgres_run_delivery_contract" time="0.108"><failure message="sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation &quot;coordination&quot; does not exist&#10;[SQL: INSERT INTO coordination (name) VALUES ($1::VARCHAR) ON CONFLICT DO NOTHING]&#10;[parameters: ('run-admission',)]&#10;(Background on this error at: https://sqlalche.me/e/20/f405)">C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:526: in _prepare_and_execute
+    prepared_stmt, attributes = await adapt_connection._prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:773: in _prepare
+    prepared_stmt = await self._connection.prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:638: in prepare
+    return await self._prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:657: in _prepare
+    stmt = await self._get_statement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:443: in _get_statement
+    statement = await self._protocol.prepare(
+asyncpg/protocol/protocol.pyx:165: in prepare
+    ???
+E   asyncpg.exceptions.UndefinedTableError: relation "coordination" does not exist
+
+The above exception was the direct cause of the following exception:
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1969: in _exec_single_context
+    self.dialect.do_execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\default.py:952: in do_execute
+    cursor.execute(statement, parameters)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:585: in execute
+    self._adapt_connection.await_(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:563: in _prepare_and_execute
+    self._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:513: in _handle_exception
+    self._adapt_connection._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:797: in _handle_exception
+    raise translated_error from error
+E   sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_dbapi.ProgrammingError: &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation "coordination" does not exist
+
+The above exception was the direct cause of the following exception:
+tests\test_repository.py:1147: in test_postgres_run_delivery_contract
+    results = await asyncio.gather(
+deep_research\persistence\sql_repository.py:222: in create_run_once
+    await transaction_lock(s, "run-admission")
+deep_research\persistence\coordination.py:13: in transaction_lock
+    await session.execute(insert(CoordinationRow).values(name=name).on_conflict_do_nothing())
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\ext\asyncio\session.py:448: in execute
+    result = await greenlet_spawn(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:201: in greenlet_spawn
+    result = context.throw(*sys.exc_info())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\orm\session.py:2373: in execute
+    return self._execute_internal(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\orm\session.py:2271: in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\orm\bulk_persistence.py:1322: in orm_execute_statement
+    result = conn.execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1421: in execute
+    return meth(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\sql\elements.py:526: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1643: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1848: in _execute_context
+    return self._exec_single_context(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1988: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:2365: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1969: in _exec_single_context
+    self.dialect.do_execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\default.py:952: in do_execute
+    cursor.execute(statement, parameters)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:585: in execute
+    self._adapt_connection.await_(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:563: in _prepare_and_execute
+    self._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:513: in _handle_exception
+    self._adapt_connection._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:797: in _handle_exception
+    raise translated_error from error
+E   sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation "coordination" does not exist
+E   [SQL: INSERT INTO coordination (name) VALUES ($1::VARCHAR) ON CONFLICT DO NOTHING]
+E   [parameters: ('run-admission',)]
+E   (Background on this error at: https://sqlalche.me/e/20/f405)</failure></testcase><testcase classname="tests.test_repository" name="test_postgres_failed_resume_has_one_requeue_winner" time="0.040"><failure message="sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation &quot;coordination&quot; does not exist&#10;[SQL: INSERT INTO coordination (name) VALUES ($1::VARCHAR) ON CONFLICT DO NOTHING]&#10;[parameters: ('run-admission',)]&#10;(Background on this error at: https://sqlalche.me/e/20/f405)">C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:526: in _prepare_and_execute
+    prepared_stmt, attributes = await adapt_connection._prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:773: in _prepare
+    prepared_stmt = await self._connection.prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:638: in prepare
+    return await self._prepare(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:657: in _prepare
+    stmt = await self._get_statement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\asyncpg\connection.py:443: in _get_statement
+    statement = await self._protocol.prepare(
+asyncpg/protocol/protocol.pyx:165: in prepare
+    ???
+E   asyncpg.exceptions.UndefinedTableError: relation "coordination" does not exist
+
+The above exception was the direct cause of the following exception:
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1969: in _exec_single_context
+    self.dialect.do_execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\default.py:952: in do_execute
+    cursor.execute(statement, parameters)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:585: in execute
+    self._adapt_connection.await_(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:563: in _prepare_and_execute
+    self._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:513: in _handle_exception
+    self._adapt_connection._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:797: in _handle_exception
+    raise translated_error from error
+E   sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_dbapi.ProgrammingError: &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation "coordination" does not exist
+
+The above exception was the direct cause of the following exception:
+tests\test_repository.py:1216: in test_postgres_failed_resume_has_one_requeue_winner
+    run_id = await repo.create_run("PG failed resume", execution=execution)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+deep_research\persistence\sql_repository.py:191: in create_run
+    run_id, _ = await self.create_run_once(
+deep_research\persistence\sql_repository.py:222: in create_run_once
+    await transaction_lock(s, "run-admission")
+deep_research\persistence\coordination.py:13: in transaction_lock
+    await session.execute(insert(CoordinationRow).values(name=name).on_conflict_do_nothing())
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\ext\asyncio\session.py:448: in execute
+    result = await greenlet_spawn(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:201: in greenlet_spawn
+    result = context.throw(*sys.exc_info())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\orm\session.py:2373: in execute
+    return self._execute_internal(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\orm\session.py:2271: in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\orm\bulk_persistence.py:1322: in orm_execute_statement
+    result = conn.execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1421: in execute
+    return meth(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\sql\elements.py:526: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1643: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1848: in _execute_context
+    return self._exec_single_context(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1988: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:2365: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\base.py:1969: in _exec_single_context
+    self.dialect.do_execute(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\engine\default.py:952: in do_execute
+    cursor.execute(statement, parameters)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:585: in execute
+    self._adapt_connection.await_(
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:563: in _prepare_and_execute
+    self._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:513: in _handle_exception
+    self._adapt_connection._handle_exception(error)
+C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py:797: in _handle_exception
+    raise translated_error from error
+E   sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) &lt;class 'asyncpg.exceptions.UndefinedTableError'&gt;: relation "coordination" does not exist
+E   [SQL: INSERT INTO coordination (name) VALUES ($1::VARCHAR) ON CONFLICT DO NOTHING]
+E   [parameters: ('run-admission',)]
+E   (Background on this error at: https://sqlalche.me/e/20/f405)</failure></testcase><testcase classname="tests.test_run_recovery_repository" name="test_recovery_cooldown_then_takeover_preserves_settings_and_metrics[postgresql-unlimited]" time="1.281" /><testcase classname="tests.test_run_recovery_repository" name="test_recovery_cooldown_then_takeover_preserves_settings_and_metrics[postgresql-limited]" time="1.256" /><testcase classname="tests.test_run_recovery_repository" name="test_defer_run_rejects_a_stale_lease_without_mutating_state[postgresql-wrong_owner]" time="1.223" /><testcase classname="tests.test_run_recovery_repository" name="test_defer_run_rejects_a_stale_lease_without_mutating_state[postgresql-expired]" time="1.289" /><testcase classname="tests.test_run_recovery_repository" name="test_defer_run_rejects_a_stale_lease_without_mutating_state[postgresql-taken_over]" time="1.269" /><testcase classname="tests.test_run_recovery_repository" name="test_recovery_cannot_overwrite_cancellation_or_success[postgresql-cancelling]" time="1.251" /><testcase classname="tests.test_run_recovery_repository" name="test_recovery_cannot_overwrite_cancellation_or_success[postgresql-cancelled]" time="1.239" /><testcase classname="tests.test_run_recovery_repository" name="test_recovery_cannot_overwrite_cancellation_or_success[postgresql-done]" time="1.249" /><testcase classname="tests.test_run_recovery_repository" name="test_cancellation_wins_a_race_with_recovery_scheduling[postgresql]" time="1.474" /><testcase classname="tests.test_run_recovery_repository" name="test_only_one_worker_can_claim_a_cooled_down_recovery[postgresql-unlimited]" time="1.337" /><testcase classname="tests.test_run_recovery_repository" name="test_only_one_worker_can_claim_a_cooled_down_recovery[postgresql-limited]" time="1.355" /><testcase classname="tests.test_run_recovery_repository" name="test_checkpoint_write_failure_rolls_back_status_and_queue_schedule[postgresql]" time="1.280" /><testcase classname="tests.test_scheduling_migration" name="test_postgres_fair_scheduling_migration_roundtrip_preserves_legacy_work" time="1.667" /><testcase classname="tests.test_scheduling_repository" name="test_one_identity_cannot_hide_another_behind_a_large_queue[postgresql]" time="1.512" /><testcase classname="tests.test_scheduling_repository" name="test_scheduler_credit_survives_a_new_repository_instance[postgresql]" time="1.227" /><testcase classname="tests.test_scheduling_repository" name="test_heavy_capacity_does_not_block_same_identity_light_work[postgresql]" time="1.221" /><testcase classname="tests.test_scheduling_repository" name="test_heavy_identity_cap_leaves_heavy_capacity_for_another_owner[postgresql]" time="1.262" /><testcase classname="tests.test_scheduling_repository" name="test_concurrent_workers_obey_total_and_heavy_limits[postgresql]" time="1.340" /><testcase classname="tests.test_scheduling_repository" name="test_priority_changes_order_within_an_identity[postgresql]" time="1.164" /><testcase classname="tests.test_scheduling_repository" name="test_waiting_low_priority_work_eventually_precedes_new_urgent_work[postgresql]" time="1.569" /><testcase classname="tests.test_scheduling_repository" name="test_executing_time_does_not_age_a_crashed_attempt_ahead_of_fresh_work[postgresql]" time="1.483" /><testcase classname="tests.test_scheduling_repository" name="test_credit_write_failure_rolls_back_the_lease_and_claim_count[postgresql]" time="1.340" /><testcase classname="tests.test_scheduling_repository" name="test_legacy_enqueue_only_accepts_recoverable_unleased_work[postgresql-pending-True-None-True]" time="1.353" /><testcase classname="tests.test_scheduling_repository" name="test_legacy_enqueue_only_accepts_recoverable_unleased_work[postgresql-running-True-None-True]" time="1.376" /><testcase classname="tests.test_scheduling_repository" name="test_legacy_enqueue_only_accepts_recoverable_unleased_work[postgresql-cancelling-True-None-False]" time="1.237" /><testcase classname="tests.test_scheduling_repository" name="test_legacy_enqueue_only_accepts_recoverable_unleased_work[postgresql-pending-False-None-False]" time="1.213" /><testcase classname="tests.test_scheduling_repository" name="test_legacy_enqueue_only_accepts_recoverable_unleased_work[postgresql-running-True-live-worker-False]" time="1.253" /><testcase classname="tests.test_service_coordination" name="test_concurrent_repositories_enforce_shared_queue_and_execution_limits[postgresql]" time="1.707" /><testcase classname="tests.test_service_coordination" name="test_same_idempotency_key_wins_once_even_at_capacity[postgresql]" time="1.465" /><testcase classname="tests.test_service_coordination" name="test_concurrent_default_models_keep_one_default_from_empty_catalog[postgresql]" time="1.401" /><testcase classname="tests.test_service_coordination" name="test_configuration_is_encrypted_shared_and_compare_and_swap[postgresql]" time="1.393" /><testcase classname="tests.test_service_coordination" name="test_artifact_delete_is_run_scoped_durable_and_retryable[postgresql]" time="1.262" /><testcase classname="tests.test_service_coordination" name="test_worker_health_expires_and_queue_metrics_are_shared[postgresql]" time="1.488" /><testcase classname="tests.test_service_coordination" name="test_provider_concurrency_and_expired_leases_are_shared[postgresql]" time="1.302" /><testcase classname="tests.test_service_coordination" name="test_provider_cooldown_request_quota_and_cancellation[postgresql]" time="1.251" /><testcase classname="tests.test_service_coordination" name="test_http_admission_cannot_be_bypassed_by_another_api_process[postgresql]" time="1.349" /><testcase classname="tests.test_source_context_migration" name="test_source_context_roundtrip_postgres" time="1.552" /></testsuite></testsuites>

@@ -19,6 +19,20 @@ const router = createBrowserRouter([
   ...(import.meta.env.DEV
     ? [
         {
+          path: '/preview/qa/:id',
+          lazy: async () => ({ Component: (await import('./pages/QaPage')).default }),
+        },
+        {
+          path: '/preview/reader/:id',
+          lazy: async () => ({ Component: (await import('./pages/ReaderPage')).default }),
+        },
+        {
+          path: '/preview/scientific-document',
+          lazy: async () => ({
+            Component: (await import('./pages/ScientificDocumentPreviewPage')).default,
+          }),
+        },
+        {
           path: '/preview/live-telemetry',
           lazy: async () => ({
             Component: (await import('./pages/LiveTelemetryPreviewPage')).default,

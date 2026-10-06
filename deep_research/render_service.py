@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import threading
@@ -14,10 +15,12 @@ from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 from . import render_tasks
-from .blocking import run_blocking, run_rendering
+from .blocking import run_blocking
 from .config import Settings
 from .persistence.repository import LeaseLostError, RunDetail
-from .render_capacity import RENDER_CAPACITY, publication_guard, render_run_lock, rendering_capacity
+from .render_capacity import RENDER_CAPACITY
+from .render_diagnostics import exception_diagnostic
+from .render_process import RenderProcess
 from .render_queue import (
     MemoryRenderQueue,
     RenderConflict,
@@ -26,6 +29,7 @@ from .render_queue import (
     SqlRenderQueue,
     _hash,
 )
+from .shutdown import cancel, wait_until
 
 logger = logging.getLogger(__name__)
 LEASE_SECONDS = 90.0
@@ -50,6 +54,12 @@ class RenderService:
         self._wakeup = asyncio.Event()
         self._active: set[asyncio.Task] = set()
         self._fences: dict[str, threading.Event] = {}
+        self._processes: set[RenderProcess] = set()
+        self.execution_timeout = getattr(settings, "render_execution_timeout_seconds", 600.0)
+        self.progress_timeout = getattr(settings, "render_progress_timeout_seconds", 180.0)
+        self.progress_poll = getattr(settings, "render_progress_poll_seconds", 1.0)
+        self.requires_hard_exit = False
+        self._shutdown_deadline: float | None = None
         self._inflight: dict[str, tuple[str, asyncio.Task]] = {}
         self._changed = 0
         self._listeners: set[asyncio.Future] = set()
@@ -98,12 +108,16 @@ class RenderService:
         while not self.stopping:
             try:
                 self._wakeup.clear()
-                while len(self._active) < RENDER_CAPACITY:
+                while not self.stopping and len(self._active) < RENDER_CAPACITY:
                     job = await self.queue.claim(
                         self.pool, str(uuid4()), limit=RENDER_CAPACITY, lease_seconds=LEASE_SECONDS
                     )
                     if job is None:
                         break
+                    if self.stopping:
+                        # A cancelled database claim may complete late. Keep
+                        # its lease recoverable without starting work on exit.
+                        return
                     task = asyncio.create_task(self._execute(job))
                     self._active.add(task)
                     task.add_done_callback(self._active.discard)
@@ -149,28 +163,30 @@ class RenderService:
             except Exception:
                 fence.set()
 
-        def check() -> None:
+        async def check() -> bool:
             if fence.is_set() or self.loop.is_closed():
-                raise LeaseLostError("渲染执行权已失效")
-            future = asyncio.run_coroutine_threadsafe(self._owned(job), self.loop)
-            try:
-                valid = future.result(timeout=20)
-            except Exception:
-                future.cancel()
-                raise
-            if not valid:
-                raise LeaseLostError("渲染执行权已失效")
+                return False
+            return await self._owned(job)
 
-        def execute() -> dict[str, Any]:
-            with (
-                render_run_lock(self.root, job.run_id),
-                rendering_capacity(self.root),
-                publication_guard(check),
-            ):
-                check()
-                return render_tasks.execute_render(
-                    job, self.root, job.payload.get("quota", self.quota)
-                )
+        process = RenderProcess()
+        self._processes.add(process)
+        work: asyncio.Task | None = None
+        watchdog: asyncio.Task | None = None
+
+        async def watch() -> None:
+            token = before
+            changed_at = time.monotonic()
+            while True:
+                await asyncio.sleep(self.progress_poll)
+                if fence.is_set() or not await self._owned(job):
+                    raise LeaseLostError("渲染执行权已失效")
+                current = await run_blocking(render_tasks.progress_token, job, self.root)
+                if current != token:
+                    changed_at, token = time.monotonic(), current
+                    if not await self.queue.progress(job.id, owner, current):
+                        raise LeaseLostError("渲染执行权已失效")
+                if time.monotonic() - changed_at >= self.progress_timeout:
+                    raise TimeoutError("渲染未产生新的格式检查点，已终止本次执行")
 
         beat = asyncio.create_task(heartbeat())
         try:
@@ -182,7 +198,22 @@ class RenderService:
             before = await run_blocking(render_tasks.progress_token, job, self.root)
             if not await self.queue.progress(job.id, job.lease_owner, before):
                 return
-            result = await run_rendering(execute)
+            work = asyncio.create_task(process.run(
+                job, self.root, job.payload.get("quota", self.quota), check,
+            ))
+            watchdog = asyncio.create_task(watch())
+            done, _ = await asyncio.wait(
+                {work, watchdog}, timeout=self.execution_timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                raise TimeoutError("渲染执行期限已到，已终止本次执行")
+            # Cancellation/authority loss wins a simultaneous completion race.
+            if watchdog in done:
+                await watchdog
+            result = await work
+            if not await check():
+                raise LeaseLostError("渲染执行权已失效")
             await self.queue.finish(job.id, job.lease_owner, result)
         except asyncio.CancelledError:
             fence.set()
@@ -190,6 +221,13 @@ class RenderService:
         except Exception as exc:
             from .execution_policy import transient_failure
 
+            logger.warning(
+                "render attempt failed; job=%s attempt=%s origin=%s diagnostic=%s",
+                job.id, job.attempts, "child" if process.diagnostic else "parent",
+                json.dumps(process.diagnostic or exception_diagnostic(exc), ensure_ascii=True),
+            )
+            fence.set()
+            process.abort()
             after: str | None
             try:
                 after = await run_blocking(render_tasks.progress_token, job, self.root)
@@ -208,8 +246,20 @@ class RenderService:
                 delay=min(8, 2**job.stalls),
             )
         finally:
-            beat.cancel()
-            await asyncio.gather(beat, return_exceptions=True)
+            fence.set()
+            process.abort()
+            cleanup_deadline = time.monotonic() + 1
+            if self._shutdown_deadline is not None:
+                cleanup_deadline = min(cleanup_deadline, self._shutdown_deadline)
+            tasks = {task for task in (work, watchdog, beat) if task is not None}
+            cancel(tasks)
+            pending = await wait_until(tasks, cleanup_deadline)
+            # Killing is asynchronous on Windows. Do not advertise a free
+            # physical slot until the child has actually exited, even when a
+            # cancellation interrupted run()'s own finally/reaping step.
+            reaped = await process.reap(cleanup_deadline)
+            self.requires_hard_exit |= bool(pending) or not reaped
+            self._processes.discard(process)
             self._fences.pop(job.id, None)
             self._notify()
 
@@ -258,14 +308,8 @@ class RenderService:
             if existing[0] != fingerprint:
                 raise RenderConflict("同一渲染请求不能用于不同输入")
             return await asyncio.shield(existing[1])
-        if not await self._exists(run_id):
-            raise FileNotFoundError("研究任务已删除")
-        job = await self.queue.reserve(
-            key=key,
-            pool=self.pool,
-            run_id=run_id,
-            kind=kind,
-            payload=payload,
+        job = await self.reserve(
+            kind, run_id, key, payload,
             restart_failed=restart_failed,
             request_token=request_token,
         )
@@ -281,6 +325,21 @@ class RenderService:
         waiter.add_done_callback(finished)
         self.wake()
         return await asyncio.shield(waiter)
+
+    async def reserve(
+        self, kind: str, run_id: str, key: str, payload: dict[str, Any], *,
+        restart_failed: bool = False, request_token: str | None = None,
+    ) -> RenderJob:
+        if self.stopping:
+            raise RuntimeError("渲染服务正在关闭")
+        if not await self._exists(run_id):
+            raise FileNotFoundError("研究任务已删除")
+        job = await self.queue.reserve(
+            key=key, pool=self.pool, run_id=run_id, kind=kind, payload=payload,
+            restart_failed=restart_failed, request_token=request_token,
+        )
+        self.wake()
+        return job
 
     async def build(
         self, detail: RunDetail, *, automatic: bool = False, retry_token: str | None = None
@@ -368,20 +427,31 @@ class RenderService:
         except RenderFailed as exc:
             render_tasks.raise_render_error(exc.error)
 
-    async def close(self, *, seconds: float = 5) -> None:
+    async def close(self, *, seconds: float = 5, deadline: float | None = None) -> None:
+        deadline = time.monotonic() + seconds if deadline is None else deadline
+        if self._shutdown_deadline is not None:
+            deadline = min(deadline, self._shutdown_deadline)
+        self._shutdown_deadline = deadline
         self.stopping = True
-        if self._active:
-            await asyncio.wait(self._active, timeout=seconds)
-        for fence in self._fences.values():
-            fence.set()
-        tasks = [*self._active, *(item[1] for item in self._inflight.values())]
         if self._drainer is not None:
-            tasks.append(self._drainer)
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            cancel({self._drainer})
+        try:
+            if self._active:
+                # Reserve part of the same total budget for process reaping.
+                await wait_until(self._active, max(time.monotonic(), deadline - 1))
+        finally:
+            # Even cancellation of close() must synchronously terminate native
+            # processes before its first cancellable cleanup wait.
+            for fence in self._fences.values():
+                fence.set()
+            for process in self._processes:
+                process.abort()
+            tasks = [*self._active, *(item[1] for item in self._inflight.values())]
+            if self._drainer is not None:
+                tasks.append(self._drainer)
+            cancel(tasks)
+            pending = await wait_until(tasks, deadline)
+            self.requires_hard_exit |= bool(pending)
 
 
 def service_for(repo: Any, settings: Settings) -> RenderService:

@@ -191,7 +191,7 @@ async def test_another_api_instance_receives_live_reasoning_resets_and_text_befo
     first, revise, finish = asyncio.Event(), asyncio.Event(), asyncio.Event()
     calls = 0
 
-    async def answer(*args, on_delta, on_event):
+    async def answer(*args, on_delta, on_event, on_checkpoint):
         nonlocal calls
         calls += 1
         on_event({"type": "reasoning", "call_id": "one", "reasoning_delta": "thinking first"})

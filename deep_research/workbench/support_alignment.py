@@ -111,6 +111,7 @@ def alignment_issue(
     *,
     check_numbers: bool = True,
     anchored_ids: set[str] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> str | None:
     """Check actual selected quotes, never other findings or the proposed statement.
 
@@ -121,9 +122,16 @@ def alignment_issue(
     """
     from ..report.validation import _computed_numbers, _numbers
 
+    def fail(code: str, message: str) -> str:
+        if diagnostics is not None:
+            diagnostics.update(code=code, message=message)
+        return message
+
+    if diagnostics is not None:
+        diagnostics.update(version=1, selected_evidence_ids=list(ids), sentences=[])
     allowed = {record["id"] for record in evidence if record["citation"] in citations}
     if not ids or not set(ids).issubset(allowed):
-        return "核验未提供本单元引用范围内的有效依据"
+        return fail("invalid_evidence_scope", "核验未提供本单元引用范围内的有效依据")
     selected = [record for record in evidence if record["id"] in ids]
     sentences = _segments(text)
     anchored: set[str] = set(anchored_ids or ())
@@ -143,9 +151,21 @@ def alignment_issue(
             )
         )
         missing, calculations = _computed_numbers(numeric_sentence, support_numbers)
+        if diagnostics is not None:
+            diagnostics["sentences"].append({
+                "citations": sorted(scope),
+                "required_names": sorted(names),
+                "required_numbers": sorted(str(n) for n in numbers),
+                "selected_evidence_ids": [record["id"] for record in records],
+                "missing_numbers": sorted(str(n) for n in missing),
+                "calculation_issues": calculations,
+            })
         if (check_numbers and missing) or calculations:
             values = "、".join(str(n) for n in sorted(missing))
-            return "所选依据不支持句中数值或显式计算" + (f"：{values}" if values else "")
+            return fail(
+                "unsupported_number_or_calculation",
+                "所选依据不支持句中数值或显式计算" + (f"：{values}" if values else ""),
+            )
         for record in records:
             raw_quote = str(record.get("quote", ""))
             quote = unicodedata.normalize(
@@ -163,5 +183,20 @@ def alignment_issue(
             if numbers.intersection(_numbers(quote)) or name_match:
                 anchored.add(key)
     if requires_anchor - anchored:
-        return "所选摘录缺少对应句中的数值或专名，请重新选择实际支持该句的依据"
+        if diagnostics is not None:
+            diagnostics["unanchored_evidence_ids"] = sorted(requires_anchor - anchored)
+        return fail(
+            "selected_excerpt_missing_anchor",
+            "所选摘录缺少对应句中的数值或专名，请重新选择实际支持该句的依据",
+        )
     return None
+
+
+def alignment_diagnostics(
+    text: str, citations: list[int], ids: list[str], evidence: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Explain the existing gate without changing its acceptance criteria."""
+    diagnostics: dict[str, Any] = {}
+    issue = alignment_issue(text, citations, ids, evidence, diagnostics=diagnostics)
+    diagnostics["status"] = "fail" if issue else "pass"
+    return diagnostics

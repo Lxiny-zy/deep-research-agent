@@ -90,6 +90,33 @@ it('does not automatically retry a terminal model failure', async () => {
   expect(mocks.getQaRequest).not.toHaveBeenCalled()
 })
 
+it('treats durable cancellation as terminal after a disconnected stream', async () => {
+  const cancelled = { ...message, status: 'cancelled' as const }
+  mocks.askQuestion.mockRejectedValueOnce(new RequestTimeoutError())
+  mocks.getQaRequest.mockResolvedValue(cancelled)
+  expect(
+    await runQaRequest('cid', 'question', { sources: [] }, 'request-one', vi.fn(), vi.fn()),
+  ).toEqual(cancelled)
+  expect(mocks.askQuestion).toHaveBeenCalledTimes(1)
+})
+
+it('does not automatically retry an invalid saved recovery scope', async () => {
+  const failure = new ApiError(409, 'qa_recovery_unavailable')
+  mocks.askQuestion.mockRejectedValueOnce(failure)
+  await expect(
+    runQaRequest(
+      'cid',
+      'question',
+      { sources: ['web'], resumeMessageId: 'stopped-message' },
+      'new-request',
+      vi.fn(),
+      vi.fn(),
+    ),
+  ).rejects.toBe(failure)
+  expect(mocks.askQuestion).toHaveBeenCalledTimes(1)
+  expect(mocks.getQaRequest).not.toHaveBeenCalled()
+})
+
 it('does not discard another pending request when an older one finishes', async () => {
   pendingQaId('cid', 'first', { sources: [] }, 'first-request')
   pendingQaId('cid', 'second', { sources: [] }, 'second-request')

@@ -35,12 +35,20 @@ export default function QaMessageView({
   onReconnect,
   onRevise,
   revisionPending,
+  onStop,
+  onResume,
+  stopping = false,
+  continuationStatus,
 }: {
   message: QaMessage
   onLocate?: (evidence: QaEvidence) => void
   onReconnect?: () => void
   onRevise?: () => void
   revisionPending?: boolean
+  onStop?: () => void
+  onResume?: () => void
+  stopping?: boolean
+  continuationStatus?: QaMessage['status']
 }) {
   const unresolved = message.thoughts
     .filter((thought) => thought.tool === 'evidence_coverage')
@@ -75,12 +83,61 @@ export default function QaMessageView({
                   恢复连接
                 </button>
               )}
+              {onStop && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={onStop}
+                  disabled={stopping}
+                >
+                  {stopping ? '正在停止…' : '停止本轮'}
+                </button>
+              )}
             </div>
           )}
           {message.status === 'error' && (
             <p className="error-text" role="alert">
               {message.error || '本轮处理失败，可以重新提问。'}
             </p>
+          )}
+          {message.status === 'cancelled' && (
+            <p role="status">本轮已停止，历史与已保存阶段仍保留。</p>
+          )}
+          {['error', 'cancelled'].includes(message.status) && message.recovery && (
+            <div className="qa-recovery">
+              {continuationStatus ? (
+                <p className="muted small" role="status">
+                  {['pending', 'running'].includes(continuationStatus)
+                    ? '已继续，后续轮次正在处理。'
+                    : ['done', 'fallback'].includes(continuationStatus)
+                      ? '已继续，请查看后续回答。'
+                      : '后续轮次尚未完成，请在后续轮次查看可继续的阶段。'}
+                </p>
+              ) : message.recovery.available && onResume ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={revisionPending}
+                  onClick={onResume}
+                  title="沿用原问题、材料范围和已保存阶段，创建新的请求"
+                >
+                  继续未完成的回答
+                </button>
+              ) : (
+                <p className="muted small">
+                  {message.recovery.reason || '没有可复用的阶段，无法继续本轮。'}
+                </p>
+              )}
+              {message.recovery.available && !continuationStatus && (
+                <p className="muted small">
+                  {message.recovery.stage === 'draft'
+                    ? '保留的是未核验草稿，继续后仍需完成核验。'
+                    : message.recovery.stage === 'reviewed'
+                      ? '将复用已保存的核验阶段。'
+                      : '将复用已保存证据。'}
+                </p>
+              )}
+            </div>
           )}
           <QaActivityView items={savedQaActivity(message.thoughts)} />
           {unresolved.length > 0 && (

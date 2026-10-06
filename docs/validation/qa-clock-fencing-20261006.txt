@@ -1,0 +1,6 @@
+Local SQLite + isolated local PostgreSQL (port 54129)
+Command: python -m pytest -q --basetemp=D:/tmp/qa-clock tests/test_qa_clock_fencing.py
+........                                                                 [100%]
+8 passed in 12.04s
+
+Exit: 0

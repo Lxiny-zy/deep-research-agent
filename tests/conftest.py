@@ -8,6 +8,13 @@ from deep_research.config import Settings
 
 
 @pytest.fixture
+def cooperative_render(monkeypatch):
+    from tests.render_helpers import use_cooperative_render
+
+    use_cooperative_render(monkeypatch)
+
+
+@pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     s = Settings(artifact_root=str(tmp_path / "artifacts"))
     s.max_rounds = 1

@@ -44,11 +44,14 @@ def render_pdf(document: ReportDocument) -> bytes:
 def render_pdf_html(document: ReportDocument) -> str:
     """Return the self-contained HTML consumed by WeasyPrint."""
     from .presentation import presentation_document
+    from .versioning import document_version
 
+    version = document.content_version or document_version(document)
     document = presentation_document(document)
 
     parts = [
         "<!doctype html><html><head><meta charset='utf-8'>",
+        f"<meta name='deep-research-content-version' content='{escape(version)}'>",
         "<style>",
         "@page { size: A4; margin: 19mm 18mm 20mm; }",
         "@page :first { margin-top: 24mm; }",
@@ -127,6 +130,7 @@ def render_pdf_html(document: ReportDocument) -> str:
         parts.append("<p class='report-kicker'>Deep Research · Evidence Report</p>")
         parts.append(f"<h1>{escape(_display_title(heading))}</h1>")
     parts.append(f"<p class='disclaimer'>{escape(document.disclaimer)}</p>")
+    parts.append(f"<p class='hash'>Document version: {escape(version)}</p>")
     _append_overview(parts, document)
     for block in document.blocks:
         if isinstance(block, ProseBlock):

@@ -17,6 +17,8 @@ from deep_research.workbench import delivery_render, publish
 from deep_research.workbench.delivery_store import build_or_load
 from deep_research.workbench.publish import DeliveryBundle
 
+pytestmark = pytest.mark.usefixtures("cooperative_render")
+
 
 @pytest.mark.parametrize(
     ("saturate", "independent"),

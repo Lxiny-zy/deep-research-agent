@@ -6,6 +6,7 @@ import { useDeliverables } from '../hooks/useWorkbench'
 import { loadThread } from '../lib/conversation'
 import type { ReportDocument, RunDetail, RunStatus } from '../types'
 import RunPage from './RunPage'
+import StructuredDocumentPreview from '../components/StructuredDocumentPreview'
 
 const navigateMock = vi.hoisted(() => vi.fn())
 const resumeMutateMock = vi.hoisted(() => vi.fn())
@@ -43,11 +44,13 @@ vi.mock('../components/ReportView', () => ({
     isLive,
     findings = [],
     citations = [],
+    document,
   }: {
     markdown: string
     isLive?: boolean
     findings?: unknown[]
     citations?: string[]
+    document?: ReportDocument
   }) => (
     <div
       data-live={isLive ? 'true' : 'false'}
@@ -56,6 +59,7 @@ vi.mock('../components/ReportView', () => ({
       data-testid="report-markdown"
     >
       {markdown}
+      {document && <StructuredDocumentPreview document={document} />}
     </div>
   ),
 }))

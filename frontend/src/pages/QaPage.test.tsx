@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   createConversation: vi.fn(),
   askQuestion: vi.fn(),
   getQaRequest: vi.fn(),
+  cancelQaRequest: vi.fn(),
   deleteConversation: vi.fn(),
   listProjects: vi.fn(),
 }))
@@ -68,6 +69,114 @@ function renderAt(path: string) {
 }
 
 describe('QaPage', () => {
+  it.each(['pending', 'running', 'done', 'fallback'] as const)(
+    'hides a parent recovery action when its child is %s',
+    async (status) => {
+      const parent = {
+        ...conversation.messages[0],
+        request_id: 'stopped-parent',
+        status: 'cancelled' as const,
+        recovery: { available: true, stage: 'evidence' as const },
+      }
+      const child = {
+        ...conversation.messages[0],
+        id: 'child',
+        position: 1,
+        request_id: 'continued-child',
+        status,
+        request_payload: { resume_message_id: parent.id },
+      }
+      mocks.getConversation.mockResolvedValue({ ...conversation, messages: [parent, child] })
+      renderAt('/qa/c1')
+      const parentView = await screen.findByRole('article', { name: '第 1 轮问答' })
+      expect(
+        within(parentView).queryByRole('button', { name: '继续未完成的回答' }),
+      ).not.toBeInTheDocument()
+      expect(parentView).toHaveTextContent(
+        ['pending', 'running'].includes(status)
+          ? '已继续，后续轮次正在处理。'
+          : '已继续，请查看后续回答。',
+      )
+    },
+  )
+
+  it.each(['error', 'cancelled'] as const)(
+    'keeps the latest %s child recoverable without marking the parent successful',
+    async (status) => {
+      const parent = {
+        ...conversation.messages[0],
+        status: 'cancelled' as const,
+        recovery: { available: true, stage: 'evidence' as const },
+      }
+      const child = {
+        ...parent,
+        id: 'child',
+        position: 1,
+        status,
+        request_payload: { resume_message_id: parent.id },
+      }
+      mocks.getConversation.mockResolvedValue({ ...conversation, messages: [parent, child] })
+      renderAt('/qa/c1')
+      const parentView = await screen.findByRole('article', { name: '第 1 轮问答' })
+      expect(parentView).toHaveTextContent('后续轮次尚未完成')
+      expect(
+        within(parentView).queryByRole('button', { name: '继续未完成的回答' }),
+      ).not.toBeInTheDocument()
+      expect(
+        within(screen.getByRole('article', { name: '第 2 轮问答' })).getByRole('button', {
+          name: '继续未完成的回答',
+        }),
+      ).toBeEnabled()
+    },
+  )
+
+  it('stops one durable request, keeps its history, then explicitly resumes the original scope with a new id', async () => {
+    const pending = {
+      ...conversation.messages[0],
+      request_id: 'original-request',
+      status: 'running' as const,
+      answer: '',
+      request_payload: {
+        query: '原始问题',
+        sources: ['web' as const],
+        project_id: 'original-project',
+      },
+    }
+    const stopped = {
+      ...pending,
+      status: 'cancelled' as const,
+      recovery: { available: true, stage: 'draft' as const },
+    }
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [pending] })
+    mocks.askQuestion.mockImplementationOnce(
+      (_cid, _text, signal) =>
+        new Promise((_resolve, reject) =>
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
+        ),
+    )
+    mocks.cancelQaRequest.mockImplementationOnce(async () => {
+      mocks.getConversation.mockResolvedValue({ ...conversation, messages: [stopped] })
+      return stopped
+    })
+    renderAt('/qa/c1')
+    await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: '停止本轮' }))
+    expect(await screen.findByText('本轮已停止，历史与已保存阶段仍保留。')).toBeInTheDocument()
+    expect(mocks.cancelQaRequest).toHaveBeenCalledWith('c1', 'original-request')
+    expect(mocks.askQuestion).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    mocks.askQuestion.mockResolvedValueOnce({ ...conversation.messages[0], id: 'resumed' })
+    fireEvent.click(screen.getByRole('button', { name: '继续未完成的回答' }))
+    await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledTimes(2))
+    expect(mocks.askQuestion.mock.calls[1][1]).toBe('原始问题')
+    expect(mocks.askQuestion.mock.calls[1][3]).toMatchObject({
+      sources: ['web'],
+      projectId: 'original-project',
+      resumeMessageId: pending.id,
+    })
+    expect(mocks.askQuestion.mock.calls[1][3].requestId).not.toBe('original-request')
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     sessionStorage.clear()

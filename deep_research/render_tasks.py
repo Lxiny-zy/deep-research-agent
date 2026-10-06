@@ -249,6 +249,8 @@ def load_result(job: RenderJob, root: str, quota: int | None) -> Any:
         raise FileNotFoundError("导出结果不存在")
     store, _ = delivery_store.delivery_store(detail, root, quota)
     data = store.control_path(result["path"]).read_bytes()
+    if len(data) != result["size"] or hashlib.sha256(data).hexdigest() != result["sha256"]:
+        raise ValueError("导出缓存文件校验失败")
     return data.decode("utf-8") if result["text"] else data
 
 

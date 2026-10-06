@@ -209,6 +209,23 @@ class Settings:
     # turning into an unbounded collection of asyncio tasks.
     max_active_runs: int = field(default_factory=lambda: _int_env("MAX_ACTIVE_RUNS", 8))
     max_queued_runs: int = field(default_factory=lambda: _int_env("MAX_QUEUED_RUNS", 32))
+    qa_max_active: int = field(default_factory=lambda: _int_env("QA_MAX_ACTIVE", 4))
+    qa_max_active_per_owner: int = field(
+        default_factory=lambda: _int_env("QA_MAX_ACTIVE_PER_OWNER", 2)
+    )
+    qa_max_pending: int = field(default_factory=lambda: _int_env("QA_MAX_PENDING", 64))
+    qa_max_pending_per_owner: int = field(
+        default_factory=lambda: _int_env("QA_MAX_PENDING_PER_OWNER", 16)
+    )
+    render_execution_timeout_seconds: float = field(
+        default_factory=lambda: _float_env("DR_RENDER_EXECUTION_TIMEOUT_SECONDS", 600.0)
+    )
+    render_progress_timeout_seconds: float = field(
+        default_factory=lambda: _float_env("DR_RENDER_PROGRESS_TIMEOUT_SECONDS", 180.0)
+    )
+    render_progress_poll_seconds: float = field(
+        default_factory=lambda: _float_env("DR_RENDER_PROGRESS_POLL_SECONDS", 1.0)
+    )
 
     # --- 执行拓扑 ---
     # ``inline``：研究任务在 API 进程内以 asyncio task 执行（默认，桌面版/单文件部署依赖它）。
@@ -320,6 +337,21 @@ class Settings:
             raise ValueError("max_active_runs must be >= 1")
         if self.max_queued_runs < 0:
             raise ValueError("max_queued_runs must be >= 0")
+        for name in (
+            "qa_max_active",
+            "qa_max_active_per_owner",
+            "qa_max_pending",
+            "qa_max_pending_per_owner",
+        ):
+            if type(getattr(self, name)) is not int or getattr(self, name) < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        for name in (
+            "render_execution_timeout_seconds",
+            "render_progress_timeout_seconds",
+            "render_progress_poll_seconds",
+        ):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be finite and positive")
         self.execution_mode = self.execution_mode.strip().lower()
         if self.execution_mode not in {"inline", "worker"}:
             raise ValueError("execution_mode 必须是 inline 或 worker")

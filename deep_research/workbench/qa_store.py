@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -54,6 +55,7 @@ class ConversationFullError(ValueError):
 
 
 def message_payload(message: QaMessage, *, include_private: bool = False) -> dict[str, Any]:
+    from .qa_checkpoint import recovery_availability
     from .qa_revision_state import PRIVATE_REVISION_TOOL, revision_availability
 
     public = (
@@ -64,13 +66,17 @@ def message_payload(message: QaMessage, *, include_private: bool = False) -> dic
             thoughts=[
                 thought
                 for thought in message.thoughts
-                if thought.get("tool") not in {
-                    PRIVATE_REVISION_TOOL, "conversation_memory", "conversation_memory_status",
+                if thought.get("tool")
+                not in {
+                    PRIVATE_REVISION_TOOL,
+                    "conversation_memory",
+                    "conversation_memory_status",
                 }
             ],
         )
     )
     data = asdict(public)
+    data["recovery"] = recovery_availability(message.status, message.request_payload)
     data["revision"] = revision_availability(message.status, message.thoughts, message.evidence)
     for name in ("request_hash", "execution_owner", "lease_until"):
         data.pop(name, None)
@@ -229,6 +235,7 @@ class SqlQaStore:
 
 class InMemoryQaStore:
     def __init__(self) -> None:
+        self._request_lock = asyncio.Lock()
         self._items: dict[str, QaConversation] = {}
         self._stream_events: dict[str, list[tuple[int, str, dict[str, Any]]]] = {}
 

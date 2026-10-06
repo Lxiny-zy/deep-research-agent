@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { askQuestion } from './client'
+import { askQuestion, cancelQaRequest } from './client'
 import { QaStreamInterruptedError, RequestTimeoutError } from './transport'
 
 afterEach(() => {
@@ -8,6 +8,47 @@ afterEach(() => {
 })
 
 describe('QA stream deadline', () => {
+  it('sends explicit recovery through the message stream with original scope and a new request id', async () => {
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response('event: complete\ndata: {"status":"done","answer":"complete"}\n\n', {
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      )
+    await askQuestion('c', 'original question', undefined, {
+      sources: ['web'],
+      projectId: 'original-project',
+      revisionMessageId: 'earlier-revision',
+      resumeMessageId: 'stopped-message',
+      requestId: 'new-request',
+    })
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/qa/conversations/c/messages/stream',
+      expect.objectContaining({
+        body: JSON.stringify({
+          query: 'original question',
+          sources: ['web'],
+          project_id: 'original-project',
+          request_id: 'new-request',
+          revision_message_id: 'earlier-revision',
+          resume_message_id: 'stopped-message',
+        }),
+      }),
+    )
+  })
+  it('cancels exactly one durable request', async () => {
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response('{"status":"cancelled"}', { headers: { 'Content-Type': 'application/json' } }),
+      )
+    await expect(cancelQaRequest('c/1', 'r/1')).resolves.toMatchObject({ status: 'cancelled' })
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/qa/conversations/c%2F1/requests/r%2F1/cancel',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
   it('forwards reasoning and revision resets separately from answer text', async () => {
     const encoder = new TextEncoder()
     const frames = [

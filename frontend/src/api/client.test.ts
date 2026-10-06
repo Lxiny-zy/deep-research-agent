@@ -367,6 +367,8 @@ describe('run document downloads', () => {
     setApiKey('secret')
 
     const result = await downloadRunDocument('run/id', 'csv', {
+      version: 'known-version',
+      requestId: 'same-request',
       includeHsiTables: true,
       tableId: 'table/one',
     })
@@ -374,12 +376,12 @@ describe('run document downloads', () => {
     expect(result.filename).toBe('research-run.csv')
     expect(result.blob.size).toBeGreaterThan(0)
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/runs/run%2Fid/document.csv?include_hsi_tables=true&table_id=table%2Fone',
+      '/api/runs/run%2Fid/document.csv?version=known-version&include_hsi_tables=true&table_id=table%2Fone',
       expect.objectContaining({
         headers: {
           Accept: 'application/octet-stream',
           Authorization: 'Bearer secret',
-          'X-Render-Retry': expect.any(String),
+          'X-Render-Retry': 'same-request',
         },
       }),
     )

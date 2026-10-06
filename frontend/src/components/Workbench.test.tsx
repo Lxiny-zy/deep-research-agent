@@ -5,21 +5,27 @@ import DeliverablesPanel from './DeliverablesPanel'
 import RunTaskSummary from './RunTaskSummary'
 import TaskTemplatePicker from './TaskTemplatePicker'
 import type { DeliverableRegistry, TaskContract, TaskTemplate } from '../types'
+import { webcrypto } from 'node:crypto'
 
 const mocks = vi.hoisted(() => ({
   fetchDeliverable: vi.fn(),
-  retryDeliverable: vi.fn(),
+  createRenderOperation: vi.fn(),
   reviseRunContent: vi.fn(),
   getDeliverables: vi.fn(),
   downloadBlob: vi.fn(),
 }))
-vi.mock('../api/client', () => ({
+vi.mock('../api/client', async () => ({
+  ...(await vi.importActual('../api/client')),
   fetchDeliverable: mocks.fetchDeliverable,
-  retryDeliverable: mocks.retryDeliverable,
+  createRenderOperation: mocks.createRenderOperation,
   reviseRunContent: mocks.reviseRunContent,
   getDeliverables: mocks.getDeliverables,
 }))
 vi.mock('../lib/download', () => ({ downloadBlob: mocks.downloadBlob }))
+beforeEach(() => {
+  vi.stubGlobal('crypto', webcrypto)
+  localStorage.clear()
+})
 
 function template(overrides: Partial<TaskTemplate> = {}): TaskTemplate {
   return {
@@ -104,6 +110,7 @@ describe('ContractPreview', () => {
 })
 
 const registry: DeliverableRegistry = {
+  content_version: 'a'.repeat(64),
   version: 1,
   run_id: 'r1',
   template: 'peerReview',
@@ -149,13 +156,49 @@ const registry: DeliverableRegistry = {
 }
 
 describe('DeliverablesPanel', () => {
+  it('disables only the corrupt file while preserving fixed-version downloads of intact files', () => {
+    render(
+      <DeliverablesPanel
+        runId="r1"
+        loading={false}
+        error={null}
+        registry={{
+          ...registry,
+          items: registry.items.map((item) =>
+            item.name === 'r.docx'
+              ? { ...item, available: false, integrity_error: 'hash mismatch' }
+              : { ...item, available: true },
+          ),
+        }}
+      />,
+    )
+    expect(screen.getByRole('button', { name: '下载 评审（Word）' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '下载' })).toBeEnabled()
+    expect(screen.getByText(/文件不可用：hash mismatch/)).toBeInTheDocument()
+  })
   it('shows classified style findings as advice on a completed delivery', () => {
     const message = '口语化或夸张措辞「说白了」'
-    render(<DeliverablesPanel runId="r1" loading={false} error={null} registry={{
-      ...registry,
-      status: 'pass',
-      gates: [{ name: 'scholarly', status: 'warn', issues: [message], metrics: {}, blocking_issues: [], advisories: [message] }],
-    }} />)
+    render(
+      <DeliverablesPanel
+        runId="r1"
+        loading={false}
+        error={null}
+        registry={{
+          ...registry,
+          status: 'pass',
+          gates: [
+            {
+              name: 'scholarly',
+              status: 'warn',
+              issues: [message],
+              metrics: {},
+              blocking_issues: [],
+              advisories: [message],
+            },
+          ],
+        }}
+      />,
+    )
     expect(screen.getByText('提示')).toBeInTheDocument()
     expect(screen.getByLabelText('学术质量改进建议')).toHaveTextContent(message)
     expect(screen.queryByText('部分完成 · 有待改进项')).not.toBeInTheDocument()
@@ -238,9 +281,18 @@ describe('DeliverablesPanel', () => {
     }
     const updated = { ...failed, content_version: 'b'.repeat(64), failures: [] }
     const onUpdated = vi.fn()
-    mocks.retryDeliverable
+    mocks.createRenderOperation
       .mockRejectedValueOnce(new Error('connection lost'))
-      .mockResolvedValueOnce(updated)
+      .mockImplementationOnce(async (_run, request) => ({
+        id: 'retry',
+        operation_id: 'retry',
+        run_id: 'r1',
+        kind: 'retry',
+        request_id: request.request_id,
+        status: 'done',
+        content_version: updated.content_version,
+      }))
+    mocks.getDeliverables.mockResolvedValue(updated)
     render(
       <DeliverablesPanel
         runId="r1"
@@ -254,12 +306,14 @@ describe('DeliverablesPanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('connection lost')
     fireEvent.click(screen.getByRole('button', { name: '重新生成 PDF' }))
     await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(updated))
-    expect(mocks.retryDeliverable.mock.calls[0]).toEqual(mocks.retryDeliverable.mock.calls[1])
-    expect(mocks.retryDeliverable.mock.calls[0].slice(0, 3)).toEqual([
-      'r1',
-      failed.content_version,
-      'pdf',
-    ])
+    expect(mocks.createRenderOperation.mock.calls[0][1]).toEqual(
+      mocks.createRenderOperation.mock.calls[1][1],
+    )
+    expect(mocks.createRenderOperation.mock.calls[0][1]).toMatchObject({
+      kind: 'retry',
+      version: failed.content_version,
+      format: 'pdf',
+    })
   })
 
   it('does not offer export retries for blocked content or read-only access', () => {
@@ -299,7 +353,12 @@ describe('DeliverablesPanel', () => {
     expect(screen.getByLabelText('学术质量改进建议')).toHaveTextContent('超长句')
     fireEvent.click(screen.getByRole('button', { name: '下载 评审（Word）' }))
     await waitFor(() => expect(mocks.downloadBlob).toHaveBeenCalledWith('r.docx', expect.any(Blob)))
-    expect(mocks.fetchDeliverable).toHaveBeenCalledWith('r1', 'r.docx')
+    expect(mocks.fetchDeliverable).toHaveBeenCalledWith(
+      'r1',
+      'r.docx',
+      undefined,
+      registry.content_version,
+    )
   })
 
   it('surfaces download failures', async () => {

@@ -11,7 +11,6 @@ import ReportView from '../components/ReportView'
 import StatsBar from '../components/StatsBar'
 import ModelReasoningPanel from '../components/ModelReasoningPanel'
 import StatusBadge from '../components/StatusBadge'
-import StructuredDocumentPreview from '../components/StructuredDocumentPreview'
 import TagEditor from '../components/TagEditor'
 import DeliverablesPanel from '../components/DeliverablesPanel'
 import FileTree from '../components/FileTree'
@@ -431,6 +430,11 @@ export default function RunPage() {
                   includeHsiTables={includeHsiTables}
                   tableOptions={tableOptions}
                   documentReady={Boolean(structuredDocument.data)}
+                  contentVersion={
+                    preferPersistedReport && documentMarkdown
+                      ? structuredDocument.data?.content_version
+                      : undefined
+                  }
                   supportFailed={
                     structuredDocument.data?.final_validation?.support_status === 'fail' ||
                     finalProseReview(detail.data)?.status === 'fail'
@@ -495,6 +499,7 @@ export default function RunPage() {
                   blockedSources={blockedSources}
                   finalReview={finalProseReview(detail.data)}
                   bibliography={structuredDocument.data?.bibliography}
+                  document={structuredDocument.data}
                 />
               </>
             )}
@@ -506,14 +511,12 @@ export default function RunPage() {
                   key={id}
                   runId={id}
                   registry={deliverables.data}
+                  sourceVersion={structuredDocument.data?.source_version}
                   loading={deliverables.isLoading}
                   error={deliverables.error}
                   onUpdated={deliverables.setRegistry}
                   onRevisionCreated={(runId) => navigate(`/runs/${encodeURIComponent(runId)}`)}
                 />
-              )}
-              {structuredDocument.data && (
-                <StructuredDocumentPreview document={structuredDocument.data} />
               )}
               {/* 常驻打印 DOM：屏幕上由 print.css 隐藏，Ctrl+P 与「打印」按钮走同一路径，
                   不需要先切到预览再打印。 */}

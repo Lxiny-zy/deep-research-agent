@@ -1,0 +1,27 @@
+Local Windows safe render diagnostics validation
+Command: python -m pytest -q --basetemp=D:/tmp/render-diagnostics-final tests/test_render_process.py::test_child_failure_logs_only_safe_exception_types_and_frame_locations tests/test_render_process.py::test_parent_failure_logs_safe_locations_without_raw_exception tests/test_render_service.py
+............                                                             [100%]
+12 passed in 5.67s
+
+Exit: 0
+Command: python -m ruff check deep_research/render_diagnostics.py deep_research/render_process.py deep_research/render_service.py tests/render_subprocess_fixture.py tests/test_render_process.py
+E501 Line too long (103 > 100)
+   --> tests\test_render_process.py:257:101
+    |
+257 | async def test_parent_failure_logs_safe_locations_without_raw_exception(tmp_path, monkeypatch, caplog):
+    |                                                                                                     ^^^
+258 |     service, _, job, claimed = await setup(tmp_path, monkeypatch)
+    |
+
+Found 1 error.
+
+Exit: 1
+Command: python -m mypy deep_research/render_diagnostics.py deep_research/render_process.py deep_research/render_service.py
+deep_research\orchestrator.py:1032: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+deep_research\orchestrator.py:1063: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 3 source files
+
+Exit: 0
+After formatting correction:
+All checks passed!
+Exit: 0

@@ -22,8 +22,9 @@ from ..artifacts import ArtifactError
 from ..blocking import run_blocking
 from ..upload_limits import DOCUMENT_LIMIT_LABEL, DOCUMENT_MAX_BASE64_CHARS, DOCUMENT_MAX_BYTES
 from .contract import build_contract, pasted_paper_text
-from .delivery_store import DeliveryConflict, current_version, load_version
+from .delivery_store import DeliveryConflict, current_version, load_version, version_registry
 from .publish import DeliveryBundle, delivery_fingerprint, resolve_template
+from .render_operations import RenderOperationRequest
 from .templates import get_template, public_templates
 
 logger = logging.getLogger(__name__)
@@ -47,8 +48,125 @@ class ContentRevisionRequest(BaseModel):
 
 class DeliveryRetryRequest(BaseModel):
     version: str = Field(pattern=r"^[0-9a-f]{64}$")
-    format: Literal["html", "pdf", "docx", "pptx", "png", "xlsx"]
+    format: Literal["md", "html", "pdf", "docx", "pptx", "png", "xlsx"]
     request_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+@router.post("/runs/{run_id}/render-operations", status_code=202)
+async def create_render_operation(
+    run_id: str, body: RenderOperationRequest, request: Request
+) -> dict[str, Any]:
+    from ..render_queue import RenderConflict, RenderQueueFull
+    from .render_operations import submit
+
+    try:
+        return await submit(request, run_id, body)
+    except DeliveryConflict as exc:
+        raise HTTPException(409, {"code": exc.code, "message": str(exc)}) from exc
+    except RenderConflict as exc:
+        raise HTTPException(409, {"code": "render_request_conflict", "message": str(exc)}) from exc
+    except RenderQueueFull as exc:
+        raise HTTPException(503, {"code": "render_queue_full", "message": str(exc)}) from exc
+    except (ArtifactError, ValueError) as exc:
+        raise HTTPException(
+            409, {"code": "delivery_integrity", "message": "交付快照校验失败"}
+        ) from exc
+
+
+@router.get("/runs/{run_id}/render-operations")
+async def find_render_operation(
+    run_id: str, request: Request,
+    request_id: str = Query(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"),
+) -> dict[str, Any]:
+    from ..render_service import service_for
+    from .render_operations import operation_alias, owned_job, receipt
+
+    service = service_for(request.app.state.repo, request.app.state.settings)
+    detail = await request.app.state.repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(404, "run not found")
+    try:
+        alias = await run_blocking(operation_alias, detail, service.root, request_id)
+    except (ArtifactError, ValueError) as exc:
+        raise HTTPException(409, {
+            "code": "delivery_integrity", "message": "渲染回执校验失败",
+        }) from exc
+    job = await service.queue.by_key(alias["key"]) if alias else None
+    if job is None:
+        raise HTTPException(404, "渲染操作不存在")
+    job = await owned_job(request, run_id, job.id)
+    return receipt(job, alias["specification"] if alias else None)
+
+
+@router.get("/runs/{run_id}/render-operations/{operation_id}")
+async def get_render_operation(
+    run_id: str, operation_id: str, request: Request,
+    request_id: str | None = Query(default=None, min_length=8, max_length=64,
+                                   pattern=r"^[A-Za-z0-9_-]+$"),
+) -> dict[str, Any]:
+    from .render_operations import operation_alias, owned_job, receipt
+
+    job = await owned_job(request, run_id, operation_id)
+    if job.status == "done" and job.kind != "export":
+        from .completion import synchronize_completion
+
+        await synchronize_completion(request.app.state.repo, run_id, request.app.state.settings)
+    alias = None
+    if request_id:
+        detail = await request.app.state.repo.get_run(run_id)
+        try:
+            alias = await run_blocking(
+                operation_alias, detail, request.app.state.settings.artifact_root, request_id
+            )
+        except (ArtifactError, ValueError) as exc:
+            raise HTTPException(409, {
+                "code": "delivery_integrity", "message": "渲染回执校验失败",
+            }) from exc
+        if alias is None or alias["key"] != job.key:
+            raise HTTPException(404, "渲染操作不存在")
+    return receipt(job, alias["specification"] if alias else None)
+
+
+@router.get("/runs/{run_id}/render-operations/{operation_id}/result")
+async def get_render_operation_result(
+    run_id: str, operation_id: str, request: Request
+) -> Response:
+    import hashlib
+
+    from .. import render_tasks
+    from ..api import _download_headers
+    from ..report.document import ReportDocument
+    from .render_operations import owned_job
+
+    job = await owned_job(request, run_id, operation_id)
+    if job.status != "done" or job.kind != "export":
+        raise HTTPException(409, {"code": "render_not_ready", "message": "导出尚未完成"})
+    settings = request.app.state.settings
+    try:
+        content = await run_blocking(
+            render_tasks.load_result, job, settings.artifact_root, settings.artifact_total_bytes
+        )
+    except (ArtifactError, ValueError, OSError) as exc:
+        raise HTTPException(
+            409, {"code": "delivery_integrity", "message": "导出文件校验失败"}
+        ) from exc
+    fmt = job.payload["format"]
+    mime, suffix = {
+        "md": ("text/markdown", ".md"), "csv": ("text/csv", ".csv"),
+        "xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"),
+        "tex": ("application/x-tex", ".tex"), "bib": ("application/x-bibtex", ".bib"),
+        "bundle": ("application/zip", "-bundle.zip"),
+        "pdf": ("application/pdf", ".pdf"), "paper-pdf": ("application/pdf", "-paper.pdf"),
+    }[fmt]
+    if fmt == "csv" and content:
+        content = "\ufeff" + content
+    data = content.encode("utf-8") if isinstance(content, str) else content
+    headers = _download_headers(
+        run_id, ReportDocument.model_validate(job.payload["document"]), suffix
+    )
+    headers["X-Content-SHA256"] = hashlib.sha256(data).hexdigest()
+    headers["X-Render-Operation"] = job.id
+    return Response(data, media_type=mime, headers=headers)
 
 
 @router.get("/templates")
@@ -118,11 +236,13 @@ async def preview_contract(req: ContractPreviewRequest, request: Request) -> dic
     return payload
 
 
-async def _bundle(request: Request, run_id: str, version: str | None = None) -> DeliveryBundle:
+async def _bundle(
+    request: Request, run_id: str, version: str | None = None, *, name: str | None = None
+) -> DeliveryBundle:
     from ..render_queue import RenderFailed
 
     try:
-        return await _stored_bundle(request, run_id, version)
+        return await _stored_bundle(request, run_id, version, name=name)
     except RenderFailed as exc:
         raise HTTPException(
             502, {"code": "render_failed", "message": str(exc), "job_id": exc.job_id}
@@ -139,7 +259,7 @@ async def _bundle(request: Request, run_id: str, version: str | None = None) -> 
 
 
 async def _stored_bundle(
-    request: Request, run_id: str, version: str | None = None
+    request: Request, run_id: str, version: str | None = None, *, name: str | None = None
 ) -> DeliveryBundle:
     repo = request.app.state.repo
     detail = await repo.get_run(run_id)
@@ -148,7 +268,9 @@ async def _stored_bundle(
     settings = request.app.state.settings
     if version is not None:
         try:
-            return await run_blocking(load_version, detail, settings.artifact_root, version)
+            return await run_blocking(
+                load_version, detail, settings.artifact_root, version, name=name
+            )
         except FileNotFoundError as exc:
             raise HTTPException(404, "交付版本不存在") from exc
     if detail.status not in _TERMINAL:
@@ -166,6 +288,12 @@ async def _stored_bundle(
     # Read the atomically published pointer: another API process may have
     # completed a retry since this process populated its immutable cache.
     active_version = await run_blocking(current_version, detail, settings.artifact_root)
+    if active_version is not None:
+        # Read committed bytes, even with a warm cache: storage corruption must
+        # never be hidden by another tab/process's earlier successful download.
+        return await run_blocking(
+            load_version, detail, settings.artifact_root, active_version, name=name
+        )
     key = (run_id, active_version or delivery_fingerprint(detail))
     bundle = cache.get(key)
     if bundle is not None:
@@ -213,17 +341,35 @@ async def _stored_bundle(
 
 
 @router.get("/runs/{run_id}/deliverables")
-async def get_deliverables(run_id: str, request: Request) -> dict[str, Any]:
+async def get_deliverables(
+    run_id: str, request: Request,
+    version: str | None = Query(None, pattern=r"^[0-9a-f]{64}$"),
+) -> dict[str, Any]:
     """交付登记：每个交付物的格式、角色、大小、哈希与验收结论，外加每道门的结果。"""
-    bundle = await _bundle(request, run_id)
-    registry = bundle.registry()
+    bundle = await _bundle(request, run_id, version, name="")
+    detail = await request.app.state.repo.get_run(run_id)
+    registry = await run_blocking(
+        version_registry, detail, request.app.state.settings.artifact_root, bundle.content_version
+    )
+    if all(item["available"] for item in registry["items"]):
+        from .completion import synchronize_completion
+
+        try:
+            await synchronize_completion(
+                request.app.state.repo, run_id, request.app.state.settings
+            )
+        except (ArtifactError, ValueError):
+            # A concurrent corruption/new publication cannot promote the run
+            # to done, but it must not hide other independently verified files.
+            logger.warning("completion reconciliation found invalid delivery for %s", run_id)
+        except OSError as exc:
+            raise HTTPException(503, "交付版本已保存，完成状态同步失败，请稍后重试") from exc
     registry["run_id"] = run_id
     from ..http.auth import principal_for
 
     registry["can_retry"] = principal_for(request).can_research
     from .content_revision import revision_offer
 
-    detail = await request.app.state.repo.get_run(run_id)
     if detail is not None:
         registry["content_revision"] = revision_offer(detail, bundle.gates)
     return registry
@@ -386,7 +532,7 @@ async def download_deliverable(
 ) -> Response:
     if not all(_NAME_RE.fullmatch(part) for part in name.split("/")) or name.count("/") > 1:
         raise HTTPException(400, "invalid deliverable name")
-    bundle = await _bundle(request, run_id, version)
+    bundle = await _bundle(request, run_id, version, name=name)
     file = next((item for item in bundle.files if item.name == name), None)
     if file is None:
         raise HTTPException(404, "deliverable not found")
@@ -410,6 +556,41 @@ async def download_deliverable(
         "X-Content-Type-Options": "nosniff",
     }
     return Response(content=file.data, media_type=record["mime_type"], headers=headers)
+
+
+@router.get("/runs/{run_id}/deliverables.zip")
+async def download_delivery_bundle(
+    run_id: str, request: Request,
+    version: str | None = Query(None, pattern=r"^[0-9a-f]{64}$"),
+) -> Response:
+    """A complete package requires every committed member to verify."""
+    import hashlib
+    import io
+    import json
+    import zipfile
+
+    bundle = await _bundle(request, run_id, version)
+
+    def archive_bytes() -> bytes:
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            members = {file.name: file.data for file in bundle.files}
+            members["manifest.json"] = json.dumps(
+                bundle.registry(), ensure_ascii=False, sort_keys=True, indent=2
+            ).encode("utf-8")
+            for name in sorted(members):
+                entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                entry.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(entry, members[name])
+        return output.getvalue()
+
+    data = await run_blocking(archive_bytes)
+    return Response(data, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="delivery-{run_id}.zip"',
+        "Cache-Control": "private, no-store",
+        "X-Content-Version": bundle.content_version,
+        "X-Content-SHA256": hashlib.sha256(data).hexdigest(),
+    })
 
 
 @router.get("/runs/{run_id}/workspace")

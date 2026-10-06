@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from deep_research.models import Report
 from deep_research.workbench.completion import assess_completion
 from deep_research.workbench.delivery import html
 from deep_research.workbench.delivery_render import render_bundle
-from deep_research.workbench.delivery_store import build_or_load
+from deep_research.workbench.delivery_store import (
+    build_or_load,
+    current_version,
+    delivery_store,
+    workspace_files,
+)
 from deep_research.workbench.gates import GateResult
 from tests.test_task_completion import execution
 from tests.test_workbench import api_repo as api_repo
 
 
+@pytest.mark.parametrize("damage_after_commit", [False, True])
 async def test_retry_file_commit_then_db_failure_recovers_on_read_without_second_render(
-    api_repo, monkeypatch
+    api_repo, monkeypatch, cooperative_render, damage_after_commit
 ):
     api, repo = api_repo
     settings = api.app.state.settings
@@ -84,6 +91,27 @@ async def test_retry_file_commit_then_db_failure_recovers_on_read_without_second
         first = await client.post(f"/api/runs/{run_id}/deliverables/retry", json=payload)
         assert first.status_code == 503
         assert await repo.get_run_status(run_id) == "needs_review"
+        if damage_after_commit:
+            latest = current_version(detail, settings.artifact_root)
+            store, _ = delivery_store(detail, settings.artifact_root)
+            file = next(
+                item for item in workspace_files(detail, settings.artifact_root)
+                if item["content_version"] == latest and item["name"].endswith(".html")
+            )
+            path = store.absolute_path(file["path"])
+            intact = path.read_bytes()
+            path.write_bytes(b"damaged after commit")
+            partial = await client.get(f"/api/runs/{run_id}/deliverables")
+            assert partial.status_code == 200, partial.text
+            assert any(item["available"] is False for item in partial.json()["items"])
+            assert await repo.get_run_status(run_id) == "needs_review"
+            good = next(item for item in partial.json()["items"] if item["format"] == "md")
+            download = await client.get(
+                f"/api/runs/{run_id}/deliverables/{good['name']}?version={latest}"
+            )
+            assert download.status_code == 200
+            assert renders == 1
+            path.write_bytes(intact)
         # Read the atomically published file version and reconcile its DB record.
         recovered = await client.get(f"/api/runs/{run_id}/deliverables")
         assert recovered.status_code == 200, recovered.text

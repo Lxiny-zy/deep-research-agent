@@ -101,7 +101,7 @@ async def test_delivery_length_feedback_reaches_the_additional_revision(settings
 
 @pytest.mark.parametrize("recovers", [True, False])
 async def test_failed_format_gets_exactly_one_retry_without_rewriting(
-    settings, monkeypatch, recovers
+    settings, monkeypatch, recovers, cooperative_render
 ):
     from deep_research.workbench.delivery import pdf
 
@@ -152,7 +152,9 @@ class NoCalls(RepairModel):
 
 
 @pytest.mark.parametrize("phase", ["content", "format"])
-async def test_recovery_reuses_completed_repair_after_lost_checkpoint(settings, monkeypatch, phase):
+async def test_recovery_reuses_completed_repair_after_lost_checkpoint(
+    settings, monkeypatch, phase, cooperative_render
+):
     from deep_research.workbench.delivery import pdf
 
     calls = []

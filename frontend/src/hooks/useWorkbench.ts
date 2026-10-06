@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
+import { clearRender, executeRender, readRender, renderStorageKey } from '../lib/renderOperation'
 import type { DeliverableRegistry } from '../types'
 import {
   getDeliverables,
@@ -51,15 +52,36 @@ export function useDeliverables(runId: string | undefined, finished: boolean) {
   const client = useQueryClient()
   const query = useQuery({
     queryKey: ['deliverables', runId],
-    queryFn: ({ signal }) => getDeliverables(runId as string, signal),
+    queryFn: async ({ signal }) => {
+      const key = await renderStorageKey(runId as string, 'delivery')
+      const pending = readRender(key)
+      const receipt = await executeRender(
+        runId as string,
+        key,
+        pending?.request ?? { kind: 'bundle' },
+        signal,
+      )
+      if (!receipt.content_version) throw new Error('渲染回执缺少交付版本，无法安全加载结果。')
+      const registry = await getDeliverables(
+        runId as string,
+        signal,
+        undefined,
+        receipt.content_version,
+      )
+      clearRender(key)
+      return registry
+    },
     enabled: Boolean(runId) && finished,
-    staleTime: 5 * 60_000,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
     retry: false,
   })
   return {
     ...query,
     setRegistry: (registry: DeliverableRegistry) => {
       client.setQueryData(['deliverables', runId], registry)
+      void client.invalidateQueries({ queryKey: ['run-document', runId] })
       void client.invalidateQueries({ queryKey: ['workspace', runId] })
       void client.invalidateQueries({ queryKey: ['narrative', runId] })
       void client.invalidateQueries({ queryKey: ['run', runId] })

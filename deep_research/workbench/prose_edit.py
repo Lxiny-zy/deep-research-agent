@@ -227,6 +227,11 @@ async def repair_paragraphs(
                 "context": unit.context,
                 "problem": "\n".join(problems[unit.id]),
                 "structure": shape[0],
+                **(
+                    {"evidence_diagnostic": decisions[unit.id]["alignment_review"]}
+                    if decisions.get(unit.id, {}).get("alignment_review")
+                    else {}
+                ),
             }
         )
     # Translation-only evidence never enters the request that edits body claims.
@@ -241,6 +246,15 @@ async def repair_paragraphs(
             {"query": reviewer.query, "paragraphs": group}, ensure_ascii=False
         )
         rules = _SYSTEM
+        if any(part.get("evidence_diagnostic") for part in group):
+            rules += (
+                "evidence_diagnostic 保留上次实际选择的摘录编号、未匹配专名/数值及引用范围。"
+                "诊断只是机械拒绝原因，不是支持结论。逐条对照已核验证据里的原文，"
+                "复合断言可在原段落内拆成短句，每句只绑定实际支持的引文；"
+                "某项因果、条件或数值未出现在原摘录时，收窄或撤回该项。"
+                "不得删去必要专名、数字或限定条件来绕过检查，不得自行编造或扩展摘录。"
+                "所有替换仍须重新通过原有逐字、数值与语义核验。"
+            )
         if translation:
             rules += (
                 "translation 是完整摘要翻译章节，replacement 包含原有标题与全部修订译文。"

@@ -113,7 +113,7 @@ def test_completion_cannot_trust_pass_label_without_required_evidence(settings, 
 
 @pytest.mark.parametrize("outcome", ["pass", "warn", "advisory", "cancel"])
 async def test_terminal_state_waits_for_durable_delivery_and_survives_restart(
-    repo, settings, monkeypatch, outcome
+    repo, settings, monkeypatch, outcome, cooperative_render
 ):
     settings = replace(settings, orchestration_mode="legacy", max_run_seconds=30)
     initial = execution(settings)

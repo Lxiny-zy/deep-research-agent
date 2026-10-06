@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react'
 import {
-  downloadRunDocument,
+  downloadRenderResult,
   getCapabilities,
   type LatexTemplateName,
   type RunDocumentFormat,
 } from '../api/client'
 import { downloadBlob, downloadText, slugify } from '../lib/download'
 import { AppIcon } from './AppIcon'
+import { useRenderOperation } from '../hooks/useRenderOperation'
+import { offlineReport } from '../lib/offlineReport'
 
 // 报告操作：复制 / 下载 .md / 打印预览 / 打印·存为 PDF，以及服务端结构化导出。
 //
-// 「下载 .md」优先走服务端 /document.md：那份 Markdown 带着证据装置（逐字引文、
-// 验证状态、快照哈希），而浏览器里的 markdown 只是综合者写的正文。拿不到 runId
-// （或服务端不可用）时回退到本地正文——退化的是完整性，不是可用性。
+// 服务端导出固定预览版本并保存操作回执。未知版本只允许有明确标记的离线正文；
+// 版本冲突和连接失败保留错误与重连入口，不自动下载另一种文件。
 //
 // 「打印·存为 PDF」直接调 window.print()：浏览器的打印对话框本身就是分页预览 +
 // 打印机 + 「另存为 PDF」三合一，不需要我们再造一个预览器。零依赖，桌面版打包
@@ -27,6 +28,7 @@ export default function ReportActions({
   includeHsiTables = false,
   tableOptions = [],
   documentReady = false,
+  contentVersion,
   previewing = false,
   onTogglePreview,
   capabilities,
@@ -39,6 +41,7 @@ export default function ReportActions({
   tableOptions?: { id: string; label: string }[]
   /** 结构化文档是否已就绪。未就绪时服务端导出只会产出空文件，不如不给点。 */
   documentReady?: boolean
+  contentVersion?: string
   previewing?: boolean
   onTogglePreview?: () => void
   capabilities?: Partial<Record<RunDocumentFormat, boolean>>
@@ -46,8 +49,13 @@ export default function ReportActions({
 }) {
   const [copied, setCopied] = useState(false)
   const [selectedTableId, setSelectedTableId] = useState('')
-  const [exporting, setExporting] = useState<RunDocumentFormat | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
+  const operation = useRenderOperation(runId, 'export', async (receipt) => {
+    if (!runId) return
+    const result = await downloadRenderResult(runId, receipt)
+    downloadBlob(result.filename, result.blob)
+  })
+  const exporting = operation.busy
   const [latexTemplate, setLatexTemplate] = useState<LatexTemplateName>('ctexart')
   const [available, setAvailable] = useState(capabilities)
   useEffect(() => {
@@ -75,13 +83,13 @@ export default function ReportActions({
   // 导出依赖服务端已装配好的文档。只判 runId 的话，运行仍在流式阶段时按钮就是
   // 可点的，而那时导出的 CSV 是空表、PDF 是空正文——用户拿到一个"成功"的空文件，
   // 比按钮暂时不可点更难理解。
-  const exportDisabled = !runId || !documentReady || exporting !== null
+  const exportDisabled = !runId || !documentReady || !contentVersion || exporting
   // 单表导出还需要真的有表。非 HSI 运行通常一张表都没有，此时 CSV/XLSX 无意义。
   const tableExportDisabled = exportDisabled || tableOptions.length === 0
   // 按钮为什么不能点，要说出来。一个无解释的灰按钮会被当成故障。
   const exportHint = !runId
     ? '运行尚未创建'
-    : !documentReady
+    : !documentReady || !contentVersion
       ? '结构化报告尚未就绪（运行结束后可用）'
       : undefined
   const tableExportHint =
@@ -105,54 +113,35 @@ export default function ReportActions({
 
   function downloadLocalMarkdown() {
     const short = runId ? `-${runId.slice(0, 8)}` : ''
-    const text = supportFailed
-      ? '> 待核验草稿：正文结论依据尚未通过核验。\n\n' + markdown
-      : markdown
-    downloadText(`${slugify(query)}${short}.md`, text)
+    downloadText(
+      `${slugify(query)}${short}-offline.md`,
+      offlineReport(markdown, { runId, version: contentVersion, supportFailed }),
+    )
   }
 
   async function downloadMarkdown() {
     // 服务端版本含证据附录；没有 runId 或文档未就绪时回退到本地正文。
-    if (!runId || !documentReady) {
+    if (!runId || !documentReady || !contentVersion) {
       downloadLocalMarkdown()
       return
     }
-    setExportError(null)
-    setExporting('md')
-    try {
-      const result = await downloadRunDocument(runId, 'md', { includeHsiTables })
-      downloadBlob(result.filename, result.blob)
-    } catch {
-      // 服务端导出失败不该让用户空手而归：正文就在手边，退化成本地下载，
-      // 并说明这一份不含证据附录，而不是只弹一句"导出失败"。
-      downloadLocalMarkdown()
-      setExportError('服务端导出不可用，已下载不含证据附录的正文。')
-    } finally {
-      setExporting(null)
-    }
+    await exportDocument('md')
   }
 
   async function exportDocument(format: RunDocumentFormat) {
-    if (!runId) return
+    if (!runId || !contentVersion) return
     setExportError(null)
-    setExporting(format)
-    try {
-      const result = await downloadRunDocument(runId, format, {
-        includeHsiTables,
-        tableId:
-          format === 'csv' || format === 'xlsx'
-            ? selectedTableId || tableOptions[0]?.id
-            : undefined,
-        ...(format === 'tex' || format === 'paper_pdf' || format === 'bundle'
-          ? { profile: 'academic' as const, template: latexTemplate }
-          : {}),
-      })
-      downloadBlob(result.filename, result.blob)
-    } catch (error: unknown) {
-      setExportError(error instanceof Error ? error.message : '导出失败')
-    } finally {
-      setExporting(null)
-    }
+    await operation.start({
+      kind: 'export',
+      format,
+      version: contentVersion,
+      include_hsi_tables: includeHsiTables,
+      table_id:
+        format === 'csv' || format === 'xlsx' ? selectedTableId || tableOptions[0]?.id : undefined,
+      ...(format === 'tex' || format === 'paper_pdf' || format === 'bundle'
+        ? { profile: 'academic' as const, template: latexTemplate }
+        : {}),
+    })
   }
 
   function exportItem(
@@ -160,7 +149,7 @@ export default function ReportActions({
     label: string,
     options: { disabled: boolean; title?: string; busyLabel?: string; icon?: 'download' | 'file' },
   ) {
-    const busy = exporting === format
+    const busy = exporting
     const failedReview = supportFailed && (format === 'pdf' || format === 'paper_pdf')
     return (
       <button
@@ -221,16 +210,16 @@ export default function ReportActions({
             type="button"
             className="run-export-item"
             onClick={() => void downloadMarkdown()}
-            disabled={disabled || exporting !== null}
-            aria-busy={exporting === 'md'}
+            disabled={disabled || exporting}
+            aria-busy={exporting}
           >
             <AppIcon
-              name={exporting === 'md' ? 'loader' : 'download'}
+              name={exporting ? 'loader' : 'download'}
               size={14}
-              className={exporting === 'md' ? 'spin' : ''}
+              className={exporting ? 'spin' : ''}
               aria-hidden="true"
             />
-            {exporting === 'md' ? '导出中…' : '下载 .md'}
+            {exporting ? '导出中…' : '下载 .md'}
           </button>
           {exportItem('pdf', '下载 PDF', {
             disabled: exportDisabled || !available?.pdf,
@@ -243,7 +232,7 @@ export default function ReportActions({
               aria-label="导出表格"
               value={selectedTableId}
               onChange={(event) => setSelectedTableId(event.target.value)}
-              disabled={exporting !== null}
+              disabled={exporting}
             >
               {tableOptions.map((table) => (
                 <option value={table.id} key={table.id}>
@@ -264,7 +253,7 @@ export default function ReportActions({
               className="input run-export-select"
               value={latexTemplate}
               onChange={(event) => setLatexTemplate(event.target.value as LatexTemplateName)}
-              disabled={exporting !== null}
+              disabled={exporting}
             >
               <option value="ctexart">中文论文 · ctexart</option>
               <option value="ctexrep">中文长文 · ctexrep</option>
@@ -295,9 +284,20 @@ export default function ReportActions({
           })}
         </div>
       </details>
-      {exportError && (
+      {contentVersion && (
+        <span className="muted small" title={contentVersion}>
+          内容版本 {contentVersion.slice(0, 12)}
+        </span>
+      )}
+      {(exportError || operation.error) && (
         <span className="report-export-error" role="alert">
-          {exportError}
+          {exportError || operation.error} 可重新连接已提交的操作，或刷新页面获取当前版本。
+          <button type="button" onClick={() => void operation.reconnect()} disabled={exporting}>
+            重新连接导出
+          </button>
+          <button type="button" onClick={downloadLocalMarkdown}>
+            下载离线正文副本
+          </button>
         </span>
       )}
     </div>

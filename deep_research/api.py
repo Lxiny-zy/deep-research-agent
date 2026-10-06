@@ -791,6 +791,78 @@ async def _recovery_loop(app: FastAPI) -> None:
             logger.exception("周期恢复未完成任务失败")
 
 
+async def _shutdown_application(
+    app: FastAPI, settings: Settings, engine: Any, *,
+    render_dispatcher: asyncio.Task | None = None, render_service: Any = None,
+    recovery_task: asyncio.Task | None = None, inline_task: asyncio.Task | None = None,
+    inline_worker: Any = None,
+) -> None:
+    from .shutdown import cancel, wait_until
+    from .worker import _CLEANUP_SECONDS
+
+    deadline = time.monotonic() + settings.worker_shutdown_grace_seconds + _CLEANUP_SECONDS
+    if inline_worker is not None:
+        inline_worker.request_stop(reason="api_shutdown")
+        deadline = min(deadline, inline_worker.shutdown_deadline)
+    running = set(inline_worker._running) if inline_worker is not None else set()
+    cleanup: set[asyncio.Task] = getattr(app.state, "cleanup_tasks", set())
+    tasks = set(getattr(app.state, "tasks", set())) - running - set(cleanup)
+    tasks.update(getattr(app.state, "qa_tasks", set()))
+    tasks.update(task for task in (render_dispatcher, recovery_task) if task is not None)
+    # Initiate every shutdown phase before waiting for any one of them. A stuck
+    # dispatcher must not postpone cancellation of QA or native render work.
+    cancel(tasks)
+    if inline_task is not None:
+        tasks.add(inline_task)
+    if render_service is not None:
+        tasks.add(asyncio.create_task(render_service.close(deadline=deadline)))
+    pending = await wait_until(tasks, deadline)
+    cancel(pending)
+    # A producer's cancellation handler can register a worker, whose own done
+    # callback can register resource cleanup. Re-snapshot every registry after
+    # each wave; one initial task snapshot misses these descendants entirely.
+    observed = set(tasks)
+    while True:
+        await asyncio.sleep(0)
+        cleanup = set(getattr(app.state, "cleanup_tasks", set()))
+        registered = (
+            set(getattr(app.state, "tasks", set()))
+            | set(getattr(app.state, "qa_tasks", set()))
+            | cleanup
+        )
+        late = registered - observed
+        if not late:
+            break
+        observed.update(late)
+        # Lease/client cleanup gets its remaining cooperative budget. Newly
+        # handed-off work is stopped immediately and cannot get a fresh grace.
+        cancel(late - cleanup)
+        pending.update(await wait_until(late, deadline))
+        cancel(pending)
+        if time.monotonic() >= deadline:
+            break
+    disposal = asyncio.create_task(engine.dispose())
+    pending.update(await wait_until({disposal}, deadline))
+    cancel(pending)
+    pending = {task for task in pending if not task.done()}
+    disposal_error = (
+        disposal.exception() if disposal.done() and not disposal.cancelled() else None
+    )
+    app.state.shutdown_incomplete = (
+        bool(pending)
+        or bool(inline_worker is not None and inline_worker.requires_hard_exit)
+        or bool(render_service is not None and render_service.requires_hard_exit)
+        or disposal_error is not None
+    )
+    if app.state.shutdown_incomplete:
+        logger.error(
+            "API shutdown incomplete; supervisor termination required; "
+            "unfinished leases remain recoverable"
+        )
+    if disposal_error is not None:
+        raise disposal_error
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
@@ -878,52 +950,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         qa_dispatcher.add_done_callback(app.state.tasks.discard)
         yield
     finally:
-        if render_dispatcher is not None:
-            render_dispatcher.cancel()
-            await asyncio.gather(render_dispatcher, return_exceptions=True)
-        if inline_worker is not None:
-            inline_worker.request_stop(reason="api_shutdown")
-        # Stop the producer of background work first. Otherwise a recovery
-        # scan can hand off a new execution after the task snapshot below.
-        if recovery_task is not None:
-            recovery_task.cancel()
-            await asyncio.gather(recovery_task, return_exceptions=True)
-        if inline_task is not None:
-            await asyncio.gather(inline_task, return_exceptions=True)
-        # A worker's bounded drain may leave an uncooperative cleanup pending.
-        # Do not reintroduce an unbounded gather after that deadline; the process
-        # supervisor enforces the API process's final shutdown limit.
-        unfinished = set(inline_worker._running) if inline_worker is not None else set()
-        if inline_worker is not None and inline_worker.requires_hard_exit:
-            logger.error(
-                "inline consumer cleanup exceeded its deadline; supervisor shutdown required"
-            )
-        # 再取消并回收后台研究任务，最后释放引擎——避免任务在 dispose 后继续发 SQL
-        cleanup_tasks: set[asyncio.Task[None]] = getattr(app.state, "cleanup_tasks", set())
-        tasks = [
-            task
-            for task in getattr(app.state, "tasks", set())
-            if task is not recovery_task and task not in cleanup_tasks and task not in unfinished
-        ]
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        # Cancelling a task before its coroutine starts schedules durable lease
-        # cleanup from its done callback. Let those callbacks run and drain the
-        # resulting tasks before disposing the database engine they depend on.
-        await asyncio.sleep(0)
-        pending_cleanup = [task for task in cleanup_tasks if not task.done()]
-        if pending_cleanup:
-            await asyncio.gather(*pending_cleanup, return_exceptions=True)
-        qa_tasks = list(getattr(app.state, "qa_tasks", set()))
-        for task in qa_tasks:
-            task.cancel()
-        if qa_tasks:
-            await asyncio.gather(*qa_tasks, return_exceptions=True)
-        if render_service is not None:
-            await render_service.close()
-        await engine.dispose()
+        await _shutdown_application(
+            app, settings, engine, render_dispatcher=render_dispatcher,
+            render_service=render_service, recovery_task=recovery_task,
+            inline_task=inline_task, inline_worker=inline_worker,
+        )
 
 
 app = FastAPI(title="Science Research", lifespan=lifespan)
@@ -2369,9 +2400,21 @@ async def _load_report_document(
         request.app.state.repo, assembler=assemble_document, event_limit=_DOCUMENT_EVENT_LIMIT
     )
     try:
-        return await service.document(run_id, include_hsi_tables=include_hsi_tables)
+        document = await service.document(run_id, include_hsi_tables=include_hsi_tables)
     except ReportNotFoundError as exc:
         raise HTTPException(404, "run not found") from exc
+    expected = request.query_params.get("version")
+    if expected is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise HTTPException(422, "文档版本标识无效")
+        if expected != document.content_version:
+            raise HTTPException(409, {
+                "code": "document_version_changed",
+                "message": "报告内容已变化，请刷新预览后再导出；未下载其他版本",
+                "expected_version": expected,
+                "current_version": document.content_version,
+            })
+    return document
 
 
 def _download_headers(run_id: str, document: ReportDocument, suffix: str) -> dict[str, str]:
@@ -2388,7 +2431,10 @@ def _download_headers(run_id: str, document: ReportDocument, suffix: str) -> dic
     if title:
         disposition += f"; filename*=UTF-8''{quote(title + suffix, safe='')}"
     # 报告内容受鉴权保护，不允许共享缓存或磁盘缓存留存
-    return {"Content-Disposition": disposition, "Cache-Control": "private, no-store"}
+    return {
+        "Content-Disposition": disposition, "Cache-Control": "private, no-store",
+        "X-Content-Version": document.content_version,
+    }
 
 
 @app.get("/api/runs/{run_id}", dependencies=[Depends(require_api_key)])
@@ -2404,6 +2450,7 @@ async def get_run(run_id: str, request: Request) -> RunDetail:
 async def get_run_document(
     run_id: str,
     request: Request,
+    response: Response,
     include_hsi_tables: bool = Query(default=False),
 ) -> ReportDocument:
     """结构化报告文档：证据装置随报告一起交付，不再只存在于前端的即时 join。
@@ -2412,7 +2459,10 @@ async def get_run_document(
     并列而不是取代后者——``RunDetail`` 仍按原样返回 ``report.citations`` 等字段，
     既有前端与质量指标链路不受影响。
     """
-    return await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
+    document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
+    response.headers["X-Content-Version"] = document.content_version
+    response.headers["Cache-Control"] = "private, no-store"
+    return document
 
 
 def _render_retry_token(request: Request) -> str | None:
@@ -2430,6 +2480,19 @@ async def _queued_document_render(
     detail = await request.app.state.repo.get_run(run_id)
     if detail is None:
         raise HTTPException(404, "run not found")
+    from .workbench.publish import delivery_fingerprint
+
+    if document.source_version != delivery_fingerprint(detail):
+        raise HTTPException(409, {
+            "code": "document_version_changed",
+            "message": "导出期间研究定稿已变化，请刷新预览后再导出",
+        })
+    # Export sidecars must come from this same checked source snapshot, even
+    # when a handler read a different revision before reaching the queue.
+    if "sources" in options:
+        options["sources"] = detail.sources
+    if "manifest" in options:
+        options["manifest"] = (await _enrich_run_detail(request.app.state.repo, detail)).manifest
     try:
         return await service_for(request.app.state.repo, request.app.state.settings).export(
             detail, document, format, retry_token=_render_retry_token(request), **options
@@ -2605,9 +2668,10 @@ async def get_run_document_bundle(
     request: Request,
     profile: str = Query(default="academic", pattern="^(academic|technical|executive|appendix)$"),
     template: str = Query(default="ctexart", pattern="^(ctexart|ctexrep|ieeetran|acmart)$"),
+    include_hsi_tables: bool = Query(default=False),
 ) -> Response:
     """Download the complete non-secret reproducibility bundle for a run."""
-    document = await _load_report_document(request, run_id, include_hsi_tables=True)
+    document = await _load_report_document(request, run_id, include_hsi_tables=include_hsi_tables)
     detail = await request.app.state.repo.get_run(run_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="run not found")

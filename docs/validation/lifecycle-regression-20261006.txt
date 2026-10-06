@@ -1,0 +1,8 @@
+Local Windows regression verification
+Command: python -m pytest -q --basetemp=D:/tmp/lifecycle-regression tests/test_api.py tests/test_task_completion.py tests/test_shutdown_deadline.py tests/test_qa_deadline.py
+........................................................................ [ 49%]
+........................................................................ [ 99%]
+.                                                                        [100%]
+145 passed in 30.38s
+
+Exit: 0

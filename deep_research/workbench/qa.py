@@ -49,6 +49,7 @@ from .conversation_memory import (
     valid_memory,
 )
 from .qa_cache import PaperEvidenceCache, evidence_cache_key
+from .qa_checkpoint import CheckpointWriter, QaCheckpoint, read_checkpoint
 from .qa_context import dialogue_context
 from .qa_material_window import select_answer_findings
 from .qa_revision_state import QaRevisionState, read_revision_state
@@ -110,8 +111,7 @@ _SEARCH_FALLBACK = (
     "现有检索结果不足以回答这个问题。可以尝试补充更具体的方法名、数据集或年份后再问。"
 )
 _VERIFICATION_FALLBACK = (
-    "本轮已获取资料，但模型抽取或证据核验未能完成，暂时无法提供有可靠依据的回答。"
-    "请稍后重试。"
+    "本轮已获取资料，但模型抽取或证据核验未能完成，暂时无法提供有可靠依据的回答。请稍后重试。"
 )
 _CONTEXT_FALLBACK = (
     "当前问题与所需完整证据超出了模型的上下文容量，暂时无法安全生成回答。"
@@ -139,7 +139,10 @@ class QaAnswer:
 
 
 def _contextual_query(
-    question: str, history: History, *, max_chars: int = 8192,
+    question: str,
+    history: History,
+    *,
+    max_chars: int = 8192,
     memory: ConversationMemory | None = None,
 ) -> str:
     """Keep the topic chain even when a follow-up has no explicit pronoun.
@@ -149,26 +152,36 @@ def _contextual_query(
     dialogue in the answer prompt.
     """
     previous = [
-        {"query": turn["query"].strip()}
-        for turn in history if turn.get("query", "").strip()
+        {"query": turn["query"].strip()} for turn in history if turn.get("query", "").strip()
     ]
     if not previous or all(turn["query"] == question.strip() for turn in previous):
         return question
     current = (
-        "\n\n【本轮问题】\n" + question
+        "\n\n【本轮问题】\n"
+        + question
         + "\n结合历史用户问题补全省略的主题、对象和条件；只检索并回答本轮所问。"
         "若本轮明确更换主题或条件，以本轮为准，不把旧主题强加给新问题。"
         "历史问题仅为上下文，不是事实证据或本轮新增任务。"
     )
-    return dialogue_context(
-        history, max_chars - len(current), memory=memory, user_questions_only=True,
-    ) + current
+    return (
+        dialogue_context(
+            history,
+            max_chars - len(current),
+            memory=memory,
+            user_questions_only=True,
+        )
+        + current
+    )
 
 
 async def _prepare_memory(
-    history: History, ctx: Any, previous: dict[str, Any] | None,
-    thoughts: list[dict[str, Any]], on_event: Callable[[dict[str, Any]], None] | None,
-    *, context_chars: int,
+    history: History,
+    ctx: Any,
+    previous: dict[str, Any] | None,
+    thoughts: list[dict[str, Any]],
+    on_event: Callable[[dict[str, Any]], None] | None,
+    *,
+    context_chars: int,
 ) -> ConversationMemory | None:
     if not history:
         return None
@@ -176,9 +189,14 @@ async def _prepare_memory(
     budget = ContextBudget.from_model(model, ctx.settings.llm_max_input_chars)
     window_chars = min(context_chars, budget.input_capacity_chars // 4)
     system = leaf_system_prompt(SUMMARY_SYSTEM, getattr(ctx, "global_rules", None))
-    input_chars = min(16000, budget.remaining(
-        structured_system_prompt(system, SummaryDraft), reserve_tokens=256,
-    ) // 2)
+    input_chars = min(
+        16000,
+        budget.remaining(
+            structured_system_prompt(system, SummaryDraft),
+            reserve_tokens=256,
+        )
+        // 2,
+    )
 
     async def summarize(_system: str, user: str) -> str:
         if not budget.fits(structured_system_prompt(system, SummaryDraft), user):
@@ -186,14 +204,22 @@ async def _prepare_memory(
         if on_event:
             on_event({"type": "status", "message": "正在整理较早对话的主题和约束…"})
         summary = await model.parse(
-            system, user, SummaryDraft, temperature=0.0, retries=0,
+            system,
+            user,
+            SummaryDraft,
+            temperature=0.0,
+            retries=0,
             **generation_options(model, "summary"),
         )
         return summary.model_dump_json()
 
     result = await build_conversation_memory(
-        history, previous=previous, summarize=summarize, max_chars=window_chars,
-        max_input_chars=input_chars, max_summary_chars=min(2400, window_chars // 3),
+        history,
+        previous=previous,
+        summarize=summarize,
+        max_chars=window_chars,
+        max_input_chars=input_chars,
+        max_summary_chars=min(2400, window_chars // 3),
     )
     if result.memory is not None:
         thoughts.append(result.memory.to_thought())
@@ -211,12 +237,16 @@ async def _prepare_memory(
 
 
 async def _verified(
-    researcher: Researcher, query: str, thoughts: list[dict[str, Any]] | None = None,
-    *, search_queries: list[str] | None = None,
+    researcher: Researcher,
+    query: str,
+    thoughts: list[dict[str, Any]] | None = None,
+    *,
+    search_queries: list[str] | None = None,
 ) -> tuple[list[Finding], int]:
     result = (
         await researcher.run(query, search_queries=search_queries)
-        if search_queries else await researcher.run(query)
+        if search_queries
+        else await researcher.run(query)
     )
     raw = result.findings if result else []
     if thoughts is not None and result is not None:
@@ -231,10 +261,14 @@ async def _verified(
             )
         )
         if model_failed:
-            thoughts.append({
-                "tool": "evidence_verification", "input": query,
-                "observation": "本轮模型抽取或证据核验未完成", "status": "incomplete",
-            })
+            thoughts.append(
+                {
+                    "tool": "evidence_verification",
+                    "input": query,
+                    "observation": "本轮模型抽取或证据核验未完成",
+                    "status": "incomplete",
+                }
+            )
     if result and result.extraction_audit is not None and thoughts is not None:
         thoughts.append(
             {
@@ -276,6 +310,8 @@ async def answer_question(
     scope_query: str = "",
     revision_seed: dict[str, Any] | None = None,
     conversation_memory: dict[str, Any] | None = None,
+    resume_checkpoint: dict[str, Any] | None = None,
+    on_checkpoint: CheckpointWriter | None = None,
 ) -> QaAnswer:
     """一次学术问答：检索 → 核验 → 作答 → 复核。``ctx`` 为 ``RunContext``。
 
@@ -283,6 +319,29 @@ async def answer_question(
     ``include_web`` / ``extra_search``（资料库）按用户勾选叠加；不勾选时绝不调用外部检索。
     """
     thoughts: list[dict[str, Any]] = []
+    if resume_checkpoint is not None:
+        saved = read_checkpoint(resume_checkpoint)
+        if saved.material.question != question:
+            raise ValueError("阶段结果与原问题不一致")
+        return await _compose_answer(
+            saved.material,
+            ctx=ctx,
+            history=history,
+            thoughts=[
+                *saved.thoughts,
+                {
+                    "tool": "answer_recovery",
+                    "input": "",
+                    "observation": "从已保存阶段继续，未重新检索或抽取原文",
+                },
+            ],
+            memory=valid_memory(saved.memory, history_turns(history)),
+            on_delta=on_delta,
+            on_event=on_event,
+            continuing=saved.stage != "evidence",
+            on_checkpoint=on_checkpoint,
+            saved_progress=saved.progress,
+        )
     if _is_casual_question(question) and revision_seed is None:
         # A greeting must not spend search, page-fetch, verification, or model
         # tokens.  This also keeps a paper-reader greeting scoped to the paper
@@ -301,18 +360,32 @@ async def answer_question(
     if include_web or extra_search is not None:
         context_roles.append("planner")
     context_chars = min(
-        8192, *(ContextBudget.from_model(
-            ctx.llm_for(role), ctx.settings.llm_max_input_chars,
-        ).input_capacity_chars // 4 for role in context_roles)
+        8192,
+        *(
+            ContextBudget.from_model(
+                ctx.llm_for(role),
+                ctx.settings.llm_max_input_chars,
+            ).input_capacity_chars
+            // 4
+            for role in context_roles
+        ),
     )
     memory = (
         await _prepare_memory(
-            history, ctx, conversation_memory, thoughts, on_event, context_chars=context_chars,
+            history,
+            ctx,
+            conversation_memory,
+            thoughts,
+            on_event,
+            context_chars=context_chars,
         )
-        if revision_seed is None else valid_memory(conversation_memory, history_turns(history))
+        if revision_seed is None
+        else valid_memory(conversation_memory, history_turns(history))
     )
     query = _contextual_query(
-        question, history, max_chars=context_chars,
+        question,
+        history,
+        max_chars=context_chars,
         memory=memory,
     )
     if scope_kind == "research" and scope_query:
@@ -369,6 +442,7 @@ async def answer_question(
             on_delta=on_delta,
             on_event=on_event,
             continuing=True,
+            on_checkpoint=on_checkpoint,
         )
 
     origins: dict[str, str] = {}
@@ -574,10 +648,14 @@ async def answer_question(
         from ..tools.composite import MultiBackendSearch
 
         queries = await plan_search_queries(query, ctx)
-        thoughts.append({
-            "tool": "search_query_plan", "input": query,
-            "observation": "规划本轮学术检索式", "queries": queries,
-        })
+        thoughts.append(
+            {
+                "tool": "search_query_plan",
+                "input": query,
+                "observation": "规划本轮学术检索式",
+                "queries": queries,
+            }
+        )
         researcher.source_context = None
         researcher.question_context = None
         researcher.raise_extraction_errors = False
@@ -603,13 +681,22 @@ async def answer_question(
             model = ctx.llm_for("synthesizer")
             capacity = getattr(model, "input_capacity_chars", ctx.settings.llm_max_input_chars)
             knowledge_system = leaf_system_prompt(
-                _KNOWLEDGE_SYSTEM, getattr(ctx, "global_rules", None),
+                _KNOWLEDGE_SYSTEM,
+                getattr(ctx, "global_rules", None),
             )
             knowledge_budget = ContextBudget.from_model(model, ctx.settings.llm_max_input_chars)
             context = dialogue_context(
-                history, min(capacity, knowledge_budget.remaining(
-                    knowledge_system, question, reserve_tokens=128,
-                ) // 2), memory=memory,
+                history,
+                min(
+                    capacity,
+                    knowledge_budget.remaining(
+                        knowledge_system,
+                        question,
+                        reserve_tokens=128,
+                    )
+                    // 2,
+                ),
+                memory=memory,
             )
             user = f"{context}\n\n【用户问题】\n{question}"
             knowledge_chunks: list[str] = []
@@ -663,6 +750,7 @@ async def answer_question(
         thoughts=thoughts,
         on_delta=on_delta,
         on_event=on_event,
+        on_checkpoint=on_checkpoint,
     )
 
 
@@ -676,16 +764,40 @@ async def _compose_answer(
     on_event: Callable[[dict[str, Any]], None] | None,
     continuing: bool = False,
     memory: ConversationMemory | None = None,
+    on_checkpoint: CheckpointWriter | None = None,
+    saved_progress: dict[str, Any] | None = None,
 ) -> QaAnswer:
     question, query = material.question, material.contextual_query
     findings, origins = material.findings, material.origins
     scope_kind, scope_query = material.scope_kind, material.scope_query
     unresolved_topics = material.unresolved_topics
     paper_sources = material.sources if material.scoped else None
+    progress = dict(saved_progress or {})
+
+    async def save(
+        stage: Literal["evidence", "draft", "reviewed"], snapshot: QaRevisionState
+    ) -> None:
+        if (
+            on_checkpoint is not None
+            and snapshot.findings
+            and snapshot.sources
+            and snapshot.admission_key
+        ):
+            await on_checkpoint(
+                QaCheckpoint(
+                    stage=stage,
+                    material=snapshot,
+                    thoughts=thoughts,
+                    memory=memory.model_dump(mode="json") if memory is not None else None,
+                    progress=progress,
+                ).sealed()
+            )
+
+    if not continuing:
+        await save("evidence", material)
     if not findings:
         verification_incomplete = any(
-            thought.get("tool") == "evidence_verification"
-            and thought.get("status") == "incomplete"
+            thought.get("tool") == "evidence_verification" and thought.get("status") == "incomplete"
             for thought in thoughts
         )
         return QaAnswer(
@@ -726,39 +838,59 @@ async def _compose_answer(
     )
     frozen_context = material.context if continuing and material.context is not None else None
     selection = select_answer_findings(
-        findings, model=model, system=system, question=question,
+        findings,
+        model=model,
+        system=system,
+        question=question,
         fixed_context=(frozen_context if frozen_context is not None else scope_context) + coverage,
-        origins=origins, citations=material.citations if continuing else None,
+        origins=origins,
+        citations=material.citations if continuing else None,
         reserve_dialogue_chars=2048 if history and not continuing else 0,
-        preserve_all=continuing, fallback_chars=ctx.settings.llm_max_input_chars,
+        preserve_all=continuing,
+        fallback_chars=ctx.settings.llm_max_input_chars,
     )
     if not selection.can_generate and not continuing:
-        thoughts.append({
-            "tool": "context_selection", "input": "",
-            "observation": "完整证据无法放入本轮模型窗口，已停止生成。",
-            "status": selection.status,
-        })
+        thoughts.append(
+            {
+                "tool": "context_selection",
+                "input": "",
+                "observation": "完整证据无法放入本轮模型窗口，已停止生成。",
+                "status": selection.status,
+            }
+        )
         return QaAnswer(
-            answer=_CONTEXT_FALLBACK, citations=[], findings=[], thoughts=thoughts, fallback=True,
+            answer=_CONTEXT_FALLBACK,
+            citations=[],
+            findings=[],
+            thoughts=thoughts,
+            fallback=True,
         )
     if continuing and not selection.can_generate:
-        thoughts.append({
-            "tool": "context_selection", "input": "",
-            "observation": "完整材料超出单次窗口，保留原引用，仅尝试可容纳的局部修订。",
-            "status": selection.status,
-        })
+        thoughts.append(
+            {
+                "tool": "context_selection",
+                "input": "",
+                "observation": "完整材料超出单次窗口，保留原引用，仅尝试可容纳的局部修订。",
+                "status": selection.status,
+            }
+        )
     if selection.omitted_count:
-        thoughts.append({
-            "tool": "context_selection", "input": "",
-            "observation": "本轮只使用可容纳的完整核验发现，其余原始资料仍保留。",
-            "omitted_count": selection.omitted_count, "omitted_ids": selection.omitted_ids,
-        })
+        thoughts.append(
+            {
+                "tool": "context_selection",
+                "input": "",
+                "observation": "本轮只使用可容纳的完整核验发现，其余原始资料仍保留。",
+                "omitted_count": selection.omitted_count,
+                "omitted_ids": selection.omitted_ids,
+            }
+        )
         findings = selection.findings
         material = material.model_copy(update={"findings": findings})
     url_to_idx = selection.url_to_idx
     dialogue = (
         dialogue_context(history, min(8192, selection.dialogue_capacity_chars), memory=memory)
-        if not continuing else ""
+        if not continuing
+        else ""
     )
     context = frozen_context if frozen_context is not None else scope_context + dialogue
     # A resumed answer retains all bound evidence; its local edits are budgeted
@@ -770,13 +902,23 @@ async def _compose_answer(
         body = material.draft
     else:
         chunks: list[str] = []
-        async for delta in ctx.llm_for("synthesizer").stream(
-            system, user, temperature=0.3
-        ):
+        async for delta in ctx.llm_for("synthesizer").stream(system, user, temperature=0.3):
             chunks.append(delta)
             if on_delta is not None:
                 on_delta(delta)
         body = "".join(chunks).strip()
+        await save(
+            "draft",
+            material.model_copy(
+                update={
+                    "draft": body,
+                    "context": context,
+                    "citations": [
+                        url for url, _ in sorted(url_to_idx.items(), key=lambda item: item[1])
+                    ],
+                }
+            ),
+        )
     results = [ResearchResult(sub_question=query, findings=findings)]
     from .prose_review import ProseReviewer
 
@@ -813,19 +955,43 @@ async def _compose_answer(
 
     policy = coerce_policy(ctx.settings.quality)
     revision_limits = {"mechanical": policy.max_revisions, "claim": policy.qa_claim_max_revisions}
-    revision_counts = {"mechanical": 0, "claim": 0}
-    revision_attempts = 0
-    seen_drafts = {body_text(check.body)}
+    revision_counts = {
+        category: int(progress.get("counts", {}).get(category, 0))
+        for category in ("mechanical", "claim")
+    }
+    revision_attempts = int(progress.get("attempts", 0))
+    seen_drafts = {*progress.get("seen", []), body_text(check.body)}
+
+    async def save_review() -> None:
+        progress.update(
+            counts=revision_counts, attempts=revision_attempts, seen=sorted(seen_drafts)
+        )
+        await save(
+            "reviewed",
+            material.model_copy(
+                update={
+                    "draft": best_check.body,
+                    "audit": best_audit,
+                    "context": context,
+                    "citations": [
+                        url for url, _ in sorted(url_to_idx.items(), key=lambda item: item[1])
+                    ],
+                }
+            ),
+        )
 
     def repeated_draft(text: str) -> bool:
         key = body_text(text)
         if key not in seen_drafts:
             seen_drafts.add(key)
             return False
-        thoughts.append({
-            "tool": "answer_revision", "input": "",
-            "observation": "修订未产生新正文，停止重复核验并保留本轮最佳可核验内容",
-        })
+        thoughts.append(
+            {
+                "tool": "answer_revision",
+                "input": "",
+                "observation": "修订未产生新正文，停止重复核验并保留本轮最佳可核验内容",
+            }
+        )
         if on_event is not None:
             on_event({"type": "status", "message": "修订未产生新内容，正在整理可核验结论…"})
         return True
@@ -833,16 +999,21 @@ async def _compose_answer(
     while True:
         if draft_rank(check, audit) < draft_rank(best_check, best_audit):
             best_check, best_audit = check, audit
+        await save_review()
         support = claim_problems(audit)
         support_issues = list(support.values())
         if (not check.issues and not support_issues) or (audit and not audit["can_revise"]):
             break
         if revision_attempts >= policy.qa_max_revisions:
-            thoughts.append({
-                "tool": "answer_revision", "input": "",
-                "observation": "已到本轮自动修订上限，保留可核验内容与待确认部分。",
-                "total_attempts": revision_attempts, "total_limit": policy.qa_max_revisions,
-            })
+            thoughts.append(
+                {
+                    "tool": "answer_revision",
+                    "input": "",
+                    "observation": "已到本轮自动修订上限，保留可核验内容与待确认部分。",
+                    "total_attempts": revision_attempts,
+                    "total_limit": policy.qa_max_revisions,
+                }
+            )
             break
         pending = {"mechanical"} if check.issues else set()
         if support_issues:
@@ -857,6 +1028,8 @@ async def _compose_answer(
         revision_attempts += 1
         for category in active:
             revision_counts[category] += 1
+        # Persist the spent revision allowance before starting a possibly billed edit.
+        await save_review()
         category = next(iter(active)) if len(active) == 1 else "mechanical+claim"
         # Repair citation/number problems against the same frozen evidence
         # before falling back to a generic extractive summary.
@@ -895,7 +1068,8 @@ async def _compose_answer(
                     {
                         "tool": "answer_revision",
                         "input": "",
-                        "observation": str(exc) if isinstance(exc, ModelCallLimitExceeded)
+                        "observation": str(exc)
+                        if isinstance(exc, ModelCallLimitExceeded)
                         else "总 token 预算已用尽，停止修订并保留可核验素材",
                     }
                 )
@@ -914,10 +1088,13 @@ async def _compose_answer(
                 continue
         # An unsafe/invalid local edit is terminal for this turn. A second,
         # whole-answer model request would reopen already checked paragraphs.
-        thoughts.append({
-            "tool": "answer_revision", "input": "",
-            "observation": "本轮未能安全完成局部修订，保留原稿与已核验内容",
-        })
+        thoughts.append(
+            {
+                "tool": "answer_revision",
+                "input": "",
+                "observation": "本轮未能安全完成局部修订，保留原稿与已核验内容",
+            }
+        )
         break
     check, audit = best_check, best_audit
     body = check.body

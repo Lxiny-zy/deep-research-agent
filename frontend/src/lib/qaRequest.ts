@@ -2,7 +2,36 @@ import { ApiError, askQuestion, getQaRequest } from '../api/client'
 import { canRecoverQaAnswer } from './qaRecovery'
 import type { QaActivity, QaMessage, QaSourceOption } from '../types'
 
-export type QaScope = { sources: QaSourceOption[]; projectId?: string; revisionMessageId?: string }
+export type QaScope = {
+  sources: QaSourceOption[]
+  projectId?: string
+  revisionMessageId?: string
+  resumeMessageId?: string
+}
+
+export function savedQaScope(message: QaMessage): QaScope {
+  return {
+    sources: message.request_payload?.sources ?? [],
+    projectId: message.request_payload?.project_id ?? undefined,
+    revisionMessageId: message.request_payload?.revision_message_id ?? undefined,
+    resumeMessageId: message.request_payload?.resume_message_id ?? undefined,
+  }
+}
+
+/** Use durable children, including the active request hidden by the streaming UI. */
+export function latestQaContinuation(
+  messageId: string,
+  messages: QaMessage[],
+): QaMessage | undefined {
+  return messages.reduce<QaMessage | undefined>(
+    (latest, message) =>
+      message.request_payload?.resume_message_id === messageId &&
+      (!latest || message.position > latest.position)
+        ? message
+        : latest,
+    undefined,
+  )
+}
 const memory = new Map<string, { query: string; scope: string; id: string }>()
 if (typeof window !== 'undefined')
   window.addEventListener('dr:credentials-cleared', () => memory.clear())
@@ -35,7 +64,7 @@ export function pendingConversationId(ids: string[]): string | undefined {
 
 export function reconcileQaRequests(cid: string, messages: QaMessage[]) {
   for (const message of messages) {
-    if (message.request_id && ['done', 'fallback', 'error'].includes(message.status)) {
+    if (message.request_id && ['done', 'fallback', 'error', 'cancelled'].includes(message.status)) {
       clearPending(cid, message.request_id)
     }
   }
@@ -46,6 +75,7 @@ export function pendingQaId(cid: string, query: string, scope: QaScope, resumed?
     Array.from(new Set(scope.sources)).sort(),
     scope.projectId ?? '',
     ...(scope.revisionMessageId ? [scope.revisionMessageId] : []),
+    ...(scope.resumeMessageId ? ['resume', scope.resumeMessageId] : []),
   ])
   let previous = memory.get(cid)
   try {
@@ -113,7 +143,11 @@ export async function runQaRequest(
       try {
         const current = await getQaRequest(cid, requestId, signal)
         signal?.throwIfAborted()
-        if (current.status === 'done' || current.status === 'fallback') {
+        if (
+          current.status === 'done' ||
+          current.status === 'fallback' ||
+          current.status === 'cancelled'
+        ) {
           clearPending(cid, requestId)
           return current
         }

@@ -53,12 +53,15 @@ _CORROBORATION_LABEL = {
 def render_markdown(doc: ReportDocument) -> str:
     """把结构化文档投影成 Markdown。"""
     from .presentation import presentation_document
+    from .versioning import export_provenance
 
+    provenance = export_provenance(doc)
     doc = presentation_document(doc)
     sections: list[str] = []
     title = doc.title.strip() or doc.query.strip()
     if title:
         sections.append(f"# {_inline(title)}")
+    sections.append(provenance)
     if doc.final_validation and doc.final_validation.support_status == "fail":
         sections.append("> **待核验草稿**：正文结论依据尚未通过核验，本文件供检查。")
     if doc.abstract:

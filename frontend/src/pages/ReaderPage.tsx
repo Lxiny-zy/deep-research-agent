@@ -14,6 +14,8 @@ import { documentForEvidence } from '../lib/readerDocuments'
 import { pendingQaId, reconcileQaRequests, runQaRequest } from '../lib/qaRequest'
 import type { QaActivity, QaEvidence, QaSourceOption, QaMessage } from '../types'
 import { appendQaActivity } from '../lib/qaActivity'
+import { useCancelQaRequest } from '../hooks/useCancelQaRequest'
+import { latestQaContinuation, savedQaScope } from '../lib/qaRequest'
 import { finalProseReview } from '../lib/workbench'
 
 // PDF.js 体积较大，只在打开原文时加载
@@ -60,11 +62,20 @@ export default function ReaderPage() {
   const [streamingAnswer, setStreamingAnswer] = useState('')
   const [activity, setActivity] = useState<QaActivity[]>([])
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null)
+  const activeRequestRef = useRef<string | null>(null)
   const resumeRef = useRef<QaMessage | null>(null)
   const revisionRef = useRef<QaMessage | null>(null)
+  const recoveryRef = useRef<QaMessage | null>(null)
+  const cancelledByUser = useRef(false)
   const targetRef = useRef<string>()
   const attemptedResume = useRef(new Set<string>())
   const connection = useRef<AbortController | null>(null)
+  const stop = useCancelQaRequest((message, requestId) => {
+    if (message.status === 'cancelled' && requestId === activeRequestRef.current) {
+      cancelledByUser.current = true
+      connection.current?.abort()
+    }
+  })
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -100,6 +111,8 @@ export default function ReaderPage() {
       resumeRef.current = null
       const revision = revisionRef.current
       revisionRef.current = null
+      const recovery = recoveryRef.current
+      recoveryRef.current = null
       if (!target) {
         target = (await createConversation(text.slice(0, 60), id)).id
         controller.signal.throwIfAborted()
@@ -110,16 +123,16 @@ export default function ReaderPage() {
       if (withLibrary) sources.push('library')
       if (withWeb) sources.push('web')
       const revisionMessageId = revision?.id ?? resume?.request_payload?.revision_message_id
-      const scope = revisionMessageId
-        ? { sources: [], projectId: undefined, revisionMessageId }
+      const scope = recovery
+        ? { ...savedQaScope(recovery), resumeMessageId: recovery.id }
         : resume
-          ? {
-              sources: resume.request_payload?.sources ?? [],
-              projectId: resume.request_payload?.project_id ?? undefined,
-            }
-          : { sources, projectId: withLibrary ? projectId : undefined }
+          ? savedQaScope(resume)
+          : revisionMessageId
+            ? { sources: [], projectId: undefined, revisionMessageId }
+            : { sources, projectId: withLibrary ? projectId : undefined }
       const requestId = pendingQaId(target, text, scope, resume?.request_id ?? undefined)
       attemptedResume.current.add(requestId)
+      activeRequestRef.current = requestId
       setActiveRequestId(requestId)
       await runQaRequest(
         target,
@@ -137,12 +150,13 @@ export default function ReaderPage() {
       return target
     },
     onMutate: (text) => {
+      cancelledByUser.current = false
       setPending(text)
       setStreamingAnswer('')
       setActivity([])
     },
     onError: (_error, text) => {
-      if (mounted.current) setDraft(text)
+      if (mounted.current && !cancelledByUser.current) setDraft(text)
     },
     onSettled: async (target) => {
       await queryClient.invalidateQueries({ queryKey: ['qa-conversations', 'run', id] })
@@ -153,6 +167,7 @@ export default function ReaderPage() {
       if (!mounted.current) return
       setPending(null)
       setActiveRequestId(null)
+      activeRequestRef.current = null
       setStreamingAnswer('')
     },
   })
@@ -237,6 +252,9 @@ export default function ReaderPage() {
             <QaMessageView
               key={message.id}
               message={message}
+              continuationStatus={
+                latestQaContinuation(message.id, conversation.data?.messages ?? [])?.status
+              }
               onLocate={locate}
               onReconnect={() => {
                 if (!ask.isPending) {
@@ -245,6 +263,26 @@ export default function ReaderPage() {
                 }
               }}
               revisionPending={ask.isPending}
+              onStop={
+                message.request_id
+                  ? () => {
+                      const target = conversationId || targetRef.current
+                      if (target)
+                        stop.mutate({ conversationId: target, requestId: message.request_id! })
+                    }
+                  : undefined
+              }
+              stopping={stop.isPending}
+              onResume={() => {
+                if (
+                  !ask.isPending &&
+                  message.recovery?.available &&
+                  !latestQaContinuation(message.id, conversation.data?.messages ?? [])
+                ) {
+                  recoveryRef.current = message
+                  ask.mutate(message.request_payload?.query ?? message.query)
+                }
+              }}
               onRevise={() => {
                 if (!ask.isPending) {
                   revisionRef.current = message
@@ -255,6 +293,19 @@ export default function ReaderPage() {
           ))}
           {pending && (
             <article className="qa-turn is-pending">
+              {activeRequestId && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={stop.isPending}
+                  onClick={() => {
+                    const target = targetRef.current || conversationId
+                    if (target) stop.mutate({ conversationId: target, requestId: activeRequestId })
+                  }}
+                >
+                  {stop.isPending ? '正在停止…' : '停止本轮'}
+                </button>
+              )}
               <div className="qa-question">
                 <p>{pending}</p>
               </div>
@@ -266,7 +317,12 @@ export default function ReaderPage() {
               />
             </article>
           )}
-          {ask.isError && (
+          {stop.isError && (
+            <p role="alert" className="error-text">
+              {stop.error instanceof Error ? stop.error.message : '停止请求失败，请重试。'}
+            </p>
+          )}
+          {ask.isError && !cancelledByUser.current && (
             <div className="alert error" role="alert">
               <AppIcon name="circle-x" size={14} aria-hidden="true" />
               {ask.error instanceof Error ? ask.error.message : '提问失败'}
