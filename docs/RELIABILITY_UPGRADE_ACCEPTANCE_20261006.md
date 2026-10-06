@@ -1,5 +1,8 @@
 # 科研交付与运行可靠性升级验收
 
+后续用户授权的实际发布、容量补充及线上验证见 [发布记录](RELIABILITY_RELEASE_20261006.md)。
+本文保留发布前本地验收的原始范围与结果。
+
 第二阶段本地升级已完成并通过下述验收。工作树为
 `D:/Cursor-edit/Project_test/deep-research-agent-upgrade`，分支 `upgrade/reliability-20261006`。
 本阶段未推送、未部署、未修改生产数据库；第一阶段生产应用仍为 `9723575`，
