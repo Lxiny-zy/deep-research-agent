@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from contextlib import asynccontextmanager
 
@@ -17,7 +16,7 @@ from deep_research.workbench.templates import get_template
 from deep_research.workbench.writers import Mindmap
 from deep_research.worker import Worker
 from tests.fakes import FakeSearch, verified_finding
-from tests.queue_helpers import drain_inline
+from tests.queue_helpers import drain_inline, finish_worker_run
 from tests.test_scenario_paths import scenario_app as scenario_app
 from tests.test_workbench import WorkbenchLLM
 
@@ -31,8 +30,7 @@ async def finish_run(repo):
         )
         await worker._tick()
         assert len(worker._running) == 1
-        await asyncio.wait_for(worker._drain(), 45)
-        await repo.remove_worker(worker.name)
+        await finish_worker_run(worker, seconds=45)
     else:
         await drain_inline(api.app, seconds=45)
 

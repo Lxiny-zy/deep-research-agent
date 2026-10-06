@@ -30,7 +30,7 @@ from deep_research.workbench.templates import TASK_TEMPLATES, get_template
 from deep_research.workbench.writers import Mindmap
 from deep_research.worker import Worker
 from tests.fakes import FakeSearch, verified_finding
-from tests.queue_helpers import drain_inline
+from tests.queue_helpers import drain_inline, finish_worker_run
 from tests.test_workbench import WorkbenchLLM
 
 
@@ -190,8 +190,7 @@ async def test_task_creation_execution_result_and_all_promised_downloads(
         worker = Worker(repo, RunExecutor(ExecutionContext(repo=repo)), api.app.state.settings)
         await worker._tick()
         assert len(worker._running) == 1
-        await asyncio.wait_for(worker._drain(), timeout=45)
-        await repo.remove_worker(worker.name)
+        await finish_worker_run(worker, seconds=45)
     else:
         await drain_inline(api.app, seconds=45)
     detail = await repo.get_run(run_id)
