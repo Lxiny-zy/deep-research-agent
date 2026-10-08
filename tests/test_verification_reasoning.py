@@ -6,7 +6,12 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-from deep_research.guardrails import SemanticEvidenceDecisionList, SemanticEvidenceVerifier
+from deep_research.guardrails import (
+    ClaimConsistencyReport,
+    ClaimConsistencyVerifier,
+    SemanticEvidenceDecisionList,
+    SemanticEvidenceVerifier,
+)
 from deep_research.llm import LLM, ModelOutputTruncated, verification_generation_options
 from deep_research.observability import Tracer
 from deep_research.orchestrator import _LazyOwnedLLM
@@ -108,6 +113,9 @@ async def test_semantic_support_and_fulltext_checks_use_only_supported_effort(mo
     finding = verified_finding()
     admitted = await SemanticEvidenceVerifier().verify_batch([finding], llm)
     assert admitted[0].verification.semantic_status == "supported"
+    await ClaimConsistencyVerifier().verify_batch([
+        finding, verified_finding(source_url="https://other.example/paper"),
+    ], llm)
     decision = (await SupportReviewer(
         llm, [{"id": "e", "citation": 1, "statement": finding.statement,
                "quote": finding.evidence_quote, "source": finding.source_url}],
@@ -130,7 +138,8 @@ async def test_semantic_support_and_fulltext_checks_use_only_supported_effort(mo
     ]))[0]
     assert checked.verdict == "supported"
     assert {schema for schema, _ in calls} == {
-        SemanticEvidenceDecisionList, SupportDecisions, FullTextTarget, FullTextChecks,
+        SemanticEvidenceDecisionList, ClaimConsistencyReport,
+        SupportDecisions, FullTextTarget, FullTextChecks,
     }
     for _, options in calls:
         if mode == "reasoning":
@@ -138,3 +147,40 @@ async def test_semantic_support_and_fulltext_checks_use_only_supported_effort(mo
         else:
             assert "reasoning_effort" not in options
     assert llm.reasoning_effort == fulltext.reasoning_effort == "medium"
+
+
+async def test_consistency_reuses_only_successful_unchanged_inventory():
+    class Judge(FakeLLM):
+        def __init__(self):
+            super().__init__()
+            self.requests = 0
+            self.fail = False
+
+        async def parse(self, *args, **kwargs):
+            self.requests += 1
+            if self.fail:
+                raise ValueError("temporary failure")
+            return ClaimConsistencyReport()
+
+    llm = Judge()
+    verifier = ClaimConsistencyVerifier()
+    findings = [verified_finding(source_url=f"https://source{i}.example") for i in range(2)]
+    checked = await verifier.verify_batch(findings, llm)
+    checked[0].confidence = 0.7
+    reused = await verifier.verify_batch(checked, llm)
+    assert llm.requests == 1
+    assert reused[0].confidence == 0.7
+    changed = [f.model_copy(deep=True) for f in findings]
+    changed[0].evidence_quote += " Additional context."
+    await verifier.verify_batch(changed, llm)
+    assert llm.requests == 2
+    changed[0].statement += " Another assertion."
+    llm.fail = True
+    failed = await verifier.verify_batch(changed, llm)
+    assert failed[0].verification.consistency_status == "not_checked"
+    llm.fail = False
+    await verifier.verify_batch(changed, llm)
+    assert llm.requests == 4
+    another = Judge()
+    await verifier.verify_batch(changed, another)
+    assert another.requests == 1

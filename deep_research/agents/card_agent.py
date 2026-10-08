@@ -27,7 +27,21 @@ _BEHAVIOR_IMPL: dict[str, type] = {
 
 
 def behavior_impls() -> dict[str, type]:
-    return dict(_BEHAVIOR_IMPL)
+    from ..workbench.writers import (
+        MindmapWriter,
+        PaperReader,
+        PeerReviewer,
+        ResearchWriter,
+        SlideWriter,
+        SurveyWriter,
+    )
+
+    return {
+        **_BEHAVIOR_IMPL,
+        "research_writer": ResearchWriter, "survey_writer": SurveyWriter,
+        "paper_reader": PaperReader, "peer_reviewer": PeerReviewer,
+        "slide_writer": SlideWriter, "mindmap_writer": MindmapWriter,
+    }
 
 
 class CardAgent:
@@ -38,9 +52,10 @@ class CardAgent:
     def __init__(
         self, *, name: str, behavior: str, system_prompt: str = "", prompt_mode: str = "replace"
     ) -> None:
-        impl_cls = _BEHAVIOR_IMPL.get(behavior)
+        implementations = behavior_impls()
+        impl_cls = implementations.get(behavior)
         if impl_cls is None:
-            raise ValueError(f"未知 behavior：{behavior}（可选：{sorted(_BEHAVIOR_IMPL)}）")
+            raise ValueError(f"未知 behavior：{behavior}（可选：{sorted(implementations)}）")
         self.name = name
         self.behavior = behavior
         self._impl: Agent = impl_cls()  # 无参构造（依赖在 step 时经 ctx 注入）

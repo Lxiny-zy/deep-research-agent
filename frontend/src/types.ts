@@ -631,6 +631,7 @@ export interface QualityField {
 // ── 角色广场 catalog ──────────────────────────────────────────────────
 // 角色行为模板（决定该角色在引擎里的执行逻辑）
 export type Behavior = 'plan' | 'research' | 'reflect' | 'synthesize' | 'critique'
+  | 'research_writer' | 'survey_writer' | 'paper_reader' | 'peer_reviewer' | 'slide_writer' | 'mindmap_writer'
 
 // 模型档案（GET /api/models，api_key 脱敏）
 export interface ModelProfile {

@@ -6,6 +6,11 @@ export interface ModelCallRecord {
   attempt?: number
   operation?: string
   role?: string | null
+  schema?: string
+  generation_task?: string
+  reasoning_effort?: string
+  reasoning_source?: string
+  provider_wait_ms?: number
   model?: string
   status: 'started' | 'succeeded' | 'failed' | 'cancelled'
   retry_reason?: string | null
@@ -23,10 +28,10 @@ export function modelCallRecord(value: unknown): ModelCallRecord | null {
   const clean: ModelCallRecord = {
     call_id: record.call_id, status: record.status as ModelCallRecord['status'],
   }
-  for (const key of ['operation_id', 'operation', 'role', 'model', 'retry_reason', 'error_type', 'usage_state']) {
+  for (const key of ['operation_id', 'operation', 'role', 'schema', 'model', 'retry_reason', 'error_type', 'usage_state', 'generation_task', 'reasoning_effort', 'reasoning_source']) {
     if (typeof record[key] === 'string') Object.assign(clean, { [key]: record[key] })
   }
-  for (const key of ['attempt', 'duration_ms']) {
+  for (const key of ['attempt', 'duration_ms', 'provider_wait_ms']) {
     const number = record[key]
     if (typeof number === 'number' && Number.isFinite(number) && number >= 0)
       Object.assign(clean, { [key]: number })
@@ -55,11 +60,24 @@ export function modelCalls(events: ResearchEvent[]): ModelCallRecord[] {
 }
 
 export function modelCallLabel(call: ModelCallRecord): string {
+  const checks: Record<string, string> = {
+    SemanticEvidenceDecisionList: '核对摘录与结论',
+    ClaimConsistencyReport: '检查来源之间的矛盾与印证',
+    SupportDecisions: '核对正文引用',
+    CoverageDecisions: '检查研究覆盖范围',
+    FormulaDecisions: '核对公式',
+    FullTextTarget: '定位全文核查内容',
+    FullTextChecks: '回查原文',
+  }
   const roles: Record<string, string> = {
     planner: '规划', researcher: '资料研究', synthesizer: '生成回答',
     evidence_verifier: '证据核验', reflector: '检查研究缺口',
+    survey_writer: '撰写文献综述', paper_reader: '撰写论文分析',
+    research_writer: '撰写调研报告', peer_reviewer: '论文审稿',
+    slide_writer: '制作汇报幻灯片', mindmap_writer: '整理研究导图',
   }
   if (call.operation === 'search') return '模型检索'
+  if (call.role === 'evidence_verifier' && call.schema && checks[call.schema]) return checks[call.schema]
   if (call.role && roles[call.role]) return roles[call.role]
   if (call.role) return call.role
   return call.operation === 'structured' ? '结构化处理' : '内容生成'

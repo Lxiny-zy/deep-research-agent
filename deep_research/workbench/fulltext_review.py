@@ -282,7 +282,18 @@ class FullTextReviewer:
                 raise ValueError("全文核查未确定有效的目标文献")
             target.document_ids = list(dict.fromkeys(target.document_ids))
             if any(not _unambiguous(self.corpus.documents[key]) for key in target.document_ids):
-                raise ValueError("文献存在不一致的来源快照，不能混用版本核查")
+                # This is an evidence limitation, not a failed model service.
+                # Reject the assertion but let the writer remove it or replace
+                # it with a claim supported by an unambiguous source. Treating
+                # it as a service failure stopped every repair of the draft.
+                record.update(
+                    failure_kind="source_snapshot_conflict",
+                    reason=(
+                        "文献存在不一致的来源快照，不能混用版本核查；"
+                        "请删除依赖全文缺失或全文比较的断言，或改用明确来源能够支持的表述"
+                    ),
+                )
+                return record
             record["target"] = target.model_dump(mode="json")
             base = {"unit": asdict(unit), "target": record["target"]}
             overhead = len(structured_system_prompt(_CHECK_SYSTEM, FullTextChecks))

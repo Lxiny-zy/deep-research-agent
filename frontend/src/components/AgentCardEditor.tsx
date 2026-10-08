@@ -15,10 +15,13 @@ import { previewRolePrompt } from '../api/client'
 import { searchSelectionNames } from '../lib/searchProfiles'
 import { AgentGlyph, AppIcon } from './AppIcon'
 
-const BEHAVIORS: Behavior[] = ['plan', 'research', 'reflect', 'synthesize', 'critique']
+const BEHAVIORS = Object.keys(BEHAVIOR_LABELS) as Behavior[]
+
+export type RolePreset = Pick<AgentCard, 'name' | 'display_name' | 'behavior'>
 
 interface Props {
   initial?: AgentCard | null
+  preset?: RolePreset
   profiles: ModelProfile[]
   searchProfiles?: SearchProfile[]
   onSubmit: (body: AgentCardInput) => void
@@ -30,6 +33,7 @@ interface Props {
 /** 角色卡片新建/编辑表单。图标统一保存为 Lucide 语义键，不再接受 emoji。 */
 export default function AgentCardEditor({
   initial,
+  preset,
   profiles,
   searchProfiles = [],
   onSubmit,
@@ -39,9 +43,9 @@ export default function AgentCardEditor({
 }: Props) {
   const dialogRef = useDialogFocus(onCancel)
   const editing = !!initial
-  const defaultBehavior = initial?.behavior ?? 'research'
-  const [name, setName] = useState(initial?.name ?? '')
-  const [displayName, setDisplayName] = useState(initial?.display_name ?? '')
+  const defaultBehavior = initial?.behavior ?? preset?.behavior ?? 'research'
+  const [name, setName] = useState(initial?.name ?? preset?.name ?? '')
+  const [displayName, setDisplayName] = useState(initial?.display_name ?? preset?.display_name ?? '')
   const [icon, setIcon] = useState(agentIconName(initial?.icon, defaultBehavior))
   const [behavior, setBehavior] = useState<Behavior>(defaultBehavior)
   const [description, setDescription] = useState(initial?.description ?? '')
@@ -149,6 +153,7 @@ export default function AgentCardEditor({
               <input
                 className="input"
                 value={name}
+                readOnly={!!preset}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="如 my-critic"
               />
@@ -161,7 +166,7 @@ export default function AgentCardEditor({
               className="input"
               value={behavior}
               onChange={(event) => setBehavior(event.target.value as Behavior)}
-              disabled={editing}
+              disabled={editing || !!preset}
             >
               {BEHAVIORS.map((item) => (
                 <option key={item} value={item}>
@@ -171,6 +176,11 @@ export default function AgentCardEditor({
             </select>
             <span className="hint">{BEHAVIOR_HINTS[behavior]}</span>
           </label>
+          <p className="hint">
+            {preset ? '保存后会应用于新任务中的这个内置角色，保留原有执行流程。'
+              : '工作流按角色标识选用卡片；新建独立卡片后，需要在工作流中引用它。'}
+            已开始的任务继续使用启动时的配置。
+          </p>
 
           <label className="field-label">
             绑定模型档案（留空＝用全局默认档案）

@@ -35,6 +35,25 @@ _LOW_REASONING_TASKS: frozenset[GenerationTask] = frozenset(
     }
 )
 
+_SCHEMA_TASKS: dict[str, GenerationTask] = {
+    "ResearchPlan": "research_planning",
+    "Reflection": "research_planning",
+    "SearchQueryPlan": "search_query",
+    "ExtractedFindingList": "extraction",
+    "SemanticEvidenceDecisionList": "verification",
+    "ClaimConsistencyReport": "verification",
+    "SupportDecisions": "verification",
+    "CoverageDecisions": "verification",
+    "FullTextTarget": "verification",
+    "FullTextChecks": "verification",
+    "FormulaDecisions": "formula_verification",
+}
+
+
+def schema_task(schema_name: str) -> GenerationTask | None:
+    """Known output contracts select effort; unknown contracts keep profile defaults."""
+    return _SCHEMA_TASKS.get(schema_name)
+
 
 def generation_options(llm: Any, task: GenerationTask) -> GenerationOptions:
     """Bounded transformations use low effort only for declared reasoning models.

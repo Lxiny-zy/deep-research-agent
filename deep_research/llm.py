@@ -14,7 +14,7 @@ import json
 import re
 import time
 from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import aclosing, suppress
+from contextlib import aclosing, asynccontextmanager, suppress
 from typing import Any, TypedDict, TypeVar
 from uuid import uuid4
 
@@ -185,7 +185,11 @@ class LLM:
         await self.client.close()
 
     async def complete(self, system: str, user: str, *, temperature: float = 0.3) -> str:
-        with model_operation("complete", role=self._call_role) as operation:
+        with model_operation(
+            "complete", role=self._call_role,
+            reasoning_effort=self.reasoning_effort if self.parameter_mode == "reasoning" else None,
+            reasoning_source="profile",
+        ) as operation:
             for attempt in range(3):
                 try:
                     return await self._complete_once(system, user, temperature)
@@ -220,6 +224,37 @@ class LLM:
         key = "max_completion_tokens" if self.parameter_mode == "reasoning" else "max_tokens"
         return {key: reservation.output_tokens}
 
+    @asynccontextmanager
+    async def _provider_slot(self, operation: ModelOperation) -> AsyncIterator[None]:
+        queued_at = time.monotonic()
+        queue = {
+            "id": uuid4().hex, "operation_id": operation.id,
+            "role": operation.role, "schema": operation.schema, "model": self.model,
+        }
+        acquired = False
+        self.tracer.emit("LLM", "info", "等待模型执行名额", data={
+            "model_queue": {**queue, "status": "waiting"},
+        })
+        try:
+            async with provider_request(
+                self.settings.llm_base_url or "https://api.openai.com", self.settings.llm_api_key,
+            ):
+                acquired = True
+                operation.provider_wait_ms = max(0, round((time.monotonic() - queued_at) * 1000))
+                self.tracer.emit("LLM", "info", "已取得模型执行名额", data={
+                    "model_queue": {
+                        **queue, "status": "acquired", "wait_ms": operation.provider_wait_ms,
+                    },
+                })
+                yield
+        except BaseException as exc:
+            if not acquired:
+                status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+                self.tracer.emit("LLM", "info", "模型排队已结束", data={
+                    "model_queue": {**queue, "status": status},
+                })
+            raise
+
     async def _complete_once(
         self, system: str, user: str, temperature: float, *, reasoning_effort: str | None = None
     ) -> str:
@@ -229,10 +264,9 @@ class LLM:
         options: VerificationGenerationOptions = (
             {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
         )
+        operation = current_operation()
         async with (
-            provider_request(
-                self.settings.llm_base_url or "https://api.openai.com", self.settings.llm_api_key
-            ),
+            self._provider_slot(operation),
             aclosing(self._stream_once(system, user, temperature=temperature, **options)) as stream,
         ):
             async for delta in stream:
@@ -252,11 +286,24 @@ class LLM:
         sys = structured_system_prompt(system, schema)
         err: Exception | None = None
         attempts = max(1, retries + 1)
-        options: VerificationGenerationOptions = (
-            {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
-        )
+        from .generation_policy import generation_options, schema_task
+
+        task = schema_task(schema.__name__)
+        options: VerificationGenerationOptions = {}
+        source = "profile"
+        if reasoning_effort is not None:
+            options = {"reasoning_effort": reasoning_effort}
+            source = "explicit"
+        elif task is not None:
+            options = generation_options(self, task)
+            if options:
+                source = "operation_policy"
         with model_operation(
             "structured", role=self._call_role, schema=schema.__name__,
+            generation_task=task,
+            reasoning_effort=(options.get("reasoning_effort", self.reasoning_effort)
+                              if self.parameter_mode == "reasoning" else None),
+            reasoning_source=source,
         ) as operation:
             for attempt in range(attempts):
                 try:
@@ -282,15 +329,16 @@ class LLM:
         # 不再重试——重发会把半截正文重复拼进交付物，这时把异常交给调用方处理。
         # Do not hold a ContextVar token across yields to a caller. Multiple
         # streams may be consumed or closed in a different order in one task.
-        operation = ModelOperation(kind="stream", role=self._call_role)
+        operation = ModelOperation(
+            kind="stream", role=self._call_role,
+            reasoning_effort=self.reasoning_effort if self.parameter_mode == "reasoning" else None,
+            reasoning_source="profile",
+        )
         for attempt in range(3):
             emitted = False
             try:
                 async with (
-                    provider_request(
-                        self.settings.llm_base_url or "https://api.openai.com",
-                        self.settings.llm_api_key,
-                    ),
+                    self._provider_slot(operation),
                     aclosing(self._stream_once(
                         system, user, temperature=temperature, operation=operation,
                     )) as stream,

@@ -6,7 +6,9 @@ import json
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -449,6 +451,10 @@ def render_specs(
     record: dict[str, Any] = {
         "version": TABLES_VERSION, "specs": [], "errors": [],
         **(
+            {"unit_reviews": deepcopy(previous["unit_reviews"])}
+            if isinstance(previous, dict) and isinstance(previous.get("unit_reviews"), list) else {}
+        ),
+        **(
             {"comparison_context_version": COMPARISON_CONTEXT_VERSION} if comparison_context else {}
         ),
     }
@@ -578,6 +584,7 @@ async def review_tables(
     *,
     corroboration: bool = False,
     ledger: dict[str, Any] | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> list[str]:
     issues = table_issues(
         markdown,
@@ -594,20 +601,55 @@ async def review_tables(
     signature = _signature(tables)
     if record.get("review_hash") != signature:
         decisions = []
+        saved_reviews = record.get("unit_reviews")
+        previous = {
+            item["key"]: item.get("decision")
+            for item in (saved_reviews if isinstance(saved_reviews, list) else [])
+            if isinstance(item, dict) and isinstance(item.get("key"), str)
+        }
+        unit_reviews: list[dict[str, Any]] = []
+        reused = requests = 0
         for table in tables:
-            # Separate evidence scopes prevent a sibling cell from lending its citation.
+            checker = SupportReviewer(
+                llm, table.evidence, capacity, system_rules=TABLE_RULES,
+                check_fulltext=False, check_formulas=False, evidence_scopes=table.allowed,
+            )
+            checker.on_progress = on_progress
+            keys = {}
             for unit in table.units:
-                checker = SupportReviewer(
-                    llm,
-                    [e for e in table.evidence if e["id"] in table.allowed[unit.id]],
-                    capacity,
-                    system_rules=TABLE_RULES,
-                    check_fulltext=False,
-                    check_formulas=False,
-                )
-                decisions.extend(await checker.review([unit]))
+                selected = checker.evidence_for(unit)
+                key = digest([checker.provenance, asdict(unit), selected])
+                keys[unit.id] = key
+                try:
+                    cached = SupportDecision.model_validate(previous.get(key))
+                except ValueError:
+                    continue
+                if cached.unit_id != unit.id or cached.verdict not in {"supported", "unsupported"}:
+                    continue
+                if cached.verdict == "supported" and (
+                    not cached.evidence_ids
+                    or not set(cached.evidence_ids) <= set(table.allowed[unit.id])
+                    or checker.alignment_issue(unit, cached)
+                ):
+                    continue
+                checker.cache[digest([asdict(unit), selected])] = cached
+                reused += 1
+            reviewed = await checker.review(table.units)
+            requests += checker.request_count
+            decisions.extend(reviewed)
+            unit_reviews.extend(
+                {"key": keys[decision.unit_id], "decision": decision.model_dump(mode="json")}
+                for decision in reviewed if decision.verdict != "uncertain"
+            )
         record["review_hash"] = signature
         record["decisions"] = [decision.model_dump(mode="json") for decision in decisions]
+        record["unit_reviews"] = unit_reviews
+        record["review_stats"] = {"units": len(decisions), "reused": reused, "requests": requests}
+        if on_progress is not None:
+            on_progress(
+                f"表格依据核对完成：{len(decisions)} 个单元，"
+                f"复用 {reused} 个，模型请求 {requests} 次"
+            )
     return table_issues(
         markdown, results, mapping, record, corroboration=corroboration, ledger=ledger
     )

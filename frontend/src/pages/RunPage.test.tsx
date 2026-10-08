@@ -532,7 +532,9 @@ describe('RunPage database synchronization', () => {
           type: 'needs_review',
           message: '待复核',
           elapsed: 2,
-          data: { status: 'needs_review', completion: { issues: ['必需 PDF 生成失败'] } },
+          data: { status: 'needs_review', completion: { issues: [
+            '必需 PDF 生成失败', '必需 PDF 生成失败', '引用需要修订', '数值需要修订', '表格需要修订',
+          ] } },
         },
       ],
     })
@@ -570,6 +572,9 @@ describe('RunPage database synchronization', () => {
     expect(screen.getByTestId('report-markdown')).toHaveTextContent('待复核正文')
     expect(screen.getByTestId('report-markdown')).toHaveAttribute('data-live', 'false')
     expect(screen.getByRole('list', { name: '待复核问题' })).toHaveTextContent('必需 PDF 生成失败')
+    expect(screen.getByRole('list', { name: '待复核问题' }).children).toHaveLength(3)
+    expect(screen.getByText('展开其余 1 项问题')).toBeInTheDocument()
+    expect(screen.getByText('表格需要修订').closest('details')).not.toHaveAttribute('open')
     expect(screen.getByRole('button', { name: '继续修订内容' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: '恢复运行' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '继续追问' })).toBeEnabled()

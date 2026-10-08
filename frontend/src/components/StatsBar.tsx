@@ -186,6 +186,7 @@ export default function StatsBar({
                 : '等待运行'
 
   const verdict = quality ? VERDICT[quality.status] : null
+  const showProgress = !progress.terminal || progress.percent >= 100
 
   return (
     <section
@@ -210,14 +211,14 @@ export default function StatsBar({
               <i aria-hidden />
               {connectionLabel}
             </span>
-            <strong className="research-progress-value">
+            {showProgress && <strong className="research-progress-value">
               {Math.round(animatedProgress)}
               <small>%</small>
-            </strong>
+            </strong>}
           </div>
         </div>
 
-        <div
+        {showProgress && <div
           className="research-progress-track"
           role="progressbar"
           aria-valuemin={0}
@@ -228,7 +229,7 @@ export default function StatsBar({
           <span
             style={{ transform: `scaleX(${Math.max(0, Math.min(100, animatedProgress)) / 100})` }}
           />
-        </div>
+        </div>}
       </div>
 
       <div className="live-metrics">

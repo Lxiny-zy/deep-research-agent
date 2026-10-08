@@ -568,6 +568,8 @@ class ClaimConsistencyVerifier:
 
     def __init__(self, *, min_confidence: float = 0.6) -> None:
         self.min_confidence = min_confidence
+        self._last_request: tuple[Any, str] | None = None
+        self._last_response: ClaimConsistencyReport | None = None
 
     async def verify_batch(self, findings: list[Finding], llm: Any) -> list[Finding]:
         eligible = [
@@ -597,13 +599,34 @@ class ClaimConsistencyVerifier:
             )
             for finding in eligible
         )
+        from .llm import verification_generation_options
+
+        system = compose_system_prompt(self._SYSTEM, load_global_rules())
+        options = verification_generation_options(llm)
+        signature = hashlib.sha256(
+            json.dumps([system, user, options], ensure_ascii=False, sort_keys=True).encode()
+        ).hexdigest()
         try:
-            response = await llm.parse(
-                compose_system_prompt(self._SYSTEM, load_global_rules()),
-                user,
-                ClaimConsistencyReport,
-                temperature=0.0,
-            )
+            # A later workflow step can check the same inventory again. Reuse
+            # only this verifier's last successful model response; deterministic
+            # source-independence checks below still use the current findings.
+            if (
+                self._last_request is not None
+                and self._last_request[0] is llm
+                and self._last_request[1] == signature
+                and self._last_response is not None
+            ):
+                response = self._last_response
+            else:
+                response = await llm.parse(
+                    system,
+                    user,
+                    ClaimConsistencyReport,
+                    temperature=0.0,
+                    **options,
+                )
+                self._last_request = (llm, signature)
+                self._last_response = response
         except LeaseLostError:
             raise
         except Exception as exc:
@@ -643,11 +666,11 @@ class ClaimConsistencyVerifier:
         # 因"非独立发布方"被驳回的印证对。不记下来的话，一条伪双源会静默显示为
         # "单一来源"，读者无从知道系统其实看到了两个来源、只是判定它们同源。
         non_independent: dict[str, list[str]] = {claim_id: [] for claim_id in by_id}
-        for pair in response.corroborations:
-            if pair.confidence < self.min_confidence:
+        for corroboration in response.corroborations:
+            if corroboration.confidence < self.min_confidence:
                 continue
-            left = pair.left_claim_id
-            right = pair.right_claim_id
+            left = corroboration.left_claim_id
+            right = corroboration.right_claim_id
             if left == right or left not in by_id or right not in by_id:
                 continue
             if frozenset((left, right)) in conflict_pairs:
@@ -663,8 +686,8 @@ class ClaimConsistencyVerifier:
                 non_independent[left].append(why)
                 non_independent[right].append(why)
                 continue
-            corroborations[left].append((right, pair.reason))
-            corroborations[right].append((left, pair.reason))
+            corroborations[left].append((right, corroboration.reason))
+            corroborations[right].append((left, corroboration.reason))
 
         updated: dict[str, Finding] = {}
         for claim_id, finding in by_id.items():

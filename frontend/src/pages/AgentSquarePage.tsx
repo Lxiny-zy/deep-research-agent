@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import AgentCardEditor from '../components/AgentCardEditor'
+import AgentCardEditor, { type RolePreset } from '../components/AgentCardEditor'
 import BuiltinRoleGallery from '../components/BuiltinRoleGallery'
 import ModelProfileCard from '../components/ModelProfileCard'
 import ModelProfileEditor from '../components/ModelProfileEditor'
@@ -20,7 +20,7 @@ import {
   useSearchKeyMutations,
   useSearchKeys,
 } from '../hooks/useCatalog'
-import { behaviorLabel } from '../lib/behaviors'
+import { behaviorLabel, BUILTIN_BEHAVIORS } from '../lib/behaviors'
 import type {
   AgentCard,
   AgentCardInput,
@@ -40,6 +40,7 @@ type Tab = 'agents' | 'models' | 'keys'
 type EditSession<T> = {
   key: number
   item: T | null // null＝新建
+  preset?: RolePreset
 }
 
 const TABS: { key: Tab; label: string; icon: AppIconName }[] = [
@@ -222,7 +223,13 @@ export default function AgentSquarePage() {
                 内置角色加载失败：{errMsg(roles.error)}
               </p>
             )}
-            <BuiltinRoleGallery roles={roles.data ?? []} />
+            <BuiltinRoleGallery roles={roles.data ?? []} onConfigure={(role) => {
+              const existing = agents.data?.find((card) => card.name === role.name)
+              if (existing) openAgentEditor(existing)
+              else setAgentSession({ key: ++sessionSequence.current, item: null, preset: {
+                name: role.name, display_name: role.label, behavior: BUILTIN_BEHAVIORS[role.name],
+              } })
+            }} />
 
             <div className="catalog-section-head custom-follow">
               <h3 className="builtin-rail-title">自定义角色</h3>
@@ -283,6 +290,11 @@ export default function AgentSquarePage() {
                   </div>
                   <p className="catalog-card-desc">
                     {a.description?.trim() || '自定义角色，可在工作流中复用。'}
+                  </p>
+                  <p className="hint">
+                    {BUILTIN_BEHAVIORS[a.name]
+                      ? (a.enabled ? '已绑定同名内置角色，新任务自动使用' : '已停用，任务使用内置配置')
+                      : '需在工作流中按此标识引用'}
                   </p>
                   <div
                     className="catalog-card-detail"
@@ -525,6 +537,7 @@ export default function AgentSquarePage() {
         <AgentCardEditor
           key={agentSession.key}
           initial={agentSession.item}
+          preset={agentSession.preset}
           profiles={profiles}
           searchProfiles={searchProfiles.data ?? []}
           onSubmit={saveAgent}

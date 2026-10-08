@@ -20,7 +20,7 @@ from ..observability import Tracer
 from ..registry import create as registry_create
 from ..security import validate_provider_url_resolved
 from ..tools.base import SearchTool
-from ..workbench.roles import WORKBENCH_WRITER_ROLES
+from ..workbench.roles import CARD_WRITER_BEHAVIORS, WORKBENCH_WRITER_ROLES
 from .dto import (
     AgentCardSnapshot,
     AgentCardView,
@@ -60,7 +60,10 @@ def terminal_roles_for_cards(cards: Iterable[AgentCardView]) -> set[str]:
     """Return report-producing names after enabled catalog cards override built-ins."""
     overrides = {card.name: card for card in cards if card.enabled}
     terminals = _BUILTIN_TERMINAL_ROLES - overrides.keys()
-    terminals.update(card.name for card in overrides.values() if card.behavior == "synthesize")
+    terminals.update(
+        card.name for card in overrides.values()
+        if card.behavior in {"synthesize", *CARD_WRITER_BEHAVIORS}
+    )
     return terminals
 
 
@@ -151,6 +154,7 @@ class CatalogRuntime:
         self._tracer = tracer
         self._settings = settings
         self._llm_cache: dict[str, LLM] = {}  # profile_id -> LLM（运行内复用）
+        self._reported_bindings: set[str] = set()
         self.search_runtime = SearchRuntime(search_profiles or [], catalog_repo, settings, tracer)
         self._default_search_ids = (
             list(settings.search_profile_ids)
@@ -243,6 +247,21 @@ class CatalogRuntime:
             profile = self._profiles.get(card.model_profile_id)
         if profile is None:
             profile = self._default_profile  # 卡片未绑则用全局默认档案
+        if agent_name not in self._reported_bindings:
+            self._reported_bindings.add(agent_name)
+            self._tracer.emit(
+                "ORCHESTRATOR", "info", f"已解析角色 {agent_name} 的执行配置",
+                data={"role_binding": {
+                    "role": agent_name,
+                    "card": card.display_name or card.name if card is not None else None,
+                    "behavior": card.behavior if card is not None else None,
+                    "profile": profile.name if profile is not None else None,
+                    "model": profile.model if profile is not None else None,
+                    "model_source": "card" if card and card.model_profile_id in self._profiles
+                    else "default" if profile is not None else "runtime",
+                    "prompt_mode": card.prompt_mode if card is not None else None,
+                }},
+            )
         if profile is None:
             return None
         return self._build_llm(profile)

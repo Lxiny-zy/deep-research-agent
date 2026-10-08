@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import httpx
@@ -56,6 +57,51 @@ async def client(settings, *responses):
     completions = Completions(*responses)
     llm.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     return llm, tracer, completions
+
+
+@pytest.mark.parametrize("mode", ["reasoning", "temperature"])
+async def test_operation_effort_respects_explicit_and_complex_checks(settings, mode):
+    from deep_research.workbench.formula_review import FormulaDecisions
+    from deep_research.workbench.support import SupportDecisions
+
+    llm, tracer, completions = await client(
+        settings, Stream('{"decisions":[]}'), Stream('{"decisions":[]}'),
+        Stream('{"decisions":[]}'),
+    )
+    llm.parameter_mode, llm.reasoning_effort = mode, "high"
+    await llm.parse("s", "u", SupportDecisions)
+    await llm.parse("s", "u", SupportDecisions, reasoning_effort="medium")
+    await llm.parse("s", "u", FormulaDecisions)
+    if mode == "reasoning":
+        assert [r["reasoning_effort"] for r in completions.requests] == ["low", "medium", "high"]
+        assert [c["reasoning_source"] for c in calls(tracer, "started")] == [
+            "operation_policy", "explicit", "profile",
+        ]
+    else:
+        assert all("reasoning_effort" not in r for r in completions.requests)
+    assert llm.reasoning_effort == "high"
+
+
+async def test_cancel_while_queued_never_becomes_an_http_attempt(settings, monkeypatch):
+    waiting = asyncio.Event()
+
+    @asynccontextmanager
+    async def blocked_slot(*args):
+        waiting.set()
+        await asyncio.Event().wait()
+        yield
+
+    monkeypatch.setattr("deep_research.llm.provider_request", blocked_slot)
+    llm, tracer, completions = await client(settings, Stream())
+    task = asyncio.create_task(llm.complete("s", "u"))
+    await asyncio.wait_for(waiting.wait(), 1)
+    assert not calls(tracer, "started")
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    queues = [e.data["model_queue"] for e in tracer.events if e.data and "model_queue" in e.data]
+    assert [q["status"] for q in queues] == ["waiting", "cancelled"]
+    assert not completions.requests and tracer.call_budget.used == 0
 
 
 def calls(tracer, status):

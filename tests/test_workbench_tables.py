@@ -141,7 +141,9 @@ class TableJudge:
                     {
                         "unit_id": unit["id"],
                         "verdict": self.verdict,
-                        "evidence_ids": [item["id"] for item in payload["evidence"]],
+                        "evidence_ids": unit.get(
+                            "allowed_evidence_ids", [item["id"] for item in payload["evidence"]]
+                        ),
                         "reason": "fixed cell judgement",
                     }
                     for unit in payload["units"]
@@ -217,14 +219,74 @@ async def test_independent_cell_judge_cannot_borrow_sibling_evidence():
     )
     judge = TableJudge()
     assert not await review_tables(body, record, results, mapping, judge, 50000)
-    assert [{e["id"] for e in call["evidence"]} for call in judge.calls] == [
-        {evidence_id(a)},
-        {evidence_id(b)},
+    assert len(judge.calls) == 1
+    assert [unit["allowed_evidence_ids"] for unit in judge.calls[0]["units"]] == [
+        [evidence_id(a)], [evidence_id(b)],
     ]
     record.pop("review_hash")
+    record.pop("unit_reviews")
     assert await review_tables(
         body, record, results, mapping, TableJudge(verdict="unsupported"), 50000
     )
+
+
+@pytest.mark.asyncio
+async def test_table_batches_eighteen_cells_and_reuses_only_unchanged_scopes():
+    from deep_research.workbench.tables import render_specs, review_tables
+
+    findings = [
+        admitted(f"Method{i} coverage 0.908", entity=f"Method{i}",
+                 quantity=Quantity(metric="coverage", value=0.908, rendered="0.908"))
+        for i in range(18)
+    ]
+    results, mapping = inputs(*findings)
+    spec = quantity_spec(findings[0])
+    spec["rows"] = [
+        {"label": f.entity, "cells": {"v": [evidence_id(f)]}} for f in findings
+    ]
+    raw = "```evidence-table\n" + json.dumps(spec) + "\n```"
+    body, record = render_specs(raw, results, mapping)
+    judge = TableJudge()
+    assert not await review_tables(body, record, results, mapping, judge, 50000)
+    assert len(judge.calls) == 2
+    assert sum(len(call["units"]) for call in judge.calls) == 18
+    assert record["review_stats"] == {"units": 18, "reused": 0, "requests": 2}
+
+    # The source snapshot changes for one cell, even though its wording is identical.
+    changed = deepcopy(results)
+    changed[0].findings[-1].verification.source_content_hash = "new-snapshot"
+    body, revised = render_specs(raw, changed, mapping, previous=record)
+    assert not await review_tables(body, revised, changed, mapping, judge, 50000)
+    assert len(judge.calls) == 3 and len(judge.calls[-1]["units"]) == 1
+    assert revised["review_stats"] == {"units": 18, "reused": 17, "requests": 1}
+
+
+@pytest.mark.asyncio
+async def test_batched_table_rejects_sibling_evidence_with_the_same_citation():
+    from deep_research.workbench.tables import render_specs, review_tables
+
+    a = admitted("A coverage 0.908", entity="A",
+                 quantity=Quantity(metric="coverage", value=0.908, rendered="0.908"))
+    b = admitted("B coverage 0.908", entity="B",
+                 quantity=Quantity(metric="coverage", value=0.908, rendered="0.908"))
+    results, mapping = inputs(a, b)
+    spec = quantity_spec(a)
+    spec["rows"].append({"label": "B", "cells": {"v": [evidence_id(b)]}})
+    body, record = render_specs(
+        "```evidence-table\n" + json.dumps(spec) + "\n```", results, mapping,
+    )
+
+    class LeakyJudge(TableJudge):
+        async def parse(self, system, user, schema, **kwargs):
+            response = await super().parse(system, user, schema, **kwargs)
+            for decision in response.decisions:
+                decision.evidence_ids = [evidence_id(a), evidence_id(b)]
+            return response
+
+    judge = LeakyJudge()
+    assert await review_tables(body, record, results, mapping, judge, 50000)
+    assert all(decision["verdict"] == "uncertain" for decision in record["decisions"])
+    assert len(judge.calls) == 2  # One bounded protocol repair, still scoped per cell.
 
 
 def test_scopes_must_be_separated_and_missing_values_are_explicit():

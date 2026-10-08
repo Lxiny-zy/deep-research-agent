@@ -39,3 +39,37 @@ it('ignores malformed metadata instead of rendering objects or claiming zero usa
   expect(screen.getByText('用量未返回')).toBeInTheDocument()
   expect(screen.queryByText('0 token')).not.toBeInTheDocument()
 })
+
+it('shows the active verification step outside collapsed history and clears it when finished', () => {
+  const call = { call_id: 'check', status: 'started', role: 'evidence_verifier', schema: 'ClaimConsistencyReport' }
+  const { rerender } = render(<ModelCallSummary events={[event(call)]} live />)
+  expect(screen.getByRole('status')).toHaveTextContent('正在检查来源之间的矛盾与印证')
+  expect(screen.getByRole('status').closest('details')).toBeNull()
+  rerender(<ModelCallSummary events={[event(call), event({ ...call, status: 'succeeded' })]} live />)
+  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  rerender(<ModelCallSummary events={[event(call)]} live={false} />)
+  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+})
+
+it('distinguishes excerpt verification from final prose checks and keeps legacy labels', () => {
+  render(<ModelCallSummary events={[
+    event({ call_id: 'a', status: 'succeeded', role: 'evidence_verifier', schema: 'SemanticEvidenceDecisionList' }),
+    event({ call_id: 'b', status: 'succeeded', role: 'evidence_verifier', schema: 'SupportDecisions' }),
+    event({ call_id: 'c', status: 'succeeded', role: 'evidence_verifier' }),
+  ]} live={false} />)
+  expect(screen.getByText('1. 核对摘录与结论')).toBeInTheDocument()
+  expect(screen.getByText('2. 核对正文引用')).toBeInTheDocument()
+  expect(screen.getByText('3. 证据核验')).toBeInTheDocument()
+})
+
+it('shows queue wait without counting it as a model request and clears it on cancellation', () => {
+  const queue = { id: 'q1', role: 'evidence_verifier', schema: 'SupportDecisions', status: 'waiting' }
+  const queueEvent: ResearchEvent = { stage: 'LLM', type: 'info', message: '', elapsed: 0, data: { model_queue: queue } }
+  const { rerender } = render(<ModelCallSummary events={[queueEvent]} live />)
+  expect(screen.getByRole('status')).toHaveTextContent('模型排队中：核对正文引用')
+  expect(screen.queryByText(/次请求/)).not.toBeInTheDocument()
+  rerender(<ModelCallSummary events={[queueEvent, {
+    ...queueEvent, data: { model_queue: { ...queue, status: 'cancelled' } },
+  }, queueEvent]} live />)
+  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+})

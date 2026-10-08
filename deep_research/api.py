@@ -2093,18 +2093,28 @@ async def list_roles(request: Request) -> list[dict[str, object]]:
     """可编排角色（供构建器角色选择器）：内置可组合角色 + 已启用自定义卡片。"""
     from .catalog.runtime import terminal_roles_for_cards
     from .registry import available
+    from .workbench.roles import CARD_WRITER_BEHAVIORS
 
-    builtin = {n for n in available() if n in _COMPOSABLE_BUILTINS}
+    specialized = {
+        "research_writer": ("课题调研写作", "保留调研模板与证据检查，配置专业写作要求。"),
+        "survey_writer": ("文献综述写作", "组织论文比较、研究脉络与方向，保留综述交付流程。"),
+        "paper_reader": ("论文精读", "保留原文读取、摘要翻译与创新点分析流程。"),
+        "peer_reviewer": ("论文审稿", "保留审稿结构、评分与依据核对流程。"),
+        "slide_writer": ("汇报幻灯片", "保留幻灯片结构、内容核验与生成流程。"),
+        "mindmap_writer": ("研究思维导图", "保留节点关系、引用与导图生成流程。"),
+    }
+    metadata = {**_COMPOSABLE_BUILTINS, **specialized}
+    builtin = {n for n in available() if n in metadata}
     roles: dict[str, dict[str, object]] = {
         name: {
             "name": name,
-            "label": _COMPOSABLE_BUILTINS[name][0],
-            "description": _COMPOSABLE_BUILTINS[name][1],
+            "label": metadata[name][0],
+            "description": metadata[name][1],
             "icon": "◆",
             "builtin": True,
-            "produces_report": name == "synthesizer",
+            "produces_report": name == "synthesizer" or name in CARD_WRITER_BEHAVIORS,
         }
-        for name in _COMPOSABLE_BUILTINS
+        for name in metadata
         if name in builtin
     }
     try:

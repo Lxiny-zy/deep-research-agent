@@ -170,12 +170,14 @@ class TemplateWriter:
     name: str
     template_key: str = "autoResearch"
     output_keys: tuple[str, ...] = ()
+    system: str = ""
+    default_card_prompt = "围绕用户的研究问题组织清晰、有原文依据的科研交付内容。"
 
     def brief(self, template: TaskTemplate, contract: TaskContract | None) -> str:
         return template.writer_brief
 
     def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
-        parts = [_BASE_SYSTEM, _skeleton(template), self.brief(template, contract)]
+        parts = [_BASE_SYSTEM, _skeleton(template), self.brief(template, contract), self.system]
         if template.key in {"autoResearch", "litReview"}:
             parts.append(
                 "正文以概括研究主题的简短一级标题（# ）开头，不复述任务指令；章节仍用二级标题。"
@@ -318,6 +320,13 @@ class TemplateWriter:
                 scratch=bb.scratch,
                 sources=ctx.evidence_sources,
             )
+
+        def report_progress(message: str) -> None:
+            ctx.tracer.emit("SYNTHESIZER", "info", message)
+
+        support_reviewer = getattr(reviewer, "reviewer", None)
+        if isinstance(support_reviewer, SupportReviewer):
+            support_reviewer.on_progress = report_progress
 
         from .content_revision import revision_seed
 
@@ -462,6 +471,7 @@ class TemplateWriter:
                 ctx.llm_for("evidence_verifier"),
                 ctx.settings.llm_max_input_chars,
                 corroboration=require_corroboration,
+                on_progress=report_progress,
             )
             assessment.hard.extend(table_problems)
             if table_problems:

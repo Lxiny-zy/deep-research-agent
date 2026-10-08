@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -216,6 +216,7 @@ class SupportReviewer:
         fulltext_corpus: FullTextCorpus | None = None,
         check_fulltext: bool = True,
         check_formulas: bool = True,
+        evidence_scopes: Mapping[str, Collection[str]] | None = None,
     ) -> None:
         self.llm, self.evidence = llm, evidence
         self.capacity = getattr(llm, "input_capacity_chars", capacity)
@@ -224,12 +225,33 @@ class SupportReviewer:
         self.protocol_repairs: list[dict[str, Any]] = []
         self.context = context
         self.system = _SYSTEM + ("\n" + system_rules if system_rules else "")
+        self.evidence_scopes = (
+            {key: frozenset(value) for key, value in evidence_scopes.items()}
+            if evidence_scopes is not None else None
+        )
+        if self.evidence_scopes is not None:
+            self.system += (
+                "\n每个单元的 allowed_evidence_ids 是独立的证据白名单。"
+                "即使其他单元的证据使用相同引用编号，也不能借用；"
+                "没有列入当前单元白名单的证据不能支持该单元。"
+            )
         self.fulltext_corpus = fulltext_corpus or FullTextCorpus([], {})
         self.check_fulltext = check_fulltext
         self.fulltext_records: dict[str, dict[str, Any]] = {}
         self.check_formulas = check_formulas
         self.formula_records: dict[str, dict[str, Any]] = {}
         self.on_progress: Callable[[str], None] | None = None
+        self.request_count = 0
+
+    def evidence_for(self, unit: SupportUnit) -> list[dict[str, Any]]:
+        allowed = (
+            self.evidence_scopes.get(unit.id, frozenset())
+            if self.evidence_scopes is not None else None
+        )
+        return [
+            item for item in self.evidence
+            if item["citation"] in unit.citations and (allowed is None or item["id"] in allowed)
+        ]
 
     def formula_scope_hash(self, unit: SupportUnit) -> str | None:
         from .formula_review import input_hash, requires_formula, source_packets
@@ -268,7 +290,7 @@ class SupportReviewer:
     def alignment_issue(self, unit: SupportUnit, decision: SupportDecision) -> str | None:
         from .formula_review import formulas, validate_formula_record
 
-        evidence = self.evidence
+        evidence = self.evidence_for(unit)
         if (
             decision.formula_review
             and validate_formula_record(
@@ -287,7 +309,7 @@ class SupportReviewer:
                     + "\n"
                     + "\n".join(quotes.get(item["id"], [])),
                 }
-                for item in self.evidence
+                for item in evidence
             ]
             matched = {
                 row["formula_id"]
@@ -425,7 +447,7 @@ class SupportReviewer:
         for index, unit in enumerate(units, 1):
             if self.on_progress is not None:
                 self.on_progress(f"正在核对回答依据（第 {index}/{len(units)} 段）…")
-            selected = [e for e in self.evidence if e["citation"] in unit.citations]
+            selected = self.evidence_for(unit)
             key = digest([asdict(unit), selected])
             keys[unit.id] = key
             if set(unit.citations).issubset(known_citations):
@@ -564,14 +586,21 @@ class SupportReviewer:
         return sequential
 
     def _prompt(self, units: list[SupportUnit], repair_issues: dict[str, str] | None = None) -> str:
-        cited = {index for unit in units for index in unit.citations}
-        evidence = compact_evidence([e for e in self.evidence if e["citation"] in cited])
+        selected = {e["id"] for unit in units for e in self.evidence_for(unit)}
+        evidence = compact_evidence([e for e in self.evidence if e["id"] in selected])
         # Evidence stays first and unchanged for a batch's revision follow-up.
         return json.dumps(
             {
                 "evidence": evidence,
                 "context": self.context,
-                "units": [asdict(u) for u in units],
+                "units": [
+                    {
+                        **asdict(unit),
+                        **({"allowed_evidence_ids": [e["id"] for e in self.evidence_for(unit)]}
+                           if self.evidence_scopes is not None else {}),
+                    }
+                    for unit in units
+                ],
                 **(
                     {
                         "formula_checks": {
@@ -649,6 +678,7 @@ class SupportReviewer:
         from ..llm import verification_generation_options
 
         try:
+            self.request_count += 1
             response = await self.llm.parse(
                 self.system, self._prompt(units, repair_issues), SupportDecisions, temperature=0.0,
                 **verification_generation_options(self.llm),
@@ -679,7 +709,7 @@ class SupportReviewer:
                         "alignment_review": None,
                     }
                 )
-                valid_ids = {e["id"] for e in self.evidence if e["citation"] in unit.citations}
+                valid_ids = {e["id"] for e in self.evidence_for(unit)}
                 invalid = (
                     decision.verdict == "supported"
                     and (
@@ -719,7 +749,8 @@ class SupportReviewer:
                         decision = SupportDecision(
                             unit_id=unit.id, verdict="unsupported", reason=issue,
                             alignment_review=alignment_diagnostics(
-                                unit.text, unit.citations, decision.evidence_ids, self.evidence
+                                unit.text, unit.citations, decision.evidence_ids,
+                                self.evidence_for(unit),
                             ),
                         )
                 elif decision.verdict == "non_factual" and numeric_fact(unit.text):

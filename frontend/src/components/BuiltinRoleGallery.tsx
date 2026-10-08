@@ -1,10 +1,10 @@
 import { agentIconName } from '../lib/agentIcons'
+import { BUILTIN_BEHAVIORS } from '../lib/behaviors'
 import type { RoleInfo } from '../types'
 import { AppIcon, type AppIconName } from './AppIcon'
 
 /**
- * 内置角色陈列（角色广场）：按管线执行序（/api/roles 返回序）展示 5 个内置角色。
- * 只读——内置角色不可编辑删除；synthesizer 带「产出报告」徽章。
+ * 内置角色陈列：展示通用角色与科研模板执行器，可创建同名配置卡。
  */
 
 const ROLE_ICONS: Record<string, AppIconName> = {
@@ -15,7 +15,10 @@ const ROLE_ICONS: Record<string, AppIconName> = {
   critic: 'shield',
 }
 
-export default function BuiltinRoleGallery({ roles }: { roles: RoleInfo[] }) {
+export default function BuiltinRoleGallery({ roles, onConfigure }: {
+  roles: RoleInfo[]
+  onConfigure?: (role: RoleInfo) => void
+}) {
   const builtins = roles.filter((role) => role.builtin)
   if (!builtins.length) return null
   return (
@@ -47,6 +50,12 @@ export default function BuiltinRoleGallery({ roles }: { roles: RoleInfo[] }) {
                 </div>
               </div>
               {role.description && <p className="builtin-card-desc">{role.description}</p>}
+              {onConfigure && BUILTIN_BEHAVIORS[role.name] && (
+                <button type="button" className="btn btn-ghost btn-sm"
+                  onClick={() => onConfigure(role)} aria-label={`配置${role.label}`}>
+                  配置提示词与模型
+                </button>
+              )}
             </article>
           )
         })}

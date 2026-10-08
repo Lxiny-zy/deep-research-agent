@@ -82,18 +82,20 @@ vi.mock('../hooks/useCatalog', () => ({
 vi.mock('../components/AgentCardEditor', () => ({
   default: ({
     initial,
+    preset,
     onSubmit,
     onCancel,
     pending,
     error,
   }: {
     initial: AgentCard | null
+    preset?: { name: string }
     onSubmit: (body: AgentCardInput) => void
     onCancel: () => void
     pending?: boolean
     error?: string
   }) => (
-    <div data-testid="agent-editor" data-agent={initial?.name ?? 'new'}>
+    <div data-testid="agent-editor" data-agent={initial?.name ?? preset?.name ?? 'new'}>
       <button type="button" data-testid="agent-save" onClick={() => onSubmit({})}>
         save
       </button>
@@ -134,7 +136,7 @@ vi.mock('../components/ModelProfileEditor', () => ({
 }))
 
 describe('AgentSquarePage builtin roles', () => {
-  it('renders builtin role cards in pipeline order, read-only, with the report badge', () => {
+  it('renders builtin roles in pipeline order with configuration actions and the report badge', () => {
     const { container } = renderPage()
 
     const cards = [...container.querySelectorAll<HTMLElement>('.builtin-role-card')]
@@ -153,8 +155,9 @@ describe('AgentSquarePage builtin roles', () => {
     // 「产出报告」徽章仅 synthesizer
     expect(screen.getAllByText('产出报告')).toHaveLength(1)
     expect(cards[3]).toHaveTextContent('产出报告')
-    // 只读：卡内不渲染任何操作按钮
-    for (const card of cards) expect(card.querySelectorAll('button')).toHaveLength(0)
+    for (const card of cards) expect(card.querySelectorAll('button')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: '配置研究员' }))
+    expect(screen.getByTestId('agent-editor')).toHaveAttribute('data-agent', 'researcher')
   })
 })
 

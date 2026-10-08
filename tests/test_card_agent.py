@@ -34,8 +34,39 @@ def test_role_preview_uses_the_same_prompt_as_runtime(behavior, mode):
 
 
 def test_behavior_impls_cover_all_behaviors():
+    from deep_research.catalog.dto import BEHAVIORS
+
     impls = behavior_impls()
-    assert set(impls) == {"plan", "research", "reflect", "synthesize", "critique"}
+    assert set(impls) == set(BEHAVIORS)
+
+
+@pytest.mark.parametrize("behavior", [
+    "survey_writer", "paper_reader", "peer_reviewer",
+    "research_writer", "slide_writer", "mindmap_writer",
+])
+@pytest.mark.parametrize("mode", ["append", "replace"])
+def test_specialized_cards_keep_executor_and_template_contracts(behavior, mode):
+    from deep_research.catalog.runtime import terminal_roles_for_cards
+    from deep_research.prompting import compose_system_prompt, role_prompt_parts
+    from deep_research.workbench.templates import get_template
+    from deep_research.workbench.writers import TemplateWriter
+
+    agent = CardAgent(
+        name="domain-writer", behavior=behavior, system_prompt="DOMAIN_RULE", prompt_mode=mode,
+    )
+    assert isinstance(agent._impl, TemplateWriter)
+    assert type(agent._impl) is behavior_impls()[behavior]
+    template = get_template(agent._impl.template_key)
+    assert template is not None
+    actual = compose_system_prompt(agent._impl.system_prompt(template, None), load_global_rules())
+    preview = role_prompt_parts(behavior, "DOMAIN_RULE", mode)
+    assert actual == preview["effective_system_prompt"]
+    assert "DOMAIN_RULE" in actual and "固定行为契约" in actual
+    if template.sections:
+        assert template.sections[0].title in actual
+    assert "domain-writer" in terminal_roles_for_cards([
+        AgentCardView(id="card", name="domain-writer", behavior=behavior),
+    ])
 
 
 @pytest.mark.asyncio

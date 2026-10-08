@@ -12,6 +12,7 @@ import AcceptancePanel from '../components/AcceptancePanel'
 import ReadingMapPanel from '../components/ReadingMapPanel'
 import StatsBar from '../components/StatsBar'
 import ModelReasoningPanel from '../components/ModelReasoningPanel'
+import RoleBindingSummary from '../components/RoleBindingSummary'
 import StatusBadge from '../components/StatusBadge'
 import TagEditor from '../components/TagEditor'
 import DeliverablesPanel from '../components/DeliverablesPanel'
@@ -264,7 +265,7 @@ export default function RunPage() {
     const completion = (dbFinished ? detail.data?.completion : null) ?? streamedCompletion
     if (!completion || typeof completion !== 'object' || !('issues' in completion)) return []
     return Array.isArray(completion.issues)
-      ? completion.issues.filter((issue): issue is string => typeof issue === 'string')
+      ? [...new Set(completion.issues.filter((issue): issue is string => typeof issue === 'string' && !!issue.trim()))]
       : []
   }, [dbFinished, detail.data?.completion, stream.events])
   const createdAt = detail.data?.created_at
@@ -383,11 +384,21 @@ export default function RunPage() {
           <div>
             <p>报告或交付尚未通过验收。请查看交付物中的问题，继续修订内容或重新生成失败的格式。</p>
             {reviewIssues.length > 0 && (
-              <ul aria-label="待复核问题">
-                {reviewIssues.map((issue, index) => (
-                  <li key={index}>{issue}</li>
-                ))}
-              </ul>
+              <>
+                <ul aria-label="待复核问题">
+                  {reviewIssues.slice(0, 3).map((issue) => (
+                    <li key={issue}>{issue}</li>
+                  ))}
+                </ul>
+                {reviewIssues.length > 3 && (
+                  <details>
+                    <summary>展开其余 {reviewIssues.length - 3} 项问题</summary>
+                    <ul aria-label="其余待复核问题">
+                      {reviewIssues.slice(3).map((issue) => <li key={issue}>{issue}</li>)}
+                    </ul>
+                  </details>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -405,7 +416,8 @@ export default function RunPage() {
       />
 
       <RunTaskSummary info={runTemplate.data} />
-      <ModelReasoningPanel events={stream.events} />
+      <RoleBindingSummary key={`roles-${id}`} events={stream.events} />
+      <ModelReasoningPanel events={stream.events} live={liveActive} />
 
       {/* 打印预览独占阅读区域，屏幕中的运行活动由打印样式隐藏。 */}
       <div className={`run-columns run-workbench-grid${printPreview ? ' is-print-preview' : ''}`}>
@@ -539,7 +551,7 @@ export default function RunPage() {
               )}
               {id && dbFinished && structuredDocument.data?.content_version && (
                 <AcceptancePanel
-                  key={id}
+                  key={`acceptance-${id}`}
                   runId={id}
                   documentVersion={structuredDocument.data.content_version}
                   deliveryVersion={deliverables.data?.content_version}
@@ -551,7 +563,7 @@ export default function RunPage() {
               )}
               {id && dbFinished && detail.data?.report && (
                 <DeliverablesPanel
-                  key={id}
+                  key={`deliverables-${id}`}
                   runId={id}
                   registry={deliverables.data}
                   sourceVersion={structuredDocument.data?.source_version}

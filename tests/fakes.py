@@ -143,6 +143,10 @@ class FakeLLM:
                         else "non_factual",
                         "evidence_ids": [
                             e["id"] for e in data["evidence"] if e["citation"] in unit["citations"]
+                            and (
+                                "allowed_evidence_ids" not in unit
+                                or e["id"] in unit["allowed_evidence_ids"]
+                            )
                         ],
                         "reason": "fixture judgement; not a factual accuracy test",
                     }

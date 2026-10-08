@@ -19,6 +19,18 @@ const searchProfiles: SearchProfile[] = [
   },
 ]
 
+it('configures the specialized writer without changing its workflow identity', () => {
+  const save = vi.fn()
+  render(<AgentCardEditor profiles={[]} onSubmit={save} onCancel={vi.fn()}
+    preset={{ name: 'survey_writer', display_name: '文献综述', behavior: 'survey_writer' }} />)
+  expect(screen.getByPlaceholderText('如 my-critic')).toHaveValue('survey_writer')
+  expect(screen.getByPlaceholderText('如 my-critic')).toHaveAttribute('readonly')
+  expect(screen.getByRole('combobox', { name: /行为模板/ })).toBeDisabled()
+  expect(screen.getByText(/保存后会应用于新任务/)).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '保存角色' }))
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ name: 'survey_writer', behavior: 'survey_writer' }))
+})
+
 it('新建研究角色默认补充提示词，专属检索必须选择档案', () => {
   const save = vi.fn()
   render(

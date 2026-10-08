@@ -399,3 +399,11 @@ async def test_two_versions_of_the_same_source_cannot_be_mixed_to_refute_a_claim
     )
     assert record["status"] == "uncertain"
     assert not llm.parts
+    assert record["failure_kind"] == "source_snapshot_conflict"
+    from deep_research.workbench.prose_review import can_revise
+
+    decision = SupportDecision(unit_id="u", verdict="uncertain", reason=record["reason"])
+    assert can_revise([decision])
+    assert not can_revise([
+        SupportDecision(unit_id="u", verdict="uncertain", reason="全文核查未完成：TimeoutError")
+    ])

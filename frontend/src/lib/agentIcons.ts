@@ -7,6 +7,8 @@ const AGENT_ICON_BY_BEHAVIOR: Record<Behavior, AppIconName> = {
   reflect: 'refresh',
   synthesize: 'file',
   critique: 'shield',
+  research_writer: 'file', survey_writer: 'file', paper_reader: 'book',
+  peer_reviewer: 'shield', slide_writer: 'file', mindmap_writer: 'network',
 }
 
 const AGENT_ICON_ALIASES: Record<string, AppIconName> = {

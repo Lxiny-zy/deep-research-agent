@@ -10,8 +10,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from ..workbench.roles import CARD_WRITER_BEHAVIORS
+
 # 内置行为模板：角色卡片只能选其一（决定该角色在引擎里的执行逻辑）。
-BEHAVIORS = ("plan", "research", "reflect", "synthesize", "critique")
+BEHAVIORS = ("plan", "research", "reflect", "synthesize", "critique", *CARD_WRITER_BEHAVIORS)
 
 SearchProvider = Literal[
     "tavily", "brave", "serper", "grok", "openalex", "arxiv", "responses", "chat_search"

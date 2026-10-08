@@ -196,15 +196,27 @@ def role_prompt_parts(behavior: str, custom: str = "", mode: str = "append") -> 
     implementations = behavior_impls()
     if behavior not in implementations or mode not in {"append", "replace"}:
         raise ValueError("未知角色行为或提示词模式")
-    default = implementations[behavior]().system
+    implementation = implementations[behavior]()
+    default = getattr(implementation, "default_card_prompt", implementation.system)
     custom = custom.strip()
     base = default
     if custom:
         base = f"{default}\n\n【角色补充指令】\n{custom}" if mode == "append" else custom
-    contract = ROLE_CONTRACTS[behavior]
+    contract = ROLE_CONTRACTS.get(behavior, (
+        "保留科研模板执行器、章节与交付要求，使用已核验素材并保留引用。"
+        "角色指令只调整领域与表达要求，不移除证据检查、定向修订或文件生成流程。"
+    ))
     role = f"{base}\n\n【固定行为契约】\n{contract}"
     rules = load_global_rules()
-    system = compose_system_prompt(role, rules)
+    if hasattr(implementation, "default_card_prompt"):
+        from .workbench.templates import get_template
+
+        implementation.system = role
+        template = get_template(implementation.template_key)
+        assert template is not None
+        system = compose_system_prompt(implementation.system_prompt(template, None), rules)
+    else:
+        system = compose_system_prompt(role, rules)
     schemas: dict[str, type[BaseModel]] = {
         "plan": ResearchPlan,
         "research": ExtractedFindingList,

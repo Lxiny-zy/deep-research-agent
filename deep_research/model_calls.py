@@ -25,6 +25,10 @@ class ModelOperation:
     id: str = field(default_factory=lambda: uuid4().hex)
     attempts: int = 0
     retry_reason: str | None = None
+    generation_task: str | None = None
+    reasoning_effort: str | None = None
+    reasoning_source: str | None = None
+    provider_wait_ms: int = 0
 
 
 _operation: ContextVar[ModelOperation | None] = ContextVar("model_operation", default=None)
@@ -33,8 +37,13 @@ _operation: ContextVar[ModelOperation | None] = ContextVar("model_operation", de
 @contextmanager
 def model_operation(
     kind: str, *, role: str | None = None, schema: str | None = None,
+    generation_task: str | None = None, reasoning_effort: str | None = None,
+    reasoning_source: str | None = None,
 ) -> Iterator[ModelOperation]:
-    operation = ModelOperation(kind=kind, role=role, schema=schema)
+    operation = ModelOperation(
+        kind=kind, role=role, schema=schema, generation_task=generation_task,
+        reasoning_effort=reasoning_effort, reasoning_source=reasoning_source,
+    )
     token = _operation.set(operation)
     try:
         yield operation
@@ -66,6 +75,10 @@ class ModelCall:
             "operation": self.operation.kind,
             "role": self.operation.role,
             "schema": self.operation.schema,
+            "generation_task": self.operation.generation_task,
+            "reasoning_effort": self.operation.reasoning_effort,
+            "reasoning_source": self.operation.reasoning_source,
+            "provider_wait_ms": self.operation.provider_wait_ms,
             "model": model,
             "retry_reason": retry_reason or self.operation.retry_reason,
             "trace_id": getattr(tracer, "trace_id", None),
@@ -73,6 +86,7 @@ class ModelCall:
             "request_id": getattr(tracer, "request_id", None),
             "conversation_id": getattr(tracer, "conversation_id", None),
         }
+        self.operation.provider_wait_ms = 0
         self._emit("started", "模型请求开始", usage_state="pending")
         metrics.inc("dr_model_http_attempts_total", {"operation": self.operation.kind})
 

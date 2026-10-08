@@ -98,6 +98,16 @@ async def test_model_role_search_and_global_configuration_reach_a_complete_task(
         },
     )
     assert card.status_code == 201, card.text
+    writer_card = await client.post(
+        "/api/agents",
+        json={
+            "name": "research_writer",
+            "behavior": "research_writer",
+            "system_prompt": "TASK_WRITER_MARKER",
+            "model_profile_id": researcher.json()["id"],
+        },
+    )
+    assert writer_card.status_code == 201, writer_card.text
     configured = await client.put(
         "/api/config",
         json={
@@ -153,6 +163,9 @@ async def test_model_role_search_and_global_configuration_reach_a_complete_task(
     assert detail is not None
     assert any(
         model == "research-model" and "TASK_PROFILE_MARKER" in prompt for model, prompt in calls
+    )
+    assert any(
+        model == "research-model" and "TASK_WRITER_MARKER" in prompt for model, prompt in calls
     )
     assert not any("LATER_PROFILE_MARKER" in prompt for _, prompt in calls)
     assert {p["model"] for p in profiles} == {"default-model", "research-model"}

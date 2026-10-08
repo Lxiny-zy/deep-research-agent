@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from deep_research.models import Finding, ResearchResult, SubQuestion
@@ -46,6 +48,88 @@ async def test_dag_schedule_orders_and_passes_context(settings):
     assert "F::A" in b_ctx
 
     assert {r.sub_question for r in results} == {"A", "B"}
+
+
+@pytest.mark.asyncio
+async def test_ready_successor_does_not_wait_for_unrelated_slow_root():
+    from deep_research.observability import Tracer
+    from deep_research.scheduler import research_dag
+
+    child_started = asyncio.Event()
+    release_slow = asyncio.Event()
+    seen = {}
+
+    async def work(question, context):
+        seen[question] = [f.statement for f in context or []]
+        if question == "slow":
+            await release_slow.wait()
+        if question == "child":
+            child_started.set()
+        return ResearchResult(sub_question=question, findings=[Finding(
+            statement=question, source_url="https://example.org/" + question,
+        )])
+
+    task = asyncio.create_task(research_dag([
+        SubQuestion(question="fast"), SubQuestion(question="slow"),
+        SubQuestion(question="child", depends_on=[0]),
+    ], work, Tracer()))
+    try:
+        await asyncio.wait_for(child_started.wait(), 1)
+        assert not task.done() and seen["child"] == ["fast"]
+        release_slow.set()
+        results = await asyncio.wait_for(task, 1)
+        assert [r.sub_question for r in results] == ["fast", "slow", "child"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_ready_scheduler_cancels_peers_on_lost_lease():
+    from deep_research.observability import Tracer
+    from deep_research.persistence.repository import LeaseLostError
+    from deep_research.scheduler import research_dag
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    seen = []
+
+    async def work(question, context):
+        seen.append(question)
+        if question == "fatal":
+            await started.wait()
+            raise LeaseLostError("lease revoked")
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    with pytest.raises(LeaseLostError):
+        await asyncio.wait_for(research_dag([
+            SubQuestion(question="fatal"), SubQuestion(question="slow"),
+            SubQuestion(question="child", depends_on=[0]),
+        ], work, Tracer()), 1)
+    assert cancelled.is_set() and "child" not in seen
+
+
+@pytest.mark.asyncio
+async def test_failed_dependency_settles_and_successor_receives_remaining_context():
+    from deep_research.observability import Tracer
+    from deep_research.scheduler import research_dag
+
+    async def work(question, context):
+        if question == "failed":
+            raise ValueError("source unavailable")
+        assert context is None
+        return ResearchResult(sub_question=question, findings=[Finding(
+            statement="available", source_url="https://example.org/available",
+        )])
+
+    results = await research_dag([
+        SubQuestion(question="failed"), SubQuestion(question="child", depends_on=[0]),
+    ], work, Tracer())
+    assert [r.sub_question for r in results] == ["child"]
 
 
 @pytest.mark.asyncio

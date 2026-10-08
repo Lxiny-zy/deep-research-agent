@@ -1,6 +1,6 @@
 """子问题的 DAG 并行调度器（从 orchestrator 抽出，供编排器与工作流引擎共用）。
 
-只负责「按依赖拓扑分层、同层并发、层间串行、前层发现作后层上下文」这一调度策略，
+只负责「依赖就绪即并发启动、前驱发现作后继上下文」这一调度策略，
 不关心「研究一个子问题」具体怎么做——后者由调用方以 research_one 回调注入。
 这样 orchestrator._research_dag 与引擎的 fanout 原语共享同一份调度逻辑，
 且测试替换 researcher 时仍然生效。
@@ -37,7 +37,7 @@ async def research_dag(
     research_one: ResearchOne,
     tracer: Tracer,
 ) -> list[ResearchResult]:
-    """按依赖拓扑分层并行检索：同层并发，层间串行（后层可用前层发现作上下文）。
+    """依赖就绪即检索，不等待同一拓扑层中的无关慢分支。
 
     无依赖时退化为单层全并行，行为与纯并行 fan-out 等价。
     """
@@ -55,8 +55,9 @@ async def research_dag(
         tracer.emit(
             "ORCHESTRATOR",
             "info",
-            f"按依赖分 {len(layers)} 层调度（每层 {[len(x) for x in layers]} 个）",
-            data={"dag": {"layers": layers, "deps": {str(i): dag[i] for i in dag}}},
+            f"按依赖就绪调度 {len(dag)} 个子问题（依赖深度 {len(layers)}）",
+            data={"dag": {"layers": layers, "deps": {str(i): dag[i] for i in dag},
+                          "strategy": "ready"}},
         )
 
     collected: dict[int, ResearchResult] = {}
@@ -71,12 +72,25 @@ async def research_dag(
         res = await research_one(sub_questions[i].question, ctx or None)
         return i, res
 
-    for layer in layers:
-        tasks = [asyncio.create_task(_run_idx(i)) for i in layer]
-        try:
-            for completed in asyncio.as_completed(tasks):
+    pending = set(dag)
+    finished: set[int] = set()
+    running: dict[asyncio.Task[tuple[int, ResearchResult | None]], int] = {}
+    try:
+        while pending or running:
+            for index in sorted(pending):
+                if all(parent in finished for parent in dag[index]):
+                    running[asyncio.create_task(_run_idx(index))] = index
+                    pending.remove(index)
+            if not running:
+                raise RuntimeError("子问题依赖无法继续调度")
+            completed, _ = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+            # Process this completion set before admitting successors, so a
+            # lost lease never starts additional work in the same iteration.
+            for task in sorted(completed, key=lambda item: running[item]):
+                index = running.pop(task)
+                finished.add(index)
                 try:
-                    idx, res = await completed
+                    idx, res = task.result()
                 except (LeaseLostError, ResearchProgressError):
                     raise
                 except Exception as exc:
@@ -84,11 +98,11 @@ async def research_dag(
                     continue
                 if isinstance(res, ResearchResult) and (res.findings or res.extraction_audit):
                     collected[idx] = res
-        except BaseException:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
+    except BaseException:
+        for task in running:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+        raise
 
     return [collected[i] for i in sorted(collected)]

@@ -7,6 +7,11 @@
 
 from __future__ import annotations
 
+CARD_WRITER_BEHAVIORS = (
+    "research_writer", "survey_writer", "paper_reader", "peer_reviewer",
+    "slide_writer", "mindmap_writer",
+)
+
 WORKBENCH_WRITER_ROLES: frozenset[str] = frozenset(
     {
         "research_writer",
