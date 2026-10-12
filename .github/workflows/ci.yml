@@ -38,7 +38,7 @@ jobs:
           cd frontend
           npm sbom --package-lock-only --sbom-format cyclonedx > ../sbom/frontend.cdx.json
       - name: 保存 SBOM
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dependency-sbom-${{ github.sha }}
           path: sbom/*.json
@@ -74,7 +74,7 @@ jobs:
         run: python scripts/verify_worker_http.py
       - name: 保存跨进程验收日志
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: worker-http
           path: artifacts/worker-http/
@@ -206,7 +206,7 @@ jobs:
         run: python scripts/verify_pdf_reader.py
       - run: python scripts/verify_search_resources_ui.py
       - run: python scripts/verify_workspace_ui.py --label ci
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: browser-regressions
