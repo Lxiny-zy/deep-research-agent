@@ -54,6 +54,54 @@ async def test_alternating_role_provider_falls_back_before_generation(make_llm):
     assert len(completions.requests[2]["messages"]) == 2
 
 
+async def test_stream_usage_compatibility_is_shared_across_role_calls(make_llm):
+    import httpx
+    from openai import BadRequestError
+
+    error = BadRequestError(
+        "stream_options is not supported",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://provider.test/chat")),
+        body=None,
+    )
+    llm, completions, _, _ = make_llm(error, _response("read", 4), _response("answer", 5))
+    assert await llm.for_role("researcher").complete("rules", "read") == "read"
+    answer = [part async for part in llm.for_role("synthesizer").stream("rules", "answer")]
+    assert "".join(answer) == "answer"
+    assert len(completions.requests) == 3
+    assert "stream_options" in completions.requests[0]
+    assert all("stream_options" not in request for request in completions.requests[1:])
+
+
+@pytest.mark.parametrize("mode", ["temperature", "reasoning"])
+async def test_profile_requests_preserve_run_limits_and_send_one_parameter_mode(settings, mode):
+    settings.llm_max_input_chars = 4321
+    settings.llm_max_output_tokens = 8192
+    llm = LLM.from_params(
+        Tracer(), api_key="test-key", base_url="https://provider.test/v1", model="test-model",
+        timeout=17, user_agent="research-test", temperature=0.65, parameter_mode=mode,
+        reasoning_effort="high", context_window_tokens=20_000, max_output_tokens=256,
+        base_settings=settings,
+    )
+    completions = _ScriptedCompletions(_response("ok", 4))
+    llm.client.chat.completions.create = completions.create
+    try:
+        assert await llm.complete("rules", "question", temperature=0.1) == "ok"
+        assert llm.settings.llm_max_input_chars == 4321
+        assert llm.settings.request_timeout == 17
+        assert settings.llm_max_output_tokens == 8192
+        request = completions.requests[0]
+        if mode == "reasoning":
+            assert request["reasoning_effort"] == "high"
+            assert request["max_completion_tokens"] == 256
+            assert "temperature" not in request and "max_tokens" not in request
+        else:
+            assert request["temperature"] == 0.65
+            assert request["max_tokens"] == 256
+            assert "reasoning_effort" not in request and "max_completion_tokens" not in request
+    finally:
+        await llm.aclose()
+
+
 @pytest.mark.parametrize("structured", [False, True])
 async def test_reasoning_only_disconnect_never_restarts_generation(make_llm, structured):
     from deep_research.llm import ModelStreamInterrupted

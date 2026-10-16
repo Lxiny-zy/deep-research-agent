@@ -273,13 +273,13 @@ class PaperIntake:
         if not collected:
             return bb
 
-        researcher = Researcher()
+        researcher = Researcher(settings=ctx.settings)
         researcher.llm = ctx.llm_for("researcher")
         researcher.verification_llm = ctx.llm_for("evidence_verifier")
         researcher.search = _FixedSources(collected)
         researcher.tracer = ctx.tracer
         researcher.settings = ctx.settings
-        researcher.system = ctx.system_prompt(researcher.system)
+        researcher.global_rules = ctx.global_rules
         from .attachment_reader import source_batches
 
         question = _question_for(contract.template, focus)

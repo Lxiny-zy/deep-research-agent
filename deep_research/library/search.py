@@ -237,7 +237,7 @@ class ProjectCorpusSearch(SearchTool):
         if requested <= 0 or not query.strip():
             return []
         chunks = await self.repository.search_chunks(
-            self.project_id, owner_id=self.owner_id, limit=5000
+            self.project_id, owner_id=self.owner_id, limit=5000, query=query,
         )
         selected = _select_diverse(_rank_chunks(query, chunks), requested)
         return [

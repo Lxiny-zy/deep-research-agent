@@ -214,9 +214,13 @@ def role_prompt_parts(behavior: str, custom: str = "", mode: str = "append") -> 
         implementation.system = role
         template = get_template(implementation.template_key)
         assert template is not None
-        system = compose_system_prompt(implementation.system_prompt(template, None), rules)
+        system = leaf_system_prompt(implementation.system_prompt(template, None), rules)
+    elif behavior == "research":
+        implementation.system = role
+        implementation.global_rules = rules
+        system = implementation.extraction_system()
     else:
-        system = compose_system_prompt(role, rules)
+        system = leaf_system_prompt(role, rules)
     schemas: dict[str, type[BaseModel]] = {
         "plan": ResearchPlan,
         "research": ExtractedFindingList,
@@ -228,7 +232,7 @@ def role_prompt_parts(behavior: str, custom: str = "", mode: str = "append") -> 
     return {
         "default_prompt": default,
         "contract": contract,
-        "global_rules": rules,
+        "global_rules": LEAF_FACT_RULES,
         "role_prompt": role,
         "effective_system_prompt": effective,
     }

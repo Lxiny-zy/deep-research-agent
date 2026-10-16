@@ -41,6 +41,7 @@ class ReportCheck:
     problems: tuple[tuple[str, str, str], ...] = ()
     # 写作者的原始正文（去掉参考来源段）；回退时 body 是素材摘要，这里仍保留原稿。
     draft: str = ""
+    partial: bool = False
 
 
 def _excerpt(text: str) -> str:
@@ -133,6 +134,7 @@ def validate_body(
     *,
     require_corroboration: bool = False,
     fallback: bool = True,
+    preserve_valid: bool = False,
     uncited_sections: tuple[str, ...] = (),
     section_support: dict[str, str] | None = None,
 ) -> ReportCheck:
@@ -174,11 +176,12 @@ def validate_body(
     if not all_indices.issubset(evidence):
         issues.append("invalid_citation")
         unknown = sorted(all_indices - set(evidence))
-        problems.append(("invalid_citation", "", f"引用了不存在的素材编号 {unknown}"))
     all_support = _numbers("\n".join(text for items in evidence.values() for text in items))
     frames = set(framing_paragraphs(body).values())
     heading = ""
-    for paragraph in validation_paragraphs(body):
+    paragraphs = validation_paragraphs(body)
+    rejected: set[int] = set()
+    for position, paragraph in enumerate(paragraphs):
         headings = [
             line.lstrip("# ").strip()
             for line in paragraph.splitlines()
@@ -211,6 +214,7 @@ def validate_body(
         if dedicated is not None:
             unsupported = sorted(_numbers(content) - _numbers(dedicated))
             if unsupported:
+                rejected.add(position)
                 issues.append("unsupported_number")
                 shown = "、".join(format(v.normalize(), "f") for v in unsupported[:5])
                 problems.append(
@@ -222,12 +226,14 @@ def validate_body(
         if not indices and exempt:
             absent, invalid = _computed_numbers(content, all_support)
             if invalid:
+                rejected.add(position)
                 issues.append("invalid_calculation")
                 problems.extend(
                     ("invalid_calculation", _excerpt(content), item) for item in invalid
                 )
             unsupported = sorted(absent)
             if unsupported:
+                rejected.add(position)
                 issues.append("unsupported_number")
                 shown = "、".join(format(v.normalize(), "f") for v in unsupported[:5])
                 problems.append(
@@ -235,19 +241,27 @@ def validate_body(
                 )
             continue
         if not indices:
+            rejected.add(position)
             issues.append("uncited_paragraph")
             problems.append(("uncited_paragraph", _excerpt(content), "这一段没有任何引用角标"))
             continue
         if not indices.issubset(evidence):
+            rejected.add(position)
             issues.append("invalid_citation")
+            problems.append((
+                "invalid_citation", _excerpt(content),
+                f"引用了不存在的素材编号 {sorted(indices - set(evidence))}",
+            ))
             continue
         support = "\n".join(text for index in indices for text in evidence[index])
         absent, invalid = _computed_numbers(content, _numbers(support))
         if invalid:
+            rejected.add(position)
             issues.append("invalid_calculation")
             problems.extend(("invalid_calculation", _excerpt(content), item) for item in invalid)
         missing = sorted(absent)
         if missing:
+            rejected.add(position)
             issues.append("unsupported_number")
             shown = "、".join(format(value.normalize(), "f") for value in missing[:5])
             problems.append(
@@ -257,11 +271,29 @@ def validate_body(
         issues.append("empty_report")
         problems.append(("empty_report", "", "正文为空"))
     draft = body
+    partial = False
+    if "invalid_citation" in issues and not any(
+        code == "invalid_citation" for code, _, _ in problems
+    ):
+        problems.append(("invalid_citation", "", f"引用了不存在的素材编号 {unknown}"))
     if issues and fallback:
-        # Preserve verified material instead of returning invented citations or altered values.
-        body = "## 已验证素材摘要\n\n" + "\n".join(dict.fromkeys(safe_statements))
+        candidate = "\n\n".join(p for index, p in enumerate(paragraphs) if index not in rejected)
+        content = "\n".join(
+            line for line in candidate.splitlines() if not line.lstrip().startswith("#")
+        )
+        if preserve_valid and rejected and re.search(r"[\w\u4e00-\u9fff]", content):
+            checked = validate_body(
+                candidate, results, url_to_idx, fallback=False,
+                require_corroboration=require_corroboration,
+                uncited_sections=uncited_sections, section_support=section_support,
+            )
+            if not checked.issues:
+                body, partial = candidate, True
+        if not partial:
+            # Global or unlocalizable failures still use verified material only.
+            body = "## 已验证素材摘要\n\n" + "\n".join(dict.fromkeys(safe_statements))
     return ReportCheck(
-        body, tuple(dict.fromkeys(issues)), evidence, tuple(dict.fromkeys(problems)), draft
+        body, tuple(dict.fromkeys(issues)), evidence, tuple(dict.fromkeys(problems)), draft, partial
     )
 
 
@@ -278,6 +310,7 @@ def finalize_report(
     results: list[ResearchResult],
     *,
     require_corroboration: bool = False,
+    preserve_valid: bool = False,
     uncited_sections: tuple[str, ...] = (),
     section_support: dict[str, str] | None = None,
 ) -> tuple[Report, ReportCheck]:
@@ -299,6 +332,7 @@ def finalize_report(
         results,
         mapping,
         require_corroboration=require_corroboration,
+        preserve_valid=preserve_valid,
         uncited_sections=uncited_sections,
         section_support=section_support,
     )

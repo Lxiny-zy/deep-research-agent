@@ -53,6 +53,8 @@ class QualityPolicy(BaseModel):
     require_limitations: bool = True
     # ---- 返工与收敛 ----
     max_revisions: int = Field(2, ge=0, le=4)
+    adaptive_review: bool = True
+    task_max_model_calls: int = Field(0, ge=0, le=4096)
     qa_claim_max_revisions: int = Field(2, ge=0, le=4)
     qa_max_revisions: int = Field(1, ge=0, le=4)
     qa_max_model_calls: int = Field(16, ge=1, le=128)
@@ -71,6 +73,17 @@ class QualityPolicy(BaseModel):
 
 
 QUALITY_FIELDS: tuple[QualityField, ...] = (
+    QualityField(
+        "adaptive_review", "按任务调整修订强度", "返工与收敛", "bool",
+        "轻量或快速交付最多自动修订一次，仍执行必要的事实、数值与引用检查。"
+        "精读和审稿沿用完整修订额度；关闭后所有任务使用设定的总额度。",
+    ),
+    QualityField(
+        "task_max_model_calls", "研究任务模型请求上限", "返工与收敛", "int",
+        "已创建的研究任务内所有角色、模型检索与 HTTP 重试共同使用的请求总额度。"
+        "额度在恢复时继续累计；达到后停止追加请求，保留已有材料和待处理问题。0 表示不限。",
+        0, 4096, "次",
+    ),
     QualityField(
         "max_evidence_quote_chars",
         "证据引文长度上限",
@@ -166,10 +179,10 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "最多返工次数",
         "返工与收敛",
         "int",
-        "质量检查不合格时，把问题清单交回写作者重写的最大次数。0 表示不返工、"
+        "报告自动修订的总次数上限，写作阶段与交付前修复共用。0 表示不自动返工、"
         "只标注问题。问答中仅计引用和数值等机械问题，断言问题另计轮数，"
         "两者还受问答自动修订总次数约束。"
-        "每次返工都会消耗额外 token；报告返工后仍取问题最少的一版交付。",
+        "每次返工都会消耗额外 token；相同问题没有改善时提前停止，保留问题最少的一版。",
         0,
         4,
         "次",
@@ -179,7 +192,8 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "问答自动修订总次数",
         "返工与收敛",
         "int",
-        "整轮问答的局部修订总上限，默认一次；同时受机械和断言的分项上限约束。"
+        "严格核验模式的局部修订总上限，默认一次；直接回答不自动修订。"
+        "同时受机械和断言的分项上限约束。"
         "局部修订失败不会再启动整篇重写，保留可核验内容与待确认点。",
         0, 4, "次",
     ),
@@ -189,6 +203,7 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "返工与收敛",
         "int",
         "单轮问答内所有角色共用的模型请求次数上限，包含摘要、规划、抽取、核验和重试。"
+        "直接回答另有更紧的限制：通常一次回答，含生成前重试最多两次；含附加模型检索时最多三次。"
         "到达上限不再请求模型，不会将未完成核验的草稿当作通过。",
         1, 128, "次",
     ),
@@ -197,7 +212,7 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "问答断言修订轮数",
         "返工与收敛",
         "int",
-        "问答中结论未得到引用支持时的修订次数，与补引用、修正数值的机械修订分别计数。"
+        "严格核验模式中结论未得到引用支持时的修订次数，与引用和数值的机械修订分别计数。"
         "0 表示仅核验不修订断言；用尽后保留可核验内容。仍受问答修订总次数和调用总上限约束。",
         0,
         4,
@@ -285,6 +300,20 @@ def policy_from(settings: Any) -> QualityPolicy:
 
 def writer_policy(value: Any, scratch: dict[str, Any]) -> QualityPolicy:
     policy = coerce_policy(value)
+    # Old checkpoints did not declare adaptive behavior. Keep their frozen
+    # revision limit and writing-progress identity when resuming paid work.
+    declared = value.get("adaptive_review", False) if isinstance(value, dict) else (
+        isinstance(value, QualityPolicy) and value.adaptive_review
+    )
+    if declared:
+        from .contract import contract_from_scratch
+
+        contract = contract_from_scratch(scratch)
+        if (
+            contract is not None and contract.template not in {"paperRead", "peerReview"}
+            and (contract.tier == "light" or contract.strategy == "quick")
+        ):
+            policy = policy.model_copy(update={"max_revisions": min(1, policy.max_revisions)})
     metadata = scratch.get("_active_step_metadata")
     if isinstance(metadata, dict) and metadata.get("completion_repair") is True:
         # The original draft is the seed; its first correction is the one

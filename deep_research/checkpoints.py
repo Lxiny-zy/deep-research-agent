@@ -10,6 +10,7 @@ SETTING_FIELDS = (
     "max_sub_questions",
     "max_rounds",
     "max_concurrency",
+    "workflow_max_concurrency",
     "results_per_search",
     "fulltext_enabled",
     "fulltext_max_chars",

@@ -5,7 +5,7 @@ import pytest
 from deep_research.agents.base import RunContext
 from deep_research.models import ExtractedFindingList
 from deep_research.observability import Tracer
-from deep_research.workbench.qa import answer_question
+from deep_research.workbench.qa import answer_verified_question as answer_question
 from deep_research.workbench.qa_cache import PaperEvidenceCache
 from tests.fakes import FakeLLM, FakeSearch
 

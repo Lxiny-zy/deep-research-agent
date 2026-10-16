@@ -123,6 +123,10 @@ async def test_graph_engine_rechecks_relationships_after_parallel_merge(settings
     ]
     engine = WorkflowEngine(ctx, resolver=agents.__getitem__)
 
+    for edge in edges:
+        edge["condition"] = (
+            'state.results.last.findings.last.verification.corroboration_status == "corroborated"'
+        )
     bb = await engine.run(
         Workflow(name="parallel-corroboration", nodes=nodes, edges=edges),
         Blackboard(query="Q"),
@@ -135,6 +139,7 @@ async def test_graph_engine_rechecks_relationships_after_parallel_merge(settings
     ]
     assert all(f.verification.independent_source_count == 2 for f in findings)
     assert llm.relationship_calls == 1
+    assert bb.report is not None
 
 
 @pytest.mark.asyncio

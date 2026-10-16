@@ -29,6 +29,7 @@ describe('QA stream deadline', () => {
         body: JSON.stringify({
           query: 'original question',
           sources: ['web'],
+          answer_mode: 'verified',
           project_id: 'original-project',
           request_id: 'new-request',
           revision_message_id: 'earlier-revision',

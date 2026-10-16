@@ -1,9 +1,10 @@
 import { ApiError, askQuestion, getQaRequest } from '../api/client'
 import { canRecoverQaAnswer } from './qaRecovery'
-import type { QaActivity, QaMessage, QaSourceOption } from '../types'
+import type { QaActivity, QaAnswerMode, QaMessage, QaSourceOption } from '../types'
 
 export type QaScope = {
   sources: QaSourceOption[]
+  answerMode?: QaAnswerMode
   projectId?: string
   revisionMessageId?: string
   resumeMessageId?: string
@@ -12,6 +13,7 @@ export type QaScope = {
 export function savedQaScope(message: QaMessage): QaScope {
   return {
     sources: message.request_payload?.sources ?? [],
+    answerMode: message.request_payload?.answer_mode ?? 'verified',
     projectId: message.request_payload?.project_id ?? undefined,
     revisionMessageId: message.request_payload?.revision_message_id ?? undefined,
     resumeMessageId: message.request_payload?.resume_message_id ?? undefined,
@@ -74,6 +76,7 @@ export function pendingQaId(cid: string, query: string, scope: QaScope, resumed?
   const signature = JSON.stringify([
     Array.from(new Set(scope.sources)).sort(),
     scope.projectId ?? '',
+    scope.answerMode ?? 'direct',
     ...(scope.revisionMessageId ? [scope.revisionMessageId] : []),
     ...(scope.resumeMessageId ? ['resume', scope.resumeMessageId] : []),
   ])

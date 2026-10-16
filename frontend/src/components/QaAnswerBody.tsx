@@ -15,6 +15,7 @@ interface CitationContextValue {
   evidence: QaEvidence[]
   onLocate?: (item: QaEvidence) => void
   streaming: boolean
+  referenceOnly: boolean
   binding?: ReportBibliography
 }
 
@@ -22,6 +23,7 @@ const CitationContext = createContext<CitationContextValue>({
   citations: [],
   evidence: [],
   streaming: false,
+  referenceOnly: false,
 })
 
 const components: Components = {
@@ -39,7 +41,7 @@ const components: Components = {
   },
   pre: ({ children }) => <pre tabIndex={0}>{children}</pre>,
   a: function CitationLink({ href, children }) {
-    const { citations, evidence, onLocate, streaming, binding } = useContext(CitationContext)
+    const { citations, evidence, onLocate, streaming, binding, referenceOnly } = useContext(CitationContext)
     const [choosing, setChoosing] = useState(false)
     useEffect(() => setChoosing(false), [href])
     if (!href?.startsWith(CITE_HREF_PREFIX))
@@ -105,8 +107,8 @@ const components: Components = {
           <button
             type="button"
             className="qa-inline-cite"
-            aria-label={scoped ? `定位引用 ${number} 的论文依据` : `浏览引用 ${number} 的来源记录`}
-            title={`${origin} · ${label}${scoped ? ' · 核验选用的摘录' : ' · 未绑定依据，浏览来源记录'}`}
+            aria-label={scoped ? `定位引用 ${number} 的论文依据` : referenceOnly ? `查看引用 ${number} 的原文` : `浏览引用 ${number} 的来源记录`}
+            title={`${origin} · ${label}${scoped ? ' · 核验选用的摘录' : referenceOnly ? ' · 本轮参考原文' : ' · 未绑定依据，浏览来源记录'}`}
             aria-expanded={choosing}
             onClick={() => {
               if (scoped) {
@@ -122,6 +124,7 @@ const components: Components = {
           {choosing && (
             <EvidenceChoice
               bound={Boolean(scoped)}
+              referenceOnly={referenceOnly}
               items={candidates}
               onClose={() => setChoosing(false)}
               onLocate={(item) => {
@@ -137,8 +140,8 @@ const components: Components = {
       return (
         <span
           className="qa-inline-cite is-unavailable"
-          title={`${label}${scoped ? '' : ' · 未绑定依据'}`}
-          aria-label={scoped ? undefined : `引用 ${number}：未绑定依据`}
+          title={`${label}${scoped || referenceOnly ? '' : ' · 未绑定依据'}`}
+          aria-label={scoped || referenceOnly ? undefined : `引用 ${number}：未绑定依据`}
         >
           {children}
         </span>
@@ -151,7 +154,7 @@ const components: Components = {
         target="_blank"
         rel="noopener noreferrer"
         aria-label={`查看引用 ${number}：${label}`}
-        title={`${origin} · ${label}${scoped ? '' : ' · 未绑定依据，仅查看来源'}`}
+        title={`${origin} · ${label}${scoped ? '' : referenceOnly ? ' · 本轮参考原文' : ' · 未绑定依据，仅查看来源'}`}
       >
         {children}
       </a>
@@ -167,6 +170,7 @@ export default function QaAnswerBody({
   onLocate,
   streaming = false,
   binding,
+  referenceOnly = false,
 }: {
   text: string
   citations?: string[]
@@ -174,6 +178,7 @@ export default function QaAnswerBody({
   onLocate?: (item: QaEvidence) => void
   streaming?: boolean
   binding?: ReportBibliography
+  referenceOnly?: boolean
 }) {
   const catalog = useMemo(
     () => (streaming ? undefined : catalogForReport(text, citations, binding)),
@@ -181,7 +186,7 @@ export default function QaAnswerBody({
   )
   return (
     <CitationContext.Provider
-      value={{ citations, evidence, onLocate, streaming, binding: catalog }}
+      value={{ citations, evidence, onLocate, streaming, binding: catalog, referenceOnly }}
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, ...mathRemarkPlugins, remarkCitations]}
@@ -197,12 +202,14 @@ export default function QaAnswerBody({
 
 function EvidenceChoice({
   bound,
+  referenceOnly = false,
   fulltextNote,
   items,
   onClose,
   onLocate,
 }: {
   bound: boolean
+  referenceOnly?: boolean
   fulltextNote?: string
   items: QaEvidence[]
   onClose: () => void
@@ -215,13 +222,13 @@ function EvidenceChoice({
         className="evidence-drawer"
         role="dialog"
         aria-modal="false"
-        aria-label={fulltextNote ? '全文核查记录' : bound ? '选择论文依据' : '浏览来源记录'}
+        aria-label={fulltextNote ? '全文核查记录' : bound ? '选择论文依据' : referenceOnly ? '本轮参考原文' : '浏览来源记录'}
         tabIndex={-1}
         ref={ref}
       >
         <div className="evidence-drawer-inner">
           <div className="evidence-drawer-head">
-            <h3>{fulltextNote ? '全文核查记录' : bound ? '选择论文依据' : '浏览来源记录'}</h3>
+            <h3>{fulltextNote ? '全文核查记录' : bound ? '选择论文依据' : referenceOnly ? '本轮参考原文' : '浏览来源记录'}</h3>
             <button type="button" className="btn btn-ghost" onClick={onClose}>
               关闭
             </button>
@@ -229,7 +236,7 @@ function EvidenceChoice({
           <div className="evidence-drawer-body">
             <p>
               {fulltextNote ||
-                (bound
+                (referenceOnly ? '以下是本轮回答使用的原文片段，可点击定位。' : bound
                   ? '这段内容的核验选用了多条摘录，请选择要查看的位置。'
                   : '未绑定依据：以下是该来源的记录，不代表本句的核验依据。')}
             </p>
@@ -238,7 +245,7 @@ function EvidenceChoice({
                 <p>{item.statement}</p>
                 <blockquote>{item.evidence_quote}</blockquote>
                 <button type="button" className="btn btn-ghost" onClick={() => onLocate(item)}>
-                  {bound ? '定位这条依据' : '定位这条记录'}
+                  {referenceOnly ? '定位这段原文' : bound ? '定位这条依据' : '定位这条记录'}
                 </button>
               </article>
             ))}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -265,50 +266,76 @@ def compile_deck(
     return compiled, markdown
 
 
-def slide_quality(deck: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+@dataclass(frozen=True)
+class SlideQualityIssue:
+    message: str
+    # Empty means the deck structure, rather than individual page text, must change.
+    pages: tuple[int, ...] = ()
+
+
+def slide_quality_issues(deck: dict[str, Any]) -> tuple[list[SlideQualityIssue], dict[str, Any]]:
     """Run on original pages, before pagination can conceal density problems."""
     from .delivery.pptx import _has_title_slide, fit_report, paginate_deck
 
     slides = deck.get("slides", [])
-    issues = []
+    issues: list[SlideQualityIssue] = []
     for number, spec in enumerate(slides, 1):
         if not meaningful_notes(str(spec.get("notes", ""))):
-            issues.append(f"原始第 {number} 页缺少有效演讲备注")
+            issues.append(SlideQualityIssue(f"原始第 {number} 页缺少有效演讲备注", (number,)))
     notes = [re.sub(r"\s+", "", str(s.get("notes", ""))) for s in slides]
     duplicated = [
         text for text, count in Counter(notes).items() if count > 1 and meaningful_notes(text)
     ]
     if duplicated:
-        issues.append("不同页面重复使用整段演讲备注，需要分别编写")
+        issues.append(SlideQualityIssue(
+            "不同页面重复使用整段演讲备注，需要分别编写",
+            tuple(number for number, text in enumerate(notes, 1) if text in duplicated),
+        ))
+    cover_pages = int(not _has_title_slide(deck))
     for problem in fit_report(deck):
+        page = problem["slide"] - cover_pages
         if problem.get("title"):
-            issues.append(f"原始第 {problem['slide']} 页标题超过两行，请缩短标题并保留正文说明")
+            issues.append(SlideQualityIssue(
+                f"原始第 {page} 页标题超过两行，请缩短标题并保留正文说明", (page,),
+            ))
             continue
-        issues.append(
-            f"原始第 {problem['slide']} 页没有内容"
+        issues.append(SlideQualityIssue(
+            f"原始第 {page} 页没有内容"
             if problem.get("empty")
             else (
-                f"原始第 {problem['slide']} 页约 {problem['lines']} 行/"
+                f"原始第 {page} 页约 {problem['lines']} 行/"
                 f"{problem['bullets']} 条要点，须降低密度或明确拆页"
-            )
-        )
+            ),
+            (page,),
+        ))
     paginated = paginate_deck(deck)["slides"]
-    if any(not meaningful_notes(str(s.get("notes", ""))) for s in paginated):
-        issues.append("分页后仍有页面缺少独立讲稿，请按内容拆分原始页面与讲稿")
-    pages = len(paginated) + (not _has_title_slide(deck))
+    missing_notes = tuple(sorted({
+        spec.get("_source_index", index) + 1 for index, spec in enumerate(paginated)
+        if not meaningful_notes(str(spec.get("notes", "")))
+    }))
+    if missing_notes:
+        issues.append(SlideQualityIssue(
+            "分页后仍有页面缺少独立讲稿，请按内容拆分原始页面与讲稿", missing_notes,
+        ))
+    pages = len(paginated) + cover_pages
     units = sum(spoken_units(str(s.get("notes", ""))) for s in slides)
     rate = deck.get("speaking_rate", 220)
     target = deck.get("target_minutes")
+    all_pages = tuple(range(1, len(slides) + 1))
     if target and units < target * rate * 0.7:
-        issues.append(
-            f"讲稿约 {units} 个语音单位，按每分钟 {rate} 个估算不足目标 {target:g} 分钟；需试讲确认"
-        )
+        issues.append(SlideQualityIssue(
+            f"讲稿约 {units} 个语音单位，按每分钟 {rate} 个估算"
+            f"不足目标 {target:g} 分钟；需试讲确认",
+            all_pages,
+        ))
     if target and units > target * rate * 1.3:
-        issues.append(f"讲稿按每分钟 {rate} 个语音单位估算超过目标 {target:g} 分钟；需压缩并试讲")
+        issues.append(SlideQualityIssue(
+            f"讲稿按每分钟 {rate} 个语音单位估算超过目标 {target:g} 分钟；需压缩并试讲", all_pages,
+        ))
     if deck.get("target_pages") and pages > deck["target_pages"]:
-        issues.append(
+        issues.append(SlideQualityIssue(
             f"正文与封面预计 {pages} 页，超过目标 {deck['target_pages']} 页（参考文献另计）"
-        )
+        ))
     return issues, {
         "original_pages": len(slides),
         "content_pages": pages,
@@ -319,3 +346,9 @@ def slide_quality(deck: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
         "target_pages": deck.get("target_pages"),
         "timing_is_estimate": True,
     }
+
+
+def slide_quality(deck: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """Keep the delivery gate's public messages while retaining page locations."""
+    issues, metrics = slide_quality_issues(deck)
+    return [issue.message for issue in issues], metrics

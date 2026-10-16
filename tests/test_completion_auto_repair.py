@@ -25,9 +25,14 @@ class RepairModel(Judge):
 
 
 async def run_fixture(
-    settings, *, broken=True, repaired=True, formats=None, short=False, repo=None
+    settings, *, broken=True, repaired=True, formats=None, short=False, repo=None,
+    max_revisions=0, model_call_limit=0,
 ):
-    settings.quality = {"max_revisions": 0, "register_check": False, "require_limitations": False}
+    settings.quality = {
+        "max_revisions": max_revisions, "register_check": False, "require_limitations": False,
+    }
+    if model_call_limit:
+        settings.quality["task_max_model_calls"] = model_call_limit
     settings.intent_enabled = False
     query = "研究变量关系，不需要配套图示"
     template = get_template("autoResearch")
@@ -69,7 +74,7 @@ async def run_fixture(
 
 
 async def test_content_is_repaired_before_terminal_needs_review(settings):
-    repo, run_id, model, _ = await run_fixture(settings)
+    repo, run_id, model, _ = await run_fixture(settings, short=True, max_revisions=1)
     detail = await repo.get_run(run_id)
     assert detail.status == "done", detail.completion
     assert model.stream_calls == 2 and BAD not in detail.report.markdown
@@ -79,7 +84,9 @@ async def test_content_is_repaired_before_terminal_needs_review(settings):
 
 
 async def test_unresolved_content_stops_after_one_additional_round(settings):
-    repo, run_id, model, _ = await run_fixture(settings, repaired=False)
+    repo, run_id, model, _ = await run_fixture(
+        settings, repaired=False, short=True, max_revisions=1
+    )
     detail = await repo.get_run(run_id)
     assert detail.status == "needs_review"
     assert model.stream_calls == 2
@@ -94,7 +101,7 @@ async def test_verified_content_does_not_trigger_a_repair_for_advice(settings):
 
 
 async def test_delivery_length_feedback_reaches_the_additional_revision(settings):
-    repo, run_id, model, _ = await run_fixture(settings, broken=False, short=True)
+    repo, run_id, model, _ = await run_fixture(settings, broken=False, short=True, max_revisions=1)
     assert (await repo.get_run(run_id)).status == "done"
     assert model.stream_calls == 2
 
@@ -173,6 +180,8 @@ async def test_recovery_reuses_completed_repair_after_lost_checkpoint(
         await run_fixture(
             settings,
             broken=phase == "content",
+            short=phase == "content",
+            max_revisions=1,
             formats=["md", "pdf"] if phase == "format" else ["md"],
             repo=repo,
         )
@@ -204,7 +213,7 @@ async def test_exhausted_budget_does_not_launch_another_writer(settings, monkeyp
         raise TokenBudgetExceeded("budget exhausted")
 
     monkeypatch.setattr(WorkflowEngine, "repair_step", exhausted)
-    repo, run_id, model, _ = await run_fixture(settings)
+    repo, run_id, model, _ = await run_fixture(settings, short=True, max_revisions=1)
     detail = await repo.get_run(run_id)
     assert detail.status == "needs_review" and model.stream_calls == 1
     state = detail.orchestration.checkpoint["scratch"]["_completion_repair"]
@@ -212,7 +221,9 @@ async def test_exhausted_budget_does_not_launch_another_writer(settings, monkeyp
 
 
 async def test_unresolved_repair_is_not_repeated_when_the_process_resumes(settings):
-    repo, run_id, model, _ = await run_fixture(settings, repaired=False)
+    repo, run_id, model, _ = await run_fixture(
+        settings, repaired=False, short=True, max_revisions=1
+    )
     detail = await repo.get_run(run_id)
     resumed = DeepResearchAgent(
         settings,

@@ -42,6 +42,14 @@ class RunQueueFullError(RuntimeError):
     """The shared service has no capacity for another active or queued run."""
 
 
+class RunQuotaExceeded(RuntimeError):
+    """Admission would exceed this identity's UTC-day allowance."""
+
+
+class RunHasActiveChildren(RuntimeError):
+    """A task still owns active Q&A or rendering work."""
+
+
 RUN_ACTIVE_STATUSES = frozenset({"pending", "running", "cancelling"})
 EXECUTION_LEASE_SECONDS = 120
 RUN_TERMINAL_STATUSES = frozenset({"cancelled", "done", "error", "needs_review"})
@@ -143,7 +151,9 @@ class ResearchRepository(Protocol):
         owner_id: str | None = None,
         project_id: str | None = None,
         max_inflight: int | None = None,
+        max_inflight_per_identity: int | None = None,
         schedule_priority: int = 1,
+        daily_run_quota: int | None = None,
     ) -> tuple[str, bool]:
         """Create a run once; return ``(run_id, created)``.
 
@@ -154,6 +164,10 @@ class ResearchRepository(Protocol):
         ...
 
     async def find_run_once(self, idempotency_key: str, request_hash: str) -> str | None: ...
+
+    async def usage_since(self, owner_id: str | None, since: datetime) -> dict[str, int]: ...
+
+    async def source_policy_summary(self, run_id: str) -> int | None: ...
 
     async def get_run_owner(self, run_id: str) -> str | None: ...
 
@@ -188,7 +202,12 @@ class ResearchRepository(Protocol):
         ...
 
     async def requeue_failed_run(
-        self, run_id: str, *, max_inflight: int | None = None, restart_seconds: int | None = None
+        self,
+        run_id: str,
+        *,
+        max_inflight: int | None = None,
+        max_inflight_per_identity: int | None = None,
+        restart_seconds: int | None = None,
     ) -> bool:
         """Atomically requeue a failed checkpointed run for worker recovery.
 
@@ -202,8 +221,12 @@ class ResearchRepository(Protocol):
         ...
 
     async def claim_next_run(
-        self, owner: str, *, lease_seconds: int = EXECUTION_LEASE_SECONDS,
-        max_active_runs: int | None = None
+        self,
+        owner: str,
+        *,
+        lease_seconds: int = EXECUTION_LEASE_SECONDS,
+        max_active_runs: int | None = None,
+        scheduling_policy: str = "strict",
     ) -> ClaimedRun | None:
         """Atomically claim one queued or abandoned run, or return ``None``.
 

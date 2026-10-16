@@ -79,7 +79,7 @@ async def checked(writer, bb, ctx, template, policy, auditor):
     )
 
 
-async def test_local_edit_error_falls_back_to_full_write_and_rechecks(settings, monkeypatch):
+async def test_local_edit_error_retains_draft_without_full_write(settings, monkeypatch):
     from deep_research.workbench import prose_edit
 
     model = Model("BAD [1].", "发现X [1].")
@@ -91,10 +91,11 @@ async def test_local_edit_error_falls_back_to_full_write_and_rechecks(settings, 
 
     monkeypatch.setattr(prose_edit, "repair_paragraphs", broken)
     body, log = await checked(ResearchWriter(), bb, ctx, template, policy, auditor)
-    assert body == "发现X [1]." and not log.remaining
-    assert len(model.prompts) == 2 and auditor.checked == ["BAD [1].", "发现X [1]."]
+    assert body == "BAD [1]." and log.remaining
+    assert len(model.prompts) == 1 and set(auditor.checked) == {"BAD [1]."}
+    assert log.stop_reason == "revision_failed" and log.revisions_used == 1
     assert any(
-        event.data and event.data.get("category") == "local_revision_fallback"
+        event.data and event.data.get("category") == "local_revision_stopped"
         for event in ctx.tracer.events
     )
 

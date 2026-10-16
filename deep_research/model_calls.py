@@ -85,6 +85,8 @@ class ModelCall:
             "run_id": getattr(tracer, "run_id", None),
             "request_id": getattr(tracer, "request_id", None),
             "conversation_id": getattr(tracer, "conversation_id", None),
+            "call_budget_limit": getattr(getattr(tracer, "call_budget", None), "limit", None),
+            "call_budget_used": getattr(getattr(tracer, "call_budget", None), "used", None),
         }
         self.operation.provider_wait_ms = 0
         self._emit("started", "模型请求开始", usage_state="pending")

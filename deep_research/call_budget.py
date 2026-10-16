@@ -1,4 +1,4 @@
-"""A request-scoped ceiling for model HTTP attempts, shared across QA roles."""
+"""A ceiling for model HTTP attempts shared across all roles in one scope."""
 
 from dataclasses import dataclass
 
@@ -6,7 +6,7 @@ from .token_budget import TokenBudgetExceeded
 
 
 class ModelCallLimitExceeded(TokenBudgetExceeded):
-    """No more model requests may start in this QA turn."""
+    """No more model requests may start in this task or QA turn."""
 
 
 @dataclass
@@ -29,3 +29,5 @@ class ModelCallBudget:
             )
         self.used += 1
 
+    async def reserve_async(self) -> None:
+        self.reserve()

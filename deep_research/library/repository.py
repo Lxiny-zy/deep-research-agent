@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, literal, select
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -59,7 +59,8 @@ class LibraryRepository(Protocol):
     async def delete_source(self, source_id: str) -> bool: ...
 
     async def search_chunks(
-        self, project_id: str, *, owner_id: str | None = None, limit: int = 5000
+        self, project_id: str, *, owner_id: str | None = None, limit: int = 5000,
+        query: str | None = None,
     ) -> list[SearchChunk]: ...
 
 
@@ -185,9 +186,32 @@ class SqlLibraryRepository:
             ]
 
     async def get_project(self, project_id: str) -> Project | None:
-        projects = await self.list_projects()
-        project = next((item for item in projects if item.id == project_id), None)
-        return Project.model_validate(project) if project is not None else None
+        # Do not materialize every project (and all aggregate subqueries) for
+        # a single ownership check.  This method is on the request path for
+        # run creation and source access, so keep the lookup bounded by the
+        # requested primary key.
+        async with self._sm() as session:
+            row = await session.get(orm.ResearchProjectRow, project_id)
+            if row is None:
+                return None
+            corpus_count = await session.scalar(
+                select(func.count(orm.CorpusRow.id)).where(orm.CorpusRow.project_id == project_id)
+            )
+            source_count = await session.scalar(
+                select(func.count(orm.LibrarySourceRow.id)).where(
+                    orm.LibrarySourceRow.project_id == project_id
+                )
+            )
+            included_count = await session.scalar(
+                select(func.count(orm.LibrarySourceRow.id)).where(
+                    orm.LibrarySourceRow.project_id == project_id,
+                    orm.LibrarySourceRow.status == "included",
+                )
+            )
+            return _project(
+                row,
+                (int(corpus_count or 0), int(source_count or 0), int(included_count or 0)),
+            )
 
     async def create_corpus(self, project_id: str, name: str, description: str = "") -> Corpus:
         row = orm.CorpusRow(
@@ -338,7 +362,8 @@ class SqlLibraryRepository:
             return True
 
     async def search_chunks(
-        self, project_id: str, *, owner_id: str | None = None, limit: int = 5000
+        self, project_id: str, *, owner_id: str | None = None, limit: int = 5000,
+        query: str | None = None,
     ) -> list[SearchChunk]:
         async with self._sm() as session:
             stmt = (
@@ -357,6 +382,31 @@ class SqlLibraryRepository:
             )
             if owner_id is not None:
                 stmt = stmt.where(orm.ResearchProjectRow.owner_id == owner_id)
+            if query is not None:
+                from .search import _terms
+
+                terms = _terms(query)
+                if not terms:
+                    return []
+                # Apply relevance to the entire authorized corpus BEFORE the
+                # limit. This portable candidate stage avoids excluding old
+                # papers solely because 5,000 newer chunks exist. The existing
+                # BM25/diversity stage still performs the final ranking.
+                score = literal(0)
+                for term in terms:
+                    score = score + case(
+                        (func.lower(orm.LibrarySourceRow.title).contains(term, autoescape=True), 3),
+                        else_=0,
+                    ) + case(
+                        (func.lower(orm.SourceChunkRow.section).contains(term, autoescape=True), 2),
+                        else_=0,
+                    ) + case(
+                        (func.lower(orm.SourceChunkRow.content).contains(term, autoescape=True), 1),
+                        else_=0,
+                    )
+                stmt = stmt.where(score > 0).order_by(None).order_by(
+                    score.desc(), orm.LibrarySourceRow.id, orm.SourceChunkRow.ordinal,
+                )
             rows = (await session.execute(stmt)).all()
             return [
                 SearchChunk(
@@ -433,8 +483,15 @@ class InMemoryLibraryRepository:
         project = self.projects.get(project_id)
         if project is None:
             return None
-        summaries = await self.list_projects()
-        return Project.model_validate(next(item for item in summaries if item.id == project_id))
+        corpora = [item for item in self.corpora.values() if item.project_id == project_id]
+        sources = [item for item in self.sources.values() if item.project_id == project_id]
+        return project.model_copy(
+            update={
+                "corpus_count": len(corpora),
+                "source_count": len(sources),
+                "included_source_count": sum(item.status == "included" for item in sources),
+            }
+        )
 
     async def create_corpus(self, project_id: str, name: str, description: str = "") -> Corpus:
         if project_id not in self.projects:
@@ -553,7 +610,8 @@ class InMemoryLibraryRepository:
         return True
 
     async def search_chunks(
-        self, project_id: str, *, owner_id: str | None = None, limit: int = 5000
+        self, project_id: str, *, owner_id: str | None = None, limit: int = 5000,
+        query: str | None = None,
     ) -> list[SearchChunk]:
         project = self.projects.get(project_id)
         if project is None or (owner_id is not None and project.owner_id != owner_id):
@@ -572,6 +630,20 @@ class InMemoryLibraryRepository:
                 )
                 for chunk in self.chunks.get(source.id, [])
             )
+        if query is not None:
+            from .search import _terms
+
+            terms = _terms(query)
+            def candidate_score(chunk: SearchChunk) -> int:
+                return sum(
+                    3 * (term in chunk.source_title.lower())
+                    + 2 * (term in chunk.section.lower())
+                    + (term in chunk.content.lower())
+                    for term in terms
+                )
+            scored = [(candidate_score(chunk), chunk) for chunk in result]
+            scored.sort(key=lambda pair: (-pair[0], pair[1].source_id, pair[1].ordinal))
+            result = [chunk for score, chunk in scored if score > 0]
         return result[:limit]
 
 

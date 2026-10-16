@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 
 from ..models import Source
@@ -44,9 +45,8 @@ class ApiKeyPoolSearch(SearchTool):
         if self._clients[index] is None:
             self._clients[index] = self._factory(self._keys[index])
         client = self._clients[index]
-        if client is not None and self._tracer is not None:
-            client.set_tracer(self._tracer)
-        return self._clients[index]  # type: ignore[return-value]
+        assert client is not None
+        return client
 
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
         if max_results <= 0:
@@ -65,7 +65,10 @@ class ApiKeyPoolSearch(SearchTool):
                     health.active += 1
                     self._emit("检索请求开始", index, "started")
                     try:
-                        result = await self._client(index).search(query, max_results=max_results)
+                        client = self._client(index)
+                        if self._tracer is not None:
+                            client = client.for_tracer(self._tracer)
+                        result = await client.search(query, max_results=max_results)
                         if health.ready:
                             health.status = "ready"
                         if index != self._index:
@@ -90,6 +93,19 @@ class ApiKeyPoolSearch(SearchTool):
                 health.waiting -= 1
         # Provider exceptions can contain request headers or key-bearing URLs.
         self._emit("Key 池全部不可用或正在冷却", None, "unavailable")
+        delays = [
+            max(1, health.retry_at - time.monotonic())
+            for key in self._keys
+            if (health := shared_health(self._provider, self._namespace, key)).status == "limited"
+        ]
+        if delays:
+            from ..provider_limits import ProviderBusyError
+
+            # Preserve sanitized backpressure across pool recreation. Invalid
+            # credentials alone remain terminal; healthy fallbacks returned above.
+            raise ProviderBusyError(
+                min(delays), context=f"{self._provider} Key 池全部不可用"
+            ) from None
         raise RuntimeError(
             f"{self._provider} Key 池全部不可用或正在冷却（{len(self._keys)} 个凭据）"
         ) from None

@@ -79,7 +79,7 @@ class LLM:
         self.settings = settings
         self.tracer = tracer
         self.model = settings.llm_model
-        self._transport_capabilities = {"prefix_messages": True}
+        self._transport_capabilities = {"prefix_messages": True, "stream_usage": True}
         self._context_usage_calibration: dict[str, float] = {}
         if self.tracer.budget is None:
             self.tracer.budget = TokenBudget()
@@ -112,16 +112,17 @@ class LLM:
         context_window_tokens: int | None = None,
         max_output_tokens: int | None = None,
         allow_private_provider_urls: bool = False,
+        base_settings: Settings | None = None,
     ) -> LLM:
         """按模型档案的显式参数构造（角色绑不同模型档案时用）。
 
-        复用 __init__ 的 client 配置，但不经全局 Settings——每个角色可有独立
-        base_url/key/model/temperature。temperature 作为该档案的默认采样温度。
+        保留本次运行的输入容量等设置，只覆盖档案声明的模型参数。
+        每个角色可有独立 base_url/key/model/temperature，不重新读取环境覆盖运行配置。
         """
         from dataclasses import replace
 
         s = replace(
-            Settings(),  # 以环境变量默认打底，再覆盖档案关键字段
+            base_settings if base_settings is not None else Settings(),
             llm_api_key=api_key,
             llm_base_url=base_url or None,
             llm_model=model,
@@ -162,7 +163,8 @@ class LLM:
     @property
     def input_capacity_chars(self) -> int:
         return ContextBudget.for_limits(
-            self.context_window_tokens, self.settings.llm_max_output_tokens,
+            self.context_window_tokens,
+            self.settings.llm_max_output_tokens,
             self.settings.llm_max_input_chars,
         ).input_capacity_chars
 
@@ -186,7 +188,8 @@ class LLM:
 
     async def complete(self, system: str, user: str, *, temperature: float = 0.3) -> str:
         with model_operation(
-            "complete", role=self._call_role,
+            "complete",
+            role=self._call_role,
             reasoning_effort=self.reasoning_effort if self.parameter_mode == "reasoning" else None,
             reasoning_source="profile",
         ) as operation:
@@ -228,31 +231,52 @@ class LLM:
     async def _provider_slot(self, operation: ModelOperation) -> AsyncIterator[None]:
         queued_at = time.monotonic()
         queue = {
-            "id": uuid4().hex, "operation_id": operation.id,
-            "role": operation.role, "schema": operation.schema, "model": self.model,
+            "id": uuid4().hex,
+            "operation_id": operation.id,
+            "role": operation.role,
+            "schema": operation.schema,
+            "model": self.model,
         }
         acquired = False
-        self.tracer.emit("LLM", "info", "等待模型执行名额", data={
-            "model_queue": {**queue, "status": "waiting"},
-        })
+        self.tracer.emit(
+            "LLM",
+            "info",
+            "等待模型执行名额",
+            data={
+                "model_queue": {**queue, "status": "waiting"},
+            },
+        )
         try:
             async with provider_request(
-                self.settings.llm_base_url or "https://api.openai.com", self.settings.llm_api_key,
+                self.settings.llm_base_url or "https://api.openai.com",
+                self.settings.llm_api_key,
             ):
                 acquired = True
                 operation.provider_wait_ms = max(0, round((time.monotonic() - queued_at) * 1000))
-                self.tracer.emit("LLM", "info", "已取得模型执行名额", data={
-                    "model_queue": {
-                        **queue, "status": "acquired", "wait_ms": operation.provider_wait_ms,
+                self.tracer.emit(
+                    "LLM",
+                    "info",
+                    "已取得模型执行名额",
+                    data={
+                        "model_queue": {
+                            **queue,
+                            "status": "acquired",
+                            "wait_ms": operation.provider_wait_ms,
+                        },
                     },
-                })
+                )
                 yield
         except BaseException as exc:
             if not acquired:
                 status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
-                self.tracer.emit("LLM", "info", "模型排队已结束", data={
-                    "model_queue": {**queue, "status": status},
-                })
+                self.tracer.emit(
+                    "LLM",
+                    "info",
+                    "模型排队已结束",
+                    data={
+                        "model_queue": {**queue, "status": status},
+                    },
+                )
             raise
 
     async def _complete_once(
@@ -274,8 +298,13 @@ class LLM:
         return "".join(parts)
 
     async def parse(
-        self, system: str, user: str, schema: type[T], *,
-        temperature: float = 0.2, retries: int = 2,
+        self,
+        system: str,
+        user: str,
+        schema: type[T],
+        *,
+        temperature: float = 0.2,
+        retries: int = 2,
         reasoning_effort: str | None = None,
     ) -> T:
         """要求模型只输出符合 schema 的 JSON，再用 Pydantic 校验；失败自动重试。
@@ -299,10 +328,15 @@ class LLM:
             if options:
                 source = "operation_policy"
         with model_operation(
-            "structured", role=self._call_role, schema=schema.__name__,
+            "structured",
+            role=self._call_role,
+            schema=schema.__name__,
             generation_task=task,
-            reasoning_effort=(options.get("reasoning_effort", self.reasoning_effort)
-                              if self.parameter_mode == "reasoning" else None),
+            reasoning_effort=(
+                options.get("reasoning_effort", self.reasoning_effort)
+                if self.parameter_mode == "reasoning"
+                else None
+            ),
             reasoning_source=source,
         ) as operation:
             for attempt in range(attempts):
@@ -330,7 +364,8 @@ class LLM:
         # Do not hold a ContextVar token across yields to a caller. Multiple
         # streams may be consumed or closed in a different order in one task.
         operation = ModelOperation(
-            kind="stream", role=self._call_role,
+            kind="stream",
+            role=self._call_role,
             reasoning_effort=self.reasoning_effort if self.parameter_mode == "reasoning" else None,
             reasoning_source="profile",
         )
@@ -339,9 +374,14 @@ class LLM:
             try:
                 async with (
                     self._provider_slot(operation),
-                    aclosing(self._stream_once(
-                        system, user, temperature=temperature, operation=operation,
-                    )) as stream,
+                    aclosing(
+                        self._stream_once(
+                            system,
+                            user,
+                            temperature=temperature,
+                            operation=operation,
+                        )
+                    ) as stream,
                 ):
                     async for delta in stream:
                         emitted = True
@@ -354,7 +394,11 @@ class LLM:
                 await asyncio.sleep(min(2**attempt, 8))
 
     async def _stream_once(
-        self, system: str, user: str, *, temperature: float = 0.4,
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float = 0.4,
         reasoning_effort: str | None = None,
         operation: ModelOperation | None = None,
     ) -> AsyncGenerator[str, None]:
@@ -406,7 +450,7 @@ class LLM:
         estimated_added = 0
         output_started = False
         try:
-            include_usage = True
+            include_usage = self._transport_capabilities["stream_usage"]
             protocol_retry: str | None = None
             while True:
                 try:
@@ -415,9 +459,12 @@ class LLM:
                     )
                     call_budget = getattr(self.tracer, "call_budget", None)
                     if call_budget is not None:
-                        call_budget.reserve()
+                        await call_budget.reserve_async()
                     call = ModelCall(
-                        self.tracer, self.model, operation=operation, retry_reason=protocol_retry,
+                        self.tracer,
+                        self.model,
+                        operation=operation,
+                        retry_reason=protocol_retry,
                     )
                     call_id = call.id
                     resp = await self.client.chat.completions.create(
@@ -432,6 +479,7 @@ class LLM:
                         raise
                     if include_usage and "stream_options" in message:
                         include_usage = False
+                        self._transport_capabilities["stream_usage"] = False
                         protocol_retry = "stream_options_unsupported"
                     elif (
                         len(request["messages"]) > 2
@@ -504,8 +552,11 @@ class LLM:
                             "model": self.model,
                             "call_id": call_id,
                             "finish_reason": finish_reason,
-                            **({"reasoning_effort": request["reasoning_effort"]}
-                               if "reasoning_effort" in request else {}),
+                            **(
+                                {"reasoning_effort": request["reasoning_effort"]}
+                                if "reasoning_effort" in request
+                                else {}
+                            ),
                             "cache_affinity": affinity,
                             **usage_report,
                         }
@@ -551,6 +602,8 @@ class LLM:
 
 
 def _retryable(error: BaseException) -> bool:
+    # ProviderBusyError must escape to the executor's durable resource wait;
+    # retrying locally would hold a run slot and ignore the shared cooldown.
     return isinstance(error, (APIConnectionError, TimeoutError)) or (
         isinstance(error, APIStatusError)
         and (error.status_code in {408, 409, 429} or error.status_code >= 500)

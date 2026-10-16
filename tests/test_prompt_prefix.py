@@ -7,7 +7,7 @@ from deep_research.agents.researcher import Researcher
 from deep_research.models import ExtractedFindingList, Source
 from deep_research.observability import Tracer
 from deep_research.workbench.paper_context import paper_context
-from deep_research.workbench.qa import answer_question
+from deep_research.workbench.qa import answer_verified_question as answer_question
 from deep_research.workbench.templates import get_template
 from deep_research.workbench.writers import TemplateWriter
 from tests.fakes import FakeLLM, FakeSearch

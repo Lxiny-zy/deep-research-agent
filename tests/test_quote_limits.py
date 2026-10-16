@@ -383,6 +383,9 @@ async def test_failed_workflow_resume_repairs_completed_research_without_reexecu
         await first.run(wf, Blackboard(query="Alpha"))
     saved = first.runtime.run.model_copy(deep=True)
     assert saved.checkpoint["results"][0]["findings"][0]["evidence_quote"] == LONG
+    if graph:
+        # Earlier ready-scheduler journals did not store sequence origin metadata.
+        saved.checkpoint["_graph_state"].pop("sequence_inputs", None)
 
     class Writer:
         async def step(self, bb, ctx):

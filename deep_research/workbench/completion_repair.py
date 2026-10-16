@@ -15,6 +15,7 @@ from .completion import assess_completion
 from .content_revision import _CONTENT_GATES, revision_offer
 from .prose_review import stored_review
 from .publish import DeliveryBundle, delivery_fingerprint
+from .quality import coerce_policy
 from .support import digest
 from .writing_progress import WritingProgressError
 
@@ -88,13 +89,32 @@ async def repair_completion(
     await run_rendering(assess_completion, working, bundle, render_root=settings.artifact_root)
     content = state["content"]
     if content["status"] in {"pending", "running"}:
+        from .contract import contract_from_scratch
+
+        scratch = _scratch(working)
+        contract = contract_from_scratch(scratch)
+        policy = coerce_policy(contract.quality if contract is not None else settings.quality)
+        revision = scratch.get("workbench", {}).get("extras", {}).get("revision", {})
+        limit = min(policy.max_revisions, revision.get("budget_limit", policy.max_revisions))
+        used = revision.get("revisions_used", max(0, revision.get("attempts", 1) - 1))
+        content.setdefault("budget_limit", limit)
+        content.setdefault("baseline_revisions", used)
         # Use the existing eligibility rules without changing the actual run's status.
         offered = revision_offer(
             replace(working, status="needs_review"),
             [gate for gate in bundle.gates if gate.blocking_issues],
         )
+        if content["status"] == "pending":
+            if used >= limit:
+                offered.update(available=False, reason="自动修订额度已用尽（包含交付前修复）。")
+            elif revision.get("stop_reason") in {"no_progress", "revision_failed"}:
+                offered.update(
+                    available=False, reason="上一轮修订没有改善，保留已有正文与待处理问题。"
+                )
         if offered["available"]:
-            content.update(status="running", attempts=1)
+            content.update(
+                status="running", attempts=1, revisions_used=content["baseline_revisions"] + 1
+            )
             content.setdefault(
                 "issues",
                 [
@@ -123,6 +143,7 @@ async def repair_completion(
                     working = candidate
                     _scratch(working)[REPAIR_KEY] = state
                 content.update(status="complete", improved=improved)
+                content["revisions_used"] = content["baseline_revisions"] + 1
                 await save(improved)
                 bundle = await bundle_for()
         else:

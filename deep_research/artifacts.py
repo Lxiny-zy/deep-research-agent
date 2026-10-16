@@ -211,6 +211,16 @@ def _contained(path: Path, base: Path) -> Path:
     return resolved
 
 
+def _native_fs_path(path: Path) -> str:
+    """Use the extended Windows spelling for filesystem calls beyond MAX_PATH."""
+    value = os.path.abspath(os.fspath(path))
+    if os.name != "nt" or value.startswith("\\\\?"):
+        return value
+    if value.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + value[2:]
+    return "\\\\?\\" + value
+
+
 def _fsync_directory(path: Path) -> None:
     """Best-effort directory durability after an atomic rename."""
 
@@ -816,7 +826,22 @@ class ArtifactStore:
             # Re-check the destination and parent after writing.  This catches
             # a stage symlink introduced while the temporary file was open.
             _contained(path.parent, self.workspace_root)
-            os.replace(temp_name, path)
+            if os.name == "nt":
+                # MoveFileEx (used by os.replace) can reject a long destination
+                # even when Python successfully created the adjacent temp file.
+                # Containment was checked above on canonical paths; only the
+                # final OS call needs Windows' extended path spelling.
+                def native(value: str | Path) -> str:
+                    name = os.path.abspath(value)
+                    if name.startswith("\\\\?\\"):
+                        return name
+                    if name.startswith("\\\\"):
+                        return "\\\\?\\UNC\\" + name[2:]
+                    return "\\\\?\\" + name
+
+                os.replace(native(temp_name), native(path))
+            else:
+                os.replace(temp_name, path)
             temp_name = None
             _fsync_directory(path.parent)
             return size, digest.hexdigest()
@@ -966,7 +991,7 @@ class ArtifactStore:
         # The file must have the size that was hashed.  A replaced destination
         # or a filesystem error must never produce a misleading manifest entry.
         try:
-            actual_size = path.stat().st_size
+            actual_size = os.stat(_native_fs_path(path)).st_size
         except OSError as exc:
             raise ArtifactIntegrityError(f"artifact disappeared after write: {path}") from exc
         if actual_size != size:
@@ -1183,7 +1208,7 @@ class ArtifactStore:
     # ---- reading, listing and integrity ------------------------------
 
     def read_bytes(self, artifact: ArtifactRecord | str | os.PathLike[str]) -> bytes:
-        return self.absolute_path(artifact).read_bytes()
+        return Path(_native_fs_path(self.absolute_path(artifact))).read_bytes()
 
     def read_text(
         self,
@@ -1191,7 +1216,7 @@ class ArtifactStore:
         *,
         encoding: str = "utf-8",
     ) -> str:
-        return self.absolute_path(artifact).read_text(encoding=encoding)
+        return Path(_native_fs_path(self.absolute_path(artifact))).read_text(encoding=encoding)
 
     def open(
         self,
@@ -1200,7 +1225,7 @@ class ArtifactStore:
         *,
         encoding: str | None = None,
     ) -> BinaryIO | TextIO:
-        path = self.absolute_path(artifact)
+        path = Path(_native_fs_path(self.absolute_path(artifact)))
         if "b" in mode:
             return cast(BinaryIO, path.open(mode))
         return cast(TextIO, path.open(mode, encoding=encoding or "utf-8"))

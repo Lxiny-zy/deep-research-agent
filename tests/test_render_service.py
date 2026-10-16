@@ -50,6 +50,60 @@ async def test_two_services_share_one_export_and_saved_bytes(tmp_path, monkeypat
         await second.close()
 
 
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+async def test_worker_mode_client_waits_for_an_independent_consumer(tmp_path, monkeypatch, backend):
+    from deep_research.persistence.db import create_all, make_engine, make_sessionmaker
+    from deep_research.persistence.sql_repository import SqlRepository
+    from deep_research.render_service import service_for
+
+    engine = None
+    if backend == "sqlite":
+        engine = make_engine(f"sqlite+aiosqlite:///{(tmp_path / 'render.db').as_posix()}")
+        await create_all(engine)
+        sessions = make_sessionmaker(engine)
+        repo, worker_repo = SqlRepository(sessions), SqlRepository(sessions)
+    else:
+        repo = worker_repo = InMemoryRepository()
+    settings = Settings(execution_mode="worker", artifact_root=str(tmp_path))
+    run_id = await repo.create_run("q")
+    detail = await repo.get_run(run_id)
+    document = ReportDocument(query="q", blocks=[ProseBlock(markdown="独立消费者输出")])
+    client = service_for(repo, settings)
+    consumer = service_for(worker_repo, settings, consume=True)
+    reserved = asyncio.Event()
+    reserve = client.queue.reserve
+
+    async def recorded_reserve(**kwargs):
+        job = await reserve(**kwargs)
+        reserved.set()
+        return job
+
+    async def forbidden_execute(_job):
+        pytest.fail("API client started a render")
+
+    monkeypatch.setattr(client.queue, "reserve", recorded_reserve)
+    monkeypatch.setattr(client, "_execute", forbidden_execute)
+    task = asyncio.create_task(client.export(detail, document, "md"))
+    try:
+        await asyncio.wait_for(reserved.wait(), 3)
+        client.wake()
+        await client.poll_pending()
+        assert client._drainer is None and not client._active
+        assert service_for(repo, settings) is client and not client.consumes
+        assert not task.done()
+        consumer.wake()
+        result = await asyncio.wait_for(task, 5)
+        assert "独立消费者输出" in result
+        assert client._drainer is None and not client._active
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await client.close()
+        await consumer.close()
+        if engine is not None:
+            await engine.dispose()
+
+
 async def test_new_job_uses_free_capacity_while_an_earlier_render_is_blocked(tmp_path, monkeypatch):
     import threading
 

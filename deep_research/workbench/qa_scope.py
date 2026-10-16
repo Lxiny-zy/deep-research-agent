@@ -12,6 +12,18 @@ from .contract import contract_from_scratch
 from .reader import paper_sources
 
 
+def qa_model_roles(*, grounded: bool, retrieval: bool, verified: bool = False) -> tuple[str, ...]:
+    """Resolve only models that this turn can call; ordinary Q&A needs no planner."""
+    return tuple(
+        role for role, needed in (
+            ("planner", verified and retrieval),
+            ("researcher", verified and (grounded or retrieval)),
+            ("synthesizer", True),
+            ("evidence_verifier", verified and (grounded or retrieval)),
+        ) if needed
+    )
+
+
 @dataclass
 class TaskQaScope:
     kind: Literal["paper", "research"]

@@ -157,8 +157,11 @@ def evidence_records(
                     "source_hash": finding.verification.source_content_hash,
                     "reference": finding.verification.source_reference
                     or finding.verification.source_title,
-                    **({"measurement_context": context}
-                       if (context := measurement_context(finding)) is not None else {}),
+                    **(
+                        {"measurement_context": context}
+                        if (context := measurement_context(finding)) is not None
+                        else {}
+                    ),
                 }
             )
     return records
@@ -227,7 +230,8 @@ class SupportReviewer:
         self.system = _SYSTEM + ("\n" + system_rules if system_rules else "")
         self.evidence_scopes = (
             {key: frozenset(value) for key, value in evidence_scopes.items()}
-            if evidence_scopes is not None else None
+            if evidence_scopes is not None
+            else None
         )
         if self.evidence_scopes is not None:
             self.system += (
@@ -246,10 +250,12 @@ class SupportReviewer:
     def evidence_for(self, unit: SupportUnit) -> list[dict[str, Any]]:
         allowed = (
             self.evidence_scopes.get(unit.id, frozenset())
-            if self.evidence_scopes is not None else None
+            if self.evidence_scopes is not None
+            else None
         )
         return [
-            item for item in self.evidence
+            item
+            for item in self.evidence
             if item["citation"] in unit.citations and (allowed is None or item["id"] in allowed)
         ]
 
@@ -390,7 +396,9 @@ class SupportReviewer:
             unit, decision.fulltext_review, self.fulltext_corpus
         )
 
-    async def _check_fulltext(self, unit: SupportUnit, key: str) -> SupportDecision | None:
+    async def _check_fulltext(
+        self, unit: SupportUnit, key: str, checker: Any = None
+    ) -> SupportDecision | None:
         from .fulltext_review import FullTextReviewer, fulltext_supports, requires_fulltext
 
         if unit.kind != "translation" and (issue := field_absence_issue(unit.text)):
@@ -406,7 +414,7 @@ class SupportReviewer:
             or record.get("unit_hash") != current
             or record.get("corpus_hash") != self.fulltext_corpus.fingerprint
         ):
-            checker = FullTextReviewer(
+            checker = checker or FullTextReviewer(
                 self.llm, self.fulltext_corpus, self.capacity, on_progress=self.on_progress
             )
             record = await checker.review(unit)
@@ -440,10 +448,35 @@ class SupportReviewer:
         }
 
     async def review(self, units: list[SupportUnit]) -> list[SupportDecision]:
+        from .fulltext_review import FullTextReviewer, requires_fulltext
+
         results: dict[str, SupportDecision] = {}
         pending: list[SupportUnit] = []
         keys: dict[str, str] = {}
         known_citations = {e["citation"] for e in self.evidence}
+        checker = FullTextReviewer(
+            self.llm, self.fulltext_corpus, self.capacity, on_progress=self.on_progress
+        )
+        fulltext_pending = []
+        if self.check_fulltext:
+            for unit in units:
+                if (
+                    not set(unit.citations).issubset(known_citations)
+                    or not requires_fulltext(unit)
+                    or (unit.kind != "translation" and field_absence_issue(unit.text))
+                ):
+                    continue
+                key = digest([asdict(unit), self.evidence_for(unit)])
+                record = self.fulltext_records.get(unit.id)
+                if record is None and key in self.cache:
+                    record = self.cache[key].fulltext_review
+                current = content_hash(json.dumps(asdict(unit), sort_keys=True, ensure_ascii=False))
+                if (
+                    not record or record.get("unit_hash") != current
+                    or record.get("corpus_hash") != self.fulltext_corpus.fingerprint
+                ):
+                    fulltext_pending.append(unit)
+            await checker.prepare(fulltext_pending)
         for index, unit in enumerate(units, 1):
             if self.on_progress is not None:
                 self.on_progress(f"正在核对回答依据（第 {index}/{len(units)} 段）…")
@@ -451,7 +484,7 @@ class SupportReviewer:
             key = digest([asdict(unit), selected])
             keys[unit.id] = key
             if set(unit.citations).issubset(known_citations):
-                fulltext_failure = await self._check_fulltext(unit, key)
+                fulltext_failure = await self._check_fulltext(unit, key, checker)
                 if fulltext_failure is not None:
                     results[unit.id] = fulltext_failure
                     continue
@@ -596,8 +629,11 @@ class SupportReviewer:
                 "units": [
                     {
                         **asdict(unit),
-                        **({"allowed_evidence_ids": [e["id"] for e in self.evidence_for(unit)]}
-                           if self.evidence_scopes is not None else {}),
+                        **(
+                            {"allowed_evidence_ids": [e["id"] for e in self.evidence_for(unit)]}
+                            if self.evidence_scopes is not None
+                            else {}
+                        ),
                     }
                     for unit in units
                 ],
@@ -680,12 +716,19 @@ class SupportReviewer:
         try:
             self.request_count += 1
             response = await self.llm.parse(
-                self.system, self._prompt(units, repair_issues), SupportDecisions, temperature=0.0,
+                self.system,
+                self._prompt(units, repair_issues),
+                SupportDecisions,
+                temperature=0.0,
                 **verification_generation_options(self.llm),
             )
         except LeaseLostError:
             raise
         except Exception as exc:
+            from ..execution_policy import resource_busy
+
+            if resource_busy(exc) is not None:
+                raise
             return {
                 unit.id: SupportDecision(
                     unit_id=unit.id,
@@ -747,9 +790,13 @@ class SupportReviewer:
                     )
                     if issue:
                         decision = SupportDecision(
-                            unit_id=unit.id, verdict="unsupported", reason=issue,
+                            unit_id=unit.id,
+                            verdict="unsupported",
+                            reason=issue,
                             alignment_review=alignment_diagnostics(
-                                unit.text, unit.citations, decision.evidence_ids,
+                                unit.text,
+                                unit.citations,
+                                decision.evidence_ids,
                                 self.evidence_for(unit),
                             ),
                         )

@@ -13,7 +13,7 @@ from deep_research.observability import Tracer
 from deep_research.orchestrator import DeepResearchAgent
 from deep_research.persistence.repository import LeaseLostError
 from deep_research.workbench.paper_evidence import PaperEvidenceSelection, plan_findings
-from deep_research.workbench.qa import answer_question
+from deep_research.workbench.qa import answer_verified_question as answer_question
 from tests.fakes import FakeLLM, FakeSearch, verified_finding
 from tests.test_paper_reader import ALICE, _headers
 from tests.test_paper_reader import reader_client as reader_client
@@ -191,6 +191,7 @@ async def test_product_qa_persists_actual_search_queries(reader_client, monkeypa
     path = f"/api/qa/conversations/{cid}/messages" + ("/stream" if stream else "")
     payload = {
         "query": "2025 年共形预测覆盖保证", "sources": ["web"], "request_id": "planned-search-1",
+        "answer_mode": "verified",
     }
     response = await client.post(
         path, headers=_headers(ALICE), json=payload,
@@ -233,7 +234,7 @@ async def test_followup_stream_keeps_contextual_search_prompt_out_of_status(
     response = await client.post(
         f"/api/qa/conversations/{cid}/messages/stream", headers=_headers(ALICE),
         json={"query": "联网搜索2026年是否提出了新的指标", "sources": ["web"],
-              "request_id": "status-context-followup"},
+              "request_id": "status-context-followup", "answer_mode": "verified"},
     )
     assert response.status_code == 200
     starts = [event for event in traces if event.type == "start" and event.stage == "RESEARCHER"]

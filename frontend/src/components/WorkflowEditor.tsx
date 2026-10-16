@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useModalFocus } from '../hooks/useModalFocus'
 import WorkflowFlowCanvas from './WorkflowFlowCanvas'
+import PanelErrorBoundary from './PanelErrorBoundary'
 import { AgentGlyph, AppIcon } from './AppIcon'
 import { allocateSemanticNodeIds } from './workflowCanvasLogic'
 import {
@@ -581,8 +582,9 @@ export default function WorkflowEditor({
               <span>拖动卡片移动 · 从端口拖线或依次点击两端 · 选中实线后按 Delete</span>
               <span className="canvas-mode">依赖画布</span>
             </div>
-            <div className="flow-canvas-shell">
-              <WorkflowFlowCanvas
+              <div className="flow-canvas-shell">
+                <PanelErrorBoundary label="工作流画布">
+                <WorkflowFlowCanvas
                 steps={steps}
                 nodeKeys={nodeKeys}
                 roles={roles}
@@ -601,8 +603,9 @@ export default function WorkflowEditor({
                 onConnect={connectNodes}
                 onDisconnect={disconnectNodes}
                 onAddAgent={appendAgent}
-                onAddReflection={appendReflection}
-              />
+                  onAddReflection={appendReflection}
+                />
+                </PanelErrorBoundary>
             </div>
             {!steps.length && <div className="canvas-empty">从左侧角色库拖入第一个角色</div>}
             {graphError && (

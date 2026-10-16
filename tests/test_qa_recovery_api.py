@@ -36,7 +36,10 @@ async def _interrupted(client, settings, monkeypatch):
         return accepted
 
     monkeypatch.setattr(MemoryQaRequests, "checkpoint", commit_then_stop)
-    payload = {"query": "解释变量关系", "sources": ["web"], "request_id": "interrupted-turn"}
+    payload = {
+        "query": "解释变量关系", "sources": ["web"], "request_id": "interrupted-turn",
+        "answer_mode": "verified",
+    }
     response = await client.post(
         f"/api/qa/conversations/{cid}/messages", headers=_headers(ALICE), json=payload
     )

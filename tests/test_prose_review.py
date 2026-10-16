@@ -271,7 +271,7 @@ def test_pronouns_and_table_rows_keep_their_reference_context():
 
 async def test_qa_repairs_semantically_unsupported_answer_before_delivery(settings):
     from deep_research.workbench.prose_edit import ProseEdits
-    from deep_research.workbench.qa import answer_question
+    from deep_research.workbench.qa import answer_verified_question as answer_question
 
     class Answer(Judge):
         edits = 0
@@ -307,7 +307,7 @@ async def test_qa_repairs_semantically_unsupported_answer_before_delivery(settin
 async def test_qa_verifier_failure_does_not_rewrite_or_claim_missing_evidence(
     settings,
 ):
-    from deep_research.workbench.qa import answer_question
+    from deep_research.workbench.qa import answer_verified_question as answer_question
 
     class Unavailable(Judge):
         async def stream(self, *args, **kwargs):
@@ -329,7 +329,7 @@ async def test_qa_verifier_failure_does_not_rewrite_or_claim_missing_evidence(
 
 
 async def test_qa_support_review_receives_full_dialogue_for_pronouns(settings):
-    from deep_research.workbench.qa import answer_question
+    from deep_research.workbench.qa import answer_verified_question as answer_question
 
     class Capture(Judge):
         async def stream(self, *args, **kwargs):

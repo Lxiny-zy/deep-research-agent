@@ -10,7 +10,7 @@ from dataclasses import replace
 import httpx
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import select, update
+from sqlalchemy import event, select, update
 
 from deep_research import artifact_lifecycle
 from deep_research.config import Settings
@@ -91,6 +91,29 @@ async def test_same_idempotency_key_wins_once_even_at_capacity(sessions):
     results = await asyncio.gather(*(submit() for _ in range(6)))
     assert len({run_id for run_id, _ in results}) == 1
     assert sum(created for _, created in results) == 1
+
+
+async def test_concurrent_identity_admission_leaves_shared_room(sessions):
+    async def submit(index):
+        return await SqlRepository(sessions).create_run_once(
+            f"query {index}",
+            request_hash=str(index),
+            owner_id="a",
+            max_inflight=4,
+            max_inflight_per_identity=3,
+        )
+
+    outcomes = await asyncio.gather(*(submit(i) for i in range(8)), return_exceptions=True)
+    assert sum(isinstance(item, tuple) for item in outcomes) == 3
+    assert sum(isinstance(item, RunQueueFullError) for item in outcomes) == 5
+    _, created = await SqlRepository(sessions).create_run_once(
+        "new identity",
+        request_hash="b",
+        owner_id="b",
+        max_inflight=4,
+        max_inflight_per_identity=3,
+    )
+    assert created
 
 
 async def test_concurrent_default_models_keep_one_default_from_empty_catalog(sessions):
@@ -207,6 +230,117 @@ async def test_provider_concurrency_and_expired_leases_are_shared(sessions):
     recovered = await first.acquire(key)
     assert recovered != next_lease and not await second.renew(next_lease)
     await first.release(recovered)
+
+
+async def test_provider_admission_is_atomic_across_independent_connection_pools(sessions):
+    other_engine = make_engine(sessions.kw["bind"].url.render_as_string(hide_password=False))
+    first = ProviderCoordinator(sessions, concurrency=1, wait_seconds=0.15)
+    second = ProviderCoordinator(make_sessionmaker(other_engine), concurrency=1, wait_seconds=0.15)
+    key = fingerprint("https://provider.example", "independent-pools")
+    try:
+        outcomes = await asyncio.gather(
+            first.acquire(key), second.acquire(key), return_exceptions=True
+        )
+        leases = [value for value in outcomes if isinstance(value, str)]
+        assert len(leases) == 1
+        assert sum(isinstance(value, ProviderBusyError) for value in outcomes) == 1
+        await first.release(leases[0])
+    finally:
+        await other_engine.dispose()
+
+
+async def test_inflight_renewal_cannot_create_an_extra_provider_slot(sessions, monkeypatch):
+    coordinator = ProviderCoordinator(sessions, concurrency=1, wait_seconds=0.4)
+    coordinator.lease_seconds = 0.1
+    key = fingerprint("https://provider.example", "renewal-race")
+    lease = await coordinator.acquire(key)
+    inspected = asyncio.Event()
+    active_leases = coordinator._active_leases
+
+    async def record_advisory_read(session, identity, now):
+        result = await active_leases(session, identity, now)
+        if result[0] == 0:
+            inspected.set()
+        return result
+
+    monkeypatch.setattr(coordinator, "_active_leases", record_advisory_read)
+    task = None
+    try:
+        async with sessions() as renewal, renewal.begin():
+            await renewal.execute(
+                update(ProviderLeaseRow)
+                .where(ProviderLeaseRow.id == lease)
+                .values(expires_at=time.time() + 30)
+            )
+            # Other transactions still see the old expiry while renewal awaits commit.
+            await asyncio.sleep(0.15)
+            task = asyncio.create_task(coordinator.acquire(key))
+            await asyncio.wait_for(inspected.wait(), 2)
+            await asyncio.sleep(0.02)
+        with pytest.raises(ProviderBusyError):
+            await asyncio.wait_for(task, 2)
+    finally:
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await coordinator.release(lease)
+
+
+async def test_provider_waiters_coalesce_without_writing_while_full(sessions):
+    first = ProviderCoordinator(sessions, concurrency=1, wait_seconds=0.15)
+    key = fingerprint("https://provider.example", "contended-key")
+    lease = await first.acquire(key)
+    statements = []
+    engine = sessions.kw["bind"].sync_engine
+
+    def record(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement.lstrip().split()[0].upper())
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        outcomes = await asyncio.gather(
+            *(
+                ProviderCoordinator(sessions, concurrency=1, wait_seconds=0.15).acquire(key)
+                for _ in range(8)
+            ),
+            return_exceptions=True,
+        )
+        assert all(isinstance(item, ProviderBusyError) for item in outcomes)
+        assert not {"INSERT", "UPDATE", "DELETE"}.intersection(statements)
+        assert statements.count("SELECT") <= 8
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+        await first.release(lease)
+
+
+async def test_provider_wait_queue_is_bounded_and_cancellation_releases_it(sessions, monkeypatch):
+    coordinator = ProviderCoordinator(sessions, concurrency=1, wait_seconds=5, max_waiters=1)
+    key = fingerprint("https://provider.example", "bounded-key")
+    lease = await coordinator.acquire(key)
+    inspected = asyncio.Event()
+    probe = coordinator._try_acquire
+
+    async def inspected_probe(identity):
+        result = await probe(identity)
+        inspected.set()
+        return result
+
+    monkeypatch.setattr(coordinator, "_try_acquire", inspected_probe)
+    waiting = asyncio.create_task(coordinator.acquire(key))
+    try:
+        await asyncio.wait_for(inspected.wait(), 2)
+        with pytest.raises(ProviderBusyError):
+            await coordinator.acquire(key)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        await coordinator.release(lease)
+        recovered = await coordinator.acquire(key)
+        await coordinator.release(recovered)
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+        await coordinator.release(lease)
 
 
 @pytest.mark.asyncio

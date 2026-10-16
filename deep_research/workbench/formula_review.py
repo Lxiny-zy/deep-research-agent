@@ -429,6 +429,10 @@ class FormulaReviewer:
             except LeaseLostError:
                 raise
             except Exception as exc:
+                from ..execution_policy import resource_busy
+
+                if resource_busy(exc) is not None:
+                    raise
                 for formula in pending:
                     complete[formula["id"]] = FormulaDecision(
                         formula_id=formula["id"],

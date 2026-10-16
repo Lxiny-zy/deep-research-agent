@@ -59,7 +59,9 @@ from .repository import (
     IdempotencyConflictError,
     LeaseLostError,
     RunDetail,
+    RunHasActiveChildren,
     RunQueueFullError,
+    RunQuotaExceeded,
     RunSummary,
     TagCount,
 )
@@ -208,7 +210,9 @@ class SqlRepository:
         owner_id: str | None = None,
         project_id: str | None = None,
         max_inflight: int | None = None,
+        max_inflight_per_identity: int | None = None,
         schedule_priority: int = 1,
+        daily_run_quota: int | None = None,
     ) -> tuple[str, bool]:
         """Insert a run and its initial workflow atomically.
 
@@ -230,8 +234,24 @@ class SqlRepository:
                         if existing.request_hash != request_hash:
                             raise IdempotencyConflictError("Idempotency-Key 已用于不同的请求")
                         return existing.id, False
+                now = datetime.now(UTC)
+                if daily_run_quota is not None:
+                    count = await s.scalar(
+                        select(func.count())
+                        .select_from(orm.UsageLedgerRow)
+                        .where(
+                            orm.UsageLedgerRow.owner_id == owner_id,
+                            orm.UsageLedgerRow.event_type == "run_admitted",
+                            orm.UsageLedgerRow.created_at
+                            >= now.replace(hour=0, minute=0, second=0, microsecond=0),
+                        )
+                    )
+                    if int(count or 0) >= daily_run_quota:
+                        raise RunQuotaExceeded("今日研究额度已用完，将于 UTC 零点重置")
                 schedule = schedule_for_execution(execution)
-                await self._check_capacity(s, max_inflight)
+                await self._check_capacity(
+                    s, max_inflight, owner_id=owner_id, identity_maximum=max_inflight_per_identity
+                )
                 run = orm.ResearchRun(
                     query=query,
                     owner_id=owner_id,
@@ -246,6 +266,15 @@ class SqlRepository:
                 )
                 s.add(run)
                 await s.flush()
+                if owner_id is not None:
+                    s.add(
+                        orm.UsageLedgerRow(
+                            owner_id=owner_id,
+                            run_id=run.id,
+                            event_type="run_admitted",
+                            tokens=0,
+                        )
+                    )
                 if execution is not None:
                     s.add(
                         orm.WorkflowRunRow(
@@ -286,7 +315,14 @@ class SqlRepository:
                     ) from exc
                 return row.id, False
 
-    async def _check_capacity(self, session: AsyncSession, maximum: int | None) -> None:
+    async def _check_capacity(
+        self,
+        session: AsyncSession,
+        maximum: int | None,
+        *,
+        owner_id: str | None = None,
+        identity_maximum: int | None = None,
+    ) -> None:
         if maximum is not None:
             count = await session.scalar(
                 select(func.count())
@@ -295,6 +331,17 @@ class SqlRepository:
             )
             if int(count or 0) >= maximum:
                 raise RunQueueFullError("研究队列已满，请稍后重试")
+        if identity_maximum is not None:
+            count = await session.scalar(
+                select(func.count())
+                .select_from(orm.ResearchRun)
+                .where(
+                    orm.ResearchRun.status.in_(RUN_ACTIVE_STATUSES),
+                    orm.ResearchRun.owner_id == owner_id,
+                )
+            )
+            if int(count or 0) >= identity_maximum:
+                raise RunQueueFullError("当前身份的在途任务已达上限，请等待已有任务完成")
 
     async def find_run_once(self, idempotency_key: str, request_hash: str) -> str | None:
         async with self._sm() as s:
@@ -312,6 +359,43 @@ class SqlRepository:
             return await s.scalar(
                 select(orm.ResearchRun.owner_id).where(orm.ResearchRun.id == run_id)
             )
+
+    async def usage_since(self, owner_id: str | None, since: datetime) -> dict[str, int]:
+        async with self._sm() as s:
+            stmt = select(
+                func.count(), func.coalesce(func.sum(orm.UsageLedgerRow.tokens), 0)
+            ).where(
+                orm.UsageLedgerRow.created_at >= since,
+                orm.UsageLedgerRow.event_type == "run_admitted",
+            )
+            if owner_id is not None:
+                stmt = stmt.where(orm.UsageLedgerRow.owner_id == owner_id)
+            count, tokens = (await s.execute(stmt)).one()
+            return {"runs": int(count), "tokens": int(tokens)}
+
+    async def source_policy_summary(self, run_id: str) -> int | None:
+        # One consistent SQL snapshot, selecting only audit payloads. Progress
+        # and model deltas never need to be transferred just to compute a count.
+        async with self._sm() as s:
+            stream = await s.stream_scalars(
+                select(orm.EventRow.data)
+                .where(
+                    orm.EventRow.run_id == run_id,
+                    orm.EventRow.data["category"].as_string() == "source_policy",
+                )
+                .execution_options(yield_per=256)
+            )
+            total: int | None = None
+            try:
+                async for data in stream:
+                    if total is None:
+                        total = 0
+                    value = (data or {}).get("blocked")
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        total += value
+            finally:
+                await stream.close()
+            return total
 
     async def heartbeat_worker(self, name: str, active: int) -> None:
         async with self._sm() as s, s.begin():
@@ -945,13 +1029,23 @@ class SqlRepository:
             return True
 
     async def requeue_failed_run(
-        self, run_id: str, *, max_inflight: int | None = None, restart_seconds: int | None = None
+        self,
+        run_id: str,
+        *,
+        max_inflight: int | None = None,
+        max_inflight_per_identity: int | None = None,
+        restart_seconds: int | None = None,
     ) -> bool:
         now = datetime.now(UTC)
         owner = f"resume-{uuid4().hex}"
         async with self._sm() as s, s.begin():
             await transaction_lock(s, "run-admission")
-            await self._check_capacity(s, max_inflight)
+            owner_id = await s.scalar(
+                select(orm.ResearchRun.owner_id).where(orm.ResearchRun.id == run_id)
+            )
+            await self._check_capacity(
+                s, max_inflight, owner_id=owner_id, identity_maximum=max_inflight_per_identity
+            )
             fenced = await s.execute(
                 update(orm.WorkflowRunRow)
                 .where(
@@ -1005,6 +1099,7 @@ class SqlRepository:
         *,
         lease_seconds: int = EXECUTION_LEASE_SECONDS,
         max_active_runs: int | None = None,
+        scheduling_policy: str = "strict",
     ) -> ClaimedRun | None:
         """Choose and charge one identity atomically with its execution lease."""
         async with self._sm() as s, s.begin():
@@ -1039,7 +1134,16 @@ class SqlRepository:
             # owned by one caller must not hide everybody else's eligible head.
             rows = (
                 await s.execute(
-                    select(orm.ResearchRun, orm.WorkflowRunRow)
+                    select(
+                        orm.ResearchRun.id,
+                        orm.ResearchRun.owner_id,
+                        orm.ResearchRun.schedule_cost,
+                        orm.ResearchRun.schedule_class,
+                        orm.ResearchRun.schedule_priority,
+                        orm.ResearchRun.claimable_at,
+                        orm.WorkflowRunRow.lease_owner,
+                        orm.WorkflowRunRow.lease_expires_at,
+                    )
                     .join(
                         orm.WorkflowRunRow,
                         orm.WorkflowRunRow.research_run_id == orm.ResearchRun.id,
@@ -1056,10 +1160,10 @@ class SqlRepository:
                 return value.replace(tzinfo=UTC).timestamp()
 
             candidates = []
-            for run, workflow in rows:
+            for run in rows:
                 ready_at = stamp(run.claimable_at)
-                if workflow.lease_owner is not None and workflow.lease_expires_at is not None:
-                    ready_at = max(ready_at, stamp(workflow.lease_expires_at))
+                if run.lease_owner is not None and run.lease_expires_at is not None:
+                    ready_at = max(ready_at, stamp(run.lease_expires_at))
                 candidates.append(
                     ScheduleCandidate(
                         run.id,
@@ -1070,7 +1174,9 @@ class SqlRepository:
                         ready_at,
                     )
                 )
-            candidates = eligible_candidates(candidates, active, max_active_runs)
+            candidates = eligible_candidates(
+                candidates, active, max_active_runs, policy=scheduling_policy
+            )
             if not candidates:
                 return None
             state_row = await s.get(orm.SchedulerStateRow, "runs")
@@ -1205,6 +1311,14 @@ class SqlRepository:
             if run is not None:
                 run.elapsed = elapsed
                 run.total_tokens = total_tokens
+                await s.execute(
+                    update(orm.UsageLedgerRow)
+                    .where(
+                        orm.UsageLedgerRow.run_id == run_id,
+                        orm.UsageLedgerRow.event_type == "run_admitted",
+                    )
+                    .values(tokens=total_tokens)
+                )
                 if run.status in {"pending", "running"}:
                     if completion is not None:
                         if workflow is None or completion.get("status") not in {
@@ -1260,6 +1374,29 @@ class SqlRepository:
     async def delete_run(self, run_id: str) -> bool:
         # 单条 DELETE：DB 级 ondelete=CASCADE 清子表（SQLite 已开 foreign_keys=ON）
         async with self._sm() as s, s.begin():
+            # Same admission locks as new Q&A/render requests. A child cannot
+            # slip between this check and parent deletion on another replica.
+            await transaction_lock(s, "qa:admission")
+            await transaction_lock(s, "render-queue")
+            active_qa = await s.scalar(
+                select(orm.QaMessageRow.id)
+                .join(orm.QaConversationRow)
+                .where(
+                    orm.QaConversationRow.run_id == run_id,
+                    orm.QaMessageRow.status.in_({"pending", "running"}),
+                )
+                .limit(1)
+            )
+            active_render = await s.scalar(
+                select(orm.RenderJobRow.id)
+                .where(
+                    orm.RenderJobRow.run_id == run_id,
+                    orm.RenderJobRow.status.in_({"pending", "running"}),
+                )
+                .limit(1)
+            )
+            if active_qa or active_render:
+                raise RunHasActiveChildren("任务仍有问答或导出正在处理，请先停止或等待完成")
             workflow = await s.scalar(
                 select(orm.WorkflowRunRow).where(orm.WorkflowRunRow.research_run_id == run_id)
             )

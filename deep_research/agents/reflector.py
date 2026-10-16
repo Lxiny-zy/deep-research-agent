@@ -9,9 +9,10 @@ from ..guardrails import report_eligible
 from ..llm import LLM
 from ..models import Reflection, ResearchResult
 from ..observability import Tracer
+from ..prompting import leaf_system_prompt
 from ..registry import register
 from ..workflow import ATTEMPTED_SCRATCH_KEY
-from .base import Blackboard, RunContext, direct_system_prompt, effective_require_corroboration
+from .base import Blackboard, RunContext, effective_require_corroboration
 
 if TYPE_CHECKING:
     from ..workbench.coverage import CoverageGaps
@@ -36,10 +37,11 @@ class Reflector:
         self.tracer = cast(Tracer, tracer)
         self.settings = cast(Settings, settings)
         self.system = SYSTEM  # 可被角色卡片覆盖
+        self.global_rules: str | None = None
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         self.llm, self.tracer, self.settings = ctx.llm_for(self.name), ctx.tracer, ctx.settings
-        self.system = ctx.system_prompt(self.system)
+        self.global_rules = ctx.global_rules
         attempted = bb.scratch.get(ATTEMPTED_SCRATCH_KEY)
         corroboration = effective_require_corroboration(bb, ctx.settings)
         from ..workbench.coverage import coverage_gaps
@@ -90,7 +92,9 @@ class Reflector:
             from ..workbench.coverage import gap_prompt
 
             user += gap_prompt(coverage)
-        reflection = await self.llm.parse(direct_system_prompt(self.system), user, Reflection)
+        reflection = await self.llm.parse(
+            leaf_system_prompt(self.system, self.global_rules), user, Reflection
+        )
         if reflection.is_sufficient and coverage is not None and coverage.open:
             # 程序计算的交付缺口优先于模型的「已充分」判断：模型常在证据远未达到
             # 引用下限时就宣布充分。只有给出了新子问题才能继续补洞；否则保持原判，

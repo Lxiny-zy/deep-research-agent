@@ -1,7 +1,10 @@
-"""HTTP turns persist private grounded memory and reuse it only in its own history."""
+"""Legacy queued turns retain private memory; new direct turns never add summary calls."""
 
+import hashlib
 import json
 from copy import deepcopy
+
+from starlette.requests import Request
 
 from deep_research import api
 from deep_research.orchestrator import DeepResearchAgent
@@ -83,6 +86,17 @@ async def seed_conversation(client, *, key=ALICE, topic="ALPHA光谱重建", cou
 
 
 async def ask(client, cid, request_id, *, key=ALICE):
+    from deep_research.workbench.qa_api import _requests
+
+    # Simulate work queued before answer_mode existed. This exercises legacy
+    # replay rather than restoring hidden summary calls in new direct questions.
+    actor = "alice" if key == ALICE else "bob"
+    payload = {"query": "请解释当前研究的评估重点。", "sources": [], "project_id": None}
+    digest = hashlib.sha256(
+        json.dumps({"actor": actor, **payload}, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+    requests = _requests(Request({"type": "http", "app": api.app}))
+    await requests.reserve(cid, request_id, digest, {**payload, "_actor": actor})
     response = await client.post(
         f"/api/qa/conversations/{cid}/messages", headers=_headers(key),
         json={"query": "请解释当前研究的评估重点。", "sources": [], "request_id": request_id},

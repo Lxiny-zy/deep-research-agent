@@ -12,6 +12,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -55,6 +56,7 @@ class CreateConversation(BaseModel):
 
 class AskRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
+    answer_mode: Literal["direct", "verified"] = "direct"
     # 普通问答中来源全部可选；绑定任务的对话另有固定的任务来源
     sources: list[Literal["web", "library"]] = Field(default_factory=list, max_length=2)
     project_id: str | None = Field(None, max_length=64)
@@ -125,12 +127,31 @@ async def _owned(request: Request, conversation_id: str) -> QaConversation:
 
 @router.get("/conversations")
 async def list_conversations(
-    request: Request, run_id: str | None = Query(None, max_length=64)
+    request: Request,
+    run_id: str | None = Query(None, max_length=64),
+    limit: int = Query(200, ge=1, le=200),
+    before: str | None = Query(None, max_length=200),
 ) -> list[dict[str, Any]]:
     principal = principal_for(request)
     if run_id is not None:
         await _check_run(request, run_id)
-    items = await _store(request).list(None if principal.can_manage else principal.id, run_id)
+    cursor = None
+    if before:
+        try:
+            raw_stamp, cid = before.split("|", 1)
+            stamp = datetime.fromisoformat(raw_stamp)
+            stamp = stamp.replace(tzinfo=UTC) if stamp.tzinfo is None else stamp.astimezone(UTC)
+            if not cid or len(cid) > 64:
+                raise ValueError("invalid id")
+            cursor = (stamp, cid)
+        except ValueError as exc:
+            raise HTTPException(422, "会话分页位置无效，请刷新列表") from exc
+    items = await _store(request).list(
+        None if principal.can_manage else principal.id,
+        run_id,
+        limit=limit,
+        before=cursor,
+    )
     return [_serialize(item) for item in items]
 
 
@@ -141,9 +162,23 @@ async def create_conversation(body: CreateConversation, request: Request) -> dic
         raise HTTPException(403, "当前身份为只读，无法发起问答")
     if body.run_id is not None:
         await _check_run(request, body.run_id)
-    conversation = await _store(request).create(
-        principal.id, body.title or "新的学术问答", run_id=body.run_id
-    )
+    try:
+        store = _store(request)
+        if isinstance(store, InMemoryQaStore) and body.run_id is not None:
+            # Match deletion's lock, and repeat the existence/ownership check
+            # after taking it. A completed check before awaiting the lock is
+            # not sufficient when the parent can be deleted concurrently.
+            async with store._request_lock:
+                await _check_run(request, body.run_id)
+                conversation = await store.create(
+                    principal.id, body.title or "新的学术问答", run_id=body.run_id
+                )
+        else:
+            conversation = await store.create(
+                principal.id, body.title or "新的学术问答", run_id=body.run_id
+            )
+    except KeyError as exc:
+        raise HTTPException(404, "run not found") from exc
     return _serialize(conversation)
 
 
@@ -182,6 +217,15 @@ async def _prepare_turn(cid: str, body: AskRequest, request: Request) -> Any:
         raise HTTPException(403, "当前身份为只读，无法发起问答")
     conversation = await _owned(request, cid)
     request_id = body.request_id or str(uuid4())
+    requests = _requests(request)
+    existing = await requests.get(cid, request_id)
+    legacy = existing is not None and "answer_mode" not in existing.request_payload
+    if (
+        body.revision_message_id
+        or body.resume_message_id
+        or (legacy and "answer_mode" not in body.model_fields_set)
+    ):
+        body = body.model_copy(update={"answer_mode": "verified"})
     body = body.model_copy(update={"request_id": request_id, "sources": sorted(set(body.sources))})
     payload = body.model_dump(exclude={"request_id"}, mode="json")
     if body.revision_message_id is None:
@@ -189,13 +233,21 @@ async def _prepare_turn(cid: str, body: AskRequest, request: Request) -> Any:
         payload.pop("revision_message_id", None)
     if body.resume_message_id is None:
         payload.pop("resume_message_id", None)
+    if legacy and body.answer_mode == "verified":
+        payload.pop("answer_mode", None)
     digest = hashlib.sha256(
         json.dumps({"actor": principal.id, **payload}, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
-    requests = _requests(request)
-    existing = await requests.get(cid, request_id)
     if existing is None:
         await api_module._check_rate_limit(request)
+        if (
+            body.answer_mode == "verified"
+            and not body.sources
+            and conversation.run_id is None
+            and not body.revision_message_id
+            and not body.resume_message_id
+        ):
+            raise HTTPException(422, "严格核验需要任务原文，或选择资料库、联网资料")
         if body.resume_message_id is not None:
             await _resume_state(request, conversation, body)
         elif body.revision_message_id is not None:
@@ -268,6 +320,15 @@ async def _answer(
     if not principal.can_research:
         raise HTTPException(403, "当前身份为只读，无法发起问答")
     conversation = await _owned(request, conversation_id)
+    prior_request = next(
+        (m for m in conversation.messages if body.request_id and m.request_id == body.request_id),
+        None,
+    )
+    if prior_request is not None and "answer_mode" not in prior_request.request_payload:
+        body = body.model_copy(update={"answer_mode": "verified"})
+    verified = body.answer_mode == "verified" or bool(
+        body.revision_message_id or body.resume_message_id
+    )
     history_messages = [
         message for message in conversation.messages if message.status in {"done", "fallback"}
     ]
@@ -296,7 +357,7 @@ async def _answer(
         }
         for message in history_messages
     ]
-    environment = await _recovery_environment(request, body, scope, history)
+    environment = await _recovery_environment(request, body, scope, history) if verified else ""
     if body.resume_message_id is not None:
         scope["resume_checkpoint"] = await _resume_state(request, conversation, body)
     execution_context = ""
@@ -329,7 +390,7 @@ async def _answer(
     )
     if previous_memory is not None:
         scope["conversation_memory"] = previous_memory
-    if conversation.run_id is not None and body.revision_message_id is None:
+    if verified and conversation.run_id is not None and body.revision_message_id is None:
         cache = getattr(request.app.state, "paper_evidence_cache", None)
         if cache is None:
             cache = PaperEvidenceCache()
@@ -339,7 +400,17 @@ async def _answer(
     from ..call_budget import ModelCallBudget, ModelCallLimitExceeded
     from .quality import coerce_policy
 
-    call_budget = ModelCallBudget(coerce_policy(settings.quality).qa_max_model_calls)
+    limit = coerce_policy(settings.quality).qa_max_model_calls
+    if not verified:
+        from .qa_direct import DIRECT_MODEL_CALL_LIMIT, DIRECT_SEARCH_CALL_LIMIT
+
+        limit = min(
+            limit,
+            DIRECT_SEARCH_CALL_LIMIT
+            if scope.get("include_web") or scope.get("extra_search") is not None
+            else DIRECT_MODEL_CALL_LIMIT,
+        )
+    call_budget = ModelCallBudget(limit)
     agent.tracer.call_budget = call_budget
     agent.tracer.cache_scope = f"qa:{principal.id}:{conversation.run_id or conversation.id}"
     agent.tracer.run_id = conversation.run_id
@@ -356,7 +427,10 @@ async def _answer(
         call = data.get("model_call")
         if isinstance(call, dict) and isinstance(call.get("call_id"), str):
             calls[call["call_id"]] = {
-                "tool": "model_call", "input": "", "observation": "", "call": call,
+                "tool": "model_call",
+                "input": "",
+                "observation": "",
+                "call": call,
             }
             if on_event:
                 on_event({"type": "model_call", "model_call": call})
@@ -391,36 +465,44 @@ async def _answer(
 
     agent.tracer.add_sink(observe)
     try:
-        ctx = await agent.one_shot_context()
+        roles = _model_roles(scope, verified=verified)
+        ctx = await agent.one_shot_context(
+            required_roles=roles,
+            include_search=bool(scope.get("include_web")),
+            required_search_roles=("researcher",) if scope.get("include_web") else (),
+        )
         from .qa_context import CONTEXT_POLICY_VERSION
 
-        roles = ("planner", "researcher", "synthesizer", "evidence_verifier")
         runtime = getattr(agent, "_catalog_runtime", None)
-        execution_context = environment_hash(
-            {
-                "context_policy": CONTEXT_POLICY_VERSION,
-                "settings": asdict(ctx.settings),
-                "global_rules": getattr(ctx, "global_rules", None),
-                "catalog": runtime.snapshot(roles).model_dump(mode="json")
-                if runtime is not None
-                else None,
-                "models": [
-                    {
-                        "role": role,
-                        **{
-                            key: getattr(ctx.llm_for(role), key, None)
-                            for key in (
-                                "model",
-                                "base_url",
-                                "parameter_mode",
-                                "context_window_tokens",
-                                "reasoning_effort",
-                            )
-                        },
-                    }
-                    for role in roles
-                ],
-            }
+        execution_context = (
+            environment_hash(
+                {
+                    "context_policy": CONTEXT_POLICY_VERSION,
+                    "settings": asdict(ctx.settings),
+                    "global_rules": getattr(ctx, "global_rules", None),
+                    "catalog": runtime.snapshot(roles).model_dump(mode="json")
+                    if runtime is not None
+                    else None,
+                    "models": [
+                        {
+                            "role": role,
+                            **{
+                                key: getattr(ctx.llm_for(role), key, None)
+                                for key in (
+                                    "model",
+                                    "base_url",
+                                    "parameter_mode",
+                                    "context_window_tokens",
+                                    "reasoning_effort",
+                                )
+                            },
+                        }
+                        for role in roles
+                    ],
+                }
+            )
+            if verified
+            else ""
         )
         if (
             body.resume_message_id is not None
@@ -437,9 +519,10 @@ async def _answer(
             body.query,
             history=history,
             ctx=ctx,
+            answer_mode="verified" if verified else "direct",
             on_delta=on_delta,
             on_event=on_event,
-            on_checkpoint=save_checkpoint,
+            on_checkpoint=save_checkpoint if verified else None,
             **scope,
         )
     except HTTPException:
@@ -475,7 +558,7 @@ async def _answer(
         }
     )
 
-    evidence = [
+    evidence = result.source_evidence or [
         {
             "support_id": evidence_id(finding),
             "statement": finding.statement,
@@ -691,6 +774,16 @@ async def _paper_scope(
     return scope
 
 
+def _model_roles(scope: dict[str, Any], *, verified: bool = True) -> tuple[str, ...]:
+    from .qa_scope import qa_model_roles
+
+    return qa_model_roles(
+        grounded=scope.get("paper_sources") is not None or scope.get("revision_seed") is not None,
+        retrieval=bool(scope.get("include_web")) or scope.get("extra_search") is not None,
+        verified=verified,
+    )
+
+
 async def _recovery_environment(
     request: Request, body: AskRequest, scope: dict[str, Any], history: list[dict]
 ) -> str:
@@ -703,12 +796,12 @@ async def _recovery_environment(
     catalog = getattr(request.app.state, "catalog", None)
     catalog_state = None
     if catalog is not None:
-        cards = await catalog.list_agents()
         catalog_state = (
             await create_catalog_runtime_snapshot(
                 catalog,
-                [card.name for card in cards],
+                _model_roles(scope),
                 request.app.state.settings,
+                include_search=bool(scope.get("include_web")),
             )
         ).model_dump(mode="json")
     library = []
@@ -738,7 +831,7 @@ async def _recovery_environment(
             "context_policy": CONTEXT_POLICY_VERSION,
             "evidence_policy": environment_hash(SemanticEvidenceVerifier._SYSTEM),
             "actor": principal_for(request).id,
-            "request": body.model_dump(exclude={"request_id", "resume_message_id"}),
+            "request": body.model_dump(exclude={"request_id", "resume_message_id", "answer_mode"}),
             "settings": asdict(request.app.state.settings),
             "catalog": catalog_state,
             "global_rules": load_global_rules(),

@@ -147,7 +147,7 @@ class ModelSearch(SearchTool):
             ):
                 call_budget = getattr(self._tracer, "call_budget", None)
                 if call_budget is not None:
-                    call_budget.reserve()
+                    await call_budget.reserve_async()
                 call = ModelCall(
                     self._tracer, self.model,
                     operation=ModelOperation(kind="search", role="researcher"),

@@ -7,6 +7,10 @@ import { AppIcon } from './AppIcon'
 import type { QaEvidence, QaMessage } from '../types'
 
 const THOUGHT_LABEL: Record<string, string> = {
+  direct_answer: '直接回答',
+  source_context: '原文范围',
+  search_query: '检索问题',
+  search_status: '附加资料范围',
   rewrite: '检索式',
   model_knowledge: '模型知识',
   skip_search: '跳过检索',
@@ -50,6 +54,9 @@ export default function QaMessageView({
   stopping?: boolean
   continuationStatus?: QaMessage['status']
 }) {
+  const direct = message.request_payload?.answer_mode === 'direct' ||
+    message.thoughts.some((thought) => thought.tool === 'direct_answer')
+  const searchNotice = message.thoughts.find((thought) => thought.tool === 'search_status')?.observation
   const unresolved = message.thoughts
     .filter((thought) => thought.tool === 'evidence_coverage')
     .flatMap((thought) => thought.unresolved_topics ?? [])
@@ -140,6 +147,7 @@ export default function QaMessageView({
             </div>
           )}
           <QaActivityView items={savedQaActivity(message.thoughts)} />
+          {searchNotice && <p className="muted" role="note">{searchNotice}</p>}
           {unresolved.length > 0 && (
             <p className="muted" role="note">
               仍待确认：{unresolved.join('；')}
@@ -148,6 +156,7 @@ export default function QaMessageView({
           <div className="markdown-body qa-answer-body">
             <QaAnswerBody
               text={message.answer}
+              referenceOnly={direct}
               citations={message.citations}
               evidence={message.evidence}
               binding={
@@ -171,7 +180,7 @@ export default function QaMessageView({
             <details className="qa-thoughts">
               <summary>
                 <AppIcon name="chevron-right" size={13} aria-hidden="true" />
-                检索与核验过程
+                {direct ? '本轮参考与回答' : '检索与核验过程'}
               </summary>
               <ol>
                 {steps.map((thought, index) => (

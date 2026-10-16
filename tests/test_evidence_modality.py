@@ -7,7 +7,7 @@ from deep_research.guardrails import SemanticEvidenceDecisionList, SemanticEvide
 from deep_research.models import ExtractedFindingList, Finding, Source
 from deep_research.observability import Tracer
 from deep_research.prompting import EVIDENCE_MODALITY_RULES, MEASUREMENT_SCOPE_RULES
-from deep_research.workbench.qa import answer_question
+from deep_research.workbench.qa import answer_verified_question as answer_question
 from deep_research.workbench.support import SupportDecisions
 from tests.fakes import FakeLLM, FakeSearch, verified_finding
 

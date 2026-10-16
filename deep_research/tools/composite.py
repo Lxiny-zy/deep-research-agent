@@ -84,16 +84,15 @@ class MultiBackendSearch(SearchTool):
         # 进 run manifest：可复现实验必须能区分「单后端跑的」与「双后端跑的」。
         return "+".join(backend.backend_name for backend in self._backends)
 
-    def set_tracer(self, tracer: Tracer) -> None:
-        super().set_tracer(tracer)
-        for backend in self._backends:
-            backend.set_tracer(tracer)
-
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
         if max_results <= 0:
             return []
+        tracer = self._tracer
+        backends = [backend.for_tracer(tracer) for backend in self._backends] if tracer else (
+            self._backends
+        )
         results = await asyncio.gather(
-            *(backend.search(query, max_results=max_results) for backend in self._backends),
+            *(backend.search(query, max_results=max_results) for backend in backends),
             return_exceptions=True,
         )
         merged: dict[str, Source] = {}
@@ -155,6 +154,17 @@ class MultiBackendSearch(SearchTool):
                         "variants": candidates,
                     },
                 )
+        if not merged:
+            from ..execution_policy import resource_busy
+            from ..provider_limits import ProviderBusyError
+
+            waits = [
+                busy.retry_after
+                for result in results
+                if isinstance(result, BaseException) and (busy := resource_busy(result)) is not None
+            ]
+            if waits:
+                raise ProviderBusyError(min(waits)) from None
         if failures and len(failures) == len(self._backends):
             raise RuntimeError(f"所有检索后端均失败：{', '.join(failures)}")
         return list(merged.values())

@@ -9,9 +9,10 @@ import {
   deleteConversation,
   getConversation,
   getReader,
-  listConversations,
 } from '../api/client'
 import { useProjects } from '../hooks/useLibrary'
+import { useQaDraft } from '../hooks/useQaDraft'
+import { useConversations } from '../hooks/useConversations'
 import {
   pendingConversationId,
   pendingQaId,
@@ -20,7 +21,7 @@ import {
 } from '../lib/qaRequest'
 import { appendQaActivity } from '../lib/qaActivity'
 import { useCancelQaRequest } from '../hooks/useCancelQaRequest'
-import { latestQaContinuation, savedQaScope } from '../lib/qaRequest'
+import { latestQaContinuation, savedQaScope, type QaScope } from '../lib/qaRequest'
 import type { QaActivity, QaMessage } from '../types'
 
 const STARTERS = [
@@ -55,7 +56,9 @@ export default function QaPage() {
 function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [draft, setDraft] = useState('')
+  const { draft, setDraft, capture, restore, moveTo } = useQaDraft(
+    id ? `conversation:${id}` : `new:${requestedRunId ?? 'standalone'}`,
+  )
   const [pending, setPending] = useState<string | null>(null)
   const [streamingAnswer, setStreamingAnswer] = useState('')
   const [activity, setActivity] = useState<QaActivity[]>([])
@@ -85,6 +88,8 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
   const [withLibrary, setWithLibrary] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [withWeb, setWithWeb] = useState(false)
+  const [strictVerification, setStrictVerification] = useState(false)
+  const [activeVerification, setActiveVerification] = useState(false)
   const createdId = useRef<string | undefined>(undefined)
   const endRef = useRef<HTMLDivElement>(null)
   const projects = useProjects()
@@ -99,11 +104,7 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
         : false,
   })
   const runId = id ? conversation.data?.run_id || undefined : requestedRunId
-  const conversations = useQuery({
-    queryKey: ['qa-conversations', runId ?? null],
-    queryFn: ({ signal }) => listConversations(signal, runId),
-    enabled: !id || Boolean(conversation.data),
-  })
+  const conversations = useConversations(runId, !id || Boolean(conversation.data))
   const taskScope = useQuery({
     queryKey: ['reader', runId],
     queryFn: ({ signal }) => getReader(runId as string, signal),
@@ -149,13 +150,17 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
       if (withLibrary) sources.push('library')
       if (withWeb) sources.push('web')
       const revisionMessageId = revision?.id ?? resume?.request_payload?.revision_message_id
-      const scope = recovery
+      const scope: QaScope = recovery
         ? { ...savedQaScope(recovery), resumeMessageId: recovery.id }
         : resume
           ? savedQaScope(resume)
           : revisionMessageId
-            ? { sources: [], projectId: undefined, revisionMessageId }
-            : { sources, projectId: withLibrary ? projectId : undefined }
+            ? { sources: [], projectId: undefined, revisionMessageId, answerMode: 'verified' }
+            : {
+                sources, projectId: withLibrary ? projectId : undefined,
+                answerMode: strictVerification && (runId || withLibrary || withWeb) ? 'verified' : 'direct',
+              }
+      setActiveVerification(scope.answerMode === 'verified')
       const requestId = pendingQaId(target, text, scope, resume?.request_id ?? undefined)
       attemptedResume.current.add(requestId)
       activeRequestRef.current = requestId
@@ -180,9 +185,12 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
       setPending(text)
       setStreamingAnswer('')
       setActivity([])
+      return capture()
     },
-    onError: (_error, text) => {
-      if (mounted.current && !cancelledByUser.current) setDraft(text)
+    onError: (_error, text, snapshot) => {
+      // A late failure belongs to the submitted request. Never overwrite a
+      // newer question the user started typing while that request was live.
+      if (mounted.current && !cancelledByUser.current) restore(text, snapshot)
     },
     onSettled: async (target) => {
       await queryClient.invalidateQueries({ queryKey: ['qa-conversations'] })
@@ -197,7 +205,10 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
       setStreamingAnswer('')
       // The app remounts page content when the pathname changes. Keep the
       // first request and its error state visible until the answer is saved.
-      if (target && !id) navigate(`/qa/${target}`, { replace: true })
+      if (target && !id) {
+        moveTo(`conversation:${target}`)
+        navigate(`/qa/${target}`, { replace: true })
+      }
     },
   })
 
@@ -290,6 +301,13 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
           ))}
           {conversations.data?.length === 0 && <li className="qa-empty-list">还没有问答会话</li>}
         </ul>
+        {conversations.isError && <p role="alert">会话列表加载失败，请重试。</p>}
+        {(conversations.hasNextPage || conversations.isError) && (
+          <button className="btn btn-secondary btn-sm" disabled={conversations.isFetching}
+            onClick={() => void (conversations.isError ? conversations.refetch() : conversations.fetchNextPage())}>
+            {conversations.isFetching ? '加载中…' : conversations.isError ? '重试' : '加载更早的会话'}
+          </button>
+        )}
       </aside>
 
       <section className={'qa-main' + (empty ? ' is-empty' : '')} aria-label="学术问答">
@@ -383,8 +401,8 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
               <QaStreamingAnswer
                 text={streamingAnswer}
                 activity={activity}
-                waiting={withLibrary || withWeb ? '正在检索并核验证据…' : '正在生成回答…'}
-                requiresVerification={withLibrary || withWeb}
+                waiting={withLibrary || withWeb ? '正在检索所选资料…' : '正在生成回答…'}
+                requiresVerification={activeVerification}
               />
             </article>
           )}
@@ -451,6 +469,16 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
                     aria-hidden="true"
                   />
                 </span>
+              </label>
+              <label className="qa-scope-toggle" title="额外检查事实、公式和引用，可能增加多次模型请求与等待；默认关闭。">
+                <input
+                  className="visually-hidden"
+                  type="checkbox"
+                  checked={strictVerification && Boolean(runId || withLibrary || withWeb)}
+                  disabled={ask.isPending || !(runId || withLibrary || withWeb)}
+                  onChange={(event) => setStrictVerification(event.target.checked)}
+                />
+                <span className="qa-scope-option">严格核验（较慢）</span>
               </label>
             </div>
             {withLibrary && (

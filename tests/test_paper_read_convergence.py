@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from deep_research.workbench.paper_evidence import PaperEvidenceSelection
-from deep_research.workbench.qa import answer_question
+from deep_research.workbench.qa import answer_verified_question as answer_question
 from deep_research.workbench.qa_cache import PaperEvidenceCache
 from tests.test_paper_evidence_reuse import scoped_setup
 

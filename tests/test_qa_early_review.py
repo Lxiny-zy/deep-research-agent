@@ -45,7 +45,7 @@ class MixedAnswer(Judge):
 
 
 async def ask(settings, model):
-    from deep_research.workbench.qa import answer_question
+    from deep_research.workbench.qa import answer_verified_question as answer_question
 
     ctx = RunContext(llm=model, search_tool=CorrelationSearch(), tracer=Tracer(), settings=settings)
     return await answer_question("解释变量关系", history=[], ctx=ctx, include_web=True)

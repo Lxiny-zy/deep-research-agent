@@ -242,7 +242,10 @@ class EvidenceVerifier:
     """Verify that a candidate quote occurs in the selected source content."""
 
     def __init__(
-        self, *, min_quote_chars: int = 6, max_quote_chars: int = 600,
+        self,
+        *,
+        min_quote_chars: int = 6,
+        max_quote_chars: int = 600,
         quote_ranges: dict[tuple[str, str], list[tuple[int, int]]] | None = None,
     ) -> None:
         if max_quote_chars < min_quote_chars:
@@ -265,7 +268,8 @@ class EvidenceVerifier:
         content_hash = hashlib.sha256(source.content.encode("utf-8")).hexdigest()
         ranges = (
             self.quote_ranges.get((source.url, content_hash), [])
-            if self.quote_ranges is not None else [(0, len(source.content))]
+            if self.quote_ranges is not None
+            else [(0, len(source.content))]
         )
         quote_span = None
         context_bounds = (0, len(source.content))
@@ -297,8 +301,9 @@ class EvidenceVerifier:
             source_reference=_local_reference(source)
             or format_reference(source.url, source.scholarly, title=source.title),
             evidence_context=_evidence_context(
-                source.content[context_bounds[0]:context_bounds[1]],
-                quote_start - context_bounds[0], quote_end - context_bounds[0],
+                source.content[context_bounds[0] : context_bounds[1]],
+                quote_start - context_bounds[0],
+                quote_end - context_bounds[0],
             ),
             # 同一个区间既截出上下文窗口，也作为可复核的引用锚点落库。
             quote_start=quote_start,
@@ -496,13 +501,18 @@ class SemanticEvidenceVerifier:
         user = self._prompt(group)
         try:
             response = await llm.parse(
-                system, user, SemanticEvidenceDecisionList, temperature=0.0,
+                system,
+                user,
+                SemanticEvidenceDecisionList,
+                temperature=0.0,
                 **verification_generation_options(llm),
             )
         except LeaseLostError:
             raise
         except Exception as exc:
-            if raise_errors:
+            from .execution_policy import resource_busy
+
+            if raise_errors or resource_busy(exc) is not None:
                 raise
             reason = f"semantic_verifier_failed:{type(exc).__name__}"
             return [
@@ -630,6 +640,10 @@ class ClaimConsistencyVerifier:
         except LeaseLostError:
             raise
         except Exception as exc:
+            from .execution_policy import resource_busy
+
+            if resource_busy(exc) is not None:
+                raise
             reason = f"consistency_verifier_failed:{type(exc).__name__}"
             failed_findings: list[Finding] = []
             for finding in findings:
@@ -752,13 +766,20 @@ class ClaimConsistencyVerifier:
                 # A claim may be quoted at several locations. Propagate the logical
                 # verdict, while retaining each occurrence's snapshot and quote anchors.
                 consistent = _with_consistency(
-                    original, verdict.consistency_status,
-                    verdict.contradicts_claim_ids, verdict.contradiction_reason,
+                    original,
+                    verdict.consistency_status,
+                    verdict.contradicts_claim_ids,
+                    verdict.contradiction_reason,
                 )
-                checked.append(_with_corroboration(
-                    consistent, verdict.corroboration_status, verdict.independent_source_count,
-                    verdict.corroborates_claim_ids, verdict.corroboration_reason,
-                ))
+                checked.append(
+                    _with_corroboration(
+                        consistent,
+                        verdict.corroboration_status,
+                        verdict.independent_source_count,
+                        verdict.corroborates_claim_ids,
+                        verdict.corroboration_reason,
+                    )
+                )
             else:
                 checked.append(finding)
         return checked

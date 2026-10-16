@@ -10,6 +10,7 @@ from deep_research.workbench.fulltext_review import (
     FullTextChecks,
     FullTextReviewer,
     FullTextTarget,
+    FullTextTargets,
     validate_fulltext_record,
 )
 from deep_research.workbench.support import (
@@ -81,6 +82,13 @@ class FullTextJudge:
     async def parse(self, system, user, schema, **kwargs):
         self.calls += 1
         data = json.loads(user)
+        if schema is FullTextTargets:
+            return FullTextTargets.model_validate({"targets": [
+                {"unit_id": item["unit"]["id"], "target": {
+                    "kind": self.kind, "document_ids": [item["documents"][0]["id"]],
+                    "keywords": ["T", "S-MSA", "dropout"], "reason": "controlled target selection",
+                }} for item in data["units"]
+            ]})
         if schema is FullTextTarget:
             return FullTextTarget(
                 kind=self.kind,

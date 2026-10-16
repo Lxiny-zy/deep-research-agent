@@ -1,11 +1,10 @@
-"""学术问答：多轮对话式的快速检索问答，每个回答都带已核验引用。
+"""学术问答：默认基于选定原文直接回答，独立核验由用户显式选择。
 
-与「深度研究」的区别在于成本与交互形态：问答是有界检索、分批抽取与核验后作答，
-适合「查一下某方向最新文献」「这个指标是什么意思」这类
-追问式需求；深度研究则是多子问题、反思补洞、结构化报告。
+普通追问只做本地上下文选择和一次回答，不串行启动证据抽取、公式检查与自动修订。
+额外检索只在用户选择来源时发生；严格核验模式保留原有证据准入、复核与修订能力。
 
-问答复用研究链路里全部的证据纪律：来源门禁、逐字引文核验、语义核验，最终正文
-同样经过 ``validate_body`` 的引用与数值复核——对话不是放宽证据标准的理由。
+直接回答保留来源范围和真实原文，不标记为独立核验通过。
+严格核验使用来源门禁、逐字引文核验、语义核验与 ``validate_body``。
 
 会话状态存于轻量表 ``qa_conversation`` / ``qa_message``：会话 id、标题、每条消息的
 问句、答句、引用与「思考过程」（检索了什么、保留了几条证据），供前端还原对话。
@@ -136,6 +135,7 @@ class QaAnswer:
     # 每个引用的出处：paper（本论文）/ library（资料库）/ web（联网检索）
     origins: dict[str, str] = field(default_factory=dict)
     revision_state: dict[str, Any] | None = None
+    source_evidence: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _contextual_query(
@@ -294,11 +294,54 @@ def _is_casual_question(question: str) -> bool:
     return bool(_CASUAL_RE.fullmatch(question.strip()))
 
 
+async def _knowledge_answer(
+    question: str,
+    query: str,
+    history: History,
+    ctx: Any,
+    memory: ConversationMemory | None,
+    thoughts: list[dict[str, Any]],
+    on_delta: Callable[[str], None] | None,
+) -> QaAnswer:
+    model = ctx.llm_for("synthesizer")
+    capacity = getattr(model, "input_capacity_chars", ctx.settings.llm_max_input_chars)
+    system = leaf_system_prompt(_KNOWLEDGE_SYSTEM, getattr(ctx, "global_rules", None))
+    budget = ContextBudget.from_model(model, ctx.settings.llm_max_input_chars)
+    context = dialogue_context(
+        history,
+        min(capacity, budget.remaining(system, question, reserve_tokens=128) // 2),
+        memory=memory,
+        require_complete_constraints=True,
+    )
+    chunks: list[str] = []
+    async for delta in model.stream(
+        system, f"{context}\n\n【用户问题】\n{question}", temperature=0.3
+    ):
+        chunks.append(delta)
+        if on_delta is not None:
+            on_delta(delta)
+    body = "".join(chunks).strip()
+    thoughts.append(
+        {
+            "tool": "model_knowledge", "input": query,
+            "observation": "未启用外部检索，使用模型自身知识回答",
+        }
+    )
+    return QaAnswer(
+        answer=body or "当前无法生成回答。若需要最新资料或可核验出处，请开启联网检索。",
+        citations=[],
+        findings=[],
+        thoughts=thoughts,
+        fallback=not bool(body),
+    )
+
+
 async def answer_question(
     question: str,
     *,
     history: History,
     ctx: Any,
+    answer_mode: Literal["direct", "verified"] = "direct",
     paper_sources: list[Source] | None = None,
     paper_evidence: list[Finding] | None = None,
     include_web: bool = False,
@@ -314,11 +357,20 @@ async def answer_question(
     resume_checkpoint: dict[str, Any] | None = None,
     on_checkpoint: CheckpointWriter | None = None,
 ) -> QaAnswer:
-    """一次学术问答：检索 → 核验 → 作答 → 复核。``ctx`` 为 ``RunContext``。
+    """Direct source-grounded Q&A by default; independent verification is explicit.
 
     ``paper_sources`` 不为 None 时是论文精读对话：这篇论文的片段始终参与，
     ``include_web`` / ``extra_search``（资料库）按用户勾选叠加；不勾选时绝不调用外部检索。
     """
+    if answer_mode == "direct" and revision_seed is None and resume_checkpoint is None:
+        from .qa_direct import answer_direct_question
+
+        return await answer_direct_question(
+            question, history=history, ctx=ctx, paper_sources=paper_sources,
+            include_web=include_web, extra_search=extra_search,
+            on_delta=on_delta, on_event=on_event, scope_kind=scope_kind,
+            scope_query=scope_query, conversation_memory=conversation_memory,
+        )
     thoughts: list[dict[str, Any]] = []
     if resume_checkpoint is not None:
         saved = read_checkpoint(resume_checkpoint)
@@ -393,12 +445,20 @@ async def answer_question(
         query = f"绑定研究任务：{scope_query}\n本轮追问：{query}"
     thoughts.append({"tool": "rewrite", "input": question, "observation": query})
 
+    if (
+        paper_sources is None
+        and not include_web
+        and extra_search is None
+        and revision_seed is None
+    ):
+        return await _knowledge_answer(question, query, history, ctx, memory, thoughts, on_delta)
+
     researcher = Researcher(settings=ctx.settings)
     researcher.llm = ctx.llm_for("researcher")
     researcher.verification_llm = ctx.llm_for("evidence_verifier")
     researcher.tracer = ctx.tracer
     researcher.settings = ctx.settings
-    researcher.system = ctx.system_prompt(researcher.system)
+    researcher.global_rules = getattr(ctx, "global_rules", None)
 
     if revision_seed is not None:
         material = read_revision_state(revision_seed)
@@ -461,15 +521,13 @@ async def answer_question(
         # fixed room for the dynamic query and JSON repair, including the actual
         # schema/global rules in capacity accounting. This is per-call capacity,
         # not a cumulative token budget.
-        from ..agents.base import direct_system_prompt
-
         input_limit = getattr(
             researcher.llm,
             "input_capacity_chars",
             ctx.settings.llm_max_input_chars,
         )
         system_chars = len(
-            structured_system_prompt(direct_system_prompt(researcher.system), ExtractedFindingList)
+            structured_system_prompt(researcher.extraction_system(), ExtractedFindingList)
         )
         available = max(0, input_limit - system_chars)
         # Schema can dominate a small context window. Reserve framing/repair
@@ -518,11 +576,16 @@ async def answer_question(
 
             pool_key = "pool:" + evidence_cache_key(cache_scope, "", paper_sources, researcher)
             pooled = paper_cache.get(pool_key) if paper_cache is not None else None
-            candidates = await current_findings(
-                merge_findings(paper_evidence or [], pooled[0] if pooled else []),
+            admitted = await current_findings(
+                paper_evidence or [],
                 paper_sources,
                 researcher,
+                cache=paper_cache,
+                cache_scope=cache_scope,
             )
+            # Pool entries were admitted under this exact source/model/policy key.
+            # Rechecking them on every new question duplicates paid verification.
+            candidates = merge_findings(pooled[0] if pooled else [], admitted)
             if candidates and on_event is not None:
                 on_event({"type": "status", "message": "正在核对已有论文证据能否回答本轮问题…"})
             selection = await plan_findings(
@@ -531,6 +594,7 @@ async def answer_question(
                 history,
                 researcher,
                 paper_sources,
+                max_read_chars=context_chars,
             )
             collected = list(selection.findings)
             raw = 0
@@ -588,6 +652,7 @@ async def answer_question(
                     researcher,
                     paper_sources,
                     read_urls,
+                    max_read_chars=context_chars,
                 )
             if selection.sufficient:
                 paper_findings = selection.findings
@@ -673,56 +738,6 @@ async def answer_question(
                 "observation": f"其他文献中保留 {len(other)} 条已核验证据",
             }
         )
-    else:
-        if paper_sources is not None:
-            # The paper-only scope is already fully represented by its frozen
-            # chunks. No optional source means no additional retrieval.
-            pass
-        else:
-            model = ctx.llm_for("synthesizer")
-            capacity = getattr(model, "input_capacity_chars", ctx.settings.llm_max_input_chars)
-            knowledge_system = leaf_system_prompt(
-                _KNOWLEDGE_SYSTEM,
-                getattr(ctx, "global_rules", None),
-            )
-            knowledge_budget = ContextBudget.from_model(model, ctx.settings.llm_max_input_chars)
-            context = dialogue_context(
-                history,
-                min(
-                    capacity,
-                    knowledge_budget.remaining(
-                        knowledge_system,
-                        question,
-                        reserve_tokens=128,
-                    )
-                    // 2,
-                ),
-                memory=memory,
-                require_complete_constraints=True,
-            )
-            user = f"{context}\n\n【用户问题】\n{question}"
-            knowledge_chunks: list[str] = []
-            async for delta in ctx.llm_for("synthesizer").stream(
-                knowledge_system, user, temperature=0.3
-            ):
-                knowledge_chunks.append(delta)
-                if on_delta is not None:
-                    on_delta(delta)
-            body = "".join(knowledge_chunks).strip()
-            thoughts.append(
-                {
-                    "tool": "model_knowledge",
-                    "input": query,
-                    "observation": "未启用外部检索，使用模型自身知识回答",
-                }
-            )
-            return QaAnswer(
-                answer=body or "当前无法生成回答。若需要最新资料或可核验出处，请开启联网检索。",
-                citations=[],
-                findings=[],
-                thoughts=thoughts,
-                fallback=not bool(body),
-            )
     fulltext_sources = list(paper_sources or [])
     for thought in thoughts:
         if thought.get("tool") == "extraction_audit":
@@ -754,6 +769,11 @@ async def answer_question(
         on_event=on_event,
         on_checkpoint=on_checkpoint,
     )
+
+
+async def answer_verified_question(question: str, **kwargs: Any) -> QaAnswer:
+    """Explicit entry for the independently verified answer contract."""
+    return await answer_question(question, answer_mode="verified", **kwargs)
 
 
 async def _compose_answer(

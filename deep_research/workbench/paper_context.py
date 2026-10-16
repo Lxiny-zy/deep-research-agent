@@ -25,6 +25,13 @@ def _block(source: Source, index: int, text: str) -> str:
     )
 
 
+def full_paper_context(sources: list[Source]) -> str:
+    """Format complete material for both admission sizing and extraction."""
+    return "【全部已读取论文片段（不代表原文件未解析部分）】\n" + "\n\n".join(
+        _block(source, index + 1, source.content) for index, source in enumerate(sources)
+    )
+
+
 def paper_context(sources: list[Source], query: str, max_chars: int) -> str:
     """Deterministic document-order prefix, bounded independently of question length.
 
@@ -33,9 +40,7 @@ def paper_context(sources: list[Source], query: str, max_chars: int) -> str:
     """
     if max_chars <= 0:
         return ""
-    full = "【全部已读取论文片段（不代表原文件未解析部分）】\n" + "\n\n".join(
-        _block(source, index + 1, source.content) for index, source in enumerate(sources)
-    )
+    full = full_paper_context(sources)
     if len(full) <= max_chars:
         return PrefixPrompt(full)
 

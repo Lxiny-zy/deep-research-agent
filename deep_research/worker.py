@@ -122,32 +122,41 @@ class Worker:
         return sorted(task.get_name() for task in self._running if not task.done())
 
     @property
+    def local_limit(self) -> int:
+        return min(
+            self.settings.max_active_runs,
+            self.settings.worker_max_active_runs or self.settings.max_active_runs,
+        )
+
+    @property
     def capacity(self) -> int:
-        return max(0, self.settings.max_active_runs - len(self._running))
+        return max(0, self.local_limit - len(self._running))
 
     async def run_forever(self) -> None:
         if getattr(self.repo, "_render_dispatcher_managed", False):
             await self._run_execution_loop()
             return
-        from .render_service import service_for
+        from .render_service import render_consumer_scope, service_for
 
-        rendering = service_for(self.repo, self.settings)
-        dispatcher = asyncio.create_task(rendering.poll_pending())
-        try:
-            await self._run_execution_loop()
-        finally:
-            self.request_stop(reason="render_dispatcher_shutdown")
-            cancel({dispatcher})
-            closing = asyncio.create_task(rendering.close(deadline=self.shutdown_deadline))
-            pending = await wait_until({dispatcher, closing}, self.shutdown_deadline)
-            cancel(pending)
-            self.requires_hard_exit |= bool(pending) or rendering.requires_hard_exit
+        with render_consumer_scope():
+            rendering = service_for(self.repo, self.settings)
+            dispatcher = asyncio.create_task(rendering.poll_pending())
+            try:
+                await self._run_execution_loop()
+            finally:
+                self.request_stop(reason="render_dispatcher_shutdown")
+                cancel({dispatcher})
+                closing = asyncio.create_task(rendering.close(deadline=self.shutdown_deadline))
+                pending = await wait_until({dispatcher, closing}, self.shutdown_deadline)
+                cancel(pending)
+                self.requires_hard_exit |= bool(pending) or rendering.requires_hard_exit
 
     async def _run_execution_loop(self) -> None:
         logger.info(
-            "worker %s started (max_active_runs=%s, poll=%ss)",
+            "worker %s started (global_limit=%s, local_limit=%s, poll=%ss)",
             self.name,
             self.settings.max_active_runs,
+            self.local_limit,
             self.settings.worker_poll_seconds,
         )
         stop_wait = asyncio.create_task(self._stopping.wait(), name="worker-stop")
@@ -189,7 +198,9 @@ class Worker:
             return self.settings.worker_poll_seconds
         try:
             claimed = await self.repo.claim_next_run(
-                f"claim-{uuid4().hex}", max_active_runs=self.settings.max_active_runs
+                f"claim-{uuid4().hex}",
+                max_active_runs=self.settings.max_active_runs,
+                scheduling_policy=self.settings.run_scheduling_policy,
             )
         except asyncio.CancelledError:
             raise
@@ -206,9 +217,13 @@ class Worker:
             )
             return self.settings.worker_poll_seconds
 
-        recoveries = claimed.execution.checkpoint.get("scratch", {}).get("_recovery", {})
+        scratch = claimed.execution.checkpoint.get("scratch", {})
+        recoveries = scratch.get("_recovery", {})
+        resource_waits = scratch.get("_resource_wait", {})
         if (
-            claimed.claim_attempts - int(recoveries.get("count", 0))
+            claimed.claim_attempts
+            - int(recoveries.get("count", 0))
+            - int(resource_waits.get("count", 0))
             > self.settings.max_claim_attempts
         ):
             # 领取次数超限意味着这个任务每次执行都崩：再派发一次只是重复浪费。

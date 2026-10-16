@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
@@ -173,6 +173,8 @@ def create_initial_execution(
     execution_plan: Any | None = None,
 ) -> WorkflowRun:
     """Create the durable, leased checkpoint used before a background task starts."""
+    from .task_call_budget import TASK_CALL_SCOPE_KEY
+
     settings = resolved_settings(settings, workflow_name)
     runtime = OrchestrationRuntime()
     execution = runtime.start(workflow_name or "deep", {"query": query})
@@ -180,6 +182,7 @@ def create_initial_execution(
         RUN_SETTINGS_CHECKPOINT_KEY: checkpoint_settings(settings),
         "_schema_version": SCHEMA_VERSION,
         "_artifact_run_scoped": True,
+        TASK_CALL_SCOPE_KEY: execution.id,
     }
     # Preserve the user's explicit choice across queue admission and worker
     # recovery.  ``workflow_name`` may instead be an intent-derived route,
@@ -236,6 +239,22 @@ class _LazyOwnedLLM(LLM):
     @parameter_mode.setter
     def parameter_mode(self, value: str) -> None:
         self._get().parameter_mode = value
+
+    @property
+    def default_temperature(self) -> float | None:
+        return getattr(self._get(), "default_temperature", None)
+
+    @default_temperature.setter
+    def default_temperature(self, value: float | None) -> None:
+        self._get().default_temperature = value
+
+    @property
+    def reasoning_effort(self) -> str:
+        return getattr(self._get(), "reasoning_effort", "medium")
+
+    @reasoning_effort.setter
+    def reasoning_effort(self, value: str) -> None:
+        self._get().reasoning_effort = value
 
     @property
     def context_window_tokens(self) -> int | None:
@@ -406,7 +425,7 @@ class DeepResearchAgent:
             else _LazyOwnedSearchTool(lambda: _default_search_tool(settings))
         )
         if isinstance(raw_search_tool, SearchTool):
-            raw_search_tool.set_tracer(self.tracer)
+            raw_search_tool = raw_search_tool.for_tracer(self.tracer)
         self.search_tool = RecordingSearchTool(raw_search_tool)
 
         # 仍构造具名角色实例：向后兼容（测试替换 self.researcher、直接调用各角色）
@@ -416,7 +435,10 @@ class DeepResearchAgent:
         self.synthesizer = Synthesizer(self.llm, self.tracer, settings)
         self._sem = asyncio.Semaphore(settings.max_concurrency)
 
-    async def one_shot_context(self) -> RunContext:
+    async def one_shot_context(
+        self, *, required_roles: Iterable[str] | None = None, include_search: bool = True,
+        required_search_roles: Iterable[str] = (),
+    ) -> RunContext:
         """为不经工作流引擎的一次性调用（学术问答）构造运行上下文。
 
         与 ``_run_workflow`` 使用同一套解析：catalog 角色卡片绑定的模型档案、
@@ -425,12 +447,19 @@ class DeepResearchAgent:
         """
         from .catalog.runtime import load_catalog_runtime
 
+        required_roles = tuple(required_roles) if required_roles is not None else None
         if self._catalog_runtime is None:
             self._catalog_runtime = await load_catalog_runtime(
-                self._catalog_repo, self.tracer, self.settings
+                self._catalog_repo, self.tracer, self.settings,
+                required_roles=required_roles, include_search=include_search,
+                required_search_roles=required_search_roles,
             )
         cr = self._catalog_runtime
-        if self._owns_llm and (cr is None or not cr.has_default_profile):
+        configured = cr is not None and (
+            cr.has_default_profile
+            or (required_roles is not None and cr.covers_roles(required_roles))
+        )
+        if self._owns_llm and not configured:
             self.settings.validate_llm()
         return RunContext(
             llm=self.llm,
@@ -690,8 +719,12 @@ class DeepResearchAgent:
         # 已有判定（API 预路由或 checkpoint 恢复）由 IntentRouter 自己处理复用与
         # 补跑逻辑，这里只负责保证「门禁一定跑过一次」。
         from .agents.intent_router import IntentRouter
+        from .workbench.contract import contract_from_scratch
 
-        await IntentRouter().step(bb, ctx)
+        contract = contract_from_scratch(bb.scratch)
+        await IntentRouter(
+            extract_entities=contract is None or contract.strategy != "none"
+        ).step(bb, ctx)
 
     async def _run_workflow(self, query: str, run_id: str | None) -> Report:
         """组装上下文、执行工作流，并在产出关键里程碑时落库（计划/结果/报告）。
@@ -740,7 +773,13 @@ class DeepResearchAgent:
             if self._artifact_store is None:
                 root = Path(self.settings.artifact_root)
                 if existing_execution is None or bb.scratch.get("_artifact_run_scoped"):
-                    artifact_run_id = run_id or bb.scratch.get("_artifact_run_id") or str(uuid4())
+                    artifact_run_id = (
+                        run_id or bb.scratch.get("_artifact_run_id")
+                        or (
+                            existing_execution.id
+                            if existing_execution is not None else str(uuid4())
+                        )
+                    )
                     artifact_run_id = _validate_component(artifact_run_id, label="artifact run id")
                     root = root / "runs" / artifact_run_id
                     bb.scratch["_artifact_run_scoped"] = True
@@ -771,6 +810,56 @@ class DeepResearchAgent:
                 )
             if self._skill_resolver is None:
                 self._skill_resolver = default_skill_resolver(Path.cwd())
+        from .workbench.contract import contract_from_scratch
+        from .workbench.quality import coerce_policy
+
+        contract = contract_from_scratch(bb.scratch)
+        task_quality = coerce_policy(
+            contract.quality if contract is not None else self.settings.quality
+        )
+        if task_quality.task_max_model_calls and self.tracer.call_budget is None:
+            from .task_call_budget import TASK_CALL_SCOPE_KEY, CallBudgetStateError, TaskCallBudget
+
+            saved_scope = bb.scratch.get(TASK_CALL_SCOPE_KEY)
+            if run_id is None and TASK_CALL_SCOPE_KEY in bb.scratch:
+                saved_scope = _validate_component(saved_scope, label="task model-call scope")
+            scope_id = _validate_component(
+                run_id or saved_scope or bb.scratch.get("_artifact_run_id")
+                or (existing_execution.id if existing_execution is not None else str(uuid4())),
+                label="task model-call scope",
+            )
+            # The allowance belongs to the task even when its caller supplies
+            # the store. A frozen execution ID also survives a failure before
+            # this run's first checkpoint has been saved.
+            bb.scratch[TASK_CALL_SCOPE_KEY] = scope_id
+            if self._artifact_store is None:
+                self._artifact_store = ArtifactStore(
+                    Path(self.settings.artifact_root) / "runs" / scope_id,
+                    max_bytes=self.settings.artifact_max_bytes,
+                    max_total_bytes=self.settings.artifact_total_bytes,
+                    quota_root=self.settings.artifact_root,
+                )
+                bb.scratch["_artifact_run_scoped"] = True
+                bb.scratch["_artifact_run_id"] = scope_id
+            call_budget = TaskCallBudget(
+                task_quality.task_max_model_calls, self._artifact_store, f"run:{scope_id}"
+            )
+            if self._resume_execution is not None and run_id is None:
+                frozen_scratch = self._resume_execution.checkpoint.get("scratch", {})
+                if not (
+                    frozen_scratch.get(TASK_CALL_SCOPE_KEY)
+                    or frozen_scratch.get("_artifact_run_id")
+                ):
+                    # Older caller-owned stores could contain reservations
+                    # under an unrecorded UUID. Never give such a run a fresh
+                    # allowance if its existing counter cannot be identified.
+                    try:
+                        await run_blocking(self._artifact_store.read_control_text, call_budget.path)
+                    except FileNotFoundError as exc:
+                        raise CallBudgetStateError(
+                            "原任务缺少可绑定的历史模型请求额度记录，未重新分配额度。"
+                        ) from exc
+            self.tracer.call_budget = call_budget
         artifact_slug = self._artifact_slug
         if planner_mode:
             # The planner branch always establishes a stable slug above; keep
@@ -1233,6 +1322,7 @@ class DeepResearchAgent:
             and prose_reviewer.check(bb.report.markdown, previous_review)[0]
         )
         diagnostic_fallback = False
+        partial_fallback = bool(previous_review and previous_review.get("partial"))
         if not reviewed_mindmap and not reviewed_prose and (bb.results or bb.report.citations):
             from .workbench.paper_abstract import abstract_section_support
             from .workbench.scholarly import uncited_sections_for
@@ -1247,6 +1337,8 @@ class DeepResearchAgent:
                 section_support=abstract_section_support(bb.scratch),
             )
             diagnostic_fallback = bool(check.issues)
+            if diagnostic_fallback:
+                partial_fallback = False
             prior_issues = [
                 issue
                 for event in self.tracer.events
@@ -1298,6 +1390,8 @@ class DeepResearchAgent:
                     audit["body_replaced"] = bool(
                         bb.scratch.get("_report_validation", {}).get("fallback")
                     )
+                    if partial_fallback:
+                        audit["partial"] = True
                 bb.scratch[PROSE_REVIEW_KEY] = audit
                 validation = {
                     "scope": "citation_and_numbers"
@@ -1307,6 +1401,7 @@ class DeepResearchAgent:
                     "fallback": bool(audit.get("body_replaced")),
                     "semantic_verification": not bool(audit.get("model_review_skipped")),
                     "support_status": audit["status"],
+                    **({"partial": True} if audit.get("partial") else {}),
                 }
                 bb.scratch["_report_validation"] = validation
                 self.tracer.emit(
@@ -1482,6 +1577,7 @@ class DeepResearchAgent:
                     "fallback": bool(record.get("body_replaced")),
                     "semantic_verification": not bool(record.get("model_review_skipped")),
                     "support_status": record["status"],
+                    **({"partial": True} if record.get("partial") else {}),
                 }
             working.report, working.results = candidate.report, candidate.results
             working.orchestration.checkpoint = candidate.model_dump(mode="json")

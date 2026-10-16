@@ -5,18 +5,26 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 
+from deep_research.artifacts import ArtifactStore
 from deep_research.call_budget import ModelCallBudget, ModelCallLimitExceeded
 from deep_research.llm import LLM
 from deep_research.observability import Tracer
 from deep_research.security import ProviderURLPolicyError
+from deep_research.task_call_budget import TaskCallBudget
 from deep_research.token_budget import TokenBudget, TokenBudgetExceeded
 from deep_research.tools.model_search import ModelSearch, cited_sources
 
 
 @pytest.mark.parametrize("protocol", ["responses", "chat_search"])
-async def test_search_and_llm_share_actual_http_attempt_budget(settings, protocol):
+@pytest.mark.parametrize("durable", [False, True])
+async def test_search_and_llm_share_actual_http_attempt_budget(
+    settings, protocol, tmp_path, durable,
+):
     tracer = Tracer()
-    tracer.call_budget = ModelCallBudget(2)
+    tracer.call_budget = (
+        TaskCallBudget(2, ArtifactStore(tmp_path), "native-search")
+        if durable else ModelCallBudget(2)
+    )
     requests = []
 
     def transport(request):
@@ -74,12 +82,17 @@ async def test_search_and_llm_share_actual_http_attempt_budget(settings, protoco
         await search.aclose()
 
 
-async def test_search_key_failover_cannot_bypass_or_reclassify_call_budget():
+@pytest.mark.parametrize("durable", [False, True])
+async def test_search_key_failover_cannot_bypass_or_reclassify_call_budget(tmp_path, durable):
     from deep_research.tools.key_health import shared_health
     from deep_research.tools.key_pool import ApiKeyPoolSearch
 
     tracer = Tracer()
-    tracer.call_budget = ModelCallBudget(1)
+    tracer.call_budget = (
+        TaskCallBudget(1, ArtifactStore(tmp_path), "key-failover")
+        if durable else ModelCallBudget(1)
+    )
+    namespace = f"call-budget-test-{durable}"
     posts, created = [], []
     clients = {}
     for key in ("limited", "spare", "untouched"):
@@ -100,14 +113,14 @@ async def test_search_key_failover_cannot_bypass_or_reclassify_call_budget():
         return clients[key]
 
     pool = ApiKeyPoolSearch(
-        "responses", list(clients), factory, tracer=tracer, namespace="call-budget-test",
+        "responses", list(clients), factory, tracer=tracer, namespace=namespace,
     )
     try:
         with pytest.raises(ModelCallLimitExceeded):
             await pool.search("q")
         assert posts == ["limited"] and created == ["limited", "spare"]
         assert tracer.call_budget.used == 1 and tracer.call_budget.rejected
-        assert shared_health("responses", "call-budget-test", "spare").status == "ready"
+        assert shared_health("responses", namespace, "spare").status == "ready"
         # Repeating the failed request still cannot rotate into a fresh paid call.
         with pytest.raises(ModelCallLimitExceeded):
             await pool.search("q again")

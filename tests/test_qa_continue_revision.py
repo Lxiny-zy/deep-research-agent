@@ -9,7 +9,7 @@ from deep_research.guardrails import SemanticEvidenceDecisionList
 from deep_research.models import ExtractedFindingList
 from deep_research.observability import Tracer
 from deep_research.workbench.prose_edit import ProseEdits
-from deep_research.workbench.qa import answer_question
+from deep_research.workbench.qa import answer_verified_question as answer_question
 from tests.test_prose_review import CorrelationSearch, Judge
 from tests.test_qa_requests import stores as stores
 

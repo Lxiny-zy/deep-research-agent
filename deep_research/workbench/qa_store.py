@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..persistence import orm
@@ -94,7 +94,12 @@ class QaStore(Protocol):
     ) -> QaConversation: ...
 
     async def list(
-        self, owner_id: str | None, run_id: str | None = None
+        self,
+        owner_id: str | None,
+        run_id: str | None = None,
+        *,
+        limit: int = 200,
+        before: tuple[datetime, str] | None = None,
     ) -> list[QaConversation]: ...
 
     async def get(self, conversation_id: str) -> QaConversation | None: ...
@@ -131,12 +136,23 @@ class SqlQaStore:
 
     async def create(self, owner_id: str, title: str, run_id: str | None = None) -> QaConversation:
         async with self._sm() as s, s.begin():
+            if run_id is not None:
+                await transaction_lock(s, "qa:admission")
+                if await s.get(orm.ResearchRun, run_id) is None:
+                    raise KeyError(run_id)
             row = orm.QaConversationRow(owner_id=owner_id, title=title[:200], run_id=run_id)
             s.add(row)
             await s.flush()
             return QaConversation(id=row.id, owner_id=owner_id, title=row.title, run_id=run_id)
 
-    async def list(self, owner_id: str | None, run_id: str | None = None) -> list[QaConversation]:
+    async def list(
+        self,
+        owner_id: str | None,
+        run_id: str | None = None,
+        *,
+        limit: int = 200,
+        before: tuple[datetime, str] | None = None,
+    ) -> list[QaConversation]:
         async with self._sm() as s:
             counts = (
                 select(orm.QaMessageRow.conversation_id, func.count().label("n"))
@@ -146,9 +162,20 @@ class SqlQaStore:
             stmt = (
                 select(orm.QaConversationRow, counts.c.n)
                 .outerjoin(counts, counts.c.conversation_id == orm.QaConversationRow.id)
-                .order_by(orm.QaConversationRow.updated_at.desc())
-                .limit(200)
+                .order_by(orm.QaConversationRow.updated_at.desc(), orm.QaConversationRow.id.desc())
+                .limit(limit)
             )
+            if before is not None:
+                stamp, cid = before
+                stmt = stmt.where(
+                    or_(
+                        orm.QaConversationRow.updated_at < stamp,
+                        and_(
+                            orm.QaConversationRow.updated_at == stamp,
+                            orm.QaConversationRow.id < cid,
+                        ),
+                    )
+                )
             if owner_id is not None:
                 stmt = stmt.where(orm.QaConversationRow.owner_id == owner_id)
             # 问答页只列独立会话；精读页只列本任务的会话，两边互不串
@@ -252,16 +279,30 @@ class InMemoryQaStore:
         self._items[conversation.id] = conversation
         return QaConversation(**{**conversation.__dict__, "messages": []})
 
-    async def list(self, owner_id: str | None, run_id: str | None = None) -> list[QaConversation]:
+    async def list(
+        self,
+        owner_id: str | None,
+        run_id: str | None = None,
+        *,
+        limit: int = 200,
+        before: tuple[datetime, str] | None = None,
+    ) -> list[QaConversation]:
         items = [
             c
             for c in self._items.values()
             if (owner_id is None or c.owner_id == owner_id) and c.run_id == run_id
         ]
-        items.sort(key=lambda c: c.updated_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+
+        def order(c: QaConversation) -> tuple[datetime, str]:
+            stamp = c.updated_at or datetime.min.replace(tzinfo=UTC)
+            return stamp.replace(tzinfo=UTC) if stamp.tzinfo is None else stamp, c.id
+
+        items.sort(key=order, reverse=True)
+        if before is not None:
+            items = [c for c in items if order(c) < before]
         return [
             QaConversation(**{**c.__dict__, "messages": [], "message_count": len(c.messages)})
-            for c in items
+            for c in items[:limit]
         ]
 
     async def get(self, conversation_id: str) -> QaConversation | None:

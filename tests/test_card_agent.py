@@ -10,20 +10,23 @@ from deep_research.catalog.dto import AgentCardView, ModelProfileFull
 from deep_research.catalog.runtime import CatalogRuntime
 from deep_research.config import Settings
 from deep_research.observability import Tracer
-from deep_research.prompting import load_global_rules
+from deep_research.prompting import LEAF_FACT_RULES, load_global_rules
 from tests.fakes import FakeLLM, FakeSearch
 
 
 @pytest.mark.parametrize("behavior", ["plan", "research", "reflect", "synthesize", "critique"])
 @pytest.mark.parametrize("mode", ["append", "replace"])
 def test_role_preview_uses_the_same_prompt_as_runtime(behavior, mode):
-    from deep_research.prompting import compose_system_prompt, role_prompt_parts
+    from deep_research.prompting import leaf_system_prompt, role_prompt_parts
 
     preview = role_prompt_parts(behavior, "domain instruction", mode)
     agent = CardAgent(
         name="custom", behavior=behavior, system_prompt="domain instruction", prompt_mode=mode
     )
-    actual = compose_system_prompt(agent._impl.system, load_global_rules())
+    actual = (
+        agent._impl.extraction_system() if behavior == "research"
+        else leaf_system_prompt(agent._impl.system, load_global_rules())
+    )
     assert preview["effective_system_prompt"].startswith(actual)
     assert "固定行为契约" in actual
     assert "domain instruction" in actual
@@ -47,7 +50,7 @@ def test_behavior_impls_cover_all_behaviors():
 @pytest.mark.parametrize("mode", ["append", "replace"])
 def test_specialized_cards_keep_executor_and_template_contracts(behavior, mode):
     from deep_research.catalog.runtime import terminal_roles_for_cards
-    from deep_research.prompting import compose_system_prompt, role_prompt_parts
+    from deep_research.prompting import leaf_system_prompt, role_prompt_parts
     from deep_research.workbench.templates import get_template
     from deep_research.workbench.writers import TemplateWriter
 
@@ -58,7 +61,7 @@ def test_specialized_cards_keep_executor_and_template_contracts(behavior, mode):
     assert type(agent._impl) is behavior_impls()[behavior]
     template = get_template(agent._impl.template_key)
     assert template is not None
-    actual = compose_system_prompt(agent._impl.system_prompt(template, None), load_global_rules())
+    actual = leaf_system_prompt(agent._impl.system_prompt(template, None), load_global_rules())
     preview = role_prompt_parts(behavior, "DOMAIN_RULE", mode)
     assert actual == preview["effective_system_prompt"]
     assert "DOMAIN_RULE" in actual and "固定行为契约" in actual
@@ -102,7 +105,8 @@ async def test_card_agent_uses_custom_prompt_and_named_model():
 
     assert bb.plan is not None  # plan 行为产出了计划
     assert "用海盗口吻拆解问题" in captured["system"]  # 自定义 prompt 生效
-    assert load_global_rules() in captured["system"]  # 全局规则对自定义角色同样生效
+    assert LEAF_FACT_RULES in captured["system"]
+    assert load_global_rules() not in captured["system"]  # 编排状态不传给内容生成模型
     assert special_llm.parse_calls == 1  # 用了专属模型
     assert default_llm.parse_calls == 0  # 没用默认模型
 

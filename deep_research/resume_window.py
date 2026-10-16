@@ -22,9 +22,10 @@ def renewed_checkpoint(checkpoint: dict[str, Any], seconds: int) -> dict[str, An
     # after admission, so even a long worker queue cannot consume that window.
     scratch.pop("_deadline_at", None)
     scratch.pop("_task_deadline_at", None)
-    recovery = scratch.get("_recovery")
-    if isinstance(recovery, dict):
-        recovery["not_before"] = 0
+    for key in ("_recovery", "_resource_wait"):
+        recovery = scratch.get(key)
+        if isinstance(recovery, dict):
+            recovery["not_before"] = 0
     return updated
 
 

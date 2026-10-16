@@ -29,6 +29,8 @@ BODY = (
 
 @pytest.fixture(params=["memory", "sqlite"])
 async def service(monkeypatch, tmp_path, request):
+    from tests.render_helpers import render_worker
+
     settings = Settings(
         api_key="revision-admin",
         api_credentials=(
@@ -69,14 +71,15 @@ async def service(monkeypatch, tmp_path, request):
     }.items():
         monkeypatch.setattr(api.app.state, name, value, raising=False)
     monkeypatch.setattr(api, "_run_limiter", api._RateLimiter(1000, 60))
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=api.app),
-        base_url="http://test",
-        headers={"Authorization": "Bearer revision-alice"},
-    ) as client:
-        yield client, repo, settings
-    for task in list(api.app.state.tasks):
-        await task
+    async with render_worker(repo, settings):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=api.app),
+            base_url="http://test",
+            headers={"Authorization": "Bearer revision-alice"},
+        ) as client:
+            yield client, repo, settings
+        for task in list(api.app.state.tasks):
+            await task
     if engine is not None:
         await engine.dispose()
 

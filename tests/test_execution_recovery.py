@@ -15,11 +15,13 @@ from deep_research.execution_policy import (
     COMMITTED_RESEARCH_PROGRESS_KEY,
     attempt_seconds,
     recovery_checkpoint,
+    resource_wait_checkpoint,
     start_window,
     transient_failure,
 )
 from deep_research.models import Report
 from deep_research.orchestrator import DeepResearchAgent, create_initial_execution
+from deep_research.provider_limits import ProviderBusyError
 from deep_research.resume_window import remaining_seconds, renewed_checkpoint
 from deep_research.workflow import Step, Workflow, WorkflowEngine
 from tests.fakes import FakeLLM, FakeSearch
@@ -97,17 +99,47 @@ def test_transient_classification_does_not_retry_quality_or_credentials():
         AuthenticationError("invalid", response=httpx.Response(401, request=request), body=None)
     )
     assert not transient_failure(ValueError("unsupported claim"))
+    assert transient_failure(ProviderBusyError(2.2))
 
 
-@pytest.mark.parametrize("failure", ["transport", "timeout", "quality", "cancel"])
+def test_resource_wait_preserves_failure_budget_and_obeys_retry_after(monkeypatch):
+    monkeypatch.setattr("deep_research.execution_policy.time.time", lambda: 1000)
+    settings = Settings(max_run_recoveries=0, max_no_progress_attempts=1)
+    execution = create_initial_execution("Q", "quick", settings)
+    scratch = execution.checkpoint["scratch"]
+    scratch["_recovery"] = {"count": 5, "no_progress": 4, "progress": "unchanged"}
+    scratch["_task_deadline_at"] = 2000
+    for count in range(1, 8):
+        execution, reason = resource_wait_checkpoint(
+            execution, settings, retry_after=ProviderBusyError(10.2).retry_after, elapsed=20
+        )
+        assert execution is not None and reason == "scheduled"
+        saved = execution.checkpoint["scratch"]
+        assert saved["_recovery"] == scratch["_recovery"]
+        assert saved["_resource_wait"]["count"] == count
+        assert saved["_resource_wait"]["not_before"] == 1011
+        assert saved["_task_deadline_at"] == 2000
+    monkeypatch.setattr("deep_research.execution_policy.time.time", lambda: 2000)
+    assert resource_wait_checkpoint(execution, settings, retry_after=10, elapsed=20) == (
+        None,
+        "task_deadline_exceeded",
+    )
+
+
+@pytest.mark.parametrize("failure", ["transport", "timeout", "quality", "cancel", "busy"])
 async def test_executor_recovers_checkpoint_without_rereading_and_preserves_terminal_semantics(
     repo, settings, monkeypatch, failure
 ):
     settings = replace(settings, orchestration_mode="legacy", max_run_seconds=30)
+    if failure == "busy":
+        settings = replace(settings, max_run_recoveries=0)
     calls = []
     definition = Workflow(
         name="recovery-test",
-        steps=[Step(agent="read"), Step(agent="write", retry={"max_attempts": 1})],
+        steps=[
+            Step(agent="read"),
+            Step(agent="write", retry={"max_attempts": 3 if failure == "busy" else 1}),
+        ],
     )
 
     class Role:
@@ -127,6 +159,21 @@ async def test_executor_recovers_checkpoint_without_rereading_and_preserves_term
                     raise asyncio.CancelledError
                 if failure == "timeout":
                     raise TimeoutError
+                if failure == "busy":
+                    from deep_research.agents.researcher import Researcher
+                    from deep_research.models import SubQuestion
+                    from deep_research.scheduler import research_dag
+
+                    class BusySearch(FakeSearch):
+                        async def search(self, query, *, max_results=5):
+                            raise ProviderBusyError(30)
+
+                    researcher = Researcher(FakeLLM(), BusySearch(), ctx.tracer, ctx.settings)
+
+                    async def research_one(question, context):
+                        return await researcher.run(question, context_findings=context)
+
+                    await research_dag([SubQuestion(question="question")], research_one, ctx.tracer)
                 raise httpx.ConnectError("temporary network interruption")
             else:
                 assert bb.scratch["verified_material"] == "original evidence"
@@ -180,6 +227,11 @@ async def test_executor_recovers_checkpoint_without_rereading_and_preserves_term
         assert "_recovery" not in detail.orchestration.checkpoint["scratch"]
         return
     assert detail.status == "running"
+    if failure == "busy":
+        scratch = detail.orchestration.checkpoint["scratch"]
+        assert "_recovery" not in scratch
+        assert scratch["_resource_wait"]["retry_after"] == 30
+        assert scratch["_resource_wait"]["not_before"] > time.time() + 25
     assert calls == ["read", "write"]
     assert not [
         event
@@ -202,4 +254,5 @@ async def test_executor_recovers_checkpoint_without_rereading_and_preserves_term
     assert completed.status == "done"
     assert calls == ["read", "write", "write"]
     assert completed.total_tokens == 10
-    assert completed.orchestration.checkpoint["scratch"]["_recovery"]["count"] == 1
+    key = "_resource_wait" if failure == "busy" else "_recovery"
+    assert completed.orchestration.checkpoint["scratch"][key]["count"] == 1

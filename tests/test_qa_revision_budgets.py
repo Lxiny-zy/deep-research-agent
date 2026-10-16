@@ -7,7 +7,7 @@ import pytest
 from deep_research.agents.base import RunContext
 from deep_research.observability import Tracer
 from deep_research.workbench.prose_edit import ProseEdits
-from deep_research.workbench.qa import answer_question
+from deep_research.workbench.qa import answer_verified_question as answer_question
 from tests.test_prose_review import CorrelationSearch, Judge
 
 BAD = "变量已经证明因果关系 [1]。"

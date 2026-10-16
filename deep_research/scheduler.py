@@ -56,8 +56,13 @@ async def research_dag(
             "ORCHESTRATOR",
             "info",
             f"按依赖就绪调度 {len(dag)} 个子问题（依赖深度 {len(layers)}）",
-            data={"dag": {"layers": layers, "deps": {str(i): dag[i] for i in dag},
-                          "strategy": "ready"}},
+            data={
+                "dag": {
+                    "layers": layers,
+                    "deps": {str(i): dag[i] for i in dag},
+                    "strategy": "ready",
+                }
+            },
         )
 
     collected: dict[int, ResearchResult] = {}
@@ -94,6 +99,10 @@ async def research_dag(
                 except (LeaseLostError, ResearchProgressError):
                     raise
                 except Exception as exc:
+                    from .execution_policy import resource_busy
+
+                    if resource_busy(exc) is not None:
+                        raise
                     tracer.emit("RESEARCHER", "error", f"子问题执行出现未预期异常：{exc}")
                     continue
                 if isinstance(res, ResearchResult) and (res.findings or res.extraction_audit):

@@ -102,6 +102,26 @@ async def test_heavy_identity_cap_leaves_heavy_capacity_for_another_owner(repo):
     assert third is not None and third.run_id == other
 
 
+async def test_claim_loads_only_the_selected_checkpoint_and_none_when_ineligible(repo):
+    for _ in range(12):
+        await enqueue(repo, "a", workflow="deep")
+    loaded = []
+
+    def record_load(row, _context):
+        loaded.append(row.research_run_id)
+
+    event.listen(orm.WorkflowRunRow, "load", record_load)
+    try:
+        first = await repo.claim_next_run("w1", max_active_runs=2)
+        assert first is not None
+        assert loaded == [first.run_id]
+        loaded.clear()
+        assert await repo.claim_next_run("w2", max_active_runs=2) is None
+        assert loaded == []
+    finally:
+        event.remove(orm.WorkflowRunRow, "load", record_load)
+
+
 async def test_concurrent_workers_obey_total_and_heavy_limits(repo):
     for owner, workflow in [("a", "deep"), ("b", "deep"), ("c", "quick"), ("d", "quick")]:
         await enqueue(repo, owner, workflow=workflow)

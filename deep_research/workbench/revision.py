@@ -42,6 +42,7 @@ class Assessment:
     soft: list[str] = field(default_factory=list)
     brief: str = ""
     can_revise: bool = True
+    stop_reason: str = ""
     # None means at least one issue needs a structural/full-document revision.
     local_problems: list[tuple[str, str]] | None = None
 
@@ -57,6 +58,9 @@ class RevisionLog:
     remaining: list[str] = field(default_factory=list)
     advisories: list[str] = field(default_factory=list)
     chosen: int = 0
+    revisions_used: int = 0
+    budget_limit: int = 0
+    stop_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +69,9 @@ class RevisionLog:
             "remaining": self.remaining,
             "advisories": self.advisories,
             "chosen": self.chosen,
+            "revisions_used": self.revisions_used,
+            "budget_limit": self.budget_limit,
+            "stop_reason": self.stop_reason,
         }
 
 
@@ -118,7 +125,10 @@ def assess_draft(
         hard += describe_problems(check)
         for code, excerpt, message in check.problems:
             if (
-                code not in {"uncited_paragraph", "unsupported_number", "invalid_calculation"}
+                code not in {
+                    "uncited_paragraph", "invalid_citation",
+                    "unsupported_number", "invalid_calculation",
+                }
                 or not excerpt
             ):
                 local_problems = None
@@ -258,13 +268,21 @@ async def write_with_revisions(
     # A stopped verifier can be retried after restart without rewriting its draft.
     if state.drafts and state.drafts[-1].assessment is not None:
         previous = state.drafts[-1].assessment
-        if previous.hard and not previous.can_revise and state.final is None:
+        if (
+            previous.hard and not previous.can_revise and state.final is None
+            and state.stop_reason in {"", "verification_incomplete"}
+        ):
             state.drafts[-1].assessment = None
             state.complete = False
-    log = RevisionLog()
+    log = RevisionLog(budget_limit=max_revisions)
     best: tuple[int, str, Assessment] | None = None
     best_index = 0
     revision: str | None = None
+    previous_issues: tuple[str, ...] | None = None
+
+    def issue_signature(assessment: Assessment) -> tuple[str, ...]:
+        return tuple(sorted({re.sub(r"\s+", " ", item).strip() for item in assessment.hard}))
+
     for index, draft in enumerate(state.drafts):
         if progress:
             valid = await progress.restore_draft(draft)
@@ -282,6 +300,7 @@ async def write_with_revisions(
             best = (len(assessment.hard), draft.body, assessment)
             best_index, log.chosen = index, index + 1
         revision = revision_prompt(draft.body, assessment)
+        previous_issues = issue_signature(assessment)
     start = len(state.drafts)
     if state.drafts and state.drafts[-1].assessment is None:
         start -= 1
@@ -290,6 +309,11 @@ async def write_with_revisions(
             draft = state.drafts[attempt]
             body = draft.body
         else:
+            # A resumed attempt keeps its original slot. Failed edits also use
+            # the shared revision allowance, even if no new draft was saved.
+            state.revisions_used = max(state.revisions_used, attempt)
+            if progress and attempt:
+                await progress.save(state)
             try:
                 body = await write(revision)
             except (LeaseLostError, WritingProgressError):
@@ -297,6 +321,10 @@ async def write_with_revisions(
             except Exception:
                 if best is None:
                     raise
+                state.complete = True
+                state.stop_reason = "revision_failed"
+                if progress:
+                    await progress.save(state)
                 break
             draft = SavedDraft(body=body, context=progress.snapshot() if progress else {})
             state.drafts.append(draft)
@@ -313,7 +341,17 @@ async def write_with_revisions(
             best = (len(assessment.hard), body, assessment)
             best_index = attempt
             log.chosen = attempt + 1
-        state.complete = assessment.clean or not assessment.can_revise or attempt == max_revisions
+        issues = issue_signature(assessment)
+        no_progress = bool(issues and previous_issues == issues)
+        state.stop_reason = (
+            "passed" if assessment.clean
+            else assessment.stop_reason if assessment.stop_reason
+            else "verification_incomplete" if not assessment.can_revise
+            else "no_progress" if no_progress
+            else "revision_limit" if attempt == max_revisions
+            else ""
+        )
+        state.complete = bool(state.stop_reason)
         if progress:
             await progress.save(state)
         if on_event is not None:
@@ -328,11 +366,14 @@ async def write_with_revisions(
         if state.complete:
             break
         revision = revision_prompt(body, assessment)
+        previous_issues = issues
     assert best is not None
     if progress:
         await progress.restore_draft(state.drafts[best_index])
     log.remaining = best[2].hard
     log.advisories = best[2].soft
+    log.revisions_used = max(state.revisions_used, len(state.drafts) - 1)
+    log.stop_reason = state.stop_reason
     return best[1], log
 
 

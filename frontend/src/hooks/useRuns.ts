@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { clearReaderPdfCache } from '../lib/readerPdfCache'
 import {
   batchDeleteRuns,
   cancelRun,
@@ -62,7 +63,8 @@ export function useDeleteRun() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => deleteRun(id),
-    onSuccess: () => {
+    onSuccess: (_, id) => {
+      clearDeletedRun(qc, id)
       qc.invalidateQueries({ queryKey: ['runs'] })
       qc.invalidateQueries({ queryKey: ['tags'] })
     },
@@ -99,11 +101,28 @@ export function useBatchDeleteRuns() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (ids: string[]) => batchDeleteRuns(ids),
-    onSuccess: () => {
+    onSuccess: (result, ids) => {
+      const deleted = result.deleted_ids ?? (result.skipped === 0 ? ids : [])
+      deleted.forEach(id => clearDeletedRun(qc, id))
       qc.invalidateQueries({ queryKey: ['runs'] })
       qc.invalidateQueries({ queryKey: ['tags'] })
     },
   })
+}
+
+function clearDeletedRun(client: QueryClient, id: string) {
+  const domains = new Set([
+    'run', 'run-document', 'reader', 'deliverables', 'run-template', 'workspace', 'narrative',
+  ])
+  client.removeQueries({ predicate: query =>
+    domains.has(String(query.queryKey[0])) && query.queryKey[1] === id,
+  })
+  // Conversation caches can contain task material even after their parent
+  // disappears. Drop these snapshots and let active observers reload.
+  client.removeQueries({ queryKey: ['qa-conversation'] })
+  void client.invalidateQueries({ queryKey: ['qa-conversations'] })
+  void client.invalidateQueries({ queryKey: ['operations'] })
+  void clearReaderPdfCache()
 }
 
 export function useSetTags(id: string) {

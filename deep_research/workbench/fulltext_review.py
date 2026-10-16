@@ -52,6 +52,15 @@ class FullTextTarget(BaseModel):
     reason: str
 
 
+class FullTextUnitTarget(BaseModel):
+    unit_id: str
+    target: FullTextTarget
+
+
+class FullTextTargets(BaseModel):
+    targets: list[FullTextUnitTarget]
+
+
 class FullTextPartDecision(BaseModel):
     part_id: str
     verdict: Literal["refutes", "supports", "not_relevant", "uncertain"]
@@ -211,7 +220,9 @@ def located_passages(unit: Any, record: Any, corpus: FullTextCorpus) -> list[dic
     for admitted findings and not approval of a newly written assertion.
     """
     if validate_fulltext_record(unit, record, corpus) is not None or record.get("status") not in {
-        "refuted", "absence_confirmed", "critique_supported",
+        "refuted",
+        "absence_confirmed",
+        "critique_supported",
     }:
         return []
     output = []
@@ -219,28 +230,94 @@ def located_passages(unit: Any, record: Any, corpus: FullTextCorpus) -> list[dic
         if row.get("verdict") not in {"refutes", "supports"} or not row.get("quote"):
             continue
         source = next(
-            source for source in corpus.documents[row["document"]].sources
+            source
+            for source in corpus.documents[row["document"]].sources
             if source.url == row["source"] and content_hash(source.content) == row["source_hash"]
         )
-        output.append({
-            "document": row["document"], "source": row["source"],
-            "source_hash": row["source_hash"], "locator": source.locator,
-            "start": row["quote_start"], "end": row["quote_start"] + len(row["quote"]),
-            "quote": row["quote"], "verdict": row["verdict"],
-            "review_status": record["status"], "review_unit_hash": record["unit_hash"],
-            "corpus_hash": record["corpus_hash"],
-        })
+        output.append(
+            {
+                "document": row["document"],
+                "source": row["source"],
+                "source_hash": row["source_hash"],
+                "locator": source.locator,
+                "start": row["quote_start"],
+                "end": row["quote_start"] + len(row["quote"]),
+                "quote": row["quote"],
+                "verdict": row["verdict"],
+                "review_status": record["status"],
+                "review_unit_hash": record["unit_hash"],
+                "corpus_hash": record["corpus_hash"],
+            }
+        )
     return output
 
 
 class FullTextReviewer:
     def __init__(
-        self, llm: Any, corpus: FullTextCorpus, capacity: int,
-        *, on_progress: Callable[[str], None] | None = None,
+        self,
+        llm: Any,
+        corpus: FullTextCorpus,
+        capacity: int,
+        *,
+        on_progress: Callable[[str], None] | None = None,
     ) -> None:
         self.llm, self.corpus = llm, corpus
         self.capacity = getattr(llm, "enforced_input_capacity_chars", capacity) or capacity
         self.on_progress = on_progress
+        self.targets: dict[str, FullTextTarget | Exception] = {}
+
+    async def prepare(self, units: list[Any]) -> None:
+        """Batch target selection; each assertion keeps its own document scope."""
+        from ..llm import verification_generation_options
+
+        system = _TARGET_SYSTEM + (
+            "逐项返回给定 unit_id 的 target，不得遗漏、重复或添加单元。"
+            "每项 document_ids 只能来自该单元自己的 documents，不能借用其他单元的目录。"
+        )
+        overhead = len(structured_system_prompt(system, FullTextTargets))
+        groups: list[list[dict[str, Any]]] = []
+        by_id = {unit.id: unit for unit in units}
+        if len(by_id) != len(units):
+            raise ValueError("全文核查单元编号重复")
+        for unit in units:
+            catalog = self.corpus.catalog(unit.citations)
+            if not catalog:
+                continue
+            item = {"unit": asdict(unit), "documents": catalog}
+            group = [*(groups[-1] if groups else []), item]
+            size = overhead + len(json.dumps({"units": group}, ensure_ascii=False))
+            if groups and size <= self.capacity:
+                groups[-1].append(item)
+            else:
+                groups.append([item])
+        for group in groups:
+            # One item retains the existing schema and capacity handling.
+            if len(group) < 2:
+                continue
+            expected = {item["unit"]["id"] for item in group}
+            try:
+                if self.on_progress is not None:
+                    self.on_progress(f"合并定位 {len(group)} 个需回查全文的单元…")
+                response = await self.llm.parse(
+                    system, json.dumps({"units": group}, ensure_ascii=False), FullTextTargets,
+                    temperature=0.0, **verification_generation_options(self.llm),
+                )
+                for unit_id in expected:
+                    matches = [item.target for item in response.targets if item.unit_id == unit_id]
+                    self.targets[_unit_hash(by_id[unit_id])] = (
+                        matches[0] if len(matches) == 1
+                        else ValueError("当前全文目标判定遗漏或重复，未重新发起整批请求")
+                    )
+            except LeaseLostError:
+                raise
+            except Exception as exc:
+                from ..execution_policy import resource_busy
+
+                if resource_busy(exc) is not None:
+                    raise
+                # A failed batch must not fan out into N additional model calls.
+                for unit_id in expected:
+                    self.targets[_unit_hash(by_id[unit_id])] = exc
 
     async def review(self, unit: Any) -> dict[str, Any]:
         from ..llm import verification_generation_options
@@ -266,10 +343,17 @@ class FullTextReviewer:
                 raise ValueError("全文核查目录超过模型容量")
             if self.on_progress is not None:
                 self.on_progress("正在定位需回查全文的断言与文献…")
-            target = await self.llm.parse(
-                _TARGET_SYSTEM, prompt, FullTextTarget, temperature=0.0,
-                **verification_generation_options(self.llm),
-            )
+            target = self.targets.get(_unit_hash(unit))
+            if isinstance(target, Exception):
+                raise target
+            if target is None:
+                target = await self.llm.parse(
+                    _TARGET_SYSTEM,
+                    prompt,
+                    FullTextTarget,
+                    temperature=0.0,
+                    **verification_generation_options(self.llm),
+                )
             record["target"] = target.model_dump(mode="json")
             if target.kind == "not_applicable":
                 if explicit_absence(unit.text):
@@ -405,5 +489,9 @@ class FullTextReviewer:
         except LeaseLostError:
             raise
         except Exception as exc:
+            from ..execution_policy import resource_busy
+
+            if resource_busy(exc) is not None:
+                raise
             record.update(status="uncertain", reason=f"全文核查未完成：{type(exc).__name__}: {exc}")
         return record

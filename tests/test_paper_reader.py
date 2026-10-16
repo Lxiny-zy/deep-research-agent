@@ -305,7 +305,7 @@ class _NoSearch(FakeSearch):
 async def test_paper_only_answer_never_calls_external_search(tmp_path) -> None:
     from deep_research.agents.base import RunContext
     from deep_research.observability import Tracer
-    from deep_research.workbench.qa import answer_question
+    from deep_research.workbench.qa import answer_verified_question as answer_question
 
     settings = Settings(artifact_root=str(tmp_path))
     ctx = RunContext(llm=_PaperLLM(), search_tool=_NoSearch(), tracer=Tracer(), settings=settings)
@@ -320,7 +320,7 @@ async def test_paper_only_answer_never_calls_external_search(tmp_path) -> None:
 async def test_paper_answer_labels_web_sources_separately(tmp_path) -> None:
     from deep_research.agents.base import RunContext
     from deep_research.observability import Tracer
-    from deep_research.workbench.qa import answer_question
+    from deep_research.workbench.qa import answer_verified_question as answer_question
 
     settings = Settings(artifact_root=str(tmp_path))
     ctx = RunContext(llm=_PaperLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)

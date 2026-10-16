@@ -34,7 +34,8 @@ async def test_explicit_revision_is_private_owned_and_idempotent(
     first = await client.post(
         f"/api/qa/conversations/{cid}/messages",
         headers=_headers(ALICE),
-        json={"query": "解释变量关系", "sources": ["web"], "request_id": "initial-question-1"},
+        json={"query": "解释变量关系", "sources": ["web"], "request_id": "initial-question-1",
+              "answer_mode": "verified"},
     )
     assert first.status_code == 201, first.text
     parent = first.json()

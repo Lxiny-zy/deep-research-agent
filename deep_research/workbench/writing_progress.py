@@ -30,6 +30,7 @@ class SavedAssessment(BaseModel):
     soft: list[str] = Field(default_factory=list)
     brief: str = ""
     can_revise: bool = True
+    stop_reason: str = ""
     local_problems: list[tuple[str, str]] | None = None
 
     @classmethod
@@ -52,6 +53,8 @@ class WritingState(BaseModel):
     max_revisions: int = Field(ge=0)
     drafts: list[SavedDraft] = Field(default_factory=list)
     complete: bool = False
+    revisions_used: int = Field(0, ge=0)
+    stop_reason: str = ""
     final: dict[str, Any] | None = None
     preparation: dict[str, Any] = Field(default_factory=dict)
     total_tokens: int = Field(0, ge=0)
@@ -87,6 +90,8 @@ class WritingState(BaseModel):
                 raise ValueError("invalid figure review preparation")
         if len(self.drafts) > self.max_revisions + 1:
             raise ValueError("writing progress exceeds frozen revision budget")
+        if self.revisions_used > self.max_revisions:
+            raise ValueError("writing attempts exceed frozen revision budget")
         if any(draft.assessment is None for draft in self.drafts[:-1]):
             raise ValueError("an earlier draft has no assessment")
         if self.complete and (not self.drafts or self.drafts[-1].assessment is None):
@@ -241,6 +246,17 @@ def for_writer(
         llm = ctx.llm_for(role_name)
         return {key: str(getattr(llm, key, "")) for key in ("model", "base_url")}
 
+    from ..checkpoints import RUN_SETTINGS_KEY
+
+    quality = coerce_policy(ctx.settings.quality).model_dump(mode="json")
+    frozen = bb.scratch.get(RUN_SETTINGS_KEY, {})
+    declared_quality = (
+        frozen.get("quality", ctx.settings.quality)
+        if isinstance(frozen, dict) else ctx.settings.quality
+    )
+    for key in ("adaptive_review", "task_max_model_calls"):
+        if not isinstance(declared_quality, dict) or key not in declared_quality:
+            quality.pop(key, None)
     return WritingProgress(
         ctx.artifact_store,
         {
@@ -268,7 +284,7 @@ def for_writer(
             "seed": bb.report.model_dump(mode="json")
             if bb.report and bb.scratch.get("content_revision")
             else None,
-            "quality": coerce_policy(ctx.settings.quality).model_dump(mode="json"),
+            "quality": quality,
             "capacity": ctx.settings.llm_max_input_chars,
             "corroboration": effective_require_corroboration(bb, ctx.settings),
             "writer": model(role),
@@ -320,7 +336,10 @@ async def finish(progress: WritingProgress | None, bb: Any, max_revisions: int) 
     if not state.complete or not state.drafts:
         return
     last = state.drafts[-1].assessment
-    if last is not None and last.hard and not last.can_revise:
+    if (
+        last is not None and last.hard and not last.can_revise
+        and state.stop_reason in {"", "verification_incomplete"}
+    ):
         return
     state.final = {
         "report": bb.report.model_dump(mode="json"),

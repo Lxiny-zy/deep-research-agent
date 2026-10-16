@@ -235,6 +235,7 @@ _DELIVERY_RUNTIME_KEYS = frozenset(
         "_task_deadline_at",
         "_attempt_elapsed_origin",
         "_recovery",
+        "_resource_wait",
         "_orchestration_run",
         "_committed_research_progress",
     }
@@ -376,7 +377,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
 
         try:
             compiled_deck, projected = compile_deck(
-                extras["deck"], detail.results, {url: i for i, url in enumerate(citations, 1)},
+                extras["deck"],
+                detail.results,
+                {url: i for i, url in enumerate(citations, 1)},
                 corroboration=requires_corroboration(detail),
                 image_sources=extras.get("slide_image_sources"),
             )
@@ -406,11 +409,15 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 visual["sha256"] = hashlib.sha256(images[asset]).hexdigest()
                 continue
             try:
+
                 def source_page(key: str = visual["id"]) -> bytes:
                     return render_registered_page(extras["slide_image_sources"], key)
 
                 source_file = render_file(
-                    "figures/" + asset, "png", visual["caption"], "figure",
+                    "figures/" + asset,
+                    "png",
+                    visual["caption"],
+                    "figure",
                     source_page,
                 )
                 images[asset] = source_file.data
@@ -419,9 +426,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             except RenderProgressError:
                 raise
             except (ValueError, KeyError, OSError) as exc:
-                input_gates.append(GateResult(
-                    "figure_evidence", "fail", ["原文图页未生成：" + str(exc)]
-                ))
+                input_gates.append(
+                    GateResult("figure_evidence", "fail", ["原文图页未生成：" + str(exc)])
+                )
 
     # 概念图：写作者整理的结构描述 → 确定性示意图，插在正文第一个二级标题之后
     raw_figure = extras.get("concept_figure") if isinstance(extras, dict) else None
@@ -848,8 +855,10 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     context = {
         "markdown": markdown,
         "presentation_notes": notes,
-        "review_bound": next((bool(g.metrics.get("review_bound")) for g in gates
-                              if g.name == "prose_evidence"), False),
+        "review_bound": next(
+            (bool(g.metrics.get("review_bound")) for g in gates if g.name == "prose_evidence"),
+            False,
+        ),
         "canonical_markdown": canonical_markdown,
         "reading_limits": reading_limits,
         "bibliography": bibliography.model_dump(mode="json") if bibliography else None,
@@ -972,9 +981,14 @@ def _xlsx_input_sheets(workbook: Any, result: Any) -> None:
             observed = rows - count
         else:
             count = unknown
-        missing_sheet.append([
-            column, rows if rows is not None else unknown, observed, count,
-        ])
+        missing_sheet.append(
+            [
+                column,
+                rows if rows is not None else unknown,
+                observed,
+                count,
+            ]
+        )
     merge = source.get("merge")
     if merge:
         overview.append(["合并主表", merge.get("base", unknown)])
@@ -983,20 +997,44 @@ def _xlsx_input_sheets(workbook: Any, result: Any) -> None:
         for table in merge.get("tables", []):
             tables.append([table.get(key, unknown) for key in ("name", "rows", "input_sha256")])
         joins = workbook.create_sheet("连接计划")
-        joins.append([
-            "步骤", "右表", "主表键", "右表键", "连接方式", "关系", "连接前主表行数",
-            "右表行数", "结果行数", "主表未匹配行数", "右表未匹配行数",
-        ])
+        joins.append(
+            [
+                "步骤",
+                "右表",
+                "主表键",
+                "右表键",
+                "连接方式",
+                "关系",
+                "连接前主表行数",
+                "右表行数",
+                "结果行数",
+                "主表未匹配行数",
+                "右表未匹配行数",
+            ]
+        )
         for index, join in enumerate(merge.get("joins", []), 1):
-            joins.append([
-                index, join.get("sheet", unknown),
-                *[json.dumps(join[key], ensure_ascii=False) if key in join else unknown
-                  for key in ("left_keys", "right_keys")],
-                *[join.get(key, unknown) for key in (
-                    "how", "relationship", "left_rows", "right_rows", "rows",
-                    "unmatched_left", "unmatched_right",
-                )],
-            ])
+            joins.append(
+                [
+                    index,
+                    join.get("sheet", unknown),
+                    *[
+                        json.dumps(join[key], ensure_ascii=False) if key in join else unknown
+                        for key in ("left_keys", "right_keys")
+                    ],
+                    *[
+                        join.get(key, unknown)
+                        for key in (
+                            "how",
+                            "relationship",
+                            "left_rows",
+                            "right_rows",
+                            "rows",
+                            "unmatched_left",
+                            "unmatched_right",
+                        )
+                    ],
+                ]
+            )
 
 
 def _stats_xlsx(result: Any) -> bytes:

@@ -10,11 +10,11 @@ from ..guardrails import report_eligible
 from ..llm import LLM
 from ..models import Report, ResearchResult
 from ..observability import Tracer
-from ..prompting import MEASUREMENT_SCOPE_RULES
+from ..prompting import MEASUREMENT_SCOPE_RULES, leaf_system_prompt
 from ..registry import register
 from ..report.validation import validate_body
 from ..token_budget import TokenBudgetExceeded
-from .base import Blackboard, RunContext, direct_system_prompt, effective_require_corroboration
+from .base import Blackboard, RunContext, effective_require_corroboration
 
 SYSTEM = (
     "你是资深分析师。基于给定素材撰写结构化中文研究报告，包含：标题、摘要、分主题的详细分析、结论。"
@@ -37,10 +37,11 @@ class Synthesizer:
         self.tracer = cast(Tracer, tracer)
         self.settings = cast(Settings, settings)
         self.system = SYSTEM  # 可被角色卡片覆盖
+        self.global_rules: str | None = None
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         self.llm, self.tracer, self.settings = ctx.llm_for(self.name), ctx.tracer, ctx.settings
-        self.system = ctx.system_prompt(self.system)
+        self.global_rules = ctx.global_rules
         bb.report = await self.run(
             bb.query,
             bb.results,
@@ -164,7 +165,7 @@ class Synthesizer:
         user = f"研究问题：{query}\n\n素材（角标即引用编号）：\n{material}"
         try:
             async for delta in self.llm.stream(
-                direct_system_prompt(system or self.system), user, temperature=0.4
+                leaf_system_prompt(system or self.system, self.global_rules), user, temperature=0.4
             ):
                 self.tracer.emit("SYNTHESIZER", "token", data={"delta": delta})
                 yield delta

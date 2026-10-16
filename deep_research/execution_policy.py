@@ -13,6 +13,7 @@ from openai import APIConnectionError, APIStatusError
 
 from .config import Settings
 from .orchestration import WorkflowRun
+from .provider_limits import ProviderBusyError
 
 COMMITTED_RESEARCH_PROGRESS_KEY = "_committed_research_progress"
 
@@ -66,6 +67,10 @@ def start_window(execution: WorkflowRun, seconds: int, total_seconds: int) -> No
     now = time.time()
     scratch.setdefault("_deadline_at", now + seconds)
     scratch.setdefault("_task_deadline_at", now + total_seconds)
+    waiting = scratch.get("_resource_wait")
+    if isinstance(waiting, dict):
+        waiting["not_before"] = 0
+        waiting["resumed_at"] = now
 
 
 def progress_fingerprint(execution: WorkflowRun) -> str:
@@ -82,12 +87,14 @@ def progress_fingerprint(execution: WorkflowRun) -> str:
 
 
 def transient_failure(error: BaseException) -> bool:
-    """Only known transport failures; quality/input/authentication errors stay terminal."""
+    """Known transport failures and backpressure; quality/auth errors stay terminal."""
     seen: set[int] = set()
     current: BaseException | None = error
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, (TimeoutError, httpx.TransportError, APIConnectionError)):
+        if isinstance(
+            current, (ProviderBusyError, TimeoutError, httpx.TransportError, APIConnectionError)
+        ):
             return True
         if isinstance(current, APIStatusError):
             return current.status_code in {408, 409, 429} or current.status_code >= 500
@@ -95,6 +102,43 @@ def transient_failure(error: BaseException) -> bool:
             return current.response.status_code in {408, 429, 500, 502, 503, 504}
         current = current.__cause__ or current.__context__
     return False
+
+
+def resource_busy(error: BaseException) -> ProviderBusyError | None:
+    """Find local admission backpressure even when a role wraps the exception."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ProviderBusyError):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def resource_wait_checkpoint(
+    execution: WorkflowRun, settings: Settings, *, retry_after: float, elapsed: float
+) -> tuple[WorkflowRun | None, str]:
+    """Release a run's slot without charging a failure or no-progress attempt."""
+    updated = execution.model_copy(deep=True)
+    scratch: dict[str, Any] = updated.checkpoint.setdefault("scratch", {})
+    now = time.time()
+    deadline = scratch.get("_task_deadline_at", now + settings.max_task_seconds)
+    if now >= deadline:
+        return None, "task_deadline_exceeded"
+    previous = scratch.get("_resource_wait", {})
+    scratch["_resource_wait"] = {
+        "count": int(previous.get("count", 0)) + 1,
+        "reason": "provider_busy",
+        "scheduled_at": now,
+        # Wake at the final deadline to settle the task without another request.
+        "not_before": min(deadline, now + max(1, retry_after)),
+        "retry_after": retry_after,
+    }
+    scratch["_attempt_elapsed_origin"] = elapsed
+    scratch.setdefault("_runtime_metrics", {})["elapsed"] = elapsed
+    scratch.pop("_deadline_at", None)
+    return updated, "scheduled"
 
 
 def recovery_checkpoint(

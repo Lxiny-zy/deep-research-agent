@@ -73,6 +73,7 @@ from .http.admission import (
     _run_admission as _run_admission,
 )
 from .http.auth import principal_for, require_api_key
+from .http.errors import install_error_handlers
 from .http.sse import (
     _SSE_EVENT_BATCH_SIZE,  # noqa: F401  经 api 命名空间再导出（既有测试依赖）
     _stream_run_sse,
@@ -98,7 +99,9 @@ from .persistence.repository import (
     IdempotencyConflictError,
     ResearchRepository,
     RunDetail,
+    RunHasActiveChildren,
     RunQueueFullError,
+    RunQuotaExceeded,
     RunSummary,
     TagCount,
 )
@@ -792,9 +795,14 @@ async def _recovery_loop(app: FastAPI) -> None:
 
 
 async def _shutdown_application(
-    app: FastAPI, settings: Settings, engine: Any, *,
-    render_dispatcher: asyncio.Task | None = None, render_service: Any = None,
-    recovery_task: asyncio.Task | None = None, inline_task: asyncio.Task | None = None,
+    app: FastAPI,
+    settings: Settings,
+    engine: Any,
+    *,
+    render_dispatcher: asyncio.Task | None = None,
+    render_service: Any = None,
+    recovery_task: asyncio.Task | None = None,
+    inline_task: asyncio.Task | None = None,
     inline_worker: Any = None,
 ) -> None:
     from .shutdown import cancel, wait_until
@@ -845,9 +853,7 @@ async def _shutdown_application(
     pending.update(await wait_until({disposal}, deadline))
     cancel(pending)
     pending = {task for task in pending if not task.done()}
-    disposal_error = (
-        disposal.exception() if disposal.done() and not disposal.cancelled() else None
-    )
+    disposal_error = disposal.exception() if disposal.done() and not disposal.cancelled() else None
     app.state.shutdown_incomplete = (
         bool(pending)
         or bool(inline_worker is not None and inline_worker.requires_hard_exit)
@@ -915,8 +921,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from .render_service import service_for
 
         render_service = service_for(app.state.repo, settings)
-        app.state.repo._render_dispatcher_managed = True
-        render_dispatcher = asyncio.create_task(render_service.poll_pending())
+        app.state.repo._render_dispatcher_managed = render_service.consumes
+        if render_service.consumes:
+            render_dispatcher = asyncio.create_task(render_service.poll_pending())
         app.state.live = {}  # run_id -> EventHub：进行中 run 的实时事件中枢（向多端 SSE 扇出）
         app.state.tasks = set()  # 持有后台任务引用，避免被 GC 提前回收
         app.state.cleanup_tasks = set()  # 任务 done callback 派生的异步资源收尾
@@ -951,13 +958,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await _shutdown_application(
-            app, settings, engine, render_dispatcher=render_dispatcher,
-            render_service=render_service, recovery_task=recovery_task,
-            inline_task=inline_task, inline_worker=inline_worker,
+            app,
+            settings,
+            engine,
+            render_dispatcher=render_dispatcher,
+            render_service=render_service,
+            recovery_task=recovery_task,
+            inline_task=inline_task,
+            inline_worker=inline_worker,
         )
 
 
 app = FastAPI(title="Science Research", lifespan=lifespan)
+install_error_handlers(app)
 
 # 角色广场 catalog 路由（模型档案 / 角色卡片 / 搜索 key），统一套用 API key 鉴权
 from .catalog_api import router as catalog_router  # noqa: E402 避免与 app 定义循环
@@ -1086,7 +1099,11 @@ async def _enqueue_run(
             project_id=req.project_id,
             max_inflight=request.app.state.settings.max_active_runs
             + request.app.state.settings.max_queued_runs,
+            max_inflight_per_identity=request.app.state.settings.identity_inflight_limit,
+            daily_run_quota=request.app.state.settings.daily_run_quota,
         )
+    except RunQuotaExceeded as exc:
+        raise HTTPException(429, {"code": "quota_exhausted", "message": str(exc)}) from exc
     except RunQueueFullError as exc:
         raise HTTPException(503, str(exc), headers={"Retry-After": "5"}) from exc
     except IdempotencyConflictError as exc:
@@ -1403,21 +1420,49 @@ async def _intent_llm(app: FastAPI, settings: Settings) -> AsyncIterator[Any | N
         finally:
             await demo_search.aclose()
         return
+    from .catalog.runtime import load_catalog_runtime
+
+    runtime = None
+    owns_llm = False
     try:
-        settings.validate_llm()
-        await _validate_runtime_provider_url(settings)
-        llm = LLM(settings, Tracer())
+        tracer = Tracer()
+        runtime = await load_catalog_runtime(
+            getattr(app.state, "catalog", None),
+            tracer,
+            settings,
+            required_roles=("intent_router",),
+            include_search=False,
+        )
+        llm = runtime.resolve_llm("intent_router") if runtime is not None else None
+        if llm is None:
+            settings.validate_llm()
+            await _validate_runtime_provider_url(settings)
+            llm = LLM(settings, tracer)
+            owns_llm = True
     except Exception:
         logger.warning("intent llm unavailable; multi-turn resolution degraded", exc_info=True)
+        if runtime is not None:
+            try:
+                await runtime.aclose()
+            except Exception:
+                logger.exception("failed to close intent catalog runtime")
         yield None
         return
     try:
-        yield llm
+        bind = getattr(llm, "for_role", None)
+        yield bind("intent_router") if callable(bind) else llm
     finally:
         try:
-            await llm.aclose()
+            if owns_llm:
+                await llm.aclose()
         except Exception:
             logger.exception("failed to close intent llm")
+        finally:
+            if runtime is not None:
+                try:
+                    await runtime.aclose()
+                except Exception:
+                    logger.exception("failed to close intent catalog runtime")
 
 
 @asynccontextmanager
@@ -1545,6 +1590,11 @@ async def create_run(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=128),
 ) -> CreateRunResponse:
     repo: ResearchRepository = request.app.state.repo
+    # Idempotency must describe the caller's submitted request.  Template and
+    # intent routing below enrich ``req`` with derived workflow/clarified
+    # fields; hashing the mutated model at enqueue time made a retry of the
+    # same HTTP request look different after the first attempt.
+    submitted_request_hash = _run_request_hash(req)
     normalized_key = idempotency_key.strip() if isinstance(idempotency_key, str) else None
     normalized_key = normalized_key or None
     principal = principal_for(request)
@@ -1552,7 +1602,7 @@ async def create_run(
         normalized_key = hashlib.sha256(f"{principal.id}:{normalized_key}".encode()).hexdigest()
     if normalized_key:
         try:
-            existing_id = await repo.find_run_once(normalized_key, _run_request_hash(req))
+            existing_id = await repo.find_run_once(normalized_key, submitted_request_hash)
         except IdempotencyConflictError as exc:
             raise HTTPException(409, {"code": "idempotency_conflict", "message": str(exc)}) from exc
         if existing_id:
@@ -1938,6 +1988,7 @@ async def create_run(
         normalized_key=normalized_key,
         lease_owner=lease_owner,
         supplied_plan=supplied_plan,
+        request_hash=submitted_request_hash,
     )
 
 
@@ -2019,6 +2070,7 @@ async def resume_run(run_id: str, request: Request) -> CreateRunResponse:
             accepted = await repo.requeue_failed_run(
                 run_id,
                 max_inflight=settings.max_active_runs + settings.max_queued_runs,
+                max_inflight_per_identity=settings.identity_inflight_limit,
                 restart_seconds=_settings_for_resume(settings, execution).max_run_seconds,
             )
         else:
@@ -2304,7 +2356,26 @@ async def list_tags(request: Request) -> list[TagCount]:
     return await repo.list_tags(owner_id=None if principal.can_manage else principal.id)
 
 
-async def _delete_run_if_idle(repo: ResearchRepository, run_id: str) -> str:
+async def _delete_run_if_idle(repo: ResearchRepository, run_id: str, qa_store: Any = None) -> str:
+    from .workbench.qa_store import InMemoryQaStore
+
+    try:
+        if isinstance(qa_store, InMemoryQaStore):
+            async with qa_store._request_lock:
+                bound = [c for c in qa_store._items.values() if c.run_id == run_id]
+                if any(m.status in {"pending", "running"} for c in bound for m in c.messages):
+                    return "leased"
+                result = await _delete_idle_run(repo, run_id)
+                if result == "deleted":
+                    for conversation in bound:
+                        await qa_store.delete(conversation.id)
+                return result
+        return await _delete_idle_run(repo, run_id)
+    except RunHasActiveChildren:
+        return "leased"
+
+
+async def _delete_idle_run(repo: ResearchRepository, run_id: str) -> str:
     detail = await repo.get_run(run_id)
     if detail is None:
         return "missing"
@@ -2336,9 +2407,11 @@ async def delete_run(run_id: str, request: Request) -> Response:
     app_ = request.app
     if app_.state.live.get(run_id) is not None:
         raise HTTPException(status_code=409, detail="运行进行中，无法删除")
-    outcome = await _delete_run_if_idle(app_.state.repo, run_id)
+    outcome = await _delete_run_if_idle(
+        app_.state.repo, run_id, getattr(app_.state, "qa_store", None)
+    )
     if outcome == "leased":
-        raise HTTPException(status_code=409, detail="运行进行中，无法删除")
+        raise HTTPException(status_code=409, detail="任务或关联问答、导出仍在处理中，无法删除")
     if outcome == "missing":
         raise HTTPException(status_code=404, detail="run not found")
     await cleanup_artifacts(app_.state.repo, app_.state.settings)
@@ -2358,7 +2431,9 @@ async def batch_delete(req: BatchDeleteRequest, request: Request) -> BatchDelete
         if app_.state.live.get(run_id) is not None:
             skipped += 1  # 进行中：跳过而非报错，批量操作尽量推进
             continue
-        outcome = await _delete_run_if_idle(app_.state.repo, run_id)
+        outcome = await _delete_run_if_idle(
+            app_.state.repo, run_id, getattr(app_.state, "qa_store", None)
+        )
         if outcome == "leased":
             skipped += 1
         elif outcome == "deleted":
@@ -2403,7 +2478,15 @@ async def _enrich_run_detail(repo: ResearchRepository, detail: RunDetail) -> Run
             # 旧 checkpoint 的意图结构可能与当前 schema 不符；不能让历史详情整体 500。
             logger.warning("run %s has an unreadable intent decision", detail.id)
     require_corroboration = _run_requires_corroboration(detail)
+    # The event list in the response is intentionally bounded for browser
+    # payloads.  Quality and safety counters must use the complete durable
+    # event stream; otherwise a late source-policy event disappears from the
+    # displayed metrics merely because the run produced more than 2,000
+    # earlier progress events.
+    from .persistence.event_metrics import blocked_source_count
+
     detail.metrics = quality_metrics(detail, require_corroboration=require_corroboration)
+    detail.metrics.blocked_sources = await blocked_source_count(repo, detail.id) or 0
     return detail
 
 
@@ -2422,12 +2505,15 @@ async def _load_report_document(
         if not re.fullmatch(r"[0-9a-f]{64}", expected):
             raise HTTPException(422, "文档版本标识无效")
         if expected != document.content_version:
-            raise HTTPException(409, {
-                "code": "document_version_changed",
-                "message": "报告内容已变化，请刷新预览后再导出；未下载其他版本",
-                "expected_version": expected,
-                "current_version": document.content_version,
-            })
+            raise HTTPException(
+                409,
+                {
+                    "code": "document_version_changed",
+                    "message": "报告内容已变化，请刷新预览后再导出；未下载其他版本",
+                    "expected_version": expected,
+                    "current_version": document.content_version,
+                },
+            )
     return document
 
 
@@ -2446,7 +2532,8 @@ def _download_headers(run_id: str, document: ReportDocument, suffix: str) -> dic
         disposition += f"; filename*=UTF-8''{quote(title + suffix, safe='')}"
     # 报告内容受鉴权保护，不允许共享缓存或磁盘缓存留存
     return {
-        "Content-Disposition": disposition, "Cache-Control": "private, no-store",
+        "Content-Disposition": disposition,
+        "Cache-Control": "private, no-store",
         "X-Content-Version": document.content_version,
     }
 
@@ -2497,10 +2584,13 @@ async def _queued_document_render(
     from .workbench.publish import delivery_fingerprint
 
     if document.source_version != delivery_fingerprint(detail):
-        raise HTTPException(409, {
-            "code": "document_version_changed",
-            "message": "导出期间研究定稿已变化，请刷新预览后再导出",
-        })
+        raise HTTPException(
+            409,
+            {
+                "code": "document_version_changed",
+                "message": "导出期间研究定稿已变化，请刷新预览后再导出",
+            },
+        )
     # Export sidecars must come from this same checked source snapshot, even
     # when a handler read a different revision before reaching the queue.
     if "sources" in options:

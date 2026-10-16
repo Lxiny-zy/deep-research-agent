@@ -32,6 +32,8 @@ from .config_service import effective_settings
 from .execution_policy import (
     recovery_checkpoint,
     resolved_settings,
+    resource_busy,
+    resource_wait_checkpoint,
     start_window,
     transient_failure,
 )
@@ -456,12 +458,20 @@ class RunExecutor:
             elapsed = (
                 agent.tracer.elapsed if agent is not None else max(0, detail.elapsed, saved_elapsed)
             )
-            updated, reason = recovery_checkpoint(
-                detail.orchestration,
-                settings,
-                reason="attempt_timeout" if isinstance(error, TimeoutError) else "transport_error",
-                elapsed=elapsed,
-            )
+            busy = resource_busy(error)
+            if busy is not None:
+                updated, reason = resource_wait_checkpoint(
+                    detail.orchestration, settings, retry_after=busy.retry_after, elapsed=elapsed
+                )
+            else:
+                updated, reason = recovery_checkpoint(
+                    detail.orchestration,
+                    settings,
+                    reason="attempt_timeout"
+                    if isinstance(error, TimeoutError)
+                    else "transport_error",
+                    elapsed=elapsed,
+                )
             if updated is None:
                 return False, reason
             if agent is not None:
@@ -469,7 +479,8 @@ class RunExecutor:
                     total_tokens=agent.tracer.total_tokens,
                     estimated_tokens=agent.tracer.estimated_tokens,
                 )
-            recovery = updated.checkpoint["scratch"]["_recovery"]
+            state_key = "_resource_wait" if busy is not None else "_recovery"
+            recovery = updated.checkpoint["scratch"][state_key]
             if not await ctx.repo.defer_run(
                 run_id, updated, lease_owner=lease_owner, not_before=recovery["not_before"]
             ):
@@ -480,8 +491,12 @@ class RunExecutor:
             event = Event(
                 stage="ORCHESTRATOR",
                 type="info",
-                message="本次尝试中断，已保存进度并安排自动恢复",
-                data={"status": "running", "recovery": recovery},
+                message=(
+                    "正在等待供应商资源，已保存进度并安排继续执行"
+                    if busy is not None
+                    else "本次尝试中断，已保存进度并安排自动恢复"
+                ),
+                data={"status": "running", state_key.removeprefix("_"): recovery},
             )
             await ctx.repo.append_events(run_id, [event], lease_owner=lease_owner)
             hub.publish(event)

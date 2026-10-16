@@ -1,8 +1,7 @@
 """用量与额度：每个身份每个自然日（UTC）的研究次数与 token 消耗。
 
-用量直接从运行记录汇总（``research_run.created_at`` / ``total_tokens``），不另建计费
-表：运行记录已经是 token 的唯一真相源（Tracer 累计值随 finalize 落库），再维护一份
-计数器只会产生两本对不上的账。
+受理次数与最终 token 快照保存在不随任务删除的 usage_ledger。
+额度检查在入队事务内执行，页面汇总仅用于展示。
 
 额度只在**创建**研究时检查：已开始的运行不会被中途打断——那会丢掉已经花掉的
 token 换来的中间结果。用户在创建前就能从 ``/api/usage`` 看到剩余额度。
@@ -19,6 +18,8 @@ _PAGE = 200
 async def usage_today(repo: Any, owner_id: str | None) -> dict[str, int]:
     """汇总今天（UTC）创建的运行数与累计 token。"""
     start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    if hasattr(repo, "usage_since"):
+        return await repo.usage_since(owner_id, start)
     runs = 0
     tokens = 0
     offset = 0

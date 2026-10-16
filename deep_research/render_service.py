@@ -9,6 +9,9 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -36,11 +39,25 @@ LEASE_SECONDS = 90.0
 HEARTBEAT_SECONDS = 20.0
 POLL_SECONDS = 0.5
 _standalone: WeakKeyDictionary = WeakKeyDictionary()
+_consumer_scope: ContextVar[bool] = ContextVar("render_consumer", default=False)
+
+
+@contextmanager
+def render_consumer_scope() -> Iterator[None]:
+    """Worker tasks inherit consumer permission; unrelated API tasks do not."""
+    token = _consumer_scope.set(True)
+    try:
+        yield
+    finally:
+        _consumer_scope.reset(token)
 
 
 class RenderService:
-    def __init__(self, repo: Any, settings: Settings, *, queue: Any = None) -> None:
+    def __init__(
+        self, repo: Any, settings: Settings, *, queue: Any = None, consume: bool | None = None
+    ) -> None:
         self.repo = repo
+        self.consumes = settings.execution_mode == "inline" if consume is None else consume
         self.root = str(Path(settings.artifact_root).resolve())
         self.pool = hashlib.sha256(os.path.normcase(self.root).encode()).hexdigest()
         self.quota = settings.artifact_total_bytes
@@ -88,6 +105,8 @@ class RenderService:
                 future.set_result(None)
 
     def wake(self) -> None:
+        if not self.consumes or self.stopping:
+            return
         self._wakeup.set()
         if not self.stopping and (self._drainer is None or self._drainer.done()):
             self._drainer = asyncio.create_task(self._drain())
@@ -96,7 +115,7 @@ class RenderService:
             )
 
     async def poll_pending(self) -> None:
-        while not self.stopping:
+        while self.consumes and not self.stopping:
             try:
                 if await self.queue.pending(self.pool):
                     self.wake()
@@ -105,7 +124,7 @@ class RenderService:
             await asyncio.sleep(1)
 
     async def _drain(self) -> None:
-        while not self.stopping:
+        while self.consumes and not self.stopping:
             try:
                 self._wakeup.clear()
                 while not self.stopping and len(self._active) < RENDER_CAPACITY:
@@ -132,9 +151,7 @@ class RenderService:
                 # part of the pool. Refill on admission as well as completion.
                 wakeup = asyncio.create_task(self._wakeup.wait())
                 try:
-                    await asyncio.wait(
-                        {*self._active, wakeup}, return_when=asyncio.FIRST_COMPLETED
-                    )
+                    await asyncio.wait({*self._active, wakeup}, return_when=asyncio.FIRST_COMPLETED)
                 finally:
                     wakeup.cancel()
                     await asyncio.gather(wakeup, return_exceptions=True)
@@ -198,12 +215,18 @@ class RenderService:
             before = await run_blocking(render_tasks.progress_token, job, self.root)
             if not await self.queue.progress(job.id, job.lease_owner, before):
                 return
-            work = asyncio.create_task(process.run(
-                job, self.root, job.payload.get("quota", self.quota), check,
-            ))
+            work = asyncio.create_task(
+                process.run(
+                    job,
+                    self.root,
+                    job.payload.get("quota", self.quota),
+                    check,
+                )
+            )
             watchdog = asyncio.create_task(watch())
             done, _ = await asyncio.wait(
-                {work, watchdog}, timeout=self.execution_timeout,
+                {work, watchdog},
+                timeout=self.execution_timeout,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if not done:
@@ -223,7 +246,9 @@ class RenderService:
 
             logger.warning(
                 "render attempt failed; job=%s attempt=%s origin=%s diagnostic=%s",
-                job.id, job.attempts, "child" if process.diagnostic else "parent",
+                job.id,
+                job.attempts,
+                "child" if process.diagnostic else "parent",
                 json.dumps(process.diagnostic or exception_diagnostic(exc), ensure_ascii=True),
             )
             fence.set()
@@ -309,7 +334,10 @@ class RenderService:
                 raise RenderConflict("同一渲染请求不能用于不同输入")
             return await asyncio.shield(existing[1])
         job = await self.reserve(
-            kind, run_id, key, payload,
+            kind,
+            run_id,
+            key,
+            payload,
             restart_failed=restart_failed,
             request_token=request_token,
         )
@@ -327,16 +355,27 @@ class RenderService:
         return await asyncio.shield(waiter)
 
     async def reserve(
-        self, kind: str, run_id: str, key: str, payload: dict[str, Any], *,
-        restart_failed: bool = False, request_token: str | None = None,
+        self,
+        kind: str,
+        run_id: str,
+        key: str,
+        payload: dict[str, Any],
+        *,
+        restart_failed: bool = False,
+        request_token: str | None = None,
     ) -> RenderJob:
         if self.stopping:
             raise RuntimeError("渲染服务正在关闭")
         if not await self._exists(run_id):
             raise FileNotFoundError("研究任务已删除")
         job = await self.queue.reserve(
-            key=key, pool=self.pool, run_id=run_id, kind=kind, payload=payload,
-            restart_failed=restart_failed, request_token=request_token,
+            key=key,
+            pool=self.pool,
+            run_id=run_id,
+            kind=kind,
+            payload=payload,
+            restart_failed=restart_failed,
+            request_token=request_token,
         )
         self.wake()
         return job
@@ -454,9 +493,11 @@ class RenderService:
             self.requires_hard_exit |= bool(pending)
 
 
-def service_for(repo: Any, settings: Settings) -> RenderService:
+def service_for(repo: Any, settings: Settings, *, consume: bool | None = None) -> RenderService:
     loop = asyncio.get_running_loop()
     root = os.path.normcase(str(Path(settings.artifact_root).resolve()))
+    if consume is None:
+        consume = settings.execution_mode == "inline" or _consumer_scope.get()
     if repo is None:
         services = _standalone.setdefault(loop, {})
     else:
@@ -464,9 +505,14 @@ def service_for(repo: Any, settings: Settings) -> RenderService:
         if services is None:
             services = {}
             repo._render_services = services
-    service = services.get(root)
+    key = (root, consume)
+    service = services.get(key)
     if service is None or service.loop is not loop or service.stopping:
-        service = RenderService(repo, settings)
-        services[root] = service
+        # Two roles share the in-memory queue too, without granting the client
+        # permission to start a local consumer when a worker is registered.
+        peer = services.get((root, not consume))
+        queue = peer.queue if peer is not None and peer.loop is loop else None
+        service = RenderService(repo, settings, queue=queue, consume=consume)
+        services[key] = service
     service.quota = settings.artifact_total_bytes
     return service

@@ -11,6 +11,7 @@ from ..models import Source
 from ..observability import Tracer
 
 _READING_QUESTION: ContextVar[str] = ContextVar("source_reading_question", default="")
+_SEARCH_TRACER: ContextVar[Tracer | None] = ContextVar("search_request_tracer", default=None)
 
 
 @contextmanager
@@ -59,10 +60,24 @@ def required_sections(question: str) -> set[str]:
 
 
 class SearchTool(ABC):
-    _tracer: Tracer | None = None
+    _default_tracer: Tracer | None = None
+
+    @property
+    def _tracer(self) -> Tracer | None:
+        # Per-request ownership follows nested backends and asyncio.gather,
+        # without changing a shared client's default tracer or HTTP pool.
+        return _SEARCH_TRACER.get() or self._default_tracer
+
+    @_tracer.setter
+    def _tracer(self, tracer: Tracer | None) -> None:
+        self._default_tracer = tracer
 
     def set_tracer(self, tracer: Tracer) -> None:
         self._tracer = tracer
+
+    def for_tracer(self, tracer: Tracer) -> SearchTool:
+        """Bind a run without mutating an injected/shared backend."""
+        return _BoundSearchTool(self, tracer)
 
     @abstractmethod
     async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
@@ -81,3 +96,26 @@ class SearchTool(ABC):
     async def aclose(self) -> None:
         """Release client resources when a search backend owns a connection pool."""
         return None
+
+
+class _BoundSearchTool(SearchTool):
+    def __init__(self, delegate: SearchTool, tracer: Tracer) -> None:
+        self.delegate = delegate
+        self._bound_tracer = tracer
+
+    def for_tracer(self, tracer: Tracer) -> SearchTool:
+        return self if tracer is self._bound_tracer else self.delegate.for_tracer(tracer)
+
+    @property
+    def backend_name(self) -> str:
+        return self.delegate.backend_name
+
+    async def search(self, query: str, *, max_results: int = 5) -> list[Source]:
+        token = _SEARCH_TRACER.set(self._bound_tracer)
+        try:
+            return await self.delegate.search(query, max_results=max_results)
+        finally:
+            _SEARCH_TRACER.reset(token)
+
+    async def aclose(self) -> None:
+        await self.delegate.aclose()

@@ -53,6 +53,7 @@ async def test_detail_reports_delayed_cancel_without_settling_it(monkeypatch, ag
     await repo.request_cancel(run_id)
     repo._runs[run_id].cancel_requested_at = datetime.now(UTC) - timedelta(seconds=age)
     monkeypatch.setattr(api.app.state, "repo", repo, raising=False)
+    monkeypatch.setattr(api.app.state, "catalog", None, raising=False)
     monkeypatch.setattr(api.app.state, "settings", Settings(execution_mode="worker"), raising=False)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api.app), base_url="http://test"
@@ -74,6 +75,7 @@ async def test_detail_does_not_invent_legacy_cancel_age(monkeypatch, status):
     run_id = await repo.create_run("legacy")
     await repo.set_status(run_id, status)
     monkeypatch.setattr(api.app.state, "repo", repo, raising=False)
+    monkeypatch.setattr(api.app.state, "catalog", None, raising=False)
     monkeypatch.setattr(api.app.state, "settings", Settings(execution_mode="worker"), raising=False)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api.app), base_url="http://test"

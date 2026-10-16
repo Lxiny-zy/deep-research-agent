@@ -34,6 +34,7 @@ from .repository import (
     LeaseLostError,
     RunDetail,
     RunQueueFullError,
+    RunQuotaExceeded,
     RunSummary,
     TagCount,
 )
@@ -77,6 +78,7 @@ class InMemoryRepository:
         self._runs: dict[str, _RunRecord] = {}
         self._order: list[str] = []
         self._idempotency: dict[str, tuple[str, str]] = {}
+        self._usage_ledger: list[tuple[str, str, str, datetime, int]] = []
         self._workers: dict[str, tuple[datetime, int]] = {}
         self._artifact_cleanup: dict[str, str] = {}
         self._scheduler_state = SchedulerState()
@@ -109,7 +111,9 @@ class InMemoryRepository:
         owner_id: str | None = None,
         project_id: str | None = None,
         max_inflight: int | None = None,
+        max_inflight_per_identity: int | None = None,
         schedule_priority: int = 1,
+        daily_run_quota: int | None = None,
     ) -> tuple[str, bool]:
         validate_priority(schedule_priority)
         if idempotency_key:
@@ -121,7 +125,19 @@ class InMemoryRepository:
                         "idempotency key was already used for a different request"
                     )
                 return existing_id, False
-        self._check_capacity(max_inflight)
+        since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        if (
+            daily_run_quota is not None
+            and sum(
+                owner == owner_id and created >= since
+                for owner, _, _, created, _ in self._usage_ledger
+            )
+            >= daily_run_quota
+        ):
+            raise RunQuotaExceeded("今日研究额度已用完，将于 UTC 零点重置")
+        self._check_capacity(
+            max_inflight, owner_id=owner_id, identity_maximum=max_inflight_per_identity
+        )
         schedule = schedule_for_execution(execution)
         run_id = str(uuid4())
         record = _RunRecord(
@@ -147,16 +163,33 @@ class InMemoryRepository:
             )
         self._runs[run_id] = record
         self._order.append(run_id)
+        if owner_id is not None:
+            self._usage_ledger.append((owner_id, run_id, "run_admitted", record.created_at, 0))
         if idempotency_key:
             self._idempotency[idempotency_key] = (run_id, request_hash)
         return run_id, True
 
-    def _check_capacity(self, maximum: int | None) -> None:
+    def _check_capacity(
+        self,
+        maximum: int | None,
+        *,
+        owner_id: str | None = None,
+        identity_maximum: int | None = None,
+    ) -> None:
         if (
             maximum is not None
             and sum(r.status in RUN_ACTIVE_STATUSES for r in self._runs.values()) >= maximum
         ):
             raise RunQueueFullError("研究队列已满，请稍后重试")
+        if (
+            identity_maximum is not None
+            and sum(
+                r.status in RUN_ACTIVE_STATUSES and r.owner_id == owner_id
+                for r in self._runs.values()
+            )
+            >= identity_maximum
+        ):
+            raise RunQueueFullError("当前身份的在途任务已达上限，请等待已有任务完成")
 
     async def find_run_once(self, idempotency_key: str, request_hash: str) -> str | None:
         existing = self._idempotency.get(idempotency_key)
@@ -169,6 +202,26 @@ class InMemoryRepository:
     async def get_run_owner(self, run_id: str) -> str | None:
         record = self._runs.get(run_id)
         return record.owner_id if record else None
+
+    async def usage_since(self, owner_id: str | None, since: datetime) -> dict[str, int]:
+        rows = [
+            row
+            for row in self._usage_ledger
+            if row[3] >= since and (owner_id is None or row[0] == owner_id)
+        ]
+        return {"runs": len(rows), "tokens": sum(row[4] for row in rows)}
+
+    async def source_policy_summary(self, run_id: str) -> int | None:
+        rec = self._runs.get(run_id)
+        total: int | None = None
+        for event in rec.events if rec else []:
+            data = event.data or {}
+            if data.get("category") == "source_policy":
+                total = total or 0
+                value = data.get("blocked")
+                if isinstance(value, int) and not isinstance(value, bool):
+                    total += value
+        return total
 
     async def heartbeat_worker(self, name: str, active: int) -> None:
         self._workers[name] = (datetime.now(UTC), active)
@@ -419,7 +472,12 @@ class InMemoryRepository:
         return True
 
     async def requeue_failed_run(
-        self, run_id: str, *, max_inflight: int | None = None, restart_seconds: int | None = None
+        self,
+        run_id: str,
+        *,
+        max_inflight: int | None = None,
+        max_inflight_per_identity: int | None = None,
+        restart_seconds: int | None = None,
     ) -> bool:
         rec = self._runs.get(run_id)
         if rec is None or rec.status != "error" or rec.orchestration is None:
@@ -430,7 +488,9 @@ class InMemoryRepository:
         lease_active = rec.lease_expires_at is not None and rec.lease_expires_at > now
         if rec.lease_owner is not None and lease_active:
             return False
-        self._check_capacity(max_inflight)
+        self._check_capacity(
+            max_inflight, owner_id=rec.owner_id, identity_maximum=max_inflight_per_identity
+        )
         if restart_seconds is not None:
             rec.orchestration.checkpoint = renewed_checkpoint(
                 rec.orchestration.checkpoint, restart_seconds
@@ -447,6 +507,7 @@ class InMemoryRepository:
         *,
         lease_seconds: int = EXECUTION_LEASE_SECONDS,
         max_active_runs: int | None = None,
+        scheduling_policy: str = "strict",
     ) -> ClaimedRun | None:
         """Reference implementation of the claim protocol.
 
@@ -491,7 +552,7 @@ class InMemoryRepository:
                 )
             )
         selection = select_next(
-            eligible_candidates(candidates, active, max_active_runs),
+            eligible_candidates(candidates, active, max_active_runs, policy=scheduling_policy),
             self._scheduler_credits,
             self._scheduler_state,
             now=now.timestamp(),
@@ -539,6 +600,10 @@ class InMemoryRepository:
                 raise ValueError("invalid task completion record")
         rec.elapsed = elapsed
         rec.total_tokens = total_tokens
+        self._usage_ledger = [
+            (owner, rid, kind, created, total_tokens if rid == run_id else tokens)
+            for owner, rid, kind, created, tokens in self._usage_ledger
+        ]
         if rec.status in {"pending", "running"}:
             if completion is not None:
                 if rec.orchestration is None or completion.get("status") not in {

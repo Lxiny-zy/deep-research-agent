@@ -1027,6 +1027,7 @@ export interface QaEvidence {
 
 export type QaOrigin = 'paper' | 'research' | 'library' | 'web'
 export type QaSourceOption = 'web' | 'library'
+export type QaAnswerMode = 'direct' | 'verified'
 
 export interface QaMessage {
   id: string
@@ -1042,6 +1043,7 @@ export interface QaMessage {
   request_id?: string | null
   request_payload?: {
     query?: string
+    answer_mode?: QaAnswerMode
     sources?: QaSourceOption[]
     project_id?: string | null
     revision_message_id?: string | null

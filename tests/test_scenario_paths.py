@@ -36,6 +36,8 @@ from tests.test_workbench import WorkbenchLLM
 
 @pytest.fixture(params=["inline", "worker"])
 async def scenario_app(monkeypatch, tmp_path, request):
+    from tests.render_helpers import render_worker
+
     settings = Settings(
         artifact_root=str(tmp_path / "artifacts"),
         intent_enabled=False,
@@ -71,12 +73,13 @@ async def scenario_app(monkeypatch, tmp_path, request):
     }.items():
         monkeypatch.setattr(api.app.state, name, value, raising=False)
     monkeypatch.setattr(api, "_run_limiter", api._RateLimiter(1000, 60))
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=api.app), base_url="http://test"
-    ) as client:
-        yield client, repo
-    await asyncio.gather(*list(api.app.state.tasks))
-    await asyncio.gather(*list(api.app.state.qa_tasks))
+    async with render_worker(repo, settings):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=api.app), base_url="http://test"
+        ) as client:
+            yield client, repo
+        await asyncio.gather(*list(api.app.state.tasks))
+        await asyncio.gather(*list(api.app.state.qa_tasks))
     await engine.dispose()
 
 
@@ -290,6 +293,7 @@ async def test_academic_qa_stream_history_and_optional_search(scenario_app, monk
 
     client, _ = scenario_app
     searches = []
+    models = []
 
     class Search(FakeSearch):
         async def search(self, query, **kwargs):
@@ -298,7 +302,9 @@ async def test_academic_qa_stream_history_and_optional_search(scenario_app, monk
 
     async def build_agent(self, settings, **kwargs):
         search = Search()
-        return DeepResearchAgent(settings, llm=QaLLM(), search_tool=search, **kwargs), search
+        model = QaLLM()
+        models.append(model)
+        return DeepResearchAgent(settings, llm=model, search_tool=search, **kwargs), search
 
     monkeypatch.setattr(RunExecutor, "build_agent", build_agent)
     created = await client.post("/api/qa/conversations", json={"title": "研究问答"})
@@ -322,5 +328,9 @@ async def test_academic_qa_stream_history_and_optional_search(scenario_app, monk
         m["status"] == "done" and "发现X" in m["answer"] for m in messages
     )
     assert messages[0]["citations"] == []
-    assert messages[1]["citations"] == messages[2]["citations"] == ["https://a.com"]
+    # Direct answers expose the supplied reference passages, not verified findings.
+    assert messages[1]["citations"] == messages[2]["citations"] == [
+        "https://a.com", "https://b.com",
+    ]
+    assert all(model.parse_calls == 0 for model in models)
     assert searches and "CASSI" in searches[-1]

@@ -68,6 +68,9 @@ class ReportService:
             require_corroboration=requires_corroboration(detail),
             include_hsi_tables=include_hsi_tables,
         )
+        from ..persistence.event_metrics import blocked_source_count
+
+        document.overview.blocked_sources = await blocked_source_count(self.repo, run_id)
         scratch = detail.orchestration.checkpoint.get("scratch", {}) if detail.orchestration else {}
         if displayed_report is not None:
             from ..bibliography import build_bibliography

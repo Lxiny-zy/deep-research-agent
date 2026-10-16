@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import cast
 
 from ..config import Settings
-from ..execution_policy import COMMITTED_RESEARCH_PROGRESS_KEY
+from ..execution_policy import COMMITTED_RESEARCH_PROGRESS_KEY, resource_busy
 from ..guardrails import (
     ClaimConsistencyVerifier,
     EvidenceVerifier,
@@ -29,12 +29,12 @@ from ..models import (
 )
 from ..observability import Tracer
 from ..persistence.repository import LeaseLostError
-from ..prompting import MEASUREMENT_SCOPE_RULES, PrefixPrompt
+from ..prompting import MEASUREMENT_SCOPE_RULES, PrefixPrompt, leaf_system_prompt
 from ..registry import register
 from ..scheduler import planned_search_queries, research_dag
 from ..tools.base import SearchTool, reading_question_scope
 from ..workflow import ATTEMPTED_SCRATCH_KEY
-from .base import Blackboard, RunContext, direct_system_prompt, effective_require_corroboration
+from .base import Blackboard, RunContext, effective_require_corroboration
 
 SYSTEM = (
     "你是严谨的研究员。仅依据【给定来源】抽取与子问题直接相关的关键事实；"
@@ -45,7 +45,7 @@ SYSTEM = (
     "不能把三个组件合成一条论断。多个动作、因果、比较、条件或指标应拆分成各有完整依据的发现。"
     "不要把同篇其他段落读到但当前引句未支持的细节塞入这一条 statement。"
     "同一方法/指标在不同分组的多个数值分别生成发现，不用一个 quantity 代表多个值，也不只取第一处。"
-    "引文不受固定字符数限制：必要时保留连续多句，包含方法名、作者归属及适用条件；"
+    "引文遵循本次调用的长度上限；必要时在上限内保留连续多句，包含方法名、作者归属及适用条件；"
     "表格保留标题、表头、单位与相关结果行之间的完整连续原文，不只复制数字。"
     "无法在同一来源片段中取得完整支持时，缩小结论范围或拆分，不得拼接片段冒充连续原文。"
     "statement 中用作者或方法名称说明归属，不附原论文的文献编号；原文编号只随逐字引句保留。"
@@ -102,10 +102,21 @@ class Researcher:
         self.semantic_verifier = semantic_verifier or SemanticEvidenceVerifier()
         self.consistency_verifier = consistency_verifier or ClaimConsistencyVerifier()
         self.system = SYSTEM  # 可被角色卡片覆盖
+        self.global_rules: str | None = None
         # Paper conversations supply a deterministic context AFTER source policy.
         self.source_context: Callable[[list[Source]], str] | None = None
         self.question_context: Callable[[list[Source]], str] | None = None
         self.raise_extraction_errors = False
+
+    def extraction_system(self) -> str:
+        """The extractor returns evidence; scheduling and file work belong to the runtime."""
+        from ..workbench.quality import policy_from
+
+        return leaf_system_prompt(self.system, self.global_rules) + (
+            f"\n每条 evidence_quote 最多 {policy_from(self.settings).max_evidence_quote_chars} 字；"
+            "选择足以支持该发现的最短连续原文，保留必要条件、归属及表头。"
+            "无法在上限内支持复合结论时拆为有各自依据的事实，不能直接引用整份长来源。"
+        )
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         """工作流入口：对 bb.plan 中尚未研究的子问题做 DAG 分层并行检索，追加到 bb.results。
@@ -127,7 +138,7 @@ class Researcher:
                 max_quote_chars=policy_from(ctx.settings).max_evidence_quote_chars
             )
         require_corroboration = effective_require_corroboration(bb, ctx.settings)
-        self.system = ctx.system_prompt(self.system)
+        self.global_rules = ctx.global_rules
         pending = bb.scratch.pop("pending_sub_questions", None)
         if pending is None:  # 未指定则取整份计划（首轮）
             pending = bb.plan.sub_questions if bb.plan else []
@@ -155,6 +166,7 @@ class Researcher:
                     "run_id": ctx.run_id,
                     "role": self.name,
                     "system": self.system,
+                    "global_rules": self.global_rules,
                     "pending": [item.model_dump(mode="json") for item in pending],
                     "previous_results": [result.material_data() for result in bb.results],
                     "reflection_round": len(bb.reflections),
@@ -255,14 +267,23 @@ class Researcher:
         selector = SourceSelector(self.verification_llm, sub_question, self.tracer)
         with source_selection_scope(selector):
             result = await self._run(
-                sub_question, context_findings,
-                require_corroboration=require_corroboration, search_queries=search_queries,
+                sub_question,
+                context_findings,
+                require_corroboration=require_corroboration,
+                search_queries=search_queries,
             )
         if result is not None and selector.records:
             audit = result.extraction_audit or ExtractionAudit(question=sub_question)
-            result = result.model_copy(update={"extraction_audit": audit.model_copy(update={
-                "source_selections": selector.records,
-            }, deep=True)})
+            result = result.model_copy(
+                update={
+                    "extraction_audit": audit.model_copy(
+                        update={
+                            "source_selections": selector.records,
+                        },
+                        deep=True,
+                    )
+                }
+            )
         return result
 
     async def _run(
@@ -301,6 +322,8 @@ class Researcher:
             except LeaseLostError:
                 raise
             except Exception as exc:  # 一个检索式失败，不丢弃其他检索式取得的来源。
+                if resource_busy(exc) is not None:
+                    raise
                 search_errors.add(type(exc).__name__)
                 self.tracer.emit(
                     "RESEARCHER", "error", f"检索失败「{query}」（{type(exc).__name__}）"
@@ -384,19 +407,18 @@ class Researcher:
         if self.question_context is not None:
             user_parts.append(self.question_context(sources))
 
-        from ..workbench.quality import policy_from
-
-        system = direct_system_prompt(self.system) + (
-            f"\n每条 evidence_quote 最多 {policy_from(self.settings).max_evidence_quote_chars} 字；"
-            "选择足以支持该发现的最短连续原文，保留必要条件、归属及表头。"
-            "无法在上限内支持复合结论时拆为有各自依据的事实，不能直接引用整份长来源。"
-        )
+        system = self.extraction_system()
         dynamic = "\n" + "\n".join(user_parts)
         prompt = fixed + dynamic
         from ..workbench.extraction import extract_with_context_budget
 
         result = await extract_with_context_budget(
-            self, sources, sub_question, system, prompt, dynamic,
+            self,
+            sources,
+            sub_question,
+            system,
+            prompt,
+            dynamic,
             allow_partition=self.source_context is None,
         )
         findings = result.findings

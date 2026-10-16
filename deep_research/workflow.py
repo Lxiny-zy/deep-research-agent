@@ -13,16 +13,19 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
+import hashlib
+import heapq
+import json
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from .execution_policy import COMMITTED_RESEARCH_PROGRESS_KEY, committed_research_progress
 from .guardrails import ClaimConsistencyVerifier, report_eligible, verify_claim_consistency
-from .models import SubQuestion
+from .models import ResearchResult, SubQuestion
 from .orchestration import (
     OrchestrationRuntime,
     RunStatus,
@@ -112,6 +115,33 @@ ATTEMPTED_SCRATCH_KEY = "attempted_sub_questions"
 _DEFAULT_TEAM_STEPS = [Step(kind="agent", agent="researcher")]
 _INCOMING_CONDITIONS_SKIP_REASON = "incoming conditions not matched"
 _MISSING = object()
+_GRAPH_STATE_KEY = "_graph_state"
+_GRAPH_CONTROL_KEYS = frozenset(
+    {
+        "_deadline_at",
+        "_task_deadline_at",
+        "_task_model_call_scope",
+        "_attempt_elapsed_origin",
+        "_recovery",
+        "_resource_wait",
+        "_runtime_metrics",
+        "_orchestration_run",
+        COMMITTED_RESEARCH_PROGRESS_KEY,
+    }
+)
+_DELTA_ADAPTER = TypeAdapter(dict[str, tuple[Any, Any]])
+
+
+def _graph_control_keys() -> frozenset[str]:
+    from .workbench.contract import CONTRACT_SCRATCH_KEY
+
+    return _GRAPH_CONTROL_KEYS | {CONTRACT_SCRATCH_KEY}
+
+
+def _result_fingerprint(result: ResearchResult) -> str:
+    return hashlib.sha256(
+        json.dumps(result.model_dump(mode="json"), sort_keys=True).encode()
+    ).hexdigest()
 
 
 def _policy_limit(bb: Blackboard, field: str, default: int) -> int:
@@ -226,6 +256,119 @@ def _merge_parallel_blackboard(base: Blackboard, current: Blackboard, branch: Bl
     )
     merged_scratch = _merge_parallel_value(base.scratch, current.scratch, branch.scratch)
     current.scratch = {} if merged_scratch is _MISSING else merged_scratch
+
+
+def _scratch_delta(base: dict[str, Any], branch: dict[str, Any]) -> tuple[dict, dict]:
+    """Retain changed leaves instead of keeping whole branch checkpoints alive."""
+    before: dict[str, Any] = {}
+    after: dict[str, Any] = {}
+    for key in dict.fromkeys([*base, *branch]):
+        old, new = base.get(key, _MISSING), branch.get(key, _MISSING)
+        if old == new:
+            continue
+        if new is _MISSING:
+            before[key] = None
+        elif isinstance(old, dict) and isinstance(new, dict):
+            before[key], after[key] = _scratch_delta(old, new)
+        else:
+            if old is not _MISSING:
+                before[key] = old
+            after[key] = new
+    return before, after
+
+
+def _blackboard_delta(base: Blackboard, branch: Blackboard) -> dict[str, tuple[Any, Any]]:
+    delta: dict[str, tuple[Any, Any]] = {}
+    controls = _graph_control_keys()
+    for key in ("query", "plan", "report", "results", "reflections"):
+        old, new = getattr(base, key), getattr(branch, key)
+        if old == new:
+            continue
+        if key in {"results", "reflections"} and new[: len(old)] == old:
+            # Append-only result branches need only their new items.
+            delta[key] = ([], new[len(old) :])
+        else:
+            delta[key] = (old, new)
+    before, after = _scratch_delta(
+        {k: v for k, v in base.scratch.items() if k not in controls},
+        {k: v for k, v in branch.scratch.items() if k not in controls},
+    )
+    if before or after:
+        delta["scratch"] = (before, after)
+    return delta
+
+
+def _merge_graph_sequence(
+    before: list[Any],
+    current: list[Any],
+    after: list[Any],
+    keys: list[str],
+    anchors: list[str],
+    *,
+    node_id: str,
+    field: str,
+) -> tuple[list[Any], list[str]]:
+    """Apply edits to the producer's slots, not positions in an unrelated branch."""
+    if len(anchors) != len(before) or len(keys) != len(current):
+        raise ValueError("invalid graph sequence checkpoint")
+    updates = {
+        key: after[index]
+        for index, key in enumerate(anchors)
+        if index < len(after) and after[index] != before[index]
+    }
+    removed = set(anchors[len(after) :])
+    merged, merged_keys = [], []
+    for key, item in zip(keys, current, strict=True):
+        if key not in removed:
+            merged.append(deepcopy(updates.get(key, item)))
+            merged_keys.append(key)
+    # A later branch may deliberately restore a slot removed by an earlier one.
+    for key, item in updates.items():
+        if key not in merged_keys:
+            merged.append(deepcopy(item))
+            merged_keys.append(key)
+    for index, item in enumerate(after[len(before) :]):
+        merged.append(deepcopy(item))
+        merged_keys.append(json.dumps([node_id, field, index]))
+    return merged, merged_keys
+
+
+def _apply_blackboard_delta(
+    bb: Blackboard,
+    delta: dict[str, tuple[Any, Any]],
+    *,
+    origins: dict[str, list[str]],
+    anchors: dict[str, list[str]],
+    node_id: str,
+) -> None:
+    for key, (before, after) in delta.items():
+        if key in {"results", "reflections"}:
+            values, origins[key] = _merge_graph_sequence(
+                before,
+                getattr(bb, key),
+                after,
+                origins[key],
+                anchors[key],
+                node_id=node_id,
+                field=key,
+            )
+            setattr(bb, key, values)
+        elif key == "scratch":
+            bb.scratch = _merge_parallel_value(before, bb.scratch, after)
+        else:
+            setattr(bb, key, deepcopy(after))
+
+
+def _load_blackboard_delta(raw: dict) -> dict[str, tuple[Any, Any]]:
+    from .agents.base import Blackboard
+
+    delta = _DELTA_ADAPTER.validate_python(raw)
+    for key, pair in delta.items():
+        if key not in Blackboard.model_fields:
+            raise ValueError(f"unknown graph checkpoint field: {key}")
+        adapter: TypeAdapter[Any] = TypeAdapter(Blackboard.model_fields[key].annotation)
+        delta[key] = (adapter.validate_python(pair[0]), adapter.validate_python(pair[1]))
+    return delta
 
 
 def _eligible_finding_count(bb: Blackboard) -> int:
@@ -452,6 +595,8 @@ class WorkflowEngine:
         self.runtime = OrchestrationRuntime(self._emit_runtime_event)
         self._run_depth = 0
         self._checkpoint_sink = checkpoint_sink
+        self._graph_state: dict[str, Any] | None = None
+        self._graph_repairs: dict[str, ResearchResult] = {}
         if resume_run is not None and initial_run is not None:
             raise ValueError("resume_run and initial_run are mutually exclusive")
         self._resuming = resume_run is not None
@@ -480,6 +625,8 @@ class WorkflowEngine:
             "edges": wf.edges,
         }
         checkpoint = bb.model_dump(mode="json")
+        if self._graph_state is not None:
+            checkpoint[_GRAPH_STATE_KEY] = self._graph_state
         if publish_event:
             run = self.runtime.save_checkpoint(checkpoint, definition)
         else:
@@ -489,7 +636,10 @@ class WorkflowEngine:
             current_run.definition = definition
             run = current_run
         if self._checkpoint_sink is not None:
-            await self._checkpoint_sink(run)
+            # Other graph nodes may finish while the sink awaits I/O. Freeze
+            # their statuses with the outputs actually included in this checkpoint.
+            snapshot = run.model_copy(deep=True) if self._graph_state is not None else run
+            await self._checkpoint_sink(snapshot)
 
     def _emit_runtime_event(self, name: str, data: dict) -> None:
         """把统一运行时生命周期桥接到已有 SSE/持久化事件流。"""
@@ -579,6 +729,10 @@ class WorkflowEngine:
                 except Exception as exc:
                     last_error = exc
                     _carry_replan_ledger(bb, candidate)
+                    from .execution_policy import resource_busy
+
+                    if self._recover_transient and resource_busy(exc) is not None:
+                        raise
                     if attempt + 1 < step.max_attempts:
                         delay = step.retry_backoff * (2**attempt)
                         self.runtime.retry_step(step_run, exc, delay)
@@ -730,7 +884,14 @@ class WorkflowEngine:
             self.ctx.global_rules = load_global_rules()
         from .workbench.quote_recovery import recover_blackboard_quotes
 
+        previous = deepcopy(bb.results) if wf.nodes and self._run_depth == 0 else []
         await recover_blackboard_quotes(bb, self.ctx)
+        if wf.nodes and self._run_depth == 0:
+            self._graph_repairs = {
+                _result_fingerprint(old): new.model_copy(deep=True)
+                for old, new in zip(previous, bb.results, strict=True)
+                if old != new
+            }
         from .workbench.contract import CONTRACT_SCRATCH_KEY, contract_from_scratch
         from .workbench.coverage_review import effective_contract
 
@@ -856,23 +1017,29 @@ class WorkflowEngine:
                 await self._checkpoint(wf, bb, publish_event=False)
 
     async def _run_graph(self, wf: Workflow, bb: Blackboard) -> Blackboard:
-        """Execute a DAG layer by layer; nodes in the same layer run concurrently."""
-        from .orchestration import (
-            WorkflowEdge,
-            WorkflowNode,
-            evaluate_condition,
-            graph_topo_layers,
-        )
+        """Run dependency-ready nodes with bounded tasks and deterministic inputs."""
+        from .agents.base import Blackboard
+        from .orchestration import evaluate_condition, graph_topo_layers
 
         nodes = [WorkflowNode.model_validate(raw) for raw in wf.nodes]
         edges = [WorkflowEdge.model_validate(raw) for raw in wf.edges]
         layers = graph_topo_layers(nodes, edges)
+        ordered = [node.id for layer in layers for node in layer]
+        order = {node_id: index for index, node_id in enumerate(ordered)}
+        levels = {node.id: index for index, layer in enumerate(layers) for node in layer}
+        by_id = {node.id: node for node in nodes}
         incoming: dict[str, list[WorkflowEdge]] = {node.id: [] for node in nodes}
+        outgoing: dict[str, set[str]] = {node.id: set() for node in nodes}
+        dependencies: dict[str, set[str]] = {node.id: set() for node in nodes}
         for edge in edges:
             incoming[edge.target].append(edge)
+            outgoing[edge.source].add(edge.target)
+            dependencies[edge.target].add(edge.source)
+        ancestors: dict[str, frozenset[str]] = {}
+        for node_id in ordered:
+            parents = dependencies[node_id]
+            ancestors[node_id] = frozenset(parents).union(*(ancestors[p] for p in parents))
         is_root = self._run_depth == 0
-        active_nodes: set[str] = set()
-        successful_nodes: set[str] = set()
         restored = {
             step.node_id: step
             for step in (
@@ -881,170 +1048,368 @@ class WorkflowEngine:
                 else []
             )
         }
-        active_nodes.update(
-            node_id for node_id, step in restored.items() if step.status == StepStatus.SUCCEEDED
+        completed = {
+            node_id
+            for node_id, step in restored.items()
+            if node_id in by_id
+            and (
+                step.status == StepStatus.SUCCEEDED
+                or (
+                    step.status == StepStatus.SKIPPED
+                    and step.error != _INCOMING_CONDITIONS_SKIP_REASON
+                )
+            )
+        }
+        active_nodes = {n for n in completed if restored[n].status == StepStatus.SUCCEEDED}
+        successful_nodes = set(active_nodes)
+        definition_hash = hashlib.sha256(
+            json.dumps([wf.name, wf.nodes, wf.edges], sort_keys=True).encode()
+        ).hexdigest()
+        saved = (
+            self.runtime.run.checkpoint.get(_GRAPH_STATE_KEY)
+            if is_root and self._resuming and self.runtime.run is not None
+            else None
         )
-        successful_nodes.update(
-            node_id for node_id, step in restored.items() if step.status == StepStatus.SUCCEEDED
-        )
+        deltas: dict[str, dict[str, tuple[Any, Any]]] = {}
+        sequence_inputs: dict[str, dict[str, list[str]]] = {}
+        repairs: dict[str, ResearchResult] = {}
+        if isinstance(saved, dict):
+            if saved.get("version") != 1 or saved.get("definition") != definition_hash:
+                raise ValueError("graph checkpoint does not match the workflow")
+            baseline = Blackboard.model_validate(saved["baseline"])
+            deltas = {
+                node_id: _load_blackboard_delta(raw)
+                for node_id, raw in saved.get("deltas", {}).items()
+                if node_id in active_nodes
+            }
+            sequence_inputs = {
+                node_id: value
+                for node_id, value in saved.get("sequence_inputs", {}).items()
+                if node_id in active_nodes
+            }
+            repairs = {
+                key: ResearchResult.model_validate(value)
+                for key, value in saved.get("repairs", {}).items()
+            }
+        else:
+            # Pre-journal checkpoints already contain their completed nodes'
+            # outputs. Adopt them as the baseline without replaying those nodes.
+            baseline = bb.model_copy(deep=True)
+        if is_root:
+            repairs.update(self._graph_repairs)
+        baseline_payload = baseline.model_dump(mode="json")
+
+        def normalize(state: Blackboard) -> None:
+            if not repairs:
+                return
+            updated = []
+            for result in state.results:
+                seen: set[str] = set()
+                key = _result_fingerprint(result)
+                while key in repairs and key not in seen:
+                    seen.add(key)
+                    result = repairs[key].model_copy(deep=True)
+                    key = _result_fingerprint(result)
+                updated.append(result)
+            state.results = updated
+
+        def compose(
+            scope: set[str] | frozenset[str],
+        ) -> tuple[Blackboard, dict[str, list[str]]]:
+            state = baseline.model_copy(deep=True)
+            origins = {
+                field: [json.dumps([None, field, i]) for i in range(len(getattr(state, field)))]
+                for field in ("results", "reflections")
+            }
+            for node_id in ordered:
+                if node_id in scope and node_id in deltas:
+                    if node_id not in sequence_inputs:
+                        # Upgrade journals written before sequence origins were recorded.
+                        _, inherited = compose(ancestors[node_id])
+                        sequence_inputs[node_id] = {
+                            field: inherited[field] if pair[0] else []
+                            for field, pair in deltas[node_id].items()
+                            if field in {"results", "reflections"}
+                        }
+                    _apply_blackboard_delta(
+                        state,
+                        deltas[node_id],
+                        origins=origins,
+                        anchors=sequence_inputs[node_id],
+                        node_id=node_id,
+                    )
+            # Deadlines, wait counters and durable progress belong to the run,
+            # not to a branch's historical input snapshot.
+            for key in _graph_control_keys():
+                if key in bb.scratch:
+                    state.scratch[key] = deepcopy(bb.scratch[key])
+                else:
+                    state.scratch.pop(key, None)
+            normalize(state)
+            return state, origins
+
+        initial, committed_origins = compose(completed)
+        _commit_blackboard(bb, initial)
+        committed_order = [n for n in ordered if n in completed]
+
+        def synchronize() -> None:
+            nonlocal committed_order, committed_origins
+            current_order = [n for n in ordered if n in completed]
+            if current_order[: len(committed_order)] == committed_order:
+                for node_id in current_order[len(committed_order) :]:
+                    if node_id in deltas:
+                        _apply_blackboard_delta(
+                            bb,
+                            deltas[node_id],
+                            origins=committed_origins,
+                            anchors=sequence_inputs[node_id],
+                            node_id=node_id,
+                        )
+            else:
+                # A slow earlier branch finished after a later branch. Reapply
+                # sparse deltas in topology order so timing cannot choose winners.
+                rebuilt, committed_origins = compose(completed)
+                _commit_blackboard(bb, rebuilt)
+            normalize(bb)
+            committed_order = current_order
+            if is_root:
+                self._graph_state = {
+                    "version": 1,
+                    "definition": definition_hash,
+                    "baseline": baseline_payload,
+                    "sequence_inputs": deepcopy(sequence_inputs),
+                    "repairs": {
+                        key: value.model_dump(mode="json") for key, value in repairs.items()
+                    },
+                    "deltas": {
+                        node_id: _DELTA_ADAPTER.dump_python(delta, mode="json")
+                        for node_id, delta in deltas.items()
+                    },
+                }
+
+        verification_lock = asyncio.Lock()
+        verified: dict[str, Any] = {}
+
+        async def verify_scope(state: Blackboard, scope: set[str] | frozenset[str]) -> None:
+            writers = [n for n in ordered if n in scope and "results" in deltas.get(n, {})]
+            if not any(
+                a not in ancestors[b] for i, a in enumerate(writers) for b in writers[i + 1 :]
+            ):
+                return
+
+            def signature() -> str:
+                return hashlib.sha256(
+                    json.dumps(
+                        [result.model_dump(mode="json") for result in state.results],
+                        sort_keys=True,
+                    ).encode()
+                ).hexdigest()
+
+            async with verification_lock:
+                key = signature()
+                if key in verified:
+                    state.results = deepcopy(verified[key])
+                    return
+                state.results = deepcopy(state.results)
+                await verify_claim_consistency(
+                    state.results,
+                    ClaimConsistencyVerifier(),
+                    self.ctx.llm_for("evidence_verifier"),
+                    self.ctx.tracer,
+                    stage="ORCHESTRATOR",
+                )
+                verified[key] = deepcopy(state.results)
+                verified[signature()] = verified[key]
+                while len(verified) > 8:
+                    verified.pop(next(iter(verified)))
+
+        remaining = {n: len(dependencies[n] - completed) for n in ordered}
+        ready = [(order[n], n) for n in ordered if n not in completed and remaining[n] == 0]
+        heapq.heapify(ready)
+        running: dict[asyncio.Task, str] = {}
+        inputs: dict[str, Blackboard] = {}
+        input_origins: dict[str, dict[str, list[str]]] = {}
+        children: dict[str, Blackboard] = {}
+        limit = self.ctx.settings.workflow_max_concurrency
+        repair_lock = asyncio.Lock()
+
+        async def repair_input(state: Blackboard) -> None:
+            from .workbench.quality import policy_from
+            from .workbench.quote_recovery import needs_quote_repair, recover_blackboard_quotes
+
+            if not self._resuming:
+                return
+            async with repair_lock:
+                normalize(state)
+                maximum = policy_from(self.ctx.settings).max_evidence_quote_chars
+                if not any(needs_quote_repair(result, maximum) for result in state.results):
+                    return
+                old = deepcopy(state.results)
+                state.results = deepcopy(state.results)
+                await recover_blackboard_quotes(state, self.ctx)
+                for before, after in zip(old, state.results, strict=True):
+                    if before != after:
+                        repairs[_result_fingerprint(before)] = after.model_copy(deep=True)
+
+        async def execute_node(
+            node: WorkflowNode, child: Blackboard
+        ) -> tuple[Blackboard, bool, bool]:
+            step = Step.model_validate(node.step)
+            step_run = self.runtime.create_step(
+                node_id=node.id if is_root else f"nested-{uuid4()}",
+                label=self._step_label(step),
+                kind=step.kind,
+                agent=step.agent,
+            )
+
+            def edge_active(edge: WorkflowEdge) -> bool:
+                if edge.source not in active_nodes:
+                    return False
+                try:
+                    return evaluate_condition(edge.condition, child)
+                except Exception as exc:
+                    self.ctx.tracer.emit(
+                        "ORCHESTRATOR",
+                        "info",
+                        f"边 {edge.id} 条件求值失败，按不激活处理：{exc}",
+                        data={
+                            "event_name": "edge.condition_error",
+                            "edge": edge.id,
+                            "condition": edge.condition,
+                            "error": str(exc),
+                        },
+                    )
+                    return False
+
+            # Conditions and consumers must see the same verified dependency set.
+            await repair_input(child)
+            await verify_scope(child, ancestors[node.id])
+            node_edges = incoming[node.id]
+            active_inputs = [edge_active(edge) for edge in node_edges]
+            if not node_edges:
+                should_run = True
+            elif node.join_mode == "all":
+                should_run = all(active_inputs)
+            elif node.join_mode == "success_all":
+                should_run = all(active_inputs) and all(
+                    e.source in successful_nodes for e in node_edges
+                )
+            else:
+                should_run = any(active_inputs)
+            if not should_run:
+                self.runtime.skip_step(step_run, _INCOMING_CONDITIONS_SKIP_REASON)
+                return child, False, False
+            if self._halted(bb):
+                self.runtime.skip_step(
+                    step_run, str(bb.scratch.get(HALT_REASON_KEY) or "halted by agent")
+                )
+                return child, False, False
+            if self._exhausted() and not self._is_terminal(step):
+                self.runtime.skip_step(step_run, "token budget exhausted")
+                return child, False, False
+            try:
+                child = await self._execute_with_policy(step, child, step_run)
+            except Exception as exc:
+                self.runtime.fail_step(step_run, exc)
+                from .execution_policy import transient_failure
+
+                if self._recover_transient and transient_failure(exc):
+                    raise
+                if isinstance(exc, (LeaseLostError, ResearchProgressError)):
+                    raise
+                self.ctx.tracer.emit(
+                    self._stage_for(step),
+                    "error",
+                    f"{self._step_label(step)} 失败，已隔离：{exc}",
+                )
+                if step.failure_policy == "fail_fast":
+                    raise
+            return child, True, step_run.status == StepStatus.SUCCEEDED
+
+        def collect_finished() -> BaseException | None:
+            failure: BaseException | None = None
+            for task in sorted((t for t in running if t.done()), key=lambda t: order[running[t]]):
+                node_id = running.pop(task)
+                child, base = children.pop(node_id), inputs.pop(node_id)
+                origins = input_origins.pop(node_id)
+                _carry_committed_research_progress(bb, child)
+                try:
+                    outcome, active, succeeded = task.result()
+                except BaseException as exc:
+                    if failure is None or isinstance(exc, asyncio.CancelledError):
+                        failure = exc
+                    continue
+                completed.add(node_id)
+                if active:
+                    active_nodes.add(node_id)
+                    if succeeded:
+                        successful_nodes.add(node_id)
+                    deltas[node_id] = _blackboard_delta(base, outcome)
+                    sequence_inputs[node_id] = {
+                        field: origins[field] if pair[0] else []
+                        for field, pair in deltas[node_id].items()
+                        if field in {"results", "reflections"}
+                    }
+                for successor in outgoing[node_id]:
+                    if successor not in completed and remaining[successor] > 0:
+                        remaining[successor] -= 1
+                        if remaining[successor] == 0:
+                            heapq.heappush(ready, (order[successor], successor))
+            synchronize()
+            return failure
+
         if is_root:
             self.runtime.start(wf.name, {"query": bb.query})
             self._emit_workflow_plan(wf)
+        synchronize()
         self._run_depth += 1
         try:
-            for layer_index, layer in enumerate(layers):
-                self.ctx.tracer.emit(
-                    "ORCHESTRATOR",
-                    "info",
-                    f"执行图层 {layer_index + 1}，并行节点 {len(layer)} 个",
-                    data={"graph_layer": layer_index, "nodes": [node.id for node in layer]},
-                )
-                layer_base = bb.model_copy(deep=True)
-                layer_nodes = tuple(layer)
-                children: dict[str, Blackboard] = {}
-
-                async def execute_node(
-                    node: WorkflowNode,
-                    layer_snapshot: Blackboard = layer_base,
-                    branch_states: dict[str, Blackboard] = children,
-                ) -> tuple[Blackboard, bool, bool]:
-                    child = layer_snapshot.model_copy(deep=True)
-                    branch_states[node.id] = child
-                    step = Step.model_validate(node.step)
-                    previous = restored.get(node.id)
-                    # A condition-derived skip is provisional: a failed
-                    # predecessor may succeed during recovery, changing this
-                    # node's eligibility. Budget skips remain terminal because
-                    # resumed runs restore the original budget and counters.
-                    previous_is_terminal = previous is not None and (
-                        previous.status == StepStatus.SUCCEEDED
-                        or (
-                            previous.status == StepStatus.SKIPPED
-                            and previous.error != _INCOMING_CONDITIONS_SKIP_REASON
-                        )
-                    )
-                    if previous_is_terminal:
-                        assert previous is not None
-                        active = previous.status == StepStatus.SUCCEEDED
-                        return child, active, previous.status == StepStatus.SUCCEEDED
-                    step_run = self.runtime.create_step(
-                        node_id=node.id if is_root else f"nested-{uuid4()}",
-                        label=self._step_label(step),
-                        kind=step.kind,
-                        agent=step.agent,
-                    )
-                    node_edges = incoming[node.id]
-
-                    def edge_active(edge: WorkflowEdge) -> bool:
-                        if edge.source not in active_nodes:
-                            return False
-                        # 条件求值兜底：单条坏边（如运行期才暴露的非法字面量）按
-                        # 「不激活」处理并发警告事件，不得经 asyncio.gather 炸穿整个 run。
-                        try:
-                            return evaluate_condition(edge.condition, bb)
-                        except Exception as exc:
-                            self.ctx.tracer.emit(
-                                "ORCHESTRATOR",
-                                "info",
-                                f"边 {edge.id} 条件求值失败，按不激活处理：{exc}",
-                                data={
-                                    "event_name": "edge.condition_error",
-                                    "edge": edge.id,
-                                    "condition": edge.condition,
-                                    "error": str(exc),
-                                },
-                            )
-                            return False
-
-                    active_inputs = [edge_active(edge) for edge in node_edges]
-                    if not node_edges:
-                        should_run = True
-                    elif node.join_mode == "all":
-                        should_run = all(active_inputs)
-                    elif node.join_mode == "success_all":
-                        should_run = all(active_inputs) and all(
-                            edge.source in successful_nodes for edge in node_edges
-                        )
-                    else:
-                        should_run = any(active_inputs)
-                    if not should_run:
-                        self.runtime.skip_step(step_run, _INCOMING_CONDITIONS_SKIP_REASON)
-                        return child, False, False
-                    if self._halted(bb):
-                        reason = str(bb.scratch.get(HALT_REASON_KEY) or "halted by agent")
-                        self.runtime.skip_step(step_run, reason)
-                        return child, False, False
-                    if self._exhausted() and not self._is_terminal(step):
-                        self.runtime.skip_step(step_run, "token budget exhausted")
-                        return child, False, False
-                    try:
-                        child = await self._execute_with_policy(step, child, step_run)
-                    except Exception as exc:
-                        self.runtime.fail_step(step_run, exc)
-                        from .execution_policy import transient_failure
-
-                        if self._recover_transient and transient_failure(exc):
-                            raise
-                        if isinstance(exc, (LeaseLostError, ResearchProgressError)):
-                            raise
+            try:
+                while ready or running:
+                    snapshots: dict[frozenset[str], tuple[Blackboard, dict[str, list[str]]]] = {}
+                    dispatched: dict[int, list[str]] = {}
+                    while ready and len(running) < limit:
+                        _, node_id = heapq.heappop(ready)
+                        scope = ancestors[node_id]
+                        if scope not in snapshots:
+                            snapshots[scope] = compose(scope)
+                        base, origins = snapshots[scope]
+                        # Policy execution already copies each mutable attempt;
+                        # only its ledger needs a separate outer scratch mapping.
+                        child = base.model_copy(update={"scratch": dict(base.scratch)})
+                        inputs[node_id], children[node_id] = base, child
+                        input_origins[node_id] = origins
+                        task = asyncio.create_task(execute_node(by_id[node_id], child))
+                        running[task] = node_id
+                        dispatched.setdefault(levels[node_id], []).append(node_id)
+                    snapshots.clear()
+                    for level, dispatched_nodes in dispatched.items():
                         self.ctx.tracer.emit(
-                            self._stage_for(step),
-                            "error",
-                            f"{self._step_label(step)} 失败，已隔离：{exc}",
+                            "ORCHESTRATOR",
+                            "info",
+                            f"图层 {level + 1} 就绪节点 {len(dispatched_nodes)} 个",
+                            data={
+                                "graph_layer": level,
+                                "nodes": dispatched_nodes,
+                                "active_nodes": len(running),
+                                "max_nodes": limit,
+                            },
                         )
-                        if step.failure_policy == "fail_fast":
-                            raise
-                    return child, True, step_run.status == StepStatus.SUCCEEDED
-
-                tasks = [asyncio.create_task(execute_node(node)) for node in layer]
-
-                def merge_outcomes(
-                    outcomes: Sequence[object],
-                    nodes_in_layer: tuple[WorkflowNode, ...] = layer_nodes,
-                    layer_snapshot: Blackboard = layer_base,
-                    branch_states: dict[str, Blackboard] = children,
-                ) -> None:
-                    for node, outcome in zip(nodes_in_layer, outcomes, strict=True):
-                        if isinstance(outcome, BaseException):
-                            if node.id in branch_states:
-                                _carry_committed_research_progress(bb, branch_states[node.id])
-                            continue
-                        assert isinstance(outcome, tuple) and len(outcome) == 3
-                        child, active, succeeded = outcome
-                        if active:
-                            active_nodes.add(node.id)
-                            if succeeded:
-                                successful_nodes.add(node.id)
-                        else:
-                            continue
-                        _merge_parallel_blackboard(layer_snapshot, bb, child)
-
-                try:
-                    outcomes = await asyncio.gather(*tasks)
-                except (Exception, asyncio.CancelledError):
-                    for task in tasks:
-                        if not task.done():
-                            task.cancel()
-                    settled = await asyncio.gather(*tasks, return_exceptions=True)
-                    # A successful sibling is already durable runtime state. Its
-                    # output must enter the failure checkpoint or resume would
-                    # skip the node and lose that output permanently.
-                    merge_outcomes(settled)
-                    raise
-                changed_result_branches = sum(
-                    active and child.results != layer_base.results for child, active, _ in outcomes
-                )
-                merge_outcomes(list(outcomes))
-                if changed_result_branches > 1:
-                    await verify_claim_consistency(
-                        bb.results,
-                        ClaimConsistencyVerifier(),
-                        self.ctx.llm_for("evidence_verifier"),
-                        self.ctx.tracer,
-                        stage="ORCHESTRATOR",
-                    )
-                if is_root:
-                    await self._checkpoint(wf, bb)
+                    await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+                    failure = collect_finished()
+                    if failure is not None:
+                        raise failure
+                    if is_root:
+                        await self._checkpoint(wf, bb)
+                await verify_scope(bb, completed)
+            except BaseException:
+                for task in running:
+                    task.cancel()
+                await asyncio.gather(*running, return_exceptions=True)
+                # Include completed siblings and verified progress before the
+                # failure checkpoint; never persist a successful step alone.
+                collect_finished()
+                raise
             if is_root and self._require_report and bb.report is None:
                 raise RuntimeError("工作流结束但未生成报告")
             return bb
@@ -1079,7 +1444,11 @@ class WorkflowEngine:
                 bb.scratch["_orchestration_run"] = run.model_dump(
                     mode="json", exclude={"checkpoint", "definition", "steps"}
                 )
+                self._graph_state = None
                 await self._checkpoint(wf, bb, publish_event=False)
+            if is_root:
+                self._graph_state = None
+                self._graph_repairs = {}
 
     async def _compose(self, step: Step, bb: Blackboard) -> None:
         """L3 运行时自组合：Coordinator 生成一份流程，校验后在同一黑板上递归执行。

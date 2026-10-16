@@ -8,7 +8,7 @@ import pytest
 
 from deep_research.agents.base import RunContext
 from deep_research.observability import Tracer
-from deep_research.workbench.qa import answer_question
+from deep_research.workbench.qa import answer_verified_question as answer_question
 from deep_research.workbench.qa_checkpoint import read_checkpoint
 from deep_research.workbench.qa_jobs import start_turn
 from deep_research.workbench.qa_store import message_payload

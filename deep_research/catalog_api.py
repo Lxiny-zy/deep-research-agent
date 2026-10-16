@@ -184,12 +184,13 @@ async def _probe_llm(profile: ModelProfileFull, settings: Settings) -> None:
         model=profile.model,
         timeout=settings.request_timeout,
         user_agent=settings.llm_user_agent,
-        temperature=0.0,
+        temperature=profile.temperature,
         parameter_mode=profile.parameter_mode,
         reasoning_effort=profile.reasoning_effort,
         context_window_tokens=profile.context_window_tokens,
         max_output_tokens=profile.max_output_tokens,
         allow_private_provider_urls=settings.allow_private_provider_urls,
+        base_settings=settings,
     )
     try:
         await llm.complete("connectivity test", "ping", temperature=0.0)

@@ -20,7 +20,7 @@ from ..config import Settings
 from ..llm import LLM
 from ..models import Reflection, Report, ResearchPlan, ResearchResult, Source
 from ..observability import Tracer
-from ..prompting import compose_system_prompt, load_global_rules
+from ..prompting import compose_system_prompt, leaf_system_prompt, load_global_rules
 from ..tools.base import SearchTool
 
 
@@ -105,11 +105,21 @@ class RunContext:
 
     def llm_for(self, agent_name: str) -> LLM:
         """取某角色应使用的 LLM：有专属档案则用之，否则回退默认。"""
+        resolved = None
         if self._llm_resolver is not None:
             resolved = self._llm_resolver(agent_name)
-            if resolved is not None:
-                return resolved.for_role(agent_name) if isinstance(resolved, LLM) else resolved
-        return self.llm.for_role(agent_name) if isinstance(self.llm, LLM) else self.llm
+        model = resolved if resolved is not None else self.llm
+        if isinstance(model, LLM):
+            from ..token_budget import TokenBudget
+
+            if self.tracer.budget is None:
+                self.tracer.budget = TokenBudget()
+            bound = model.for_role(agent_name)
+            # The role copy belongs to this run. An injected/reused client must
+            # not retain another context's request allowance or trace identity.
+            bound.tracer = self.tracer
+            return bound
+        return model
 
     async def search_for(self, agent_name: str) -> SearchTool:
         resolved = None
@@ -125,16 +135,22 @@ class RunContext:
             from ..tools.composite import MultiBackendSearch
 
             delegate = MultiBackendSearch([self._search_overlay, delegate])
-        if recorder is not None and delegate is not recorder.delegate:
-            return recorder.for_delegate(delegate)
-        if resolved is not None:
-            return resolved
-        return self.search_tool
+        if isinstance(delegate, SearchTool):
+            delegate = delegate.for_tracer(self.tracer)
+        if recorder is not None:
+            return (
+                recorder.for_delegate(delegate) if delegate is not recorder.delegate else recorder
+            )
+        return delegate
 
     def system_prompt(self, role_prompt: str) -> str:
         """Render a role prompt with the run-wide orchestration rules."""
 
         return compose_system_prompt(role_prompt, self.global_rules)
+
+    def content_prompt(self, task_contract: str) -> str:
+        """Model content tasks do not own the runtime's files, tools or checkpoints."""
+        return leaf_system_prompt(task_contract, self.global_rules)
 
 
 def direct_system_prompt(role_prompt: str) -> str:

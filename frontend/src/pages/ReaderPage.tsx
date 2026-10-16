@@ -1,11 +1,12 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { createConversation, getConversation, getReader, listConversations } from '../api/client'
+import { createConversation, getConversation, getReader } from '../api/client'
 import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
 import QaStreamingAnswer from '../components/QaStreamingAnswer'
 import ReportView from '../components/ReportView'
+import PanelErrorBoundary from '../components/PanelErrorBoundary'
 import ReadingMapPanel from '../components/ReadingMapPanel'
 import {
   canLocateReadingAnchor,
@@ -14,6 +15,8 @@ import {
 } from '../api/readingMap'
 import type { PdfHighlight } from '../components/PdfViewer'
 import { useProjects } from '../hooks/useLibrary'
+import { useQaDraft } from '../hooks/useQaDraft'
+import { useConversations } from '../hooks/useConversations'
 import { useRunDetail, useRunDocument } from '../hooks/useRuns'
 import { flattenFindings, reportEvidenceToFindings } from '../lib/evidence'
 import { documentForEvidence } from '../lib/readerDocuments'
@@ -21,7 +24,7 @@ import { pendingQaId, reconcileQaRequests, runQaRequest } from '../lib/qaRequest
 import type { QaActivity, QaEvidence, QaSourceOption, QaMessage } from '../types'
 import { appendQaActivity } from '../lib/qaActivity'
 import { useCancelQaRequest } from '../hooks/useCancelQaRequest'
-import { latestQaContinuation, savedQaScope } from '../lib/qaRequest'
+import { latestQaContinuation, savedQaScope, type QaScope } from '../lib/qaRequest'
 import { finalProseReview } from '../lib/workbench'
 
 // PDF.js 体积较大，只在打开原文时加载
@@ -57,11 +60,7 @@ export default function ReaderPage() {
     includeHsiTables,
   })
   const projects = useProjects()
-  const conversations = useQuery({
-    queryKey: ['qa-conversations', 'run', id],
-    queryFn: ({ signal }) => listConversations(signal, id),
-    enabled: Boolean(id),
-  })
+  const conversations = useConversations(id, Boolean(id))
   // undefined：沿用最近一次会话；null：用户点了「新对话」，下一问再建
   const [chosen, setChosen] = useState<string | null | undefined>(undefined)
   const conversationId = chosen === undefined ? conversations.data?.[0]?.id : (chosen ?? undefined)
@@ -75,7 +74,9 @@ export default function ReaderPage() {
         : false,
   })
 
-  const [draft, setDraft] = useState('')
+  const { draft, setDraft, capture, restore, moveTo } = useQaDraft(
+    conversationId ? `conversation:${conversationId}` : `new:${id}`,
+  )
   const [pending, setPending] = useState<string | null>(null)
   const [streamingAnswer, setStreamingAnswer] = useState('')
   const [activity, setActivity] = useState<QaActivity[]>([])
@@ -105,6 +106,8 @@ export default function ReaderPage() {
   const [withLibrary, setWithLibrary] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [withWeb, setWithWeb] = useState(false)
+  const [strictVerification, setStrictVerification] = useState(false)
+  const [activeVerification, setActiveVerification] = useState(false)
   const [pane, setPane] = useState<'pdf' | 'report' | 'map'>('pdf')
   const [documentId, setDocumentId] = useState<string>()
   const [highlight, setHighlight] = useState<PdfHighlight | null>(null)
@@ -175,6 +178,7 @@ export default function ReaderPage() {
       if (!target) {
         target = (await createConversation(text.slice(0, 60), id)).id
         controller.signal.throwIfAborted()
+        moveTo(`conversation:${target}`)
         setChosen(target)
       }
       targetRef.current = target
@@ -182,13 +186,17 @@ export default function ReaderPage() {
       if (withLibrary) sources.push('library')
       if (withWeb) sources.push('web')
       const revisionMessageId = revision?.id ?? resume?.request_payload?.revision_message_id
-      const scope = recovery
+      const scope: QaScope = recovery
         ? { ...savedQaScope(recovery), resumeMessageId: recovery.id }
         : resume
           ? savedQaScope(resume)
           : revisionMessageId
-            ? { sources: [], projectId: undefined, revisionMessageId }
-            : { sources, projectId: withLibrary ? projectId : undefined }
+            ? { sources: [], projectId: undefined, revisionMessageId, answerMode: 'verified' }
+            : {
+                sources, projectId: withLibrary ? projectId : undefined,
+                answerMode: strictVerification ? 'verified' : 'direct',
+              }
+      setActiveVerification(scope.answerMode === 'verified')
       const requestId = pendingQaId(target, text, scope, resume?.request_id ?? undefined)
       attemptedResume.current.add(requestId)
       activeRequestRef.current = requestId
@@ -213,12 +221,13 @@ export default function ReaderPage() {
       setPending(text)
       setStreamingAnswer('')
       setActivity([])
+      return capture()
     },
-    onError: (_error, text) => {
-      if (mounted.current && !cancelledByUser.current) setDraft(text)
+    onError: (_error, text, snapshot) => {
+      if (mounted.current && !cancelledByUser.current) restore(text, snapshot)
     },
     onSettled: async (target) => {
-      await queryClient.invalidateQueries({ queryKey: ['qa-conversations', 'run', id] })
+      await queryClient.invalidateQueries({ queryKey: ['qa-conversations'] })
       if (target ?? targetRef.current)
         await queryClient.invalidateQueries({
           queryKey: ['qa-conversation', target ?? targetRef.current],
@@ -382,9 +391,9 @@ export default function ReaderPage() {
               </div>
               <QaStreamingAnswer
                 text={streamingAnswer}
-                waiting="正在翻阅原文并核验…"
+                waiting={activeVerification ? '正在准备核验材料…' : '正在根据原文回答…'}
                 activity={activity}
-                requiresVerification
+                requiresVerification={activeVerification}
               />
             </article>
           )}
@@ -448,6 +457,15 @@ export default function ReaderPage() {
                 onChange={(event) => setWithWeb(event.target.checked)}
               />
               联网检索
+            </label>
+            <label className="reader-scope-item" title="额外检查事实、公式和引用，可能增加多次模型请求与等待；默认关闭。">
+              <input
+                type="checkbox"
+                checked={strictVerification}
+                disabled={!canAsk || ask.isPending}
+                onChange={(event) => setStrictVerification(event.target.checked)}
+              />
+              严格核验（较慢）
             </label>
           </fieldset>
           <label className="visually-hidden" htmlFor="reader-input">
@@ -572,21 +590,23 @@ export default function ReaderPage() {
               {reader.isLoading ? '正在读取任务…' : '这次任务没有可查看的论文。'}
             </p>
           ) : current.pdf ? (
-            <Suspense
-              fallback={
-                <p className="pdf-loading" role="status">
-                  <AppIcon name="loader" size={15} className="spin" aria-hidden="true" />
-                  正在准备阅读器…
-                </p>
-              }
-            >
-              <PdfViewer
-                key={current.id}
-                runId={id}
-                documentId={current.id}
-                highlight={highlight}
-              />
-            </Suspense>
+            <PanelErrorBoundary key={current.id} label="PDF 阅读器">
+              <Suspense
+                fallback={
+                  <p className="pdf-loading" role="status">
+                    <AppIcon name="loader" size={15} className="spin" aria-hidden="true" />
+                    正在准备阅读器…
+                  </p>
+                }
+              >
+                <PdfViewer
+                  key={current.id}
+                  runId={id}
+                  documentId={current.id}
+                  highlight={highlight}
+                />
+              </Suspense>
+            </PanelErrorBoundary>
           ) : (
             <div className="reader-note">
               <p className="hint">{current.note || '这份论文没有可显示的原版 PDF。'}</p>

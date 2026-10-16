@@ -1147,7 +1147,7 @@ class DataAnalyst:
             f"统计完成：{result.rows} 行，{len(result.tests)} 项检验，{len(result.figures)} 张图",
             data={"category": "analysis", "rows": result.rows, "tests": len(result.tests)},
         )
-        system = ctx.system_prompt(
+        system = ctx.content_prompt(
             _ANALYSIS_SYSTEM
             + "\n\n"
             + _skeleton(template)
@@ -1198,6 +1198,10 @@ class DataAnalyst:
         )
         assert reviewer is not None
         current_body = ""
+        last_body = ""
+        last_audit: dict[str, Any] | None = None
+        local_problems: list[tuple[str, str]] | None = None
+        local_revision_failed = False
 
         from .content_revision import revision_seed
 
@@ -1205,7 +1209,7 @@ class DataAnalyst:
         seed_pending = seed is not None
 
         async def write(revision: str | None) -> str:
-            nonlocal seed_pending, current_body
+            nonlocal seed_pending, current_body, local_revision_failed
             if seed_pending and seed is not None:
                 seed_pending = False
                 reviewer.prime(seed.markdown, seed_review)
@@ -1219,25 +1223,50 @@ class DataAnalyst:
                 from .revision import revision_prompt
 
                 revision = revision_prompt(seed.markdown, initial)
-            chunks: list[str] = []
-            first = True
-            async for delta in ctx.llm_for(self.name).stream(
-                system, user + (revision or ""), temperature=0.2
-            ):
-                chunks.append(delta)
-                raw = "".join(chunks)
-                has_specs = "evidence-table" in raw
-                ctx.tracer.emit(
-                    "SYNTHESIZER",
-                    "token",
-                    data={
-                        "delta": table_preview(raw) if has_specs else delta,
-                        **({"replace": True} if has_specs or (first and revision) else {}),
-                    },
-                )
-                first = False
+            raw_body = None
+            edited = revision is not None and last_audit is not None and local_problems is not None
+            if edited:
+                assert last_audit is not None
+                from ..token_budget import TokenBudgetExceeded
+                from .prose_edit import repair_paragraphs
+
+                try:
+                    raw_body = await repair_paragraphs(
+                        ctx.llm_for(self.name), reviewer, last_body, last_audit,
+                        local_problems=local_problems,
+                    )
+                except (LeaseLostError, WritingProgressError, TokenBudgetExceeded):
+                    raise
+                except Exception as exc:
+                    local_revision_failed = True
+                    ctx.tracer.emit(
+                        "SYNTHESIZER", "info", "局部修订未完成，保留已有统计报告。",
+                        data={
+                            "category": "local_revision_stopped", "error_type": type(exc).__name__,
+                        },
+                    )
+                    return last_body
+            if raw_body is None:
+                chunks: list[str] = []
+                first = True
+                async for delta in ctx.llm_for(self.name).stream(
+                    system, user + (revision or ""), temperature=0.2
+                ):
+                    chunks.append(delta)
+                    raw = "".join(chunks)
+                    has_specs = "evidence-table" in raw
+                    ctx.tracer.emit(
+                        "SYNTHESIZER",
+                        "token",
+                        data={
+                            "delta": table_preview(raw) if has_specs else delta,
+                            **({"replace": True} if has_specs or (first and revision) else {}),
+                        },
+                    )
+                    first = False
+                raw_body = "".join(chunks).strip()
             body, table_record = render_specs(
-                "".join(chunks).strip(),
+                raw_body,
                 [],
                 {},
                 ledger=result.snapshot(),
@@ -1246,15 +1275,20 @@ class DataAnalyst:
             from .analysis_lineage import attach_design
 
             body = attach_design(body, result.design, result.lineage)
+            # Repeated observations restrict inference, not valid descriptive
+            # prose. Bind the mandatory limitation before the first assessment.
+            for issue in result.issues:
+                if issue.startswith("检测到重复测量：") and issue not in body:
+                    body += "\n\n> " + issue
             table_records[body] = table_record
             bb.scratch[TABLES_KEY] = table_record
-            if body != "".join(chunks).strip():
+            if edited or body != raw_body:
                 ctx.tracer.emit("SYNTHESIZER", "token", data={"delta": body, "replace": True})
             current_body = body
             return body
 
         async def assess(draft: str) -> Assessment:
-            nonlocal current_body
+            nonlocal current_body, last_body, last_audit, local_problems
             current_body = draft
             # 数字与章节是硬性要求；文体问题同样要求修订。三者都是确定性检查。
             hard = [
@@ -1263,7 +1297,18 @@ class DataAnalyst:
             ]
             if not draft:
                 hard.append("正文为空")
-            hard += list(structure_gate(draft, template).issues)
+            structure_issues = list(structure_gate(draft, template).issues)
+            hard += structure_issues
+            local_problems = None if structure_issues or not draft else []
+            if local_problems is not None and hard:
+                from .delivery.math_markdown import validation_paragraphs
+
+                for paragraph in validation_paragraphs(draft):
+                    numbers = check_numbers(paragraph, facts, input_description=question)
+                    if numbers:
+                        local_problems.append((
+                            paragraph.strip(), "数字不在统计台账中：" + "、".join(numbers),
+                        ))
             if policy.register_check:
                 from .gate_classification import STYLE_CODES
 
@@ -1279,6 +1324,7 @@ class DataAnalyst:
             else:
                 soft = []
             audit = await reviewer.review(draft)
+            last_body, last_audit = draft, audit
             if progress:
                 await progress.save_context()
             hard.extend(audit["issues"])
@@ -1286,10 +1332,10 @@ class DataAnalyst:
             hard.extend(coverage.get("issues", []))
             from .coverage_review import table_scope_issues
 
-            hard.extend(table_scope_issues(draft))
+            scope_issues = table_scope_issues(draft)
+            hard.extend(scope_issues)
             table_record = table_records.setdefault(draft, bb.scratch.get(TABLES_KEY) or {})
-            hard.extend(
-                await review_tables(
+            table_problems = await review_tables(
                     draft,
                     table_record,
                     [],
@@ -1298,11 +1344,16 @@ class DataAnalyst:
                     ctx.settings.llm_max_input_chars,
                     ledger=result.snapshot(),
                 )
-            )
+            hard.extend(table_problems)
+            if table_problems or scope_issues or coverage.get("status") == "fail":
+                local_problems = None
             return Assessment(
                 hard=hard,
                 soft=soft,
-                can_revise=audit["can_revise"] and coverage.get("can_revise", True),
+                can_revise=not local_revision_failed and audit["can_revise"]
+                and coverage.get("can_revise", True),
+                local_problems=local_problems,
+                stop_reason="revision_failed" if local_revision_failed else "",
             )
 
         def capture() -> dict[str, Any]:
@@ -1310,14 +1361,20 @@ class DataAnalyst:
                 "body": current_body,
                 "audit": reviewer.cached_review(current_body),
                 "table_record": table_records.get(current_body, {}),
+                "local_problems": local_problems,
+                "local_revision_failed": local_revision_failed,
             }
 
         def restore(value: dict[str, Any]) -> bool:
-            nonlocal current_body, seed_pending
+            nonlocal current_body, seed_pending, last_body, last_audit
+            nonlocal local_problems, local_revision_failed
             current_body = value["body"]
             seed_pending = False
             table_records[current_body] = value["table_record"]
             bb.scratch[TABLES_KEY] = table_records[current_body]
+            last_body, last_audit = current_body, value.get("audit")
+            local_problems = value.get("local_problems")
+            local_revision_failed = value.get("local_revision_failed", False)
             return restore_prose(reviewer, current_body, value.get("audit"))
 
         if progress:
@@ -1337,10 +1394,6 @@ class DataAnalyst:
         # （例如泛泛而谈、或把别的任务的模板套了过来），此时统计摘要更可靠。
         if not unsupported and structure_gate(body, template).status != "pass":
             unsupported = ["missing_sections"]
-        if any(issue.startswith("检测到重复测量：") for issue in result.issues):
-            # The current engine has no repeated-measures inferential model.
-            # Always deliver the explicit limitation, even if prose omits it.
-            unsupported = ["unsupported_repeated_measurements"]
         if unsupported:
             ctx.tracer.emit(
                 "SYNTHESIZER",

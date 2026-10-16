@@ -28,11 +28,12 @@ def evidence_cache_key(scope: str, query: str, sources: list[Source], researcher
         }
 
     payload = {
-        "version": 13,
+        "version": 14,
         "scope": scope,
         "query": query,
         "sources": [source.model_dump(mode="json") for source in sources],
         "prompt": researcher.system,
+        "global_rules": getattr(researcher, "global_rules", None),
         "extractor": model(researcher.llm),
         "verifier": model(researcher.verification_llm),
         "finding_verification": {

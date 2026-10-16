@@ -90,6 +90,9 @@ class Settings:
     provider_max_concurrency: int = field(
         default_factory=lambda: _int_env("DR_PROVIDER_MAX_CONCURRENCY", 2)
     )
+    provider_max_waiters: int = field(
+        default_factory=lambda: _int_env("DR_PROVIDER_MAX_WAITERS", 128)
+    )
     provider_requests_per_minute: int = field(
         default_factory=lambda: _int_env("DR_PROVIDER_REQUESTS_PER_MINUTE", 120)
     )
@@ -204,11 +207,20 @@ class Settings:
     max_no_progress_attempts: int = field(
         default_factory=lambda: _int_env("MAX_NO_PROGRESS_ATTEMPTS", 2)
     )
-    # Process-local admission limits for background research executions.  The
-    # queue is intentionally bounded so overload is observable instead of
-    # turning into an unbounded collection of asyncio tasks.
+    # Service-wide limits, enforced by the shared repository transaction.
     max_active_runs: int = field(default_factory=lambda: _int_env("MAX_ACTIVE_RUNS", 8))
+    workflow_max_concurrency: int = field(
+        default_factory=lambda: _int_env("DR_WORKFLOW_MAX_CONCURRENCY", 4)
+    )
     max_queued_runs: int = field(default_factory=lambda: _int_env("MAX_QUEUED_RUNS", 32))
+    # Unset protects one admission opportunity from a single identity's backlog.
+    # Set to the total inflight limit for an intentionally single-tenant batch queue.
+    max_inflight_runs_per_identity: int | None = field(
+        default_factory=lambda: _int_env_opt("MAX_INFLIGHT_RUNS_PER_IDENTITY")
+    )
+    run_scheduling_policy: str = field(
+        default_factory=lambda: _str_env("DR_RUN_SCHEDULING_POLICY", "strict")
+    )
     qa_max_active: int = field(default_factory=lambda: _int_env("QA_MAX_ACTIVE", 4))
     qa_max_active_per_owner: int = field(
         default_factory=lambda: _int_env("QA_MAX_ACTIVE_PER_OWNER", 2)
@@ -232,6 +244,9 @@ class Settings:
     # ``worker``：API 只入队，由独立的 ``python -m deep_research.worker`` 进程抢占式领取。
     # 两种模式共用同一套租约 fencing 与 checkpoint 恢复语义，切换不改变任务本身的行为。
     execution_mode: str = field(default_factory=lambda: _str_env("DR_EXECUTION_MODE", "inline"))
+    worker_max_active_runs: int | None = field(
+        default_factory=lambda: _int_env_opt("DR_WORKER_MAX_ACTIVE_RUNS")
+    )
     # worker 空闲时的领取轮询间隔；有任务时连续领取，不受此值限制。
     worker_poll_seconds: float = field(
         default_factory=lambda: _float_env("DR_WORKER_POLL_SECONDS", 1.0)
@@ -281,7 +296,17 @@ class Settings:
         )
     )
 
+    @property
+    def identity_inflight_limit(self) -> int:
+        if self.max_inflight_runs_per_identity is not None:
+            return self.max_inflight_runs_per_identity
+        return max(1, self.max_active_runs + self.max_queued_runs - 1)
+
     def __post_init__(self) -> None:
+        if type(self.workflow_max_concurrency) is not int or self.workflow_max_concurrency < 1:
+            raise ValueError("workflow_max_concurrency must be a positive integer")
+        if type(self.provider_max_waiters) is not int or self.provider_max_waiters < 1:
+            raise ValueError("provider_max_waiters must be a positive integer")
         """范围校验：非法配置尽早失败（含 per-run 覆盖经 dataclasses.replace 时）。"""
         if self.provider_max_concurrency < 1 or self.provider_requests_per_minute < 1:
             raise ValueError("provider concurrency and request limits must be positive")
@@ -337,6 +362,13 @@ class Settings:
             raise ValueError("max_active_runs must be >= 1")
         if self.max_queued_runs < 0:
             raise ValueError("max_queued_runs must be >= 0")
+        for name in ("max_inflight_runs_per_identity", "worker_max_active_runs"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value < 1):
+                raise ValueError(f"{name} must be a positive integer or unset")
+        self.run_scheduling_policy = self.run_scheduling_policy.strip().lower()
+        if self.run_scheduling_policy not in {"strict", "borrow"}:
+            raise ValueError("run_scheduling_policy must be strict or borrow")
         for name in (
             "qa_max_active",
             "qa_max_active_per_owner",

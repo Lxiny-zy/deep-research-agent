@@ -125,8 +125,14 @@ class Selection:
 
 
 def eligible_candidates(
-    candidates: Sequence[ScheduleCandidate], active: Sequence[ActiveRun], maximum: int | None
+    candidates: Sequence[ScheduleCandidate],
+    active: Sequence[ActiveRun],
+    maximum: int | None,
+    *,
+    policy: str = "strict",
 ) -> list[ScheduleCandidate]:
+    if policy not in {"strict", "borrow"}:
+        raise ValueError("scheduling policy must be strict or borrow")
     if maximum is None:
         return list(candidates)
     if len(active) >= maximum:
@@ -136,11 +142,17 @@ def eligible_candidates(
     heavy_limit = max(1, maximum - 1)
     per_identity = max(1, (heavy_limit + 1) // 2)
     heavy = Counter(run.identity for run in active if run.kind == "heavy")
+    # Borrow only when no queued heavy identity has an unused guaranteed share.
+    # Running work is never preempted; a later arrival waits for a slot to finish.
+    borrow = policy == "borrow" and not any(
+        c.kind == "heavy" and heavy[c.identity] < per_identity for c in candidates
+    )
+    heavy_count = sum(heavy.values())
     return [
         candidate
         for candidate in candidates
         if candidate.kind == "light"
-        or (sum(heavy.values()) < heavy_limit and heavy[candidate.identity] < per_identity)
+        or (heavy_count < heavy_limit and (borrow or heavy[candidate.identity] < per_identity))
     ]
 
 

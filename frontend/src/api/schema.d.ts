@@ -1990,6 +1990,12 @@ export interface components {
         };
         /** AskRequest */
         AskRequest: {
+            /**
+             * Answer Mode
+             * @default direct
+             * @enum {string}
+             */
+            answer_mode?: "direct" | "verified";
             /** Project Id */
             project_id?: string | null;
             /** Query */

@@ -319,6 +319,24 @@ class ResearchRun(Base):
     project: Mapped[ResearchProjectRow | None] = relationship(back_populates="runs")
 
 
+class UsageLedgerRow(Base):
+    """Append-only admission accounting independent of deletable run rows."""
+
+    __tablename__ = "usage_ledger"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "run_id", "event_type", name="uq_usage_ledger_event"),
+        Index("ix_usage_ledger_owner_created", "owner_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(String(64), index=True)
+    # Deliberately no FK: deletion of a run must not erase accounting history.
+    run_id: Mapped[str] = mapped_column(String(36), index=True)
+    event_type: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
 class SubQuestionRow(Base):
     __tablename__ = "sub_question"
     __table_args__ = (UniqueConstraint("run_id", "idx", name="uq_subquestion_run_idx"),)
@@ -659,7 +677,9 @@ class QaConversationRow(Base):
     owner_id: Mapped[str] = mapped_column(String(64), index=True)
     title: Mapped[str] = mapped_column(String(200), default="")
     # 论文精读工作区的对话绑定所属任务；学术问答页的独立会话为空
-    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("research_run.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

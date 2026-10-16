@@ -221,7 +221,7 @@ describe('QaPage', () => {
         'c2',
         '新问题',
         expect.any(AbortSignal),
-        { sources: [], projectId: undefined, requestId: expect.any(String) },
+        { sources: [], answerMode: 'direct', projectId: undefined, requestId: expect.any(String) },
         expect.any(Function),
         expect.any(Function),
       ),
@@ -250,11 +250,13 @@ describe('QaPage', () => {
       'c2',
       '关键结论是什么？',
       expect.any(AbortSignal),
-      { sources: [], projectId: undefined, requestId: expect.any(String) },
+      { sources: [], answerMode: 'direct', projectId: undefined, requestId: expect.any(String) },
       expect.any(Function),
       expect.any(Function),
     )
-    expect(mocks.listConversations).toHaveBeenCalledWith(expect.any(AbortSignal), 'run-1')
+    expect(mocks.listConversations).toHaveBeenCalledWith(
+      expect.any(AbortSignal), 'run-1', { limit: 30, before: undefined },
+    )
   })
 
   it('uses the stored conversation scope instead of a conflicting run query parameter', async () => {
@@ -300,6 +302,7 @@ describe('QaPage', () => {
           sources: [],
           projectId: undefined,
           revisionMessageId: 'm1',
+          answerMode: 'verified',
           requestId: expect.any(String),
         },
         expect.any(Function),
@@ -334,6 +337,7 @@ describe('QaPage', () => {
           sources: [],
           projectId: undefined,
           revisionMessageId: 'm1',
+          answerMode: 'verified',
           requestId: 'resume-revision-one',
         },
         expect.any(Function),
@@ -436,7 +440,7 @@ describe('QaPage', () => {
         'c2',
         '首轮问题',
         expect.any(AbortSignal),
-        { sources: [], projectId: undefined, requestId: expect.any(String) },
+        { sources: [], answerMode: 'direct', projectId: undefined, requestId: expect.any(String) },
         expect.any(Function),
         expect.any(Function),
       ),

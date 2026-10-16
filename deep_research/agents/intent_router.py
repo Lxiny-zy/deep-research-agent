@@ -125,11 +125,14 @@ class IntentRouter:
         tracer: Tracer | None = None,
         settings: Settings | None = None,
         cascade: IntentCascade | None = None,
+        *,
+        extract_entities: bool = True,
     ) -> None:
         self.llm = cast(LLM, llm)
         self.tracer = cast(Tracer, tracer)
         self.settings = cast(Settings, settings)
         self._cascade = cascade
+        self._extract_entities = extract_entities
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         self.llm, self.tracer, self.settings = ctx.llm_for(self.name), ctx.tracer, ctx.settings
@@ -301,7 +304,7 @@ class IntentRouter:
         只补 ENTITY_INTENTS 中的意图；已抽到实体的不重抽：预路由若跑过（比如调用方
         显式要求），这里就没必要再花一次。
         """
-        if not self.settings.intent_llm_fallback:
+        if not self.settings.intent_llm_fallback or not self._extract_entities:
             return False
         return (
             decision.intent in ENTITY_INTENTS
@@ -332,4 +335,4 @@ class IntentRouter:
         # 首判（CLI / 直接入口无缓存）保留澄清判定——这些入口没有交互式循环，
         # halt 报告是它们唯一的追问方式；对缓存的复判则由调用方清掉澄清
         # （见 step 里的两处 `.clarification = None`）。
-        return await cascade.classify(query)
+        return await cascade.classify(query, extract_entities=self._extract_entities)

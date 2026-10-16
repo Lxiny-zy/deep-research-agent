@@ -155,7 +155,11 @@ class FakeLLM:
             )
         from deep_research.workbench.coverage_review import CoverageDecisions
         from deep_research.workbench.formula_review import FormulaDecisions
-        from deep_research.workbench.fulltext_review import FullTextChecks, FullTextTarget
+        from deep_research.workbench.fulltext_review import (
+            FullTextChecks,
+            FullTextTarget,
+            FullTextTargets,
+        )
 
         if schema is CoverageDecisions:
             data = json.loads(user)
@@ -254,6 +258,13 @@ class FakeLLM:
                 keywords=[],
                 reason="fixture judgement; not an absence accuracy test",
             )
+        if schema is FullTextTargets:
+            return schema.model_validate({"targets": [
+                {"unit_id": item["unit"]["id"], "target": {
+                    "kind": "not_applicable", "document_ids": [], "keywords": [],
+                    "reason": "fixture judgement; not an absence accuracy test",
+                }} for item in json.loads(user)["units"]
+            ]})
         if schema is FullTextChecks:
             return FullTextChecks(
                 checks=[

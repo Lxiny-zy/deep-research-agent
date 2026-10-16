@@ -71,11 +71,13 @@ async def create_catalog_runtime_snapshot(
     catalog_repo: CatalogSource,
     required_roles: Iterable[str],
     settings: Settings | None = None,
+    *,
+    include_search: bool = True,
 ) -> CatalogRuntimeSnapshot:
     """Capture non-secret catalog semantics for the roles a workflow may use."""
     required = set(required_roles)
     effective_settings = settings or Settings()
-    search_defaults = default_search_ids(effective_settings)
+    search_defaults = default_search_ids(effective_settings) if include_search else []
     cards = await catalog_repo.list_agents()
     enabled = {card.name: card for card in cards if card.enabled}
     default_profile = await catalog_repo.get_default_profile()
@@ -123,7 +125,7 @@ async def create_catalog_runtime_snapshot(
                 for pid in (card.search_profile_ids or [])
             }
             | set(search_defaults),
-        ),
+        ) if include_search else [],
     )
 
 
@@ -238,6 +240,14 @@ class CatalogRuntime:
         """Whether this runtime can replace the process-wide LLM fallback."""
         return self._default_profile is not None
 
+    def covers_roles(self, roles: Iterable[str]) -> bool:
+        """Whether these roles can run without opening the global fallback model."""
+        return self.has_default_profile or all(
+            (card := self._cards.get(role)) is not None
+            and card.model_profile_id in self._profiles
+            for role in roles
+        )
+
     # ── 模型解析 ────────────────────────────────────────────────────────
     def resolve_llm(self, agent_name: str) -> LLM | None:
         """角色卡片绑定了档案 → 用该档案的 LLM；否则 None（由 RunContext 回退默认）。"""
@@ -283,6 +293,7 @@ class CatalogRuntime:
             context_window_tokens=profile.context_window_tokens,
             max_output_tokens=profile.max_output_tokens,
             allow_private_provider_urls=self._settings.allow_private_provider_urls,
+            base_settings=self._settings,
         )
         self._llm_cache[profile.id] = llm
         return llm
@@ -309,6 +320,9 @@ async def load_catalog_runtime(
     settings: Settings,
     *,
     snapshot: CatalogRuntimeSnapshot | dict[str, object] | None = None,
+    required_roles: Iterable[str] | None = None,
+    required_search_roles: Iterable[str] = (),
+    include_search: bool = True,
 ) -> CatalogRuntime | None:
     """从 CatalogRepository 拉取快照，构造 CatalogRuntime；repo 为空或无数据时返回 None。"""
     if snapshot is not None:
@@ -371,7 +385,7 @@ async def load_catalog_runtime(
         )
 
     if catalog_repo is None:
-        if settings.search_profile_ids:
+        if settings.search_profile_ids and include_search:
             return CatalogRuntime(
                 cards=[],
                 profiles={},
@@ -384,13 +398,19 @@ async def load_catalog_runtime(
             )
         return None
     cards = await catalog_repo.list_agents()
-    search_defaults = default_search_ids(settings)
+    required = set(required_roles) if required_roles is not None else None
+    if required_roles is not None:
+        requested = (required or set()) | set(required_search_roles)
+        cards = [card for card in cards if card.name in requested]
+    search_defaults = default_search_ids(settings) if include_search else []
     # A global default profile is useful even when no custom role cards exist:
     # it supplies the model for built-in roles without requiring LLM_API_KEY.
     default_profile = await catalog_repo.get_default_profile()
     # 收集所有被引用的档案 + 默认档案
     profiles: dict[str, ModelProfileFull] = {}
     for c in cards:
+        if required is not None and c.name not in required:
+            continue  # Keep the search binding without initializing its unused model.
         if c.enabled and c.model_profile_id and c.model_profile_id not in profiles:
             full = await catalog_repo.get_profile_full(c.model_profile_id)
             if full is not None:
@@ -410,7 +430,7 @@ async def load_catalog_runtime(
             settings,
             {pid for card in cards if card.enabled for pid in (card.search_profile_ids or [])}
             | set(search_defaults),
-        ),
+        ) if include_search else [],
         catalog_repo=catalog_repo,
         default_search_profile_ids=search_defaults,
     )

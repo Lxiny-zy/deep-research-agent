@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from ..agents.base import Blackboard, RunContext, direct_system_prompt
+from ..agents.base import Blackboard, RunContext
 from ..agents.researcher import Researcher, source_context
 from ..guardrails import verify_claim_consistency
 from ..models import ExtractedFindingList, Source
@@ -31,7 +31,7 @@ def source_batches(
         researcher.llm, "input_capacity_chars", researcher.settings.llm_max_input_chars
     )
     rules = len(
-        structured_system_prompt(direct_system_prompt(researcher.system), ExtractedFindingList)
+        structured_system_prompt(researcher.extraction_system(), ExtractedFindingList)
     )
     available = max(0, capacity - rules - len(question) - 128)
     # Repair/framing space scales to the real remaining context, not a token budget.
@@ -76,12 +76,12 @@ class AttachmentReader:
                 "files": [item.summary() for item in attachments],
             },
         )
-        researcher = Researcher()
+        researcher = Researcher(settings=ctx.settings)
         researcher.llm = ctx.llm_for("researcher")
         researcher.verification_llm = ctx.llm_for("evidence_verifier")
         researcher.tracer = ctx.tracer
         researcher.settings = ctx.settings
-        researcher.system = ctx.system_prompt(researcher.system)
+        researcher.global_rules = ctx.global_rules
         before = len(bb.results)
         for attachment in attachments:
             sources = attachment.sources()

@@ -1091,7 +1091,7 @@ class QaLLM(FakeLLM):
 async def test_answer_question_verifies_and_cites(settings) -> None:
     from deep_research.agents.base import RunContext
     from deep_research.observability import Tracer
-    from deep_research.workbench.qa import answer_question
+    from deep_research.workbench.qa import answer_verified_question as answer_question
 
     ctx = RunContext(llm=QaLLM(), search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
     result = await answer_question("CASSI 是什么？", history=[], ctx=ctx, include_web=True)
@@ -1112,7 +1112,7 @@ async def test_answer_question_verifies_and_cites(settings) -> None:
 async def test_answer_question_skips_search_for_greetings(settings) -> None:
     from deep_research.agents.base import RunContext
     from deep_research.observability import Tracer
-    from deep_research.workbench.qa import answer_question
+    from deep_research.workbench.qa import answer_verified_question as answer_question
 
     class NoSearch:
         async def search(self, query, *, max_results=5):  # type: ignore[no-untyped-def]
@@ -1128,7 +1128,7 @@ async def test_answer_question_skips_search_for_greetings(settings) -> None:
 async def test_answer_question_admits_when_no_evidence(settings) -> None:
     from deep_research.agents.base import RunContext
     from deep_research.observability import Tracer
-    from deep_research.workbench.qa import answer_question
+    from deep_research.workbench.qa import answer_verified_question as answer_question
 
     class Empty(FakeSearch):
         async def search(self, query, *, max_results=5):  # type: ignore[no-untyped-def]
@@ -1144,7 +1144,7 @@ async def test_answer_question_admits_when_no_evidence(settings) -> None:
 async def test_answer_question_uses_model_knowledge_without_sources(settings) -> None:
     from deep_research.agents.base import RunContext
     from deep_research.observability import Tracer
-    from deep_research.workbench.qa import answer_question
+    from deep_research.workbench.qa import answer_verified_question as answer_question
 
     class NoSearch:
         async def search(self, query, *, max_results=5):  # type: ignore[no-untyped-def]
@@ -1169,6 +1169,7 @@ def test_followup_query_uses_previous_turn() -> None:
 
 @pytest.mark.asyncio
 async def test_qa_endpoints_round_trip_and_isolate_owners(api_repo, monkeypatch) -> None:
+    """Exercise verified evidence/history; default direct QA has separate route tests."""
     api, _ = api_repo
     from deep_research.workbench.qa_store import InMemoryQaStore
 
@@ -1184,11 +1185,11 @@ async def test_qa_endpoints_round_trip_and_isolate_owners(api_repo, monkeypatch)
         cid = created["id"]
         answer = await client.post(
             f"/api/qa/conversations/{cid}/messages",
-            json={"query": "CASSI 是什么？", "sources": ["web"]},
+            json={"query": "CASSI 是什么？", "sources": ["web"], "answer_mode": "verified"},
         )
         follow = await client.post(
             f"/api/qa/conversations/{cid}/messages",
-            json={"query": "第二篇呢", "sources": ["web"]},
+            json={"query": "第二篇呢", "sources": ["web"], "answer_mode": "verified"},
         )
         detail = (await client.get(f"/api/qa/conversations/{cid}")).json()
         listing = (await client.get("/api/qa/conversations")).json()

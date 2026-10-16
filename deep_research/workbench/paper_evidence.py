@@ -11,12 +11,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ..agents.base import direct_system_prompt
+from ..generation_policy import generation_options
 from ..guardrails import report_eligible, screen_source_intent
 from ..models import Finding, Source
-from ..prompting import PrefixPrompt, structured_system_prompt
+from ..prompting import PrefixPrompt, leaf_system_prompt, structured_system_prompt
 from ..quantities import _measurement_metric_matches, normalize_unit, parse_measurements
 from .conversation_memory import History
+from .qa_cache import PaperEvidenceCache, evidence_cache_key
 from .qa_context import dialogue_context
 from .support import digest
 
@@ -94,10 +95,21 @@ async def current_findings(
     researcher: Any,
     *,
     require_prior_admission: bool = True,
+    cache: PaperEvidenceCache | None = None,
+    cache_scope: str = "",
 ) -> list[Finding]:
     """Re-admit historical claims against current source, quote and semantic rules."""
     if not candidates:
         return []
+    cache_key = ""
+    if cache is not None:
+        cache_key = "admission:" + evidence_cache_key(cache_scope, "", sources, researcher)
+        cache_key += ":" + digest(
+            [require_prior_admission, [finding.model_dump(mode="json") for finding in candidates]]
+        )
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached[0]
     wanted = {finding.source_url for finding in candidates}
     allowed: dict[tuple[str, str], Source] = {}
     for source in sources:
@@ -147,7 +159,10 @@ async def current_findings(
     checked_findings = await researcher.semantic_verifier.verify_batch(
         result, researcher.verification_llm, raise_errors=True
     )
-    return [finding for finding in checked_findings if report_eligible(finding)]
+    admitted = [finding for finding in checked_findings if report_eligible(finding)]
+    if cache is not None:
+        cache.put(cache_key, admitted, len(candidates))
+    return admitted
 
 
 async def select_findings(
@@ -167,11 +182,41 @@ async def plan_findings(
     researcher: Any,
     sources: list[Source] | None = None,
     read_urls: set[str] | None = None,
+    *,
+    max_read_chars: int | None = None,
 ) -> EvidencePlan:
-    if not candidates:
-        return EvidencePlan()
     if sources is not None:
         sources = [source for source in sources if source.content.strip()]
+    capacity = getattr(
+        researcher.llm, "input_capacity_chars", researcher.settings.llm_max_input_chars
+    )
+    if not candidates:
+        if not sources:
+            return EvidencePlan()
+        if read_urls and all(source.url in read_urls for source in sources):
+            return EvidencePlan(
+                next_step="answer_with_gaps",
+                missing_topics=[question],
+                reading_reason="本轮已读取可用原文，尚未得到能回答该问题的核验证据",
+            )
+        from .paper_context import full_paper_context
+
+        read_limit = max_read_chars if max_read_chars is not None else capacity // 2
+        single_source = len(sources) == 1
+        if not read_urls and (single_source or len(full_paper_context(sources)) <= read_limit):
+            # One source has no routing decision; oversized text still uses the
+            # bounded, explicitly partial paper context. Compact material fits whole.
+            return EvidencePlan(
+                source_urls=[source.url for source in sources],
+                next_step="read_selected",
+                reading_reason=(
+                    "仅一个原文来源，直接定位本轮相关内容"
+                    if single_source
+                    else "当前原文可一次完整读取，直接抽取本轮所需证据"
+                ),
+            )
+        # A long paper with no candidates still needs a targeted reading plan.
+        # An empty evidence pool is not a request to scan every remaining page.
     gaps = _measurement_gaps(candidates, sources or [])
     records: list[dict[str, Any]] = [
         {
@@ -210,11 +255,8 @@ async def plan_findings(
             for source in sources
         ]
         fixed += "\n【可补读来源目录】\n" + json.dumps(catalog, ensure_ascii=False)
-    capacity = getattr(
-        researcher.llm, "input_capacity_chars", researcher.settings.llm_max_input_chars
-    )
     enforced = getattr(researcher.llm, "enforced_input_capacity_chars", capacity)
-    system = direct_system_prompt(_SYSTEM)
+    system = leaf_system_prompt(_SYSTEM, getattr(researcher, "global_rules", None))
     room = (
         capacity
         - len(structured_system_prompt(system, PaperEvidenceSelection))
@@ -247,7 +289,8 @@ async def plan_findings(
         ):
             raise ValueError("补读计划请求超出当前模型输入容量，未截断证据")
         decision = await researcher.llm.parse(
-            system, PrefixPrompt(fixed, dynamic), PaperEvidenceSelection
+            system, PrefixPrompt(fixed, dynamic), PaperEvidenceSelection,
+            **generation_options(researcher.llm, "evidence_selection"),
         )
         if not set(decision.finding_ids).issubset(mapping) or (
             decision.sufficient and not decision.finding_ids

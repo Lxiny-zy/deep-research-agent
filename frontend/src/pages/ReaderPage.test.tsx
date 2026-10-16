@@ -228,6 +228,7 @@ describe('ReaderPage', () => {
           sources: [],
           projectId: undefined,
           revisionMessageId: 'm1',
+          answerMode: 'verified',
           requestId: expect.any(String),
         },
         expect.any(Function),
@@ -260,7 +261,7 @@ describe('ReaderPage', () => {
         'c1',
         pending.query,
         expect.any(AbortSignal),
-        { sources: ['web'], projectId: undefined, requestId: 'existing-request' },
+        { sources: ['web'], answerMode: 'verified', projectId: undefined, requestId: 'existing-request' },
         expect.any(Function),
         expect.any(Function),
       ),
@@ -360,6 +361,27 @@ describe('ReaderPage', () => {
     expect(mocks.createConversation).toHaveBeenCalledTimes(1)
   })
 
+  it.each([false, true])('only marks drafts for explicitly selected verification: %s', async (verified) => {
+    let finish!: (message: typeof answered.messages[number]) => void
+    mocks.askQuestion.mockImplementationOnce((_cid, _query, _signal, _scope, onDelta) => {
+      onDelta?.('对创新点的直接解释 [1]。')
+      return new Promise((resolve) => { finish = resolve })
+    })
+    renderPage()
+    await screen.findByTestId('pdf')
+    const toggle = screen.getByRole('checkbox', { name: '严格核验（较慢）' })
+    expect(toggle).not.toBeChecked()
+    if (verified) fireEvent.click(toggle)
+    fireEvent.change(screen.getByLabelText('向这篇论文提问'), {
+      target: { value: '按照最好的创新点分析原理' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '提问' }))
+    await waitFor(() => expect(mocks.askQuestion).toHaveBeenCalledTimes(1))
+    expect(mocks.askQuestion.mock.calls[0][3].answerMode).toBe(verified ? 'verified' : 'direct')
+    expect(Boolean(screen.queryByText(/回答草稿 · 正在核验/))).toBe(verified)
+    await act(async () => { finish(answered.messages[0]) })
+  })
+
   it('disables questions when a completed run has no usable paper sources', async () => {
     mocks.getReader.mockResolvedValue({ ...reader, can_ask: false })
     renderPage()
@@ -415,7 +437,7 @@ describe('ReaderPage', () => {
         'c1',
         '用了什么数据集？',
         expect.any(AbortSignal),
-        { sources: [], projectId: undefined, requestId: expect.any(String) },
+        { sources: [], answerMode: 'direct', projectId: undefined, requestId: expect.any(String) },
         expect.any(Function),
         expect.any(Function),
       )
@@ -463,7 +485,7 @@ describe('ReaderPage', () => {
         'c1',
         '和综述比呢？',
         expect.any(AbortSignal),
-        { sources: ['library', 'web'], projectId: 'p1', requestId: expect.any(String) },
+        { sources: ['library', 'web'], answerMode: 'direct', projectId: 'p1', requestId: expect.any(String) },
         expect.any(Function),
         expect.any(Function),
       ),

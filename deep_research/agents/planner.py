@@ -15,7 +15,7 @@ from ..observability import Tracer
 from ..prompting import leaf_system_prompt
 from ..registry import register
 from ..report.hsi_tables import hsi_table_schemas
-from .base import Blackboard, RunContext, direct_system_prompt
+from .base import Blackboard, RunContext
 from .intent_router import (
     INTENT_POLICY_KEY,
     INTENT_RESOLVED_QUERY_KEY,
@@ -152,10 +152,11 @@ class Planner:
         self.tracer = cast(Tracer, tracer)
         self.settings = cast(Settings, settings)
         self.system = SYSTEM  # 可被角色卡片的 system_prompt 覆盖（数据驱动角色）
+        self.global_rules: str | None = None
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:
         self.llm, self.tracer, self.settings = ctx.llm_for(self.name), ctx.tracer, ctx.settings
-        self.system = ctx.system_prompt(self.system)
+        self.global_rules = ctx.global_rules
         # 意图路由给出的子问题预算。它由 API 层的全局预路由写入 checkpoint；直接
         # 入口也会在运行前补判，确保所有工作流共享同一份策略快照。写入前已与用户
         # 配置取过 min。
@@ -240,7 +241,7 @@ class Planner:
             else ""
         )
         plan = await self.llm.parse(
-            direct_system_prompt(self.system),
+            leaf_system_prompt(self.system, self.global_rules),
             f"研究问题：{query}{constraint_block}\n\n请给出不超过 {limit} 个子问题。",
             ResearchPlan,
         )

@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
+import random
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
+from weakref import WeakKeyDictionary
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -28,9 +32,10 @@ from .tools.key_health import failure_kind, retry_delay, shared_health
 class ProviderBusyError(RuntimeError):
     status_code = 429
 
-    def __init__(self, delay: float) -> None:
-        self.retry_after = max(1, int(delay))
-        super().__init__(f"供应商凭据正在限流或冷却，请在 {self.retry_after} 秒后重试")
+    def __init__(self, delay: float, *, context: str = "") -> None:
+        self.retry_after = max(1, math.ceil(delay))
+        message = f"供应商凭据正在限流或冷却，请在 {self.retry_after} 秒后重试"
+        super().__init__(f"{context}：{message}" if context else message)
 
 
 def fingerprint(endpoint: str, secret: str) -> str:
@@ -38,6 +43,19 @@ def fingerprint(endpoint: str, secret: str) -> str:
     port = url.port or (443 if url.scheme.lower() == "https" else 80)
     origin = f"{url.scheme.lower()}://{(url.hostname or '').lower()}:{port}"
     return hashlib.sha256(f"{origin}\0{secret}".encode()).hexdigest()
+
+
+@dataclass
+class _WaitGate:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
+    waiters: int = 0
+    retry_at: float = 0
+
+
+# One poller per loop, connection pool and credential, including coordinators
+# created by separate executions. Entries disappear when their last waiter exits.
+_wait_gates: WeakKeyDictionary = WeakKeyDictionary()
 
 
 class ProviderCoordinator:
@@ -50,56 +68,137 @@ class ProviderCoordinator:
         concurrency: int = 2,
         requests_per_minute: int = 120,
         wait_seconds: float = 30,
+        max_waiters: int = 128,
     ) -> None:
         self.sessions = sessions
         self.concurrency = concurrency
         self.requests_per_minute = requests_per_minute
         self.wait_seconds = wait_seconds
+        self.max_waiters = max_waiters
+
+    def _gates(self) -> dict[tuple[int, str], _WaitGate]:
+        return _wait_gates.setdefault(asyncio.get_running_loop(), {})
+
+    def _gate_key(self, identity: str) -> tuple[int, str]:
+        return id(self.sessions.kw.get("bind", self.sessions)), identity
 
     async def acquire(self, identity: str) -> str:
         deadline = time.monotonic() + self.wait_seconds
-        while True:
+        gates, key = self._gates(), self._gate_key(identity)
+        gate = gates.setdefault(key, _WaitGate())
+        if gate.waiters >= self.max_waiters:
+            raise ProviderBusyError(1)
+        gate.waiters += 1
+        try:
+            # Followers wait in a bounded, cancellation-safe FIFO, not on SQL.
+            queued = gate.lock.locked()
+            if queued:
+                try:
+                    await asyncio.wait_for(gate.lock.acquire(), max(0, deadline - time.monotonic()))
+                except TimeoutError:
+                    raise ProviderBusyError(1) from None
+            else:
+                await gate.lock.acquire()
+            try:
+                if queued and time.monotonic() >= deadline:
+                    raise ProviderBusyError(1)
+                if gate.retry_at > time.monotonic():
+                    raise ProviderBusyError(gate.retry_at - time.monotonic())
+                backoff = 0.25
+                while True:
+                    gate.changed.clear()
+                    try:
+                        lease, earliest = await self._try_acquire(identity)
+                    except ProviderBusyError as exc:
+                        gate.retry_at = time.monotonic() + exc.retry_after
+                        raise
+                    if lease is not None:
+                        return lease
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise ProviderBusyError(1)
+                    delay = min(remaining, 2.0, backoff * random.uniform(0.8, 1.2))
+                    if earliest is not None:
+                        delay = min(delay, max(0.01, earliest - time.time()))
+                    try:
+                        await asyncio.wait_for(gate.changed.wait(), delay)
+                    except TimeoutError:
+                        if time.monotonic() >= deadline:
+                            raise ProviderBusyError(1) from None
+                    backoff = min(2.0, backoff * 2)
+            finally:
+                gate.lock.release()
+        finally:
+            gate.waiters -= 1
+            if not gate.waiters:
+                gates.pop(key, None)
+
+    def _check_state(self, state: ProviderStateRow | None, now: float) -> None:
+        if state is None:
+            return
+        if state.retry_at > now:
+            raise ProviderBusyError(state.retry_at - now)
+        if now - state.window_start < 60 and state.window_count >= self.requests_per_minute:
+            raise ProviderBusyError(60 - (now - state.window_start))
+
+    async def _active_leases(
+        self, session: AsyncSession, identity: str, now: float
+    ) -> tuple[int, float | None]:
+        row = (
+            await session.execute(
+                select(func.count(), func.min(ProviderLeaseRow.expires_at)).where(
+                    ProviderLeaseRow.fingerprint == identity, ProviderLeaseRow.expires_at > now
+                )
+            )
+        ).one()
+        return int(row[0]), row[1]
+
+    async def _try_acquire(self, identity: str) -> tuple[str | None, float | None]:
+        # An advisory read keeps occupied pools out of the write-lock path.
+        async with self.sessions() as session:
             now = time.time()
-            async with self.sessions() as session, session.begin():
-                await transaction_lock(session, identity)
-                await session.execute(
-                    delete(ProviderLeaseRow).where(ProviderLeaseRow.expires_at <= now)
+            self._check_state(await session.get(ProviderStateRow, identity), now)
+            active, earliest = await self._active_leases(session, identity, now)
+            if active >= self.concurrency:
+                return None, earliest
+        # Only the transaction below grants authority: advisory reads never do.
+        async with self.sessions() as session, session.begin():
+            await transaction_lock(session, identity)
+            now = time.time()
+            state = await session.get(ProviderStateRow, identity)
+            self._check_state(state, now)
+            # Lock/remove expired rows before counting: a concurrent renewal
+            # may still be committing. Counting first could admit an extra
+            # request when that renewal makes an apparently expired lease live.
+            await session.execute(
+                delete(ProviderLeaseRow).where(
+                    ProviderLeaseRow.fingerprint == identity, ProviderLeaseRow.expires_at <= now
                 )
-                state = await session.get(ProviderStateRow, identity)
-                if state is None:
-                    state = ProviderStateRow(
-                        fingerprint=identity,
-                        retry_at=0,
-                        window_start=now,
-                        window_count=0,
-                        requests=0,
-                        limited=0,
-                    )
-                    session.add(state)
-                if state.retry_at > now:
-                    raise ProviderBusyError(state.retry_at - now)
-                if now - state.window_start >= 60:
-                    state.window_start, state.window_count = now, 0
-                if state.window_count >= self.requests_per_minute:
-                    raise ProviderBusyError(60 - (now - state.window_start))
-                active = await session.scalar(
-                    select(func.count())
-                    .select_from(ProviderLeaseRow)
-                    .where(ProviderLeaseRow.fingerprint == identity)
+            )
+            active, earliest = await self._active_leases(session, identity, now)
+            if active >= self.concurrency:
+                return None, earliest
+            if state is None:
+                state = ProviderStateRow(
+                    fingerprint=identity,
+                    retry_at=0,
+                    window_start=now,
+                    window_count=0,
+                    requests=0,
+                    limited=0,
                 )
-                if int(active or 0) < self.concurrency:
-                    lease = str(uuid4())
-                    session.add(
-                        ProviderLeaseRow(
-                            id=lease, fingerprint=identity, expires_at=now + self.lease_seconds
-                        )
-                    )
-                    state.window_count += 1
-                    state.requests += 1
-                    return lease
-            if time.monotonic() >= deadline:
-                raise ProviderBusyError(1)
-            await asyncio.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                session.add(state)
+            if now - state.window_start >= 60:
+                state.window_start, state.window_count = now, 0
+            lease = str(uuid4())
+            session.add(
+                ProviderLeaseRow(
+                    id=lease, fingerprint=identity, expires_at=now + self.lease_seconds
+                )
+            )
+            state.window_count += 1
+            state.requests += 1
+            return lease, None
 
     async def renew(self, lease: str) -> bool:
         async with self.sessions() as session, session.begin():
@@ -113,7 +212,15 @@ class ProviderCoordinator:
 
     async def release(self, lease: str) -> None:
         async with self.sessions() as session, session.begin():
-            await session.execute(delete(ProviderLeaseRow).where(ProviderLeaseRow.id == lease))
+            identity = await session.scalar(
+                delete(ProviderLeaseRow)
+                .where(ProviderLeaseRow.id == lease)
+                .returning(ProviderLeaseRow.fingerprint)
+            )
+        if identity is not None:
+            gate = self._gates().get(self._gate_key(identity))
+            if gate is not None:
+                gate.changed.set()
 
     async def fail(self, identity: str, error: Exception) -> None:
         kind = failure_kind(error)
@@ -203,6 +310,7 @@ def coordinator_for(repo: Any, settings: Settings) -> ProviderCoordinator | None
         concurrency=settings.provider_max_concurrency,
         requests_per_minute=settings.provider_requests_per_minute,
         wait_seconds=min(30, settings.request_timeout),
+        max_waiters=settings.provider_max_waiters,
     )
 
 

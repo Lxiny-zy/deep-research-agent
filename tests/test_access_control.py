@@ -21,6 +21,8 @@ READER = "test-readonly-user-credential"
 
 @pytest.fixture
 async def access_client(monkeypatch, tmp_path):
+    from tests.render_helpers import render_worker
+
     repo = InMemoryRepository()
     settings = Settings(
         api_key=ADMIN,
@@ -43,9 +45,12 @@ async def access_client(monkeypatch, tmp_path):
         "config_lock": asyncio.Lock(),
     }.items():
         monkeypatch.setattr(api.app.state, name, value, raising=False)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=api.app), base_url="http://test"
-    ) as client:
+    async with (
+        render_worker(repo, settings),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=api.app), base_url="http://test"
+        ) as client,
+    ):
         yield client, repo
 
 

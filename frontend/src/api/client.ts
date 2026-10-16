@@ -77,6 +77,9 @@ import { QaStreamInterruptedError, RequestTimeoutError } from './transport'
 
 export class ApiError extends Error {
   qaTerminal = false
+  code?: string
+  requestId?: string
+  retryable?: boolean
   constructor(
     public readonly status: number,
     message: string,
@@ -224,13 +227,23 @@ async function request<T>(url: string, init?: RequestInit, timeoutMs = 30_000): 
       if (!res.ok) {
         if (res.status === 401) signalUnauthorized(key)
         let detail = res.statusText || `请求失败（HTTP ${res.status}）`
+        let payload: Record<string, unknown> = {}
         try {
-          const body = (await res.json()) as { detail?: unknown }
+          const body = (await res.json()) as Record<string, unknown>
           if (body.detail != null) detail = formatDetail(body.detail, detail)
+          else if (typeof body.message === 'string') detail = body.message
+          payload = body.detail && typeof body.detail === 'object' && !Array.isArray(body.detail)
+            ? { ...body, ...body.detail as Record<string, unknown> } : body
         } catch {
           // 错误体非 JSON，沿用 statusText
         }
-        throw new ApiError(res.status, detail)
+        const error = new ApiError(res.status, detail)
+        error.code = typeof payload.code === 'string' ? payload.code : undefined
+        error.requestId = res.headers.get('X-Request-ID') ??
+          (typeof payload.request_id === 'string' ? payload.request_id : undefined)
+        error.retryable = typeof payload.retryable === 'boolean' ? payload.retryable :
+          [408, 429, 502, 503, 504].includes(res.status)
+        throw error
       }
       if (res.status === 204) return undefined as T
       return (await res.json()) as T
@@ -1104,8 +1117,14 @@ export async function fetchDeliverable(
 // ---- 学术问答 --------------------------------------------------------------
 
 /** 不传 runId 时只列普通问答；传入时只列绑定到该精读任务的会话。 */
-export function listConversations(signal?: AbortSignal, runId?: string): Promise<QaConversation[]> {
-  const query = runId ? `?${new URLSearchParams({ run_id: runId }).toString()}` : ''
+export function listConversations(
+  signal?: AbortSignal, runId?: string, page?: { limit: number; before?: string },
+): Promise<QaConversation[]> {
+  const params = new URLSearchParams()
+  if (runId) params.set('run_id', runId)
+  if (page) params.set('limit', String(page.limit))
+  if (page?.before) params.set('before', page.before)
+  const query = params.size ? `?${params.toString()}` : ''
   return request<QaConversation[]>(`/api/qa/conversations${query}`, { signal })
 }
 
@@ -1149,6 +1168,7 @@ export function askQuestion(
   signal?: AbortSignal,
   scope?: {
     sources: QaSourceOption[]
+    answerMode?: 'direct' | 'verified'
     projectId?: string
     requestId?: string
     revisionMessageId?: string
@@ -1161,6 +1181,7 @@ export function askQuestion(
     ? {
         query,
         sources: scope.sources,
+        answer_mode: scope.revisionMessageId || scope.resumeMessageId ? 'verified' : scope.answerMode ?? 'direct',
         ...(scope.projectId ? { project_id: scope.projectId } : {}),
         ...(scope.requestId ? { request_id: scope.requestId } : {}),
         ...(scope.revisionMessageId ? { revision_message_id: scope.revisionMessageId } : {}),
