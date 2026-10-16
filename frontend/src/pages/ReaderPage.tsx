@@ -15,6 +15,7 @@ import {
 } from '../api/readingMap'
 import type { PdfHighlight } from '../components/PdfViewer'
 import { useProjects } from '../hooks/useLibrary'
+import { useThreadScroll } from '../hooks/useThreadScroll'
 import { useQaDraft } from '../hooks/useQaDraft'
 import { useConversations } from '../hooks/useConversations'
 import { useRunDetail, useRunDocument } from '../hooks/useRuns'
@@ -64,6 +65,10 @@ export default function ReaderPage() {
   // undefined：沿用最近一次会话；null：用户点了「新对话」，下一问再建
   const [chosen, setChosen] = useState<string | null | undefined>(undefined)
   const conversationId = chosen === undefined ? conversations.data?.[0]?.id : (chosen ?? undefined)
+  useEffect(() => {
+    // Keep the open thread stable when a background refresh changes ordering.
+    if (chosen === undefined && conversations.data.length > 0) setChosen(conversations.data[0].id)
+  }, [chosen, conversations.data])
   const conversation = useQuery({
     queryKey: ['qa-conversation', conversationId],
     queryFn: ({ signal }) => getConversation(conversationId as string, signal),
@@ -109,9 +114,11 @@ export default function ReaderPage() {
   const [strictVerification, setStrictVerification] = useState(false)
   const [activeVerification, setActiveVerification] = useState(false)
   const [pane, setPane] = useState<'pdf' | 'report' | 'map'>('pdf')
+  useEffect(() => {
+    if (pane === 'map' && !reportDocument.data?.content_version) setPane('pdf')
+  }, [pane, reportDocument.data?.content_version])
   const [documentId, setDocumentId] = useState<string>()
   const [highlight, setHighlight] = useState<PdfHighlight | null>(null)
-  const endRef = useRef<HTMLDivElement>(null)
 
   const documents = reader.data?.documents ?? []
   const current =
@@ -121,7 +128,10 @@ export default function ReaderPage() {
   const projectList = projects.data ?? []
   const libraryReady = !withLibrary || Boolean(projectId)
   const paperReady = reader.data?.status === 'done' || reader.data?.status === 'needs_review'
-  const canAsk = paperReady && reader.data?.can_ask !== false
+  const historyReady = conversationId
+    ? Boolean(conversation.data) && !conversation.isError
+    : !conversations.isError && !conversations.isLoading
+  const canAsk = paperReady && reader.data?.can_ask === true && historyReady
   const consumedNavigation = useRef('')
   useEffect(() => {
     if (!navigation || consumedNavigation.current === location.key || !reader.data || !detail.data)
@@ -261,14 +271,14 @@ export default function ReaderPage() {
       mutateQuestion(unfinished.query)
     }
   }, [conversationId, conversation.data, asking, mutateQuestion])
-  useEffect(() => {
-    endRef.current?.scrollIntoView?.({ block: 'end', behavior: 'smooth' })
-  }, [messages.length, pending])
+  const thread = useThreadScroll(conversationId ?? id,
+    `${messages.length}:${streamingAnswer.length}:${pending ?? ''}`)
 
   function submit() {
     const value = draft.trim()
     if (!value || ask.isPending || !libraryReady || !canAsk) return
     setDraft('')
+    thread.jumpToLatest()
     ask.mutate(value)
   }
 
@@ -322,8 +332,43 @@ export default function ReaderPage() {
           </p>
         </header>
 
-        <div className="reader-thread" aria-live="polite">
-          {messages.length === 0 && !pending && (
+        <div className="reader-conversations">
+          <label htmlFor="reader-conversation">论文对话</label>
+          <select id="reader-conversation" value={conversationId ?? ''}
+            disabled={ask.isPending || conversations.isLoading}
+            onChange={(event) => {
+              ask.reset()
+              stop.reset()
+              targetRef.current = undefined
+              setChosen(event.target.value || null)
+            }}>
+            <option value="">新对话</option>
+            {conversationId && !conversations.data.some(item => item.id === conversationId) && (
+              <option value={conversationId}>{conversation.data?.title || '当前对话'}</option>
+            )}
+            {conversations.data.map(item => <option key={item.id} value={item.id}>
+              {item.title || '未命名对话'} · {item.message_count} 轮
+            </option>)}
+          </select>
+          {conversations.hasNextPage && <button type="button" className="btn btn-ghost btn-sm"
+            disabled={conversations.isFetchingNextPage}
+            onClick={() => void conversations.fetchNextPage()}>
+            {conversations.isFetchingNextPage ? '加载中…' : '更早对话'}
+          </button>}
+        </div>
+
+        <div className="reader-thread" ref={thread.threadRef} onScroll={thread.onScroll}>
+          <div className="thread-content" ref={thread.contentRef}>
+          {conversation.isLoading && conversationId && <p role="status">正在加载对话…</p>}
+          {(conversation.isError || conversations.isError) && <div className="alert error" role="alert">
+            <p>历史对话加载失败，请重新加载后继续。</p>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => {
+              if (conversationId) void conversation.refetch()
+              void conversations.refetch()
+            }}>重新加载</button>
+          </div>}
+          {messages.length === 0 && !pending && !conversation.isLoading &&
+            !conversation.isError && !conversations.isError && (
             <p className="reader-empty hint">
               可以问方法细节、实验设置、结论依据，比如「表 2 的对比基线是怎么选的？」
             </p>
@@ -408,8 +453,10 @@ export default function ReaderPage() {
               {ask.error instanceof Error ? ask.error.message : '提问失败'}
             </div>
           )}
-          <div ref={endRef} />
+          </div>
         </div>
+        {thread.showLatest && <button type="button" className="btn btn-secondary btn-sm thread-latest"
+          onClick={thread.jumpToLatest}>回到最新回答</button>}
 
         <form
           className="reader-composer"
@@ -477,7 +524,7 @@ export default function ReaderPage() {
             rows={2}
             maxLength={2000}
             value={draft}
-            disabled={!canAsk || ask.isPending}
+            disabled={!canAsk}
             placeholder="向这篇论文提问…"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -490,7 +537,9 @@ export default function ReaderPage() {
           <div className="qa-composer-foot">
             {!canAsk ? (
               <span className="hint">
-                {running
+                {!historyReady
+                  ? '正在读取对话，加载失败时请点击重新加载'
+                  : running
                   ? '论文正在导入，完成后可提问'
                   : paperReady
                     ? '没有可用的论文原文材料，暂时不可提问'
@@ -502,7 +551,7 @@ export default function ReaderPage() {
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                onClick={() => setChosen(null)}
+                onClick={() => { ask.reset(); stop.reset(); targetRef.current = undefined; setChosen(null) }}
                 disabled={!conversationId || ask.isPending || !canAsk}
               >
                 <AppIcon name="plus" size={14} aria-hidden="true" />
@@ -522,11 +571,28 @@ export default function ReaderPage() {
       </section>
 
       <section className="reader-pane" aria-label="原文与精读报告">
-        <div className="reader-tabs" role="tablist" aria-label="右侧内容">
+        <div className="reader-tabs" role="tablist" aria-label="右侧内容"
+          onKeyDown={(event) => {
+            if (!(event.target instanceof HTMLElement) || event.target.getAttribute('role') !== 'tab') return
+            const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+            const position = tabs.indexOf(event.target as HTMLButtonElement)
+            let next = position
+            if (event.key === 'ArrowRight') next = (position + 1) % tabs.length
+            else if (event.key === 'ArrowLeft') next = (position + tabs.length - 1) % tabs.length
+            else if (event.key === 'Home') next = 0
+            else if (event.key === 'End') next = tabs.length - 1
+            else return
+            event.preventDefault()
+            tabs[next]?.focus()
+            tabs[next]?.click()
+          }}>
           <button
             type="button"
             role="tab"
             aria-selected={pane === 'pdf'}
+            id="reader-tab-pdf"
+            aria-controls="reader-panel-pdf"
+            tabIndex={pane === 'pdf' ? 0 : -1}
             className={`reader-tab${pane === 'pdf' ? ' is-active' : ''}`}
             onClick={() => setPane('pdf')}
           >
@@ -537,6 +603,9 @@ export default function ReaderPage() {
             type="button"
             role="tab"
             aria-selected={pane === 'report'}
+            id="reader-tab-report"
+            aria-controls="reader-panel-report"
+            tabIndex={pane === 'report' ? 0 : -1}
             className={`reader-tab${pane === 'report' ? ' is-active' : ''}`}
             onClick={() => setPane('report')}
           >
@@ -548,6 +617,9 @@ export default function ReaderPage() {
               type="button"
               role="tab"
               aria-selected={pane === 'map'}
+              id="reader-tab-map"
+              aria-controls="reader-panel-map"
+              tabIndex={pane === 'map' ? 0 : -1}
               className={`reader-tab reader-tab-map${pane === 'map' ? ' is-active' : ''}`}
               onClick={() => {
                 setPane('map')
@@ -584,7 +656,8 @@ export default function ReaderPage() {
           </p>
         )}
 
-        <div className="reader-pane-body" role="tabpanel" hidden={pane !== 'pdf'} aria-label="原文">
+        <div className="reader-pane-body" role="tabpanel" hidden={pane !== 'pdf'}
+          id="reader-panel-pdf" aria-labelledby="reader-tab-pdf" tabIndex={0}>
           {!current ? (
             <p className="reader-note hint">
               {reader.isLoading ? '正在读取任务…' : '这次任务没有可查看的论文。'}
@@ -628,7 +701,9 @@ export default function ReaderPage() {
           className="reader-pane-body"
           role="tabpanel"
           hidden={pane !== 'report'}
-          aria-label="精读报告"
+          id="reader-panel-report"
+          aria-labelledby="reader-tab-report"
+          tabIndex={0}
         >
           {pane === 'report' &&
             (report?.markdown ? (
@@ -656,7 +731,9 @@ export default function ReaderPage() {
           className="reader-pane-body"
           role="tabpanel"
           hidden={pane !== 'map'}
-          aria-label="阅读导览"
+          id="reader-panel-map"
+          aria-labelledby="reader-tab-map"
+          tabIndex={0}
         >
           {mapOpened && reportDocument.data?.content_version && (
             <ReadingMapPanel

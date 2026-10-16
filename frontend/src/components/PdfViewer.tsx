@@ -94,20 +94,41 @@ function PdfPage({
         if (cancelled) return
         const original = page.getViewport({ scale: 1 })
         setActualSize({ width: original.width, height: original.height })
-        const ratio = window.devicePixelRatio || 1
         const viewport = page.getViewport({ scale })
-        target.width = Math.floor(viewport.width * ratio)
-        target.height = Math.floor(viewport.height * ratio)
-        const context = target.getContext('2d')
+        // Bound bitmap memory on high-DPI screens and oversized PDF pages.
+        // CSS page dimensions and evidence coordinates remain unchanged.
+        const ratio = Math.min(
+          window.devicePixelRatio || 1, 2,
+          Math.sqrt(4_000_000 / Math.max(1, viewport.width * viewport.height)),
+          8192 / Math.max(1, viewport.width, viewport.height),
+        )
+        // Each attempt owns its rendering canvas. Cancelling PDF.js is async;
+        // a zoom/visibility change must not start another render on a canvas
+        // still owned by the preceding task.
+        const bitmap = document.createElement('canvas')
+        bitmap.width = Math.max(1, Math.floor(viewport.width * ratio))
+        bitmap.height = Math.max(1, Math.floor(viewport.height * ratio))
+        const context = bitmap.getContext('2d')
         if (!context) throw new Error('浏览器无法创建 PDF 画布')
         const rendering = page.render({
-          canvas: target,
+          canvas: bitmap,
           canvasContext: context,
           viewport,
           transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
         })
         task = rendering
-        await rendering.promise
+        try {
+          await rendering.promise
+          if (cancelled) return
+          target.width = bitmap.width
+          target.height = bitmap.height
+          const display = target.getContext('2d')
+          if (!display) throw new Error('浏览器无法显示 PDF 画布')
+          display.drawImage(bitmap, 0, 0)
+        } finally {
+          bitmap.width = 0
+          bitmap.height = 0
+        }
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(reason instanceof Error ? reason.message : '这一页渲染失败')
@@ -246,7 +267,11 @@ export default function PdfViewer({
     if (!element) return
     // A hidden report/PDF tab must not reset fit zoom and rerender every page.
     const measure = () => {
-      if (element.clientWidth > 0) setWidth(Math.max(element.clientWidth - 32, 0))
+      if (element.clientWidth > 0) {
+        const style = getComputedStyle(element)
+        const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+        setWidth(Math.max(element.clientWidth - padding, 0))
+      }
       if (element.clientHeight > 0) setHeight(element.clientHeight)
     }
     measure()
@@ -347,7 +372,8 @@ export default function PdfViewer({
       ),
       // Drawer transitions can change fit zoom over several frames. Correct
       // layout changes immediately instead of racing an earlier smooth scroll.
-      behavior: centeredMarks.current === marks ? 'instant' : 'smooth',
+      behavior: centeredMarks.current === marks ||
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
     })
     centeredMarks.current = marks
   }, [marks, scale, height])
@@ -373,7 +399,7 @@ export default function PdfViewer({
             onClick={zoomOut}
             aria-label="缩小"
             title="缩小"
-            disabled={!doc}
+            disabled={!doc || !ZOOM_STEPS.some(step => step < scale - 0.01)}
           >
             <AppIcon name="zoom-out" size={15} aria-hidden="true" />
           </button>
@@ -392,7 +418,7 @@ export default function PdfViewer({
             onClick={zoomIn}
             aria-label="放大"
             title="放大"
-            disabled={!doc}
+            disabled={!doc || !ZOOM_STEPS.some(step => step > scale + 0.01)}
           >
             <AppIcon name="zoom-in" size={15} aria-hidden="true" />
           </button>

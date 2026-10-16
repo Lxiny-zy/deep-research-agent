@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, memo, useContext, useEffect, useMemo, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { mathRemarkPlugins, mathRehypePlugins, normalizeMathMarkdown } from '../lib/scientificMath'
@@ -9,6 +9,9 @@ import { createPortal } from 'react-dom'
 import type { QaEvidence, ReportBibliography } from '../types'
 
 const ORIGINS = { paper: '本论文', research: '本次任务', library: '资料库', web: '联网来源' }
+const EMPTY_CITATIONS: string[] = []
+const EMPTY_EVIDENCE: QaEvidence[] = []
+const REMARK_PLUGINS = [remarkGfm, ...mathRemarkPlugins, remarkCitations]
 
 interface CitationContextValue {
   citations: string[]
@@ -163,10 +166,10 @@ const components: Components = {
 }
 
 /** Stable renderers preserve text selection and focused citations during updates. */
-export default function QaAnswerBody({
+function QaAnswerBody({
   text,
-  citations = [],
-  evidence = [],
+  citations = EMPTY_CITATIONS,
+  evidence = EMPTY_EVIDENCE,
   onLocate,
   streaming = false,
   binding,
@@ -184,21 +187,28 @@ export default function QaAnswerBody({
     () => (streaming ? undefined : catalogForReport(text, citations, binding)),
     [text, citations, binding, streaming],
   )
+  const markdown = useMemo(() => normalizeMathMarkdown(catalog?.body ?? text), [catalog, text])
+  const context = useMemo(
+    () => ({ citations, evidence, onLocate, streaming, binding: catalog, referenceOnly }),
+    [citations, evidence, onLocate, streaming, catalog, referenceOnly],
+  )
   return (
     <CitationContext.Provider
-      value={{ citations, evidence, onLocate, streaming, binding: catalog, referenceOnly }}
+      value={context}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, ...mathRemarkPlugins, remarkCitations]}
+        remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={mathRehypePlugins}
         components={components}
         skipHtml
       >
-        {normalizeMathMarkdown(catalog?.body ?? text)}
+        {markdown}
       </ReactMarkdown>
     </CitationContext.Provider>
   )
 }
+
+export default memo(QaAnswerBody)
 
 function EvidenceChoice({
   bound,

@@ -34,7 +34,8 @@ export default function IntroHalo({
     }
     if (!ctx) return
     const context = ctx
-    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    const motion = window.matchMedia?.('(prefers-reduced-motion: reduce)')
+    let reduced = motion?.matches ?? false
     let size = 0
     let frame = 0
     let energy = 0
@@ -78,6 +79,7 @@ export default function IntroHalo({
       if (reduced) render(0)
     }
     const onMove = (event: PointerEvent) => {
+      if (reduced || event.pointerType === 'touch') return
       const rect = canvas.getBoundingClientRect()
       const dx = event.clientX - (rect.left + rect.width / 2)
       const dy = event.clientY - (rect.top + rect.height / 2)
@@ -87,15 +89,22 @@ export default function IntroHalo({
     const onLeave = () => {
       pointer.ts = 0
     }
+    const onMotion = () => {
+      reduced = motion?.matches ?? false
+      if (reduced) {
+        pointer.s = pointer.ts = 0
+        energy = burst = 0
+      }
+      start()
+    }
 
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize)
     observer?.observe(canvas)
     resize()
     start()
-    if (!reduced) {
-      window.addEventListener('pointermove', onMove, { passive: true })
-      document.documentElement.addEventListener('pointerleave', onLeave)
-    }
+    window.addEventListener('pointermove', onMove, { passive: true })
+    document.documentElement.addEventListener('pointerleave', onLeave)
+    motion?.addEventListener?.('change', onMotion)
     document.addEventListener('visibilitychange', start)
     return () => {
       cancelAnimationFrame(frame)
@@ -103,8 +112,9 @@ export default function IntroHalo({
       window.removeEventListener('pointermove', onMove)
       document.documentElement.removeEventListener('pointerleave', onLeave)
       document.removeEventListener('visibilitychange', start)
+      motion?.removeEventListener?.('change', onMotion)
     }
-  }, [])
+  }, [dark])
 
   return <canvas ref={ref} className="intro-halo" aria-hidden="true" />
 }

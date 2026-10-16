@@ -1,0 +1,138 @@
+/* Shared reading surfaces. Loaded after theme rules, before print overrides. */
+.thread-content {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+  width: 100%;
+}
+
+.thread-latest {
+  align-self: center;
+  flex: none;
+  margin: var(--space-2);
+}
+
+.qa-header,
+.reader-head,
+.qa-composer,
+.reader-composer,
+.reader-tabs,
+.pdf-toolbar {
+  flex-shrink: 0;
+}
+
+.qa-main.is-empty {
+  overflow-y: auto;
+}
+
+.qa-conversation-title {
+  max-width: 100%;
+}
+
+.qa-thread,
+.reader-thread,
+.reader-report,
+.pdf-scroller {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.reader-tabs,
+.pdf-toolbar {
+  flex-wrap: wrap;
+}
+
+.reader-tab,
+.pdf-toolbar-zoom {
+  flex-shrink: 0;
+}
+
+.reader-doc-select {
+  min-width: 0;
+}
+
+.reader-conversations {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+}
+
+.reader-conversations select {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.reader-chat,
+.qa-main,
+.reader-pane-body,
+.reader-report,
+.pdf-viewer {
+  min-width: 0;
+}
+
+.pdf-toolbar-note {
+  overflow-wrap: anywhere;
+}
+
+.pdf-scroller {
+  align-items: flex-start;
+}
+
+/* Auto margins center narrow pages and collapse to zero for zoomed pages.
+   Unlike align-items:center this keeps the left edge reachable by scrolling. */
+.pdf-page {
+  margin-inline: auto;
+}
+
+@supports (height: 100dvh) {
+  .qa-layout,
+  .reader-layout {
+    height: calc(100dvh - var(--topbar-height) - var(--space-6) * 2);
+  }
+  @media (max-width: 960px) {
+    .reader-layout { height: auto; }
+    .reader-chat { max-height: 80dvh; }
+    .reader-pane { min-height: 70dvh; }
+  }
+  @media (max-width: 760px) {
+    .qa-layout {
+      height: calc(100dvh - var(--topbar-height) - var(--space-4) * 2);
+    }
+  }
+}
+
+@media (max-width: 760px) {
+  .reader-doc-select {
+    flex-basis: 100%;
+    margin-left: 0;
+    max-width: 100%;
+  }
+  .reader-tabs,
+  .pdf-toolbar { gap: var(--space-2); }
+  .qa-composer-foot { flex-wrap: wrap; }
+  .qa-composer-foot .hint { display: block; }
+}
+
+/* A short viewport must scroll the whole conversation column when the fixed
+   header and source controls would otherwise consume all of its height. */
+@media (max-height: 700px) {
+  .qa-layout { min-height: 0; }
+  .qa-main,
+  .reader-chat { overflow-y: auto; }
+  .qa-thread,
+  .reader-thread { flex: 1 0 160px; }
+  .qa-sidebar { overflow-y: auto; }
+  .qa-conversation-list { flex: 1 0 60px; }
+}
+
+@media (hover: none) {
+  .qa-conversation-delete { opacity: 1; }
+}

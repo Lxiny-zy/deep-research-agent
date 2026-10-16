@@ -11,6 +11,7 @@ import {
   getReader,
 } from '../api/client'
 import { useProjects } from '../hooks/useLibrary'
+import { useThreadScroll } from '../hooks/useThreadScroll'
 import { useQaDraft } from '../hooks/useQaDraft'
 import { useConversations } from '../hooks/useConversations'
 import {
@@ -91,7 +92,6 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
   const [strictVerification, setStrictVerification] = useState(false)
   const [activeVerification, setActiveVerification] = useState(false)
   const createdId = useRef<string | undefined>(undefined)
-  const endRef = useRef<HTMLDivElement>(null)
   const projects = useProjects()
 
   const conversation = useQuery({
@@ -246,14 +246,13 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
       mutateQuestion(unfinished.query)
     }
   }, [id, conversation.data, asking, mutateQuestion])
-  useEffect(() => {
-    endRef.current?.scrollIntoView?.({ block: 'end', behavior: 'smooth' })
-  }, [messages.length, pending])
+  const thread = useThreadScroll(id ?? 'new', `${messages.length}:${streamingAnswer.length}:${pending ?? ''}`)
 
   function submit(text = draft) {
     const value = text.trim()
     if (!value || ask.isPending || !canAsk || (withLibrary && !projectId)) return
     setDraft('')
+    thread.jumpToLatest()
     ask.mutate(value)
   }
 
@@ -293,14 +292,24 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
                 className="btn btn-ghost btn-sm icon-button qa-conversation-delete"
                 aria-label={`删除会话 ${item.title}`}
                 title="删除会话"
-                onClick={() => remove.mutate(item.id)}
+                disabled={remove.isPending || (ask.isPending && item.id === (id || targetRef.current))}
+                onClick={() => {
+                  if (window.confirm(`删除会话“${item.title || '未命名会话'}”？此操作不可撤销。`))
+                    remove.mutate(item.id)
+                }}
               >
                 <AppIcon name="trash" size={13} aria-hidden="true" />
               </button>
             </li>
           ))}
-          {conversations.data?.length === 0 && <li className="qa-empty-list">还没有问答会话</li>}
+          {conversations.isLoading && <li className="qa-empty-list" role="status">正在加载会话…</li>}
+          {!conversations.isLoading && !conversations.isError && conversations.data.length === 0 && (
+            <li className="qa-empty-list">还没有问答会话</li>
+          )}
         </ul>
+        {remove.isError && <p className="error-text" role="alert">
+          {remove.error instanceof Error ? remove.error.message : '删除失败，请重试。'}
+        </p>}
         {conversations.isError && <p role="alert">会话列表加载失败，请重试。</p>}
         {(conversations.hasNextPage || conversations.isError) && (
           <button className="btn btn-secondary btn-sm" disabled={conversations.isFetching}
@@ -323,7 +332,15 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
           )}
         </header>
 
-        <div className={'qa-thread' + (empty ? ' is-empty' : '')} aria-live="polite">
+        <div className={'qa-thread' + (empty ? ' is-empty' : '')}
+          ref={thread.threadRef} onScroll={thread.onScroll}>
+          <div className="thread-content" ref={thread.contentRef}>
+          {id && conversation.isLoading && <p role="status">正在加载对话…</p>}
+          {id && conversation.isError && <div className="alert error" role="alert">
+            <p>{conversation.error instanceof Error ? conversation.error.message : '对话加载失败'}</p>
+            <button type="button" className="btn btn-secondary btn-sm"
+              onClick={() => void conversation.refetch()}>重新加载对话</button>
+          </div>}
           {empty && !runId && (
             <div className="qa-welcome">
               <span className="qa-welcome-kicker" aria-hidden="true">
@@ -417,8 +434,10 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
               {ask.error instanceof Error ? ask.error.message : '提问失败'}
             </div>
           )}
-          <div ref={endRef} />
+          </div>
         </div>
+        {thread.showLatest && <button type="button" className="btn btn-secondary btn-sm thread-latest"
+          onClick={thread.jumpToLatest}>回到最新回答</button>}
 
         <form
           className="qa-composer"
@@ -439,6 +458,7 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
                   className="visually-hidden"
                   type="checkbox"
                   checked={withLibrary}
+                  disabled={ask.isPending}
                   onChange={(event) => setWithLibrary(event.target.checked)}
                 />
                 <span className="qa-scope-option">
@@ -457,6 +477,7 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
                   className="visually-hidden"
                   type="checkbox"
                   checked={withWeb}
+                  disabled={ask.isPending}
                   onChange={(event) => setWithWeb(event.target.checked)}
                 />
                 <span className="qa-scope-option">
@@ -486,6 +507,7 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
                 <label htmlFor="qa-scope-project">知识库项目</label>
                 <select
                   id="qa-scope-project"
+                  disabled={ask.isPending}
                   aria-label="选择知识库项目"
                   value={projectId}
                   onChange={(event) => setProjectId(event.target.value)}

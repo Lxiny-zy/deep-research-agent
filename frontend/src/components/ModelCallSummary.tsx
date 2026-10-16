@@ -1,9 +1,10 @@
+import { memo, useMemo } from 'react'
 import type { ResearchEvent } from '../types'
 import { modelCallLabel, modelCallRecord, modelCalls, modelCallUsage, type ModelCallRecord } from '../lib/modelCalls'
 import { AppIcon } from './AppIcon'
 
-export default function ModelCallSummary({ events, live }: { events: ResearchEvent[]; live: boolean }) {
-  const calls = modelCalls(events)
+function ModelCallSummary({ events, live }: { events: ResearchEvent[]; live: boolean }) {
+  const calls = useMemo(() => modelCalls(events), [events])
   const queues = new Map<string, { call: ModelCallRecord; waiting: boolean }>()
   for (const event of events) {
     const queue = event.data?.model_queue
@@ -70,3 +71,5 @@ export default function ModelCallSummary({ events, live }: { events: ResearchEve
     </>
   )
 }
+
+export default memo(ModelCallSummary)

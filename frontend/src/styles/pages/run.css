@@ -1303,7 +1303,39 @@
   font-size: var(--text-base);
   line-height: 1.4;
   overflow-wrap: anywhere;
+  contain: content;
+  white-space: pre-wrap;
 }
+
+.model-reasoning-toolbar {
+  align-items: center;
+  border-left: 1px solid var(--border);
+  color: var(--text-3);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  gap: 6px;
+  margin-left: 18px;
+  padding: 0 0 6px 10px;
+}
+
+.reasoning-stream-caret {
+  animation: reasoning-caret 900ms steps(1) infinite;
+  border-right: 2px solid var(--primary);
+  display: inline-block;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: -0.18em;
+}
+
+@keyframes reasoning-caret {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-stream-caret { animation: none; }
+}
+
 
 .evidence-source {
   align-items: center;

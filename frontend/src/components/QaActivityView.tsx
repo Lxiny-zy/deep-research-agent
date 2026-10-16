@@ -1,5 +1,6 @@
 import type { QaActivity } from '../types'
 import { qaActivityEvents } from '../lib/qaActivity'
+import { useMemo } from 'react'
 import ModelReasoningPanel from './ModelReasoningPanel'
 
 export default function QaActivityView({
@@ -9,6 +10,6 @@ export default function QaActivityView({
   items: QaActivity[]
   live?: boolean
 }) {
-  const events = qaActivityEvents(items)
+  const events = useMemo(() => qaActivityEvents(items), [items])
   return <ModelReasoningPanel events={events} live={live} />
 }

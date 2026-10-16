@@ -22,6 +22,14 @@
   --text-2: #cac7d4;
   --text-3: #aeabbb;
   --text-muted: #9a97a8;
+  --thinking-bg: #102422;
+  --thinking-surface: #132d29;
+  --thinking-border: #284b44;
+  --thinking-text: #c2ded5;
+  --thinking-muted: #9cbbb1;
+  --thinking-accent: #7ad7bc;
+  --intro-star: #b9c4fa;
+  --intro-haze: #15283e;
 
   --primary: #9ea8ff;
   --primary-hover: #b1b9ff;

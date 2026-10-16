@@ -25,6 +25,14 @@
   --text-3: #55525e;
   --text-muted: #5d5a66;
   --text-inverse: #ffffff;
+  --thinking-bg: #edf4f3;
+  --thinking-surface: #f6faf9;
+  --thinking-border: #c5dcd7;
+  --thinking-text: #345650;
+  --thinking-muted: #526e68;
+  --thinking-accent: #28796d;
+  --intro-star: #727cb2;
+  --intro-haze: #dce7f1;
 
   /* 主色：墨靛（导航指示、链接）；金色：选中态描线 */
   --primary: #3a45a8;
