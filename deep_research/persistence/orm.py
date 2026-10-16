@@ -289,6 +289,8 @@ class ResearchRun(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 1 = unversioned historical request; 2 = original submitted body.
+    request_hash_version: Mapped[int] = mapped_column(Integer, default=2, server_default="1")
     interpretation: Mapped[str] = mapped_column(Text, default="")
     elapsed: Mapped[float] = mapped_column(Float, default=0.0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)

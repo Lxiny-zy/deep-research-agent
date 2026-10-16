@@ -259,6 +259,7 @@ class SqlRepository:
                     status="pending",
                     idempotency_key=idempotency_key,
                     request_hash=request_hash or None,
+                    request_hash_version=2,
                     claimable_at=datetime.now(UTC) if claimable else None,
                     schedule_cost=schedule.cost,
                     schedule_class=schedule.kind,
@@ -343,14 +344,21 @@ class SqlRepository:
             if int(count or 0) >= identity_maximum:
                 raise RunQueueFullError("当前身份的在途任务已达上限，请等待已有任务完成")
 
-    async def find_run_once(self, idempotency_key: str, request_hash: str) -> str | None:
+    async def find_run_once(
+        self, idempotency_key: str, request_hash: str, *,
+        legacy_hash: str | None = None, owner_id: str | None = None,
+    ) -> str | None:
         async with self._sm() as s:
             row = await s.scalar(
                 select(orm.ResearchRun).where(orm.ResearchRun.idempotency_key == idempotency_key)
             )
             if row is None:
                 return None
-            if row.request_hash != request_hash:
+            legacy_match = (
+                row.request_hash_version == 1 and legacy_hash is not None
+                and row.request_hash == legacy_hash and row.owner_id == owner_id
+            )
+            if row.request_hash != request_hash and not legacy_match:
                 raise IdempotencyConflictError("Idempotency-Key 已用于不同的请求")
             return row.id
 

@@ -29,7 +29,10 @@ def upgrade() -> None:
     )
     if orphans:
         raise RuntimeError(
-            "Task-bound Q&A contains orphan bindings; archive or resolve them before migrating"
+            f"Task-bound Q&A contains {orphans} orphan bindings. "
+            "Set DATABASE_URL and run: python -m deep_research.migration_preflight check. "
+            "To preserve selected chats, stop services and use the preserve command "
+            "with --conversation-id ID --services-stopped --apply, then retry migration."
         )
     existing = {
         fk.get("name") for fk in inspector.get_foreign_keys("qa_conversation") if fk.get("name")

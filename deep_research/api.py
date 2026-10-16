@@ -1601,8 +1601,18 @@ async def create_run(
     if normalized_key and not principal.can_manage:
         normalized_key = hashlib.sha256(f"{principal.id}:{normalized_key}".encode()).hexdigest()
     if normalized_key:
+        from .http.idempotency import legacy_template_update
+
+        legacy_update = legacy_template_update(req.template, req.strategy, req.workflow)
+        legacy_hash = (
+            _run_request_hash(req.model_copy(update=legacy_update))
+            if legacy_update is not None else None
+        )
         try:
-            existing_id = await repo.find_run_once(normalized_key, submitted_request_hash)
+            existing_id = await repo.find_run_once(
+                normalized_key, submitted_request_hash,
+                legacy_hash=legacy_hash, owner_id=principal.id,
+            )
         except IdempotencyConflictError as exc:
             raise HTTPException(409, {"code": "idempotency_conflict", "message": str(exc)}) from exc
         if existing_id:

@@ -6351,6 +6351,8 @@ export interface operations {
         parameters: {
             query?: {
                 run_id?: string | null;
+                limit?: number;
+                before?: string | null;
             };
             header?: {
                 "x-api-key"?: string | null;

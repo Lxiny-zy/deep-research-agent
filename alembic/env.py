@@ -38,6 +38,12 @@ if config.config_file_name is not None:
 target_metadata = orm.Base.metadata
 
 
+def _include_object(obj, name, type_, reflected, compare_to):  # type: ignore[no-untyped-def]
+    # Explicit maintenance archives must never be suggested for deletion by
+    # runtime schema autogeneration. No other tables are excluded.
+    return not (type_ == "table" and name == "qa_orphan_archive")
+
+
 def run_migrations_offline() -> None:
     """离线模式：仅按 URL 生成 SQL，不建立实际连接。"""
     context.configure(
@@ -52,7 +58,10 @@ def run_migrations_offline() -> None:
 
 
 def _do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+    context.configure(
+        connection=connection, target_metadata=target_metadata, compare_type=True,
+        include_object=_include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
