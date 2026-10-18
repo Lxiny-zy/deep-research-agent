@@ -20,6 +20,7 @@ import FileTree from '../components/FileTree'
 import RunNarrative from '../components/RunNarrative'
 import StepRail from '../components/StepRail'
 import RunTaskSummary from '../components/RunTaskSummary'
+import WorkflowStatePanel from '../components/WorkflowStatePanel'
 import { useDeliverables, useNarrative, useRunTemplate, useWorkspace } from '../hooks/useWorkbench'
 import { AppIcon } from '../components/AppIcon'
 import { useResearchStream } from '../hooks/useResearchStream'
@@ -29,6 +30,7 @@ import { displayReportTitle } from '../lib/reportTitle'
 import { deriveResearchProgress } from '../lib/runProgress'
 import { isTerminalRunStatus } from '../lib/runStatus'
 import { finalProseReview } from '../lib/workbench'
+import { reviseRunContent } from '../api/client'
 import type { ReportDocument, RunDetail, RunStatus } from '../types'
 
 /**
@@ -90,6 +92,7 @@ export default function RunPage() {
   const navigate = useNavigate()
   // 打印预览：在屏幕上按 A4 版心呈现打印布局，替换掉交互视图。
   const [printPreview, setPrintPreview] = useState(false)
+  const [workflowActionBusy, setWorkflowActionBusy] = useState(false)
   const [streamRestartToken, setStreamRestartToken] = useState(0)
   // 恢复发起时的 attempt 基线；null＝当前没有在等恢复生效。
   // 存基线而不是存布尔，是因为"恢复是否已生效"只能靠 attempt 变化判定：
@@ -233,6 +236,17 @@ export default function RunPage() {
   function askFollowUp() {
     if (!runDetail) return
     navigate(`/qa?${new URLSearchParams({ run: runDetail.id }).toString()}`)
+  }
+
+  async function runWorkflowAction(action: import('../types').WorkflowAction) {
+    if (action !== 'rewrite' || !id || !deliverables.data?.content_version) return
+    setWorkflowActionBusy(true)
+    try {
+      const next = await reviseRunContent(id, deliverables.data.content_version)
+      navigate(`/runs/${encodeURIComponent(next.run_id)}`)
+    } finally {
+      setWorkflowActionBusy(false)
+    }
   }
 
   function resumeRun() {
@@ -416,6 +430,11 @@ export default function RunPage() {
       />
 
       <RunTaskSummary info={runTemplate.data} />
+      <WorkflowStatePanel
+        state={detail.data?.workflow ?? detail.data?.completion?.workflow}
+        onAction={deliverables.data?.content_version ? (action) => void runWorkflowAction(action) : undefined}
+        busy={workflowActionBusy}
+      />
       <RoleBindingSummary key={`roles-${id}`} events={stream.events} />
       <ModelReasoningPanel events={stream.events} live={liveActive} />
 

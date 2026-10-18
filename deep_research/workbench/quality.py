@@ -41,25 +41,25 @@ class QualityPolicy(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     # ---- 引用与来源 ----
-    survey_min_citations: int = Field(20, ge=1, le=200)
-    research_min_citations: int = Field(3, ge=0, le=100)
+    survey_min_citations: int = Field(8, ge=1, le=200)
+    research_min_citations: int = Field(2, ge=0, le=100)
     max_citation_cluster: int = Field(7, ge=2, le=20)
-    max_evidence_quote_chars: int = Field(600, ge=60, le=2000)
+    max_evidence_quote_chars: int = Field(800, ge=60, le=2000)
     forbid_abstract_citations: bool = True
     recency_check: bool = True
     # ---- 文体与结构 ----
     register_check: bool = True
-    max_sentence_chars: int = Field(160, ge=60, le=600)
+    max_sentence_chars: int = Field(220, ge=60, le=600)
     require_limitations: bool = True
     # ---- 返工与收敛 ----
-    max_revisions: int = Field(2, ge=0, le=4)
+    max_revisions: int = Field(4, ge=0, le=6)
     adaptive_review: bool = True
     task_max_model_calls: int = Field(0, ge=0, le=4096)
-    qa_claim_max_revisions: int = Field(2, ge=0, le=4)
-    qa_max_revisions: int = Field(1, ge=0, le=4)
+    qa_claim_max_revisions: int = Field(3, ge=0, le=6)
+    qa_max_revisions: int = Field(2, ge=0, le=6)
     qa_max_model_calls: int = Field(16, ge=1, le=128)
-    extraction_max_revisions: int = Field(1, ge=0, le=4)
-    review_evidence_rounds: int = Field(1, ge=0, le=4)
+    extraction_max_revisions: int = Field(2, ge=0, le=6)
+    review_evidence_rounds: int = Field(2, ge=0, le=6)
     fail_on_quality: bool = False
     min_evidence_findings: int = Field(3, ge=0, le=50)
 
@@ -184,7 +184,7 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "两者还受问答自动修订总次数约束。"
         "每次返工都会消耗额外 token；相同问题没有改善时提前停止，保留问题最少的一版。",
         0,
-        4,
+        6,
         "次",
     ),
     QualityField(
@@ -195,7 +195,7 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "严格核验模式的局部修订总上限，默认一次；直接回答不自动修订。"
         "同时受机械和断言的分项上限约束。"
         "局部修订失败不会再启动整篇重写，保留可核验内容与待确认点。",
-        0, 4, "次",
+        0, 6, "次",
     ),
     QualityField(
         "qa_max_model_calls",
@@ -215,7 +215,7 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "严格核验模式中结论未得到引用支持时的修订次数，与引用和数值的机械修订分别计数。"
         "0 表示仅核验不修订断言；用尽后保留可核验内容。仍受问答修订总次数和调用总上限约束。",
         0,
-        4,
+        6,
         "次",
     ),
     QualityField(
@@ -235,7 +235,7 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "0 表示只保存失败记录。修复仍须重新核验；遇到服务错误或没有实质修改时停止，"
         "不重新抽取全文。",
         0,
-        4,
+        6,
         "次",
     ),
     QualityField(
@@ -246,7 +246,7 @@ QUALITY_FIELDS: tuple[QualityField, ...] = (
         "仅指定文献综述在写作前逐篇核对任务所需证据；有缺口时优先补读相关章节，"
         "保留已有发现。0 表示只检查不补读。补读仍须核验，未覆盖关键内容时不交付正式综述。",
         0,
-        4,
+        6,
         "次",
     ),
     QualityField(

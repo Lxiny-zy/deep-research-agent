@@ -24,6 +24,8 @@ Deep Research Agent（深度研究智能体）：多子问题 DAG 检索 → 来
 
 ## 其他约定
 
+- 当前项目以完整报告链路和可迭代修订为目标。降低质量门限时应优先增加修订、扩大等价标题和放宽非事实编排检查；不得把正文直接替换成证据摘录来掩盖修订失败。引用越界、无依据数值、来源版本冲突、文件损坏和权限边界仍是硬安全门。
+
 - `.env` 含真实密钥，禁止读取或提交。
 - `build/`、`artifacts/`、`node_modules/` 是构建产物，勿在其内修改源文件（源码以仓库根为准）。
 - 测试：`python -m pytest -q -m "not pg"`；静态检查：`python -m ruff check .`、`python -m mypy deep_research`。

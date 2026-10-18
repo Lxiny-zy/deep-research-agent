@@ -30,7 +30,16 @@ _FULLTEXT_WORDING = re.compile(
 
 
 def explicit_absence(text: str) -> bool:
-    return bool(_ABSENCE.search(text) or _UNRESOLVED.search(text))
+    # Scope notes disclose the limits of the saved evidence; they do not assert
+    # that the source itself omitted the information.
+    normalized = re.sub(r"[*_`]", "", text)
+    normalized = re.sub(
+        r"(?:^|(?<=[。\n]))\s*(?:表注[：:]\s*)?未报告(?:表示|仅表示|仅指)本次"
+        r"(?:已核验发现|已核查材料|证据摘录|摘录)(?:中)?未列出(?:该)?字段[，,；;]\s*"
+        r"不代表原文(?:全文)?(?:没有|未)报告[。.]?",
+        "", normalized,
+    )
+    return bool(_ABSENCE.search(normalized) or _UNRESOLVED.search(normalized))
 
 
 def requires_fulltext(unit: Any) -> bool:

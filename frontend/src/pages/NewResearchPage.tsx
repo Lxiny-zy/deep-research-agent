@@ -645,10 +645,10 @@ function ResearchComposer() {
             <details className="home-disclosure" open={Boolean(customWorkflow)}>
               <summary>
                 <AppIcon name="chevron-right" size={14} aria-hidden="true" />
-                自定义研究流程
+              高级研究策略
               </summary>
               <label className="field-label" htmlFor="workflow">
-                研究流程
+                研究策略
                 <span className="select-with-icon">
                   <AppIcon name="workflow" size={15} aria-hidden="true" />
                   <select

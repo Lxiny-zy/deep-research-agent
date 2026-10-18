@@ -121,6 +121,7 @@ def assess_draft(
             fallback=False,
             uncited_sections=abstract_sections(template.key, policy),
             section_support=section_support,
+            allow_uncited=not policy.fail_on_quality,
         )
         hard += describe_problems(check)
         for code, excerpt, message in check.problems:

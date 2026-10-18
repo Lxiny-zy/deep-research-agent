@@ -95,6 +95,9 @@ class RunDetail:
     # 本次运行的意图判定（从 checkpoint scratch 还原）；未跑意图门禁时为 None。
     intent: IntentDecision | None = None
     completion: dict[str, Any] | None = None
+    # Product-level phase projection; derived from the durable checkpoint and
+    # completion record, never used as an execution source of truth.
+    workflow: dict[str, Any] | None = None
     cancel_requested_at: datetime | None = None
     status_notice: str | None = None
 

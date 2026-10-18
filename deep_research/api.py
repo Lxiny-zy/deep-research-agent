@@ -2477,6 +2477,22 @@ async def _enrich_run_detail(repo: ResearchRepository, detail: RunDetail) -> Run
     scratch = detail.orchestration.checkpoint.get("scratch", {}) if detail.orchestration else {}
     completion = scratch.get("_completion") if isinstance(scratch, dict) else None
     detail.completion = completion if isinstance(completion, dict) else None
+    from .workbench.workflow_state import derive_workflow_state
+
+    detail.workflow = (
+        detail.completion.get("workflow")
+        if (
+            isinstance(detail.completion, dict)
+            and isinstance(detail.completion.get("workflow"), dict)
+        )
+        else derive_workflow_state(
+            detail,
+            None,
+            detail.completion.get("issues", []) if isinstance(detail.completion, dict) else [],
+        )
+    )
+    if detail.completion is not None and "workflow" not in detail.completion:
+        detail.completion["workflow"] = detail.workflow
     raw_manifest = scratch.get(RUN_MANIFEST_CHECKPOINT_KEY) if isinstance(scratch, dict) else None
     if raw_manifest is not None:
         detail.manifest = RunManifest.model_validate(raw_manifest)

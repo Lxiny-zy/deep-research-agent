@@ -69,7 +69,7 @@ const WORKSPACE_NAV: NavItem[] = [
 ]
 
 const ADVANCED_NAV: NavItem[] = [
-  { to: '/workflows', label: '工作流构建', en: 'Workflow', icon: 'workflow', roles: ['admin'] },
+  { to: '/workflows', label: '研究策略（工作流构建）', en: 'Research Strategy', icon: 'workflow', roles: ['admin'] },
   { to: '/agents', label: '角色广场', en: 'Agents', icon: 'users', roles: ['admin'] },
   { to: '/settings', label: '设置', en: 'Settings', icon: 'settings', roles: ['admin'] },
 ]
@@ -81,7 +81,7 @@ const PAGE_TITLE: [RegExp, string, string][] = [
   [/^\/history/, '任务记录', 'Task History'],
   [/^\/qa/, '学术问答', 'Research Q&A'],
   [/^\/library/, '资料库', 'Library'],
-  [/^\/workflows/, '工作流构建', 'Workflow'],
+  [/^\/workflows/, '研究策略', 'Research Strategy'],
   [/^\/agents/, '角色广场', 'Agents'],
   [/^\/settings/, '设置', 'Settings'],
 ]

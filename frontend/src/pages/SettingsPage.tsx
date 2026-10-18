@@ -691,8 +691,8 @@ export default function SettingsPage() {
                     <AppIcon name="workflow" size={18} />
                   </span>
                   <span className="settings-advanced-text">
-                    <strong>工作流构建</strong>
-                    <small>编排自定义研究流程</small>
+                    <strong>研究策略（工作流构建）</strong>
+                    <small>管理策略与高级编排</small>
                   </span>
                   <AppIcon name="chevron-right" size={16} aria-hidden="true" />
                 </Link>

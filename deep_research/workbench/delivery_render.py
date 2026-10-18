@@ -68,7 +68,11 @@ def render_bundle(
         name = stem + suffix
         if any(file.name == name for file in files):
             return
-        if context["blocked"] and role != "data":
+        if (
+            context["blocked"]
+            and (context["fail_on_quality"] or context.get("hard_blocked", False))
+            and role != "data"
+        ):
             failed(fmt, label, ["正文或证据核验未通过，需要先修订研究内容"], retryable=False)
             return
         if retry_format is not None and fmt != retry_format:
@@ -373,17 +377,19 @@ def render_bundle(
             }, ensure_ascii=False, indent=2).encode("utf-8"),
         )
 
-    if not context["blocked"]:
-        check = consistency_gate(markdown, {file.name: file.data for file in files})
-        gates.append(check)
-        for fmt in check.metrics.get("failed_formats", []):
-            failed(fmt, fmt.upper(), check.issues)
-        for file in files:
-            if file.format == "pptx":
-                slide_check = slides_gate(file.data, deck(), markdown)
-                gates.append(slide_check)
-                if slide_check.status == "fail":
-                    failed("pptx", "演示文稿", slide_check.issues, retryable=False)
+    # Keep a consistency record even when content quality needs repair.  This
+    # prevents one upstream content failure from becoming a misleading second
+    # error saying that the consistency check itself is missing.
+    check = consistency_gate(markdown, {file.name: file.data for file in files})
+    gates.append(check)
+    for fmt in check.metrics.get("failed_formats", []):
+        failed(fmt, fmt.upper(), check.issues)
+    for file in files:
+        if file.format == "pptx":
+            slide_check = slides_gate(file.data, deck(), markdown)
+            gates.append(slide_check)
+            if slide_check.status == "fail":
+                failed("pptx", "演示文稿", slide_check.issues, retryable=False)
     if failures:
         gates.append(
             GateResult(
@@ -425,7 +431,17 @@ def render_bundle(
             )
             if applies:
                 rank = {"pass": 0, "warn": 1, "fail": 2}
-                status = "fail" if gate.status == "fail" else "warn"
+                # Content-quality findings remain visible on each file, but a
+                # readable draft is not treated as a corrupt file in the
+                # default repair-friendly mode. Strict mode keeps the old
+                # fail-closed behaviour.
+                hard_format_gate = gate.name in {
+                    "citation", "source_processing", "markdown", "consistency",
+                    "territory", "render", "file_readability",
+                }
+                status = "fail" if gate.status == "fail" and (
+                    context["fail_on_quality"] or hard_format_gate
+                ) else "warn"
                 if rank[status] > rank[file.status]:
                     file.status = status
                 file.issues = list(dict.fromkeys([*file.issues, *(gate.blocking_issues or [])]))

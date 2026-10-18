@@ -452,6 +452,7 @@ class TemplateWriter:
                 section_support=abstract_section_support(bb.scratch)
                 if template.key == "paperRead"
                 else None,
+                allow_uncited=not policy.fail_on_quality,
             )
             local_revision = assessment.local_problems is not None and template.key != "mindmap"
             if template.key == "slides":

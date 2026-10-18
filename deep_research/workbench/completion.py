@@ -140,6 +140,12 @@ def promised_formats(detail: RunDetail) -> set[str] | None:
     return expanded
 
 
+def _strict_quality(detail: RunDetail) -> bool:
+    scratch = detail.orchestration.checkpoint.get("scratch", {}) if detail.orchestration else {}
+    contract = contract_from_scratch(scratch)
+    return bool(contract and contract.quality.get("fail_on_quality", False))
+
+
 def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, Any]:
     required = promised_formats(detail)
     if required is None:
@@ -178,7 +184,12 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
             or (
                 file.status != "pass"
                 and not (
-                    file.status == "warn" and file.issues and set(file.issues) <= set(advisories)
+                    file.status == "warn"
+                    and file.issues
+                    and (
+                        not _strict_quality(detail)
+                        or set(file.issues) <= set(advisories)
+                    )
                 )
             )
             for file in files
@@ -190,6 +201,9 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
     if bundle.input_version != source:
         issues.append("交付文件与当前定稿版本不一致")
     status = "needs_review" if issues else "done"
+    from .workflow_state import derive_workflow_state
+
+    workflow = derive_workflow_state(detail, bundle, list(dict.fromkeys(issues)))
     checked_at = datetime.now(UTC).isoformat()
     previous = detail.completion or scratch.get(COMPLETION_KEY)
     previous = previous if isinstance(previous, dict) else {}
@@ -211,6 +225,7 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
     return {
         "policy_version": COMPLETION_POLICY_VERSION,
         "status": status,
+        "workflow": workflow,
         "scope": "frozen_task_delivery",
         "input_version": source,
         "content_version": bundle.content_version,

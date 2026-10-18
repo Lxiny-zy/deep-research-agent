@@ -180,9 +180,18 @@ LIT_REVIEW = TaskTemplate(
     sections=(
         SectionSpec("abstract", "摘要", "综述范围、检索口径与主要发现", ("Abstract",)),
         SectionSpec("introduction", "引言", "研究背景、动机与综述边界", ("背景", "Introduction")),
-        SectionSpec("themes", "主题综述", "按主题分节，每节对比代表工作", ("研究现状", "方法综述")),
-        SectionSpec("comparison", "方法对比", "用表格或段落横向比较主流方法", ("对比分析", "比较")),
-        SectionSpec("open_problems", "开放问题", "尚未解决的问题与未来方向", ("未来方向", "挑战")),
+        SectionSpec(
+            "themes", "主题综述", "按主题分节，每节对比代表工作",
+            ("研究现状", "方法综述", "技术路线分类", "研究进展", "Related Work"),
+        ),
+        SectionSpec(
+            "comparison", "方法对比", "用表格或段落横向比较主流方法",
+            ("对比分析", "比较", "横向评估", "Comparison"),
+        ),
+        SectionSpec(
+            "open_problems", "开放问题", "尚未解决的问题与未来方向",
+            ("未来方向", "挑战", "展望", "Future Work", "Open Problems"),
+        ),
         SectionSpec("conclusion", "结论", "收束全文", ("总结",)),
     ),
     deliverables=_DOC_SUITE,

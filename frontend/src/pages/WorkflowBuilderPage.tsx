@@ -50,7 +50,7 @@ type EditSession = {
   clone?: boolean
 }
 
-/** 工作流构建器：可视化自由组合角色为有序流程，存库后可在「新建研究」中选用。 */
+/** 研究策略中心：展示可复用策略；底层流程编辑保留为管理员高级能力。 */
 export default function WorkflowBuilderPage() {
   const navigate = useNavigate()
   const workflows = useCustomWorkflows()
@@ -173,15 +173,15 @@ export default function WorkflowBuilderPage() {
     <div className="stack page-stack workflow-page">
       <header className="page-header">
         <div>
-          <h1>工作流构建</h1>
-          <p>
-            把角色编排成有序流程，可插入反思循环与分支依赖。保存后可在工作台的「高级：自定义研究流程」中选用。
+            <h1>研究策略</h1>
+            <p>
+            先按研究目标选择策略；日常任务不需要理解 Agent、Step 或分支。底层流程编排保留在本页的高级区域，供管理员调试和扩展。
           </p>
         </div>
         <div className="page-header-actions">
           <button className="btn btn-primary" onClick={() => openEditor(null)} type="button">
             <AppIcon name="plus" size={15} aria-hidden="true" />
-            新建工作流
+            新建高级策略
           </button>
         </div>
       </header>
@@ -192,8 +192,8 @@ export default function WorkflowBuilderPage() {
             <AppIcon name="stack" size={18} aria-hidden="true" />
           </span>
           <span className="workflow-template-copy">
-            <strong>内置模板</strong>
-            <span>从现成的研究流程开始，克隆后按需调整。</span>
+            <strong>可复用研究策略</strong>
+            <span>从深度研究、快速查询或领域审查开始，策略会自动选择合适的证据链。</span>
           </span>
           <AppIcon
             name="chevron-down"
@@ -221,11 +221,11 @@ export default function WorkflowBuilderPage() {
         </div>
       </details>
 
-      <section className="panel workflow-custom-rail" aria-label="自定义工作流">
+        <section className="panel workflow-custom-rail" aria-label="自定义研究策略">
         <div className="panel-header">
           <div>
-            <h2 className="panel-title">自定义工作流</h2>
-            <p className="hint">你保存的研究流程，可随时编辑、停用或直接发起研究。</p>
+            <h2 className="panel-title">我的研究策略</h2>
+            <p className="hint">保存后的策略可以在新建研究时复用；只有需要改变底层 Agent 链路时才进入编辑。</p>
           </div>
         </div>
         {workflows.isLoading && <Skeleton rows={3} />}
@@ -245,8 +245,8 @@ export default function WorkflowBuilderPage() {
         {!workflows.isLoading && !workflows.isError && workflows.data?.length === 0 && (
           <EmptyState
             icon="workflow"
-            title="为你的研究，搭一条专属流程"
-            description="新建工作流，或从内置模板开始。"
+            title="为你的研究，保存一套策略"
+            description="从内置策略开始，或进入高级编排器创建专属链路。"
           >
             <button
               className="btn btn-secondary"
@@ -257,7 +257,7 @@ export default function WorkflowBuilderPage() {
                 templatesRef.current.scrollIntoView({ block: 'start' })
               }}
             >
-              <AppIcon name="stack" size={15} aria-hidden="true" /> 浏览内置模板
+              <AppIcon name="stack" size={15} aria-hidden="true" /> 浏览研究策略
             </button>
           </EmptyState>
         )}

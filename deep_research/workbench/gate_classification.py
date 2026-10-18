@@ -5,7 +5,7 @@ from __future__ import annotations
 from .gates import GateResult
 
 COMPLETION_POLICY_VERSION = 2
-ADVISORY_LENGTH_RATIO = 0.8
+ADVISORY_LENGTH_RATIO = 0.6
 STYLE_CODES = frozenset(
     {
         "paired-frame",

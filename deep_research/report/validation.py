@@ -137,6 +137,7 @@ def validate_body(
     preserve_valid: bool = False,
     uncited_sections: tuple[str, ...] = (),
     section_support: dict[str, str] | None = None,
+    allow_uncited: bool = False,
 ) -> ReportCheck:
     """复核正文的引用与数值。
 
@@ -221,9 +222,9 @@ def validate_body(
                     ("unsupported_number", _excerpt(content), f"数字 {shown} 在本节原文中找不到")
                 )
             continue
-        if not indices and not exempt:
+        if not indices and not exempt and not allow_uncited:
             exempt = only_math(content)
-        if not indices and exempt:
+        if not indices and (exempt or allow_uncited):
             absent, invalid = _computed_numbers(content, all_support)
             if invalid:
                 rejected.add(position)
@@ -286,12 +287,23 @@ def validate_body(
                 candidate, results, url_to_idx, fallback=False,
                 require_corroboration=require_corroboration,
                 uncited_sections=uncited_sections, section_support=section_support,
+                allow_uncited=allow_uncited,
             )
             if not checked.issues:
                 body, partial = candidate, True
         if not partial:
-            # Global or unlocalizable failures still use verified material only.
-            body = "## 已验证素材摘要\n\n" + "\n".join(dict.fromkeys(safe_statements))
+            if preserve_valid and rejected:
+                # Preserve the requested report shape after repair exhaustion;
+                # replace unsafe paragraphs with a neutral, explicit marker
+                # instead of collapsing the entire document into an excerpt.
+                body = "\n\n".join(
+                    "本段结论待进一步核验，当前不作确定性判断。"
+                    if index in rejected else paragraph
+                    for index, paragraph in enumerate(paragraphs)
+                )
+            else:
+                # Global or unlocalizable failures still use verified material only.
+                body = "## 已验证素材摘要\n\n" + "\n".join(dict.fromkeys(safe_statements))
     return ReportCheck(
         body, tuple(dict.fromkeys(issues)), evidence, tuple(dict.fromkeys(problems)), draft, partial
     )
@@ -313,6 +325,7 @@ def finalize_report(
     preserve_valid: bool = False,
     uncited_sections: tuple[str, ...] = (),
     section_support: dict[str, str] | None = None,
+    allow_uncited: bool = False,
 ) -> tuple[Report, ReportCheck]:
     """Apply the same checks after every terminal research role, including custom roles."""
     eligible = {
@@ -335,6 +348,7 @@ def finalize_report(
         preserve_valid=preserve_valid,
         uncited_sections=uncited_sections,
         section_support=section_support,
+        allow_uncited=allow_uncited,
     )
     included = [
         (url, index) for url, index in mapping.items() if index in check.evidence_by_citation

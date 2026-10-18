@@ -12,7 +12,7 @@ from .support_numbers import normalize_scientific_numbers
 _CITATIONS = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
 _CITATION_GROUP = re.compile(r"\[\d+(?:\s*[,，]\s*\d+)*\](?:\s*\[\d+(?:\s*[,，]\s*\d+)*\])*")
 _NAMES = re.compile(
-    r"(?<![A-Za-z0-9\\])(?:[A-Z]{2,}[A-Za-z0-9]*|[A-Z][a-z]{2,}[A-Za-z0-9]*)(?:\+\+)?"
+    r"(?<![A-Za-z0-9\\])(?:[A-Z]{2,}[A-Za-z0-9]*|[A-Z][A-Za-z0-9]{2,})(?:\+\+)?"
 )
 _ORDINARY = frozenset(
     "the this these those each all using from with without where when which while "
@@ -23,6 +23,11 @@ _ORDINARY = frozenset(
     "classification prediction evaluation comparison experimental experiment overall average "
     "total sample group method model network algorithm input output paragraph slide page".split()
 )
+_NAME_ALIASES = {
+    "hsi": ("hyperspectral imaging", "高光谱成像"),
+    "admm": ("alternating direction method of multipliers", "交替方向乘子法"),
+    "mcfa": ("multispectral color filter array", "多光谱彩色滤波阵列"),
+}
 
 
 def _names(text: str, evidence: list[dict[str, Any]]) -> set[str]:
@@ -38,7 +43,10 @@ def _names(text: str, evidence: list[dict[str, Any]]) -> set[str]:
 
 
 def _contains(text: str, name: str) -> bool:
-    return re.search(r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])", text) is not None
+    return any(
+        re.search(r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])", text) is not None
+        for alias in (name, *_NAME_ALIASES.get(name, ()))
+    )
 
 
 def _numeric_text(text: str) -> str:

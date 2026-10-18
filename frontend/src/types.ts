@@ -415,6 +415,27 @@ export interface RunCompletion {
   content_version?: string
   required_formats?: string[]
   gates?: GateResult[]
+  workflow?: WorkflowState
+}
+
+export type WorkflowPhaseStatus = 'pending' | 'active' | 'done' | 'needs_review' | 'blocked' | 'skipped'
+export type WorkflowAction = 'retrieve' | 'read' | 'rewrite' | 'render' | 'security' | 'review' | 'none'
+export interface WorkflowPhase {
+  id: string
+  label: string
+  status: WorkflowPhaseStatus
+  detail: string
+  issues: string[]
+  action: WorkflowAction
+}
+export interface WorkflowState {
+  version: number
+  current_phase: string
+  current_label: string
+  next_action: WorkflowAction
+  phases: WorkflowPhase[]
+  issue_counts: Record<string, number>
+  issue_total: number
 }
 
 export interface RunDetail extends RunSummary {
@@ -432,6 +453,7 @@ export interface RunDetail extends RunSummary {
   manifest: RunManifest | null
   metrics: QualityMetrics | null
   intent: IntentDecision | null
+  workflow?: WorkflowState | null
 }
 
 export type WorkflowRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'

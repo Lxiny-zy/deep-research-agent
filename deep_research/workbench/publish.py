@@ -811,7 +811,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         gates.append(revision)
     if template.key == "peerReview":
         gates.append(review_gate(extras))
-    citation_failed = any(
+    quality_failed = any(
         g.name
         in {
             "citation",
@@ -830,6 +830,15 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         and g.status == "fail"
         for g in gates
     )
+    # In the default repair-friendly mode, semantic/coverage failures still
+    # produce a complete report and remain visible in the acceptance record.
+    # Only hard evidence and processing failures prevent unsafe format output.
+    hard_failed = any(
+        g.name in {"citation", "source_processing"}
+        and g.status == "fail"
+        for g in gates
+    )
+    citation_failed = hard_failed or (policy.fail_on_quality and quality_failed)
 
     from ..report.service import requires_corroboration
     from .delivery_render import render_bundle
@@ -879,6 +888,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         "statistics": statistics,
         "base_gates": [gate.to_dict() for gate in gates],
         "blocked": citation_failed,
+        "hard_blocked": hard_failed,
         "fail_on_quality": policy.fail_on_quality,
         "generated_at": (created_at or datetime.now(UTC)).astimezone(UTC).isoformat(),
     }
