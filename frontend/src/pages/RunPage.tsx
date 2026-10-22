@@ -239,10 +239,12 @@ export default function RunPage() {
   }
 
   async function runWorkflowAction(action: import('../types').WorkflowAction) {
-    if (action !== 'rewrite' || !id || !deliverables.data?.content_version) return
+    const research = action === 'retrieve' || action === 'read'
+    const offer = research ? deliverables.data?.research_continuation : deliverables.data?.content_revision
+    if ((!research && action !== 'rewrite') || !id || !offer?.available || deliverables.data?.can_retry === false) return
     setWorkflowActionBusy(true)
     try {
-      const next = await reviseRunContent(id, deliverables.data.content_version)
+      const next = await reviseRunContent(id, offer.source_version, research ? 'research' : 'rewrite')
       navigate(`/runs/${encodeURIComponent(next.run_id)}`)
     } finally {
       setWorkflowActionBusy(false)

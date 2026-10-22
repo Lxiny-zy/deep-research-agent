@@ -169,7 +169,8 @@ async def test_worker_resumes_a_run_abandoned_by_a_crashed_worker() -> None:
     assert call["run_id"] == run_id
     # 接管：带 resume_execution，让 WorkflowEngine 跳过已完成节点。
     assert call["resume_execution"] is not None
-    assert call["resume_execution"].checkpoint == {"query": "crashed", "scratch": {}}
+    assert call["resume_execution"].checkpoint == crashed.execution.checkpoint
+    assert call["resume_execution"].checkpoint["query"] == "crashed"
     assert call["initial_execution"] is None
 
 

@@ -1644,7 +1644,16 @@ async def create_run(
         from .workbench.templates import get_template as _template_for_tier
 
         chosen_template = _template_for_tier(req.template)
-        tier_key = chosen_template.tier_default if chosen_template else None
+        from .workbench.tiers import default_tier
+
+        tier_key = (
+            default_tier(
+                chosen_template.tier_default,
+                req.strategy or chosen_template.default_strategy,
+            )
+            if chosen_template
+            else None
+        )
     if tier_key is not None:
         from .workbench.tiers import tier_overrides
 
@@ -1869,6 +1878,7 @@ async def create_run(
             dataset_source=dataset_source,
             demo_data=req.demo_data,
             strategy=req.strategy,
+            tier=settings.research_tier or None,
             # 契约里的质量策略会覆盖 settings.quality，这里必须带上用户的设置
             quality=settings.quality,
             request_is_document=False if req.attachments else None,

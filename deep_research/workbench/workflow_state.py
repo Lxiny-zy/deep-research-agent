@@ -94,8 +94,10 @@ def derive_workflow_state(
     extras = workbench.get("extras", {}) if isinstance(workbench, dict) else {}
     gates = [gate.to_dict() for gate in bundle.gates] if bundle is not None else []
     all_issues = list(dict.fromkeys([*(completion_issues or []), *_messages(gates)]))
-    by_action: dict[ActionKind, list[str]] = {kind: [] for kind in
-        ("retrieve", "read", "rewrite", "render", "security", "review", "none")}
+    by_action: dict[ActionKind, list[str]] = {
+        "retrieve": [], "read": [], "rewrite": [], "render": [],
+        "security": [], "review": [], "none": [],
+    }
     for issue in all_issues:
         by_action[classify_issue(issue)].append(issue)
 
@@ -114,6 +116,8 @@ def derive_workflow_state(
     ))
     evidence_gate = _gate(gates, "source_processing")
     evidence_status: PhaseStatus = "done" if results else "active"
+    if by_action["retrieve"] or by_action["read"]:
+        evidence_status = "needs_review"
     if evidence_gate and evidence_gate.get("status") == "fail":
         evidence_status = "blocked"
     phases.append(_phase(

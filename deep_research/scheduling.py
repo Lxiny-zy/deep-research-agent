@@ -26,6 +26,81 @@ AGING_SECONDS = 30.0
 _LIGHT_WORKFLOWS = frozenset({"qa", "paper_qa", "quick"})
 
 
+def _small_workbench_contract(execution: WorkflowRun, scratch: object) -> bool:
+    """Only canonical workflows with measured, bounded inputs qualify."""
+    if not isinstance(scratch, dict):
+        return False
+    from .workbench.contract import contract_from_scratch
+    from .workbench.templates import get_template
+    from .workflows import WORKFLOWS
+
+    contract = contract_from_scratch(scratch)
+    if contract is None:
+        return False
+    import re
+
+    request = contract.original_request
+    if re.search(r"系统综述|全面调研|全面研究|systematic\s+review", request, re.I):
+        return False
+    if any(int(match) > 10 for match in re.findall(
+        r"(\d+)\s*(?:篇|页|章|个(?:主题|问题)|papers?\b|pages?\b)", request, re.I
+    )):
+        return False
+    template = get_template(contract.template)
+    builtin = WORKFLOWS.get(execution.workflow_name)
+    if (
+        template is None or builtin is None
+        or execution.workflow_name not in template.strategies.values()
+        or execution.definition != builtin.model_dump(mode="json")
+        or "_execution_plan" in scratch
+        or scratch.get("project_id")
+        or contract.tier != "light" or contract.strategy == "deep"
+    ):
+        return False
+    attachments = scratch.get("attachments", [])
+    if not isinstance(attachments, list):
+        return False
+    chars = 0
+    pages = 0
+    for attachment in attachments:
+        if not isinstance(attachment, dict) or attachment.get("truncated"):
+            return False
+        chunks = attachment.get("chunks", [])
+        if not isinstance(chunks, list) or any(not isinstance(c, dict) for c in chunks):
+            return False
+        chars += sum(len(str(c.get("content", ""))) for c in chunks)
+        pages += max((c.get("page") or 0 for c in chunks), default=0)
+    if len(attachments) > 2 or chars > 20_000 or pages > 10:
+        return False
+    # Remote pointers have unknown size until intake, so cannot qualify.
+    if contract.papers or contract.dataset_tables or len(contract.requested_items) > 5:
+        return False
+    if contract.template == "dataAnalysis":
+        import csv
+        import io
+
+        data = contract.dataset_csv
+        if not data or len(data) > 100_000:
+            return False
+        delimiter = "\t" if "\t" in data.splitlines()[0] else ","
+        rows = list(csv.reader(io.StringIO(data), delimiter=delimiter))
+        return len(rows) <= 301 and max((len(row) for row in rows), default=0) <= 12
+    if contract.template in {"mindmap", "paperRead", "peerReview"}:
+        return bool(chars or contract.original_request.strip()) and (
+            len(contract.original_request) <= 12_000
+        )
+    if contract.template == "autoResearch" and contract.strategy == "quick":
+        settings = scratch.get(RUN_SETTINGS_KEY, {})
+        return (
+            isinstance(settings, dict)
+            and settings.get("max_sub_questions", 99) <= 3
+            and settings.get("results_per_search", 99) <= 4
+            and contract.min_citations <= 3
+            and len(contract.original_request) <= 1000
+        )
+    return False
+
+
 @dataclass(frozen=True)
 class ScheduleSpec:
     cost: int
@@ -63,18 +138,23 @@ def _has_explicit_execution_contract(execution: WorkflowRun, scratch: object) ->
     return builtin is None or execution.definition != builtin.model_dump(mode="json")
 
 
-def schedule_for_execution(execution: WorkflowRun | None) -> ScheduleSpec:
+def schedule_for_execution(execution: WorkflowRun | None, *, frozen: bool = True) -> ScheduleSpec:
     if execution is None:
         return ScheduleSpec(4, "heavy")
     scratch = execution.checkpoint.get("scratch", {})
+    saved = scratch.get("_dispatch_schedule") if isinstance(scratch, dict) else None
+    if frozen and isinstance(saved, dict):
+        cost, saved_kind = saved.get("cost"), saved.get("kind")
+        if type(cost) is int and 1 <= cost <= MAX_COST and saved_kind in {"light", "heavy"}:
+            return ScheduleSpec(cost, saved_kind)
     raw = scratch.get(RUN_SETTINGS_KEY, {}) if isinstance(scratch, dict) else {}
     settings = raw if isinstance(raw, dict) else {}
     tier = settings.get("research_tier")
     name = execution.workflow_name
     short_flow = (
-        name in _LIGHT_WORKFLOWS
+        ((name in _LIGHT_WORKFLOWS and not _has_explicit_execution_contract(execution, scratch))
+         or _small_workbench_contract(execution, scratch))
         and tier not in {"standard", "deep"}
-        and not _has_explicit_execution_contract(execution, scratch)
     )
     # A light research tier estimates less work; it does not make an open
     # research/review/full-paper pipeline a short interactive task. In particular,
@@ -179,6 +259,9 @@ def select_next(
 
     def rank(candidate: ScheduleCandidate) -> tuple[float, float, str]:
         aged = candidate.priority + max(0.0, now - candidate.ready_at) // AGING_SECONDS
+        # Prefer bounded short work within an identity for one aging quantum;
+        # older research still wins so continuous short arrivals cannot starve it.
+        aged += int(candidate.kind == "light")
         return -aged, candidate.ready_at, candidate.run_id
 
     for candidate in candidates:

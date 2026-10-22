@@ -7,9 +7,20 @@ token 仅作实际消耗统计，不限制研究或交付。
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypedDict
 
 Tier = Literal["light", "standard", "deep"]
+
+
+class TierOverrides(TypedDict, total=False):
+    max_sub_questions: int
+    max_rounds: int
+    results_per_search: int
+
+
+_TIER_FIELDS: tuple[Literal["max_sub_questions", "max_rounds", "results_per_search"], ...] = (
+    "max_sub_questions", "max_rounds", "results_per_search",
+)
 
 
 @dataclass(frozen=True)
@@ -47,7 +58,7 @@ def tier_overrides(
     *,
     explicit: dict[str, object],
     ceilings: dict[str, int | None],
-) -> dict[str, object]:
+) -> TierOverrides:
     """返回档位产生的参数覆盖；用户显式参数不被覆盖，部署上限不被突破。"""
     spec = TIERS.get(tier or "")
     if spec is None:
@@ -57,8 +68,9 @@ def tier_overrides(
         "max_rounds": spec.max_rounds,
         "results_per_search": spec.results_per_search,
     }
-    out: dict[str, object] = {}
-    for field, value in wanted.items():
+    out: TierOverrides = {}
+    for field in _TIER_FIELDS:
+        value = wanted[field]
         if explicit.get(field) is not None:
             continue
         ceiling = ceilings.get(field)
@@ -70,4 +82,13 @@ def public_tiers() -> list[dict[str, object]]:
     return [spec.to_public() for spec in TIERS.values()]
 
 
-__all__ = ["TIERS", "Tier", "TierSpec", "public_tiers", "tier_overrides"]
+__all__ = ["TIERS", "Tier", "TierSpec", "default_tier", "public_tiers", "tier_overrides"]
+
+
+def default_tier(template_default: Tier, strategy: str | None) -> Tier:
+    """Align implicit depth with retrieval; explicit caller settings still win."""
+    if strategy == "deep":
+        return "deep"
+    if strategy == "quick":
+        return "light"
+    return template_default

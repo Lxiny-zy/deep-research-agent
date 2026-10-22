@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,6 +10,7 @@ from starlette.requests import Request
 
 from deep_research.config import Settings
 from deep_research.workbench import qa_api
+from tests.test_qa_requests import api_application
 
 
 @pytest.mark.parametrize("disconnect", [False, True])
@@ -36,7 +36,7 @@ async def test_qa_deltas_arrive_before_final_answer(monkeypatch, disconnect) -> 
     request = Request(
         {
             "type": "http",
-            "app": SimpleNamespace(state=SimpleNamespace(qa_store=store, settings=Settings())),
+            "app": api_application(store, Settings()),
         }
     )
     response = await qa_api.ask_stream(
@@ -83,7 +83,7 @@ async def test_reconnect_replays_snapshot_and_shares_the_original_model_task(mon
     request = Request(
         {
             "type": "http",
-            "app": SimpleNamespace(state=SimpleNamespace(qa_store=store, settings=Settings())),
+            "app": api_application(store, Settings()),
         }
     )
     monkeypatch.setattr(api, "_check_rate_limit", AsyncMock())

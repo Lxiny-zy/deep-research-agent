@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from .call_budget import ModelCallBudget
 from .token_budget import TokenBudget
+from .verification_cache import VerificationCache
 
 # Stage 不再是封闭枚举：新增角色（Critic / FactChecker / Coder 等）可直接发自己的事件，
 # 无需改动本文件。下列常量是内置角色的约定值，仅供参考与类型提示，不构成校验白名单。
@@ -83,6 +84,7 @@ class Tracer:
         self.request_id: str | None = None
         self.conversation_id: str | None = None
         self.cache_scope = ""
+        self.verification_cache = VerificationCache()
         self.events: list[Event] = []
         self._subscribers: list[Callable[[Event], None]] = []
         # 实时 sink：接收含 token 在内的全部事件，供 run_stream / EventHub(SSE) 消费

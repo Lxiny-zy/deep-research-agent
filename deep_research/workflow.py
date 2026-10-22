@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import heapq
 import json
+import time
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -23,7 +24,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-from .execution_policy import COMMITTED_RESEARCH_PROGRESS_KEY, committed_research_progress
+from .execution_policy import (
+    COMMITTED_RESEARCH_PROGRESS_KEY,
+    TaskYield,
+    committed_research_progress,
+)
 from .guardrails import ClaimConsistencyVerifier, report_eligible, verify_claim_consistency
 from .models import ResearchResult, SubQuestion
 from .orchestration import (
@@ -587,6 +592,8 @@ class WorkflowEngine:
     ) -> None:
         self.ctx = ctx
         self._recover_transient = recover_transient
+        self._slice_started = time.monotonic()
+        self._yielded = False
         # 角色解析器：默认从代码注册表取；编排器可注入「先查 DB 角色卡片，再回退注册表」
         # 的解析器，实现数据驱动角色与内置角色统一调度。
         self._resolve = resolver or create
@@ -731,7 +738,9 @@ class WorkflowEngine:
                     _carry_replan_ledger(bb, candidate)
                     from .execution_policy import resource_busy
 
-                    if self._recover_transient and resource_busy(exc) is not None:
+                    if self._recover_transient and (
+                        resource_busy(exc) is not None or isinstance(exc, TaskYield)
+                    ):
                         raise
                     if attempt + 1 < step.max_attempts:
                         delay = step.retry_backoff * (2**attempt)
@@ -980,9 +989,22 @@ class WorkflowEngine:
                         raise
                 if is_root:
                     await self._checkpoint(wf, bb)
+                    quantum = self.ctx.settings.run_slice_seconds
+                    if (
+                        self._recover_transient and quantum > 0
+                        and index + 1 < len(wf.steps)
+                        and time.monotonic() - self._slice_started >= quantum
+                    ):
+                        self._yielded = True
+                        raise TaskYield("stage checkpoint saved")
             if is_root and self._require_report and bb.report is None:
                 raise RuntimeError("工作流结束但未生成报告")
             return bb
+        except TaskYield:
+            self._yielded = True
+            if is_root:
+                await self._checkpoint(wf, bb)
+            raise
         except asyncio.CancelledError:
             if is_root and self.runtime.run is not None:
                 self.runtime.finish(RunStatus.CANCELLED)
@@ -1007,6 +1029,7 @@ class WorkflowEngine:
                 self._resuming = False
             if (
                 is_root
+                and not self._yielded
                 and self.runtime.run is not None
                 and self.runtime.run.status == RunStatus.RUNNING
             ):
@@ -1368,7 +1391,13 @@ class WorkflowEngine:
                 while ready or running:
                     snapshots: dict[frozenset[str], tuple[Blackboard, dict[str, list[str]]]] = {}
                     dispatched: dict[int, list[str]] = {}
-                    while ready and len(running) < limit:
+                    quantum = self.ctx.settings.run_slice_seconds
+                    slice_due = (
+                        self._recover_transient and quantum > 0
+                        and time.monotonic() - self._slice_started >= quantum
+                        and bool(completed)
+                    )
+                    while ready and len(running) < limit and not slice_due:
                         _, node_id = heapq.heappop(ready)
                         scope = ancestors[node_id]
                         if scope not in snapshots:
@@ -1395,6 +1424,10 @@ class WorkflowEngine:
                                 "max_nodes": limit,
                             },
                         )
+                    if not running and ready:
+                        await self._checkpoint(wf, bb)
+                        self._yielded = True
+                        raise TaskYield("graph stage checkpoint saved")
                     await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
                     failure = collect_finished()
                     if failure is not None:
@@ -1413,6 +1446,9 @@ class WorkflowEngine:
             if is_root and self._require_report and bb.report is None:
                 raise RuntimeError("工作流结束但未生成报告")
             return bb
+        except TaskYield:
+            self._yielded = True
+            raise
         except asyncio.CancelledError:
             if is_root and self.runtime.run is not None:
                 self.runtime.finish(RunStatus.CANCELLED)
@@ -1437,6 +1473,7 @@ class WorkflowEngine:
                 self._resuming = False
             if (
                 is_root
+                and not self._yielded
                 and self.runtime.run is not None
                 and self.runtime.run.status == RunStatus.RUNNING
             ):
@@ -1595,56 +1632,125 @@ class WorkflowEngine:
             step.max_rounds if step.max_rounds is not None else self.ctx.settings.max_rounds
         )
         rounds = _policy_limit(bb, "max_rounds", configured_rounds)
-        # 每一轮都是独立的提交单元：本轮在副本上执行，成功才并回 bb。整个循环是
-        # 一个 step，若让异常逃出去，_execute_with_policy 会丢弃整块候选黑板——
-        # 前几轮已经补到、验证过的证据会连同失败的这一轮一起消失。因此轮内失败
-        # 一律视为「无法继续补洞」并停在最后一次成功提交的状态上。
-        for rnd in range(rounds):
+        from .agents.base import Blackboard
+        from .artifacts import ArtifactStore
+        from .blocking import run_blocking
+        from .execution_policy import transient_failure
+        from .reflection_progress import ReflectionProgress
+
+        progress = ReflectionProgress(self.ctx.artifact_store, {
+            "version": 1, "run_id": self.ctx.run_id,
+            "step": step.model_dump(mode="json"), "rounds": rounds,
+            "input": bb.model_dump(mode="json", exclude={"scratch"}),
+            "contract": bb.scratch.get("task_contract"),
+        }) if isinstance(self.ctx.artifact_store, ArtifactStore) and self.ctx.run_id else None
+        start = 0
+        pending = False
+        saved = await run_blocking(progress.load) if progress else None
+        if saved is not None:
+            try:
+                start = saved["round"]
+                if not 0 <= start <= rounds or type(saved["pending"]) is not bool:
+                    raise ValueError("invalid reflection state")
+                restored = Blackboard.model_validate(saved["blackboard"])
+                if restored.query != bb.query:
+                    raise ValueError("reflection query mismatch")
+                # Preserve current leases, metrics and recovery metadata.
+                for key in (
+                    ATTEMPTED_SCRATCH_KEY, "reflection_rounds", "pending_sub_questions",
+                    "_research_incomplete",
+                ):
+                    if key in restored.scratch:
+                        bb.scratch[key] = restored.scratch[key]
+                bb.results, bb.reflections = restored.results, restored.reflections
+                _carry_committed_research_progress(bb, restored)
+                pending = saved["pending"]
+                if saved.get("complete"):
+                    return
+            except Exception as exc:
+                raise ResearchProgressError("反思进度内容无法恢复") from exc
+
+        async def save(round_no: int, state: Blackboard, *, pending: bool = False,
+                       complete: bool = False) -> None:
+            if progress:
+                await run_blocking(progress.save, {
+                    "round": round_no, "pending": pending, "complete": complete,
+                    "blackboard": state.model_dump(mode="json"),
+                })
+
+        for rnd in range(start, rounds):
             if self._exhausted():
-                self.ctx.tracer.emit("ORCHESTRATOR", "info", "token 预算耗尽，停止反思补洞")
                 break
             before = _eligible_finding_count(bb)
             candidate = bb.model_copy(deep=True)
-            try:
-                candidate = await reflector.step(candidate, self.ctx)
-            except (LeaseLostError, ResearchProgressError):
-                raise  # 租约已被接管：本 worker 必须立刻停手，不能当作普通失败继续付费调用
-            except Exception as exc:
-                self.ctx.tracer.emit(
-                    "REFLECTOR", "error", f"第 {rnd + 1} 轮反思失败，保留已有证据进入综合：{exc}"
+            if not pending:
+                try:
+                    candidate = await reflector.step(candidate, self.ctx)
+                except (LeaseLostError, ResearchProgressError):
+                    raise
+                except Exception as exc:
+                    if self._recover_transient and transient_failure(exc):
+                        raise
+                    bb.scratch["_research_incomplete"] = [
+                        "反思阶段未完成，需继续研究后判断证据是否充分。"
+                    ]
+                    self.ctx.tracer.emit(
+                        "REFLECTOR",
+                        "error",
+                        f"第 {rnd + 1} 轮反思失败，保留已有证据进入综合：{exc}",
+                    )
+                    break
+                reflection = candidate.reflections[-1] if candidate.reflections else None
+                if (
+                    reflection is None
+                    or reflection.is_sufficient
+                    or not reflection.new_sub_questions
+                ):
+                    await save(rnd, candidate, complete=True)
+                    _commit_blackboard(bb, candidate)
+                    break
+                new_subs = _unseen_sub_questions(
+                    candidate, reflection.new_sub_questions, reflection.search_queries
                 )
-                break
-            reflection = candidate.reflections[-1] if candidate.reflections else None
-            if reflection is None or reflection.is_sufficient or not reflection.new_sub_questions:
-                _commit_blackboard(bb, candidate)
-                break
-            new_subs = _unseen_sub_questions(
-                candidate, reflection.new_sub_questions, reflection.search_queries
-            )
-            if not new_subs:
-                # 反思提出的全是已研究过的问题：再跑只会重复同样的检索与抽取。
-                _commit_blackboard(bb, candidate)
-                self.ctx.tracer.emit("REFLECTOR", "info", "新增子问题均已研究过，停止补洞")
-                break
+                if not new_subs:
+                    await save(rnd, candidate, complete=True)
+                    _commit_blackboard(bb, candidate)
+                    self.ctx.tracer.emit("REFLECTOR", "info", "未提出新的补洞方向，保留未满足项")
+                    break
+                candidate.scratch.setdefault("reflection_rounds", []).append(
+                    {"round": rnd + 1, "sub_questions": new_subs}
+                )
+                candidate.scratch["pending_sub_questions"] = new_subs
+                # Store the exact plan before research; recovery must not ask
+                # the model to invent a different set and lose saved results.
+                await save(rnd, candidate, pending=True)
             self.ctx.tracer.emit("ORCHESTRATOR", "round", f"第 {rnd + 1} 轮补洞")
-            # 记录补洞轮次，供编排器落库（origin="reflection"）；不影响无 repo 运行
-            candidate.scratch.setdefault("reflection_rounds", []).append(
-                {"round": rnd + 1, "sub_questions": new_subs}
-            )
-            # 把补洞子问题交给 researcher 增量研究（经 scratch 传递，不重研已做过的）
-            candidate.scratch["pending_sub_questions"] = new_subs
             try:
                 candidate = await researcher.step(candidate, self.ctx)
             except (LeaseLostError, ResearchProgressError):
                 raise
             except Exception as exc:
+                _carry_committed_research_progress(bb, candidate)
+                if self._recover_transient and transient_failure(exc):
+                    raise
+                bb.scratch["_research_incomplete"] = [
+                    "补洞检索未完成，需继续研究后判断证据是否充分。"
+                ]
+                self.ctx.tracer.emit("RESEARCHER", "error", f"补洞未完成，保留证据：{exc}")
+                break
+            gained = _eligible_finding_count(candidate) - before
+            await save(rnd + 1, candidate, complete=gained <= 0 or rnd + 1 == rounds)
+            _commit_blackboard(bb, candidate)
+            pending = False
+            if gained <= 0:
                 self.ctx.tracer.emit(
-                    "RESEARCHER", "error", f"第 {rnd + 1} 轮补洞研究失败，保留已有证据：{exc}"
+                    "ORCHESTRATOR", "info", "本轮未新增合格证据，保留缺口并停止补洞"
                 )
                 break
-            _commit_blackboard(bb, candidate)
-            gained = _eligible_finding_count(bb) - before
-            if gained <= 0:
-                # 收敛判据：这一轮没有带来任何可进报告的新证据，继续补洞的边际收益为零。
-                self.ctx.tracer.emit("ORCHESTRATOR", "info", "本轮未新增合格证据，停止补洞")
-                break
+            quantum = self.ctx.settings.run_slice_seconds
+            if (
+                progress is not None and self._recover_transient and quantum > 0
+                and rnd + 1 < rounds
+                and time.monotonic() - self._slice_started >= quantum
+            ):
+                raise TaskYield("reflection round saved")

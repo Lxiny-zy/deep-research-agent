@@ -30,6 +30,7 @@ async def run_fixture(
 ):
     settings.quality = {
         "max_revisions": max_revisions, "register_check": False, "require_limitations": False,
+        "research_min_citations": 1,  # Repair fixture contains one verified source.
     }
     if model_call_limit:
         settings.quality["task_max_model_calls"] = model_call_limit

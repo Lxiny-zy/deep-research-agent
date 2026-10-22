@@ -97,7 +97,7 @@ function ResearchComposer() {
   const usage = useUsage()
   // 档位默认跟随任务模板（精读/评审偏标准，综述偏深度）；用户手动选过后不再被模板覆盖。
   const [tierChoice, setTierChoice] = useState<TierKey | null>(null)
-  const tier: TierKey = tierChoice ?? activeTemplate?.tier_default ?? 'standard'
+  const tier: TierKey = tierChoice ?? (strategy === 'deep' ? 'deep' : strategy === 'quick' ? 'light' : activeTemplate?.tier_default ?? 'standard')
   // 数据分析的数据表：文件交给服务端解析，多工作表由用户选择；没有数据时只有
   // 用户主动勾选才用示例数据演示。
   const [dataset, setDataset] = useState<DatasetChoice | null>(null)

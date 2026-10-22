@@ -499,12 +499,20 @@ class SemanticEvidenceVerifier:
         from .llm import verification_generation_options
 
         user = self._prompt(group)
+        expected_indices = {index for index, _ in group}
+
+        def complete_indices(response: SemanticEvidenceDecisionList) -> bool:
+            indices = [decision.index for decision in response.decisions]
+            return len(indices) == len(group) and set(indices) == expected_indices
+
         try:
-            response = await llm.parse(
+            cached_parse = getattr(llm, "parse_verification", None)
+            response = await (cached_parse or llm.parse)(
                 system,
                 user,
                 SemanticEvidenceDecisionList,
                 temperature=0.0,
+                **({"cache_if": complete_indices} if cached_parse is not None else {}),
                 **verification_generation_options(llm),
             )
         except LeaseLostError:
@@ -613,14 +621,24 @@ class ClaimConsistencyVerifier:
 
         system = compose_system_prompt(self._SYSTEM, load_global_rules())
         options = verification_generation_options(llm)
-        signature = hashlib.sha256(
-            json.dumps([system, user, options], ensure_ascii=False, sort_keys=True).encode()
-        ).hexdigest()
+        evidence_context = [
+            (finding.verification.claim_id, finding.verification.source_content_hash)
+            for finding in eligible
+        ]
+        signature = hashlib.sha256(json.dumps(
+            [system, user, options, evidence_context], ensure_ascii=False, sort_keys=True,
+        ).encode()).hexdigest()
         try:
             # A later workflow step can check the same inventory again. Reuse
             # only this verifier's last successful model response; deterministic
             # source-independence checks below still use the current findings.
-            if (
+            cached_parse = getattr(llm, "parse_verification", None)
+            if cached_parse is not None:
+                response = await cached_parse(
+                    system, user, ClaimConsistencyReport, temperature=0.0,
+                    cache_context=evidence_context, **options,
+                )
+            elif (
                 self._last_request is not None
                 and self._last_request[0] is llm
                 and self._last_request[1] == signature

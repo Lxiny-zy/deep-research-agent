@@ -102,7 +102,10 @@ async def repair_completion(
         # Use the existing eligibility rules without changing the actual run's status.
         offered = revision_offer(
             replace(working, status="needs_review"),
-            [gate for gate in bundle.gates if gate.blocking_issues],
+            [gate for gate in bundle.gates if gate.blocking_issues and not (
+                gate.name == "citation" and gate.metrics.get("retrieval_shortfall", 0) > 0
+                and gate.metrics.get("used", 0) >= gate.metrics.get("available", 0)
+            )],
         )
         if content["status"] == "pending":
             if used >= limit:

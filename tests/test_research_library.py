@@ -93,7 +93,8 @@ class _ChunkSearchRepository:
         self.chunks = chunks
 
     async def search_chunks(
-        self, project_id: str, *, owner_id: str | None = None, limit: int = 5000
+        self, project_id: str, *, owner_id: str | None = None, limit: int = 5000,
+        query: str | None = None,
     ) -> list[SearchChunk]:
         if project_id != "project" or owner_id != "alice":
             return []

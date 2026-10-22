@@ -13,6 +13,16 @@ from deep_research.workbench.qa_requests import MemoryQaRequests, RequestConflic
 from deep_research.workbench.qa_store import InMemoryQaStore, SqlQaStore, message_payload
 
 
+def api_application(store, settings):
+    from deep_research.persistence.memory_repository import InMemoryRepository
+    from deep_research.persistence.sql_repository import SqlRepository
+
+    repo = SqlRepository(store._sm) if isinstance(store, SqlQaStore) else InMemoryRepository()
+    return SimpleNamespace(state=SimpleNamespace(
+        settings=settings, qa_store=store, repo=repo, qa_tasks=set(),
+    ))
+
+
 @pytest.fixture(params=["memory", "sql"])
 async def stores(request, tmp_path):
     engine = None
@@ -223,7 +233,7 @@ async def test_another_api_instance_receives_live_reasoning_resets_and_text_befo
     store, jobs, other, cid = stores
     other_store = SqlQaStore(store._sm) if isinstance(store, SqlQaStore) else store
     applications = [
-        SimpleNamespace(state=SimpleNamespace(settings=Settings(), qa_store=s))
+        api_application(s, Settings())
         for s in (store, other_store)
     ]
     requests = [Request({"type": "http", "app": app}) for app in applications]
@@ -360,7 +370,7 @@ async def test_api_turns_see_previous_completed_answers_and_duplicate_posts_reus
     request = Request(
         {
             "type": "http",
-            "app": SimpleNamespace(state=SimpleNamespace(settings=Settings(), qa_store=store)),
+            "app": api_application(store, Settings()),
         }
     )
     entered, release = asyncio.Event(), asyncio.Event()
@@ -381,15 +391,25 @@ async def test_api_turns_see_previous_completed_answers_and_duplicate_posts_reus
     monkeypatch.setattr(qa_jobs, "POLL_SECONDS", 0.01)
     first_body = qa_api.AskRequest(query="first", request_id="first-request")
     first = asyncio.create_task(qa_api.ask(cid, first_body, request))
-    await entered.wait()
-    duplicate = asyncio.create_task(qa_api.ask(cid, first_body, request))
-    second = asyncio.create_task(
-        qa_api.ask(cid, qa_api.AskRequest(query="second", request_id="second-request"), request)
-    )
-    release.set()
-    a, repeated, b = await asyncio.gather(first, duplicate, second)
-    assert a["id"] == repeated["id"] and a["position"] == 0 and b["position"] == 1
-    assert calls == [("first", []), ("second", [("first", "first-answer")])]
+    tasks = [first]
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        duplicate = asyncio.create_task(qa_api.ask(cid, first_body, request))
+        second = asyncio.create_task(
+            qa_api.ask(cid, qa_api.AskRequest(query="second", request_id="second-request"), request)
+        )
+        tasks.extend([duplicate, second])
+        release.set()
+        a, repeated, b = await asyncio.wait_for(asyncio.gather(*tasks), 3)
+        assert a["id"] == repeated["id"] and a["position"] == 0 and b["position"] == 1
+        assert calls == [("first", []), ("second", [("first", "first-answer")])]
+    finally:
+        release.set()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*request.app.state.qa_tasks, return_exceptions=True)
 
 
 def test_context_keeps_full_recent_answers_and_more_than_four_turns():
@@ -435,9 +455,7 @@ async def test_never_started_requests_resume_but_only_with_current_authorization
 
     store = InMemoryQaStore()
     cid = (await store.create("local", "resume")).id
-    app = SimpleNamespace(
-        state=SimpleNamespace(settings=Settings(api_key="", api_credentials=()), qa_store=store)
-    )
+    app = api_application(store, Settings(api_key="", api_credentials=()))
     request = Request({"type": "http", "app": app})
     calls = []
 

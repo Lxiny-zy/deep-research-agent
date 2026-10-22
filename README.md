@@ -199,7 +199,7 @@ DR_EXECUTION_MODE=worker docker compose --profile worker up --build --scale work
 可用 `DR_WORKER_MAX_ACTIVE_RUNS` 单独限制每个执行进程的容量，
 `MAX_INFLIGHT_RUNS_PER_IDENTITY` 限制单身份积压；`DR_RUN_SCHEDULING_POLICY=borrow`
 允许借用闲置的重任务份额。worker 模式下 API 的渲染服务仅提交和等待结果，
-独立 worker 负责渲染消费。配置语义与验证记录见[资源调度优化说明](docs/resource-scheduling-optimization-20261008.md)。
+独立 worker 负责渲染消费。配置语义与验证记录见[资源调度优化说明](docs/archive/2026-10/resource-scheduling-optimization-20261008.md)。
 
 - **谁执行**：inline 与 worker 都先把任务写入持久队列，inline 由 API 内嵌的队列消费者领取。
   领取按任务所有者公平轮转，入队时冻结任务成本和轻/重类别，执行上限 ≥ 2 时为轻任务保留

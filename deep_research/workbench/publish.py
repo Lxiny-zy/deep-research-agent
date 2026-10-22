@@ -29,6 +29,7 @@ from typing import Any, cast
 
 from ..persistence.repository import RunDetail
 from .contract import contract_from_scratch
+from .gate_classification import blocks_formal_export
 from .gates import (
     GateResult,
     Status,
@@ -249,7 +250,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 65,
+        "format_version": 66,
         "support_policy": SUPPORT_POLICY_VERSION,
         "mindmap_policy": MINDMAP_POLICY_VERSION,
         "query": detail.query,
@@ -642,6 +643,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     incomplete = processing_failures(detail.results)
     if incomplete:
         gates.append(GateResult("source_processing", "fail", incomplete))
+    research_incomplete = scratch.get("_research_incomplete")
+    if isinstance(research_incomplete, list) and research_incomplete:
+        gates.append(GateResult("research_progress", "warn", research_incomplete))
     gates.append(structure_gate(markdown, template, extras))
     from .coverage_review import coverage_issues as requested_coverage_issues
     from .coverage_review import effective_contract, material_bases, table_scope_issues
@@ -789,9 +793,20 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             )
         )
     if min_citations or citations:
-        gates.append(
-            citation_gate(markdown, citations, template, min_citations, document_keys=document_keys)
+        citations_checked = citation_gate(
+            markdown, citations, template, min_citations, document_keys=document_keys
         )
+        gates.append(citations_checked)
+        if contract is not None and contract.strategy in {"quick", "deep"}:
+            available = citations_checked.metrics["available"]
+            shortfall = max(0, contract.min_citations - available)
+            gates.append(GateResult(
+                "research_sufficiency", "warn" if shortfall else "pass",
+                [f"检索证据不足：已核验 {available} 个来源，任务要求 {contract.min_citations} 个"]
+                if shortfall else [],
+                {"required": contract.min_citations, "available": available,
+                 "retrieval_shortfall": shortfall},
+            ))
     if template.key not in {"slides", "mindmap"}:
         gates.append(
             scholarly_gate(
@@ -832,12 +847,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     )
     # In the default repair-friendly mode, semantic/coverage failures still
     # produce a complete report and remain visible in the acceptance record.
-    # Only hard evidence and processing failures prevent unsafe format output.
-    hard_failed = any(
-        g.name in {"citation", "source_processing"}
-        and g.status == "fail"
-        for g in gates
-    )
+    # Missing required material, invalid node evidence and unsupported statistical
+    # interpretations cannot become formal exports even in repair-friendly mode.
+    hard_failed = any(blocks_formal_export(g, template.key) for g in gates)
     citation_failed = hard_failed or (policy.fail_on_quality and quality_failed)
 
     from ..report.service import requires_corroboration

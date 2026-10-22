@@ -35,9 +35,9 @@ POLICY = QualityPolicy()
 # --------------------------------------------------------------------------- 策略
 
 
-def test_policy_defaults_and_survey_minimum_is_twenty() -> None:
-    assert POLICY.survey_min_citations == 20
-    assert POLICY.min_citations_for("litReview", 6) == 20
+def test_policy_defaults_and_survey_minimum_is_eight() -> None:
+    assert POLICY.survey_min_citations == 8
+    assert POLICY.min_citations_for("litReview", 6) == 8
     assert POLICY.min_citations_for("autoResearch", 3) == POLICY.research_min_citations
     # 其它任务沿用模板自己的下限
     assert POLICY.min_citations_for("peerReview", 1) == 1
@@ -241,7 +241,7 @@ def _results(count: int) -> list[ResearchResult]:
 
 def test_coverage_gaps_track_the_survey_minimum() -> None:
     gaps = coverage_gaps(_scratch("litReview", "高光谱重建综述"), _results(5), "q")
-    assert gaps.open and "至少 20 篇" in gaps.gaps[0]
+    assert gaps.open and "至少 8 篇" in gaps.gaps[0]
     assert "is_sufficient=true" in gap_prompt(gaps)
     closed = coverage_gaps(
         _scratch("litReview", "高光谱重建综述", survey_min_citations=5), _results(5), "q"
@@ -303,9 +303,9 @@ async def test_quality_policy_is_editable_through_config_api(monkeypatch, tmp_pa
         rejected = await client.put("/api/config", json={"quality": {"max_revisions": 99}})
         after = await client.get("/api/config")
     assert schema.status_code == 200 and any(
-        item["key"] == "survey_min_citations" and item["default"] == 20 for item in schema.json()
+        item["key"] == "survey_min_citations" and item["default"] == 8 for item in schema.json()
     )
-    assert before.json()["quality"]["survey_min_citations"] == 20
+    assert before.json()["quality"]["survey_min_citations"] == 8
     assert updated.status_code == 200, updated.text
     assert updated.json()["quality"]["survey_min_citations"] == 30
     # 部分更新不会清掉其它字段

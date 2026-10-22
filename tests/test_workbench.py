@@ -412,8 +412,10 @@ async def test_writer_revises_draft_that_fails_quality_checks(settings) -> None:
     assert by_name["revision"].metrics["revisions"] >= 1
     # 已引用全部可用来源；检索目标不足仍明确提示，但不再制造无法满足的写作要求。
     assert by_name["citation"].status == "pass"
-    assert by_name["citation"].metrics["retrieval_shortfall"] == 19
-    assert any("20" in issue for issue in by_name["citation"].issues)
+    assert by_name["citation"].metrics["retrieval_shortfall"] == 7
+    assert any("8" in issue for issue in by_name["citation"].issues)
+    assert by_name["research_sufficiency"].status == "warn"
+    assert by_name["research_sufficiency"].metrics["retrieval_shortfall"] == 7
 
 
 async def test_rejected_writer_draft_is_retained_for_repair_without_repeating_research(

@@ -22,6 +22,16 @@ const firstPage = {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })))
   mocks.fetchReaderPdf.mockResolvedValue(new ArrayBuffer(4))
   mocks.quoteRects.mockResolvedValue([{ x: 10, y: 200, width: 60, height: 11.5 }])
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
@@ -34,7 +44,10 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-it('places the cited text in the middle of the PDF scroll viewport', async () => {
+it.each([false, true])('centers cited text with reduced motion set to %s', async (reducedMotion) => {
+  vi.mocked(window.matchMedia).mockReturnValue({
+    ...window.matchMedia('(prefers-reduced-motion: reduce)'), matches: reducedMotion,
+  })
   const page = {
     ...firstPage,
     getTextContent: async () => ({
@@ -56,7 +69,9 @@ it('places the cited text in the middle of the PDF scroll viewport', async () =>
   scroller.scrollTo = vi.fn()
   rerender(<PdfViewer runId="r" documentId="d" highlight={{ quote: 'target quote', token: 1 }} />)
   await waitFor(() =>
-    expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 705.75, behavior: 'smooth' }),
+    expect(scroller.scrollTo).toHaveBeenCalledWith({
+      top: 705.75, behavior: reducedMotion ? 'instant' : 'smooth',
+    }),
   )
   expect(mocks.quoteRects.mock.calls[0][2]).toEqual([{ page: 0, item: 0, start: 0, end: 12 }])
   expect(screen.getByText('已定位完整引文 · 第 1 页')).toBeInTheDocument()
@@ -112,6 +127,9 @@ it('keeps the chosen quotation centered when the evidence drawer changes the PDF
   await screen.findByText('共 3 页')
   const scroller = container.querySelector('.pdf-scroller') as HTMLDivElement
   const holders = [...container.querySelectorAll<HTMLDivElement>('.pdf-page')]
+  // jsdom does not resolve the application's spacing variables. Supply the
+  // actual horizontal padding so fit zoom uses a measured content viewport.
+  scroller.style.padding = '0 16px'
   let width = 632
   let height = 600
   Object.defineProperty(scroller, 'clientWidth', { get: () => width })

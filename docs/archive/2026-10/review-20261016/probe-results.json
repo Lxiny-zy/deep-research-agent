@@ -1,0 +1,40 @@
+{
+  "template_retry": {
+    "first": 202,
+    "retry": 409,
+    "retry_body": {
+      "detail": {
+        "code": "idempotency_conflict",
+        "message": "Idempotency-Key 已用于不同的请求"
+      }
+    }
+  },
+  "quota_delete": {
+    "before": {
+      "runs": 1,
+      "tokens": 123
+    },
+    "after": {
+      "runs": 0,
+      "tokens": 0
+    }
+  },
+  "truncated_metrics": {
+    "stored_events": 2001,
+    "detail_events": 2000,
+    "blocked_sources": 0,
+    "expected": 7
+  },
+  "deleted_task_conversation": {
+    "still_readable": true,
+    "in_regular_list": false
+  },
+  "conversation_pagination": {
+    "sql_list": 200,
+    "memory_list": 201
+  },
+  "project_lookup": {
+    "sql_statements": 1,
+    "has_where": false
+  }
+}

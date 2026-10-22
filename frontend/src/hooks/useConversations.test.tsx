@@ -16,7 +16,7 @@ it('loads older conversations using the last timestamp and id', async () => {
   await waitFor(() => expect(result.current.data).toHaveLength(30))
   expect(result.current.hasNextPage).toBe(true)
   await act(() => result.current.fetchNextPage())
-  expect(result.current.data).toHaveLength(31)
+  await waitFor(() => expect(result.current.data).toHaveLength(31))
   expect(listConversations).toHaveBeenLastCalledWith(expect.any(AbortSignal), 'r', {
     limit: 30, before: '2026-01-01T00:00:00Z|c29',
   })

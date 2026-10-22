@@ -22,6 +22,7 @@ SETTING_FIELDS = (
     "max_run_seconds",
     "run_timeout_profiles",
     "research_tier",
+    "run_slice_seconds",
     "max_task_seconds",
     "max_run_recoveries",
     "max_no_progress_attempts",

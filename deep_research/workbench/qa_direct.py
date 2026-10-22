@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from ..blocking import run_blocking
 from ..call_budget import ModelCallBudget, ModelCallLimitExceeded
 from ..context_budget import ContextBudget
 from ..guardrails import SourcePolicy
@@ -250,8 +251,11 @@ async def answer_direct_question(
             "\n【本轮范围】附加检索未全部完成；只回答已有材料，"
             "不声称已查全或已得到最新结论。"
         )
-    passages, context, citations, partial = _select_passages(
-        sources, query, origins, budget, system, dynamic,
+    # Ranking/token estimation scans potentially long papers. Keep this CPU
+    # work off the API event loop so unrelated questions and cancellation stay
+    # responsive; the existing bounded worker pool limits concurrent work.
+    passages, context, citations, partial = await run_blocking(
+        _select_passages, sources, query, origins, budget, system, dynamic,
     )
     thoughts.append({
         "tool": "source_context", "input": "", "observation": (

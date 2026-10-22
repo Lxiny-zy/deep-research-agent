@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from pathlib import Path
@@ -284,6 +285,33 @@ class _LazyOwnedLLM(LLM):
             system, user, schema, temperature=temperature, retries=retries, **options
         )
 
+    async def parse_verification(
+        self,
+        system: str,
+        user: str,
+        schema: type[ModelT],
+        *,
+        temperature: float = 0.0,
+        reasoning_effort: str | None = None,
+        cache_if: Callable[[ModelT], bool] | None = None,
+        cache_context: Any = None,
+    ) -> ModelT:
+        value = self._get()
+        options: VerificationGenerationOptions = (
+            {"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}
+        )
+        if not isinstance(value, LLM):
+            return await value.parse(system, user, schema, temperature=temperature, **options)
+        # RunContext may bind an injected proxy to a new run's tracer. Keep the
+        # original client untouched and retain the realized role attribution.
+        if "tracer" in self.__dict__:
+            value = copy.copy(value)
+            value.tracer = self.tracer
+        return await value.parse_verification(
+            system, user, schema, temperature=temperature,
+            cache_if=cache_if, cache_context=cache_context, **options,
+        )
+
     async def stream(
         self, system: str, user: str, *, temperature: float = 0.4
     ) -> AsyncIterator[str]:
@@ -539,8 +567,11 @@ class DeepResearchAgent:
 
     async def _run_once(self, query: str) -> Report:
         from .provider_limits import coordinator_for, provider_scope
+        from .scheduling import schedule_for_execution
 
-        with provider_scope(coordinator_for(self.repo, self.settings)):
+        execution = self._resume_execution or self._initial_execution
+        interactive = schedule_for_execution(execution).kind == "light"
+        with provider_scope(coordinator_for(self.repo, self.settings), interactive=interactive):
             return await self._execute_once(query)
 
     async def _execute_once(self, query: str) -> Report:

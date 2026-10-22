@@ -19,6 +19,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -235,6 +236,18 @@ def _fsync_directory(path: Path) -> None:
             os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _atomic_replace(source: str, destination: Path) -> None:
+    """Allow short Windows reader/scanner holds without hiding persistent failures."""
+    for attempt in range(6):
+        try:
+            os.replace(source, _native_fs_path(destination))
+            return
+        except PermissionError as exc:
+            if os.name != "nt" or getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 5:
+                raise
+            time.sleep(0.01 * 2**attempt)
 
 
 @dataclass(frozen=True, slots=True)
@@ -596,7 +609,7 @@ class ArtifactStore:
         base = _contained(self._root_for(safe_area), self.workspace_root)
         path = _contained(base / safe_slug / safe_stage, base)
         if create:
-            path.mkdir(parents=True, exist_ok=True)
+            Path(_native_fs_path(path)).mkdir(parents=True, exist_ok=True)
             # Re-check after mkdir in case a pre-existing component was a symlink.
             path = _contained(path, base)
         return path
@@ -706,7 +719,7 @@ class ArtifactStore:
     def read_control_text(self, name: str | os.PathLike[str], *, encoding: str = "utf-8") -> str:
         """Read a private control file after applying the same containment check."""
 
-        return self.control_path(name).read_text(encoding=encoding)
+        return Path(_native_fs_path(self.control_path(name))).read_text(encoding=encoding)
 
     def write_control_json(
         self,
@@ -738,7 +751,7 @@ class ArtifactStore:
     def load_manifest(self, slug: str) -> ArtifactManifest:
         path = self.manifest_path(slug)
         try:
-            payload = path.read_text(encoding="utf-8")
+            payload = Path(_native_fs_path(path)).read_text(encoding="utf-8")
         except FileNotFoundError:
             return self._new_manifest(_validate_component(slug, label="slug"))
         except OSError as exc:
@@ -797,14 +810,16 @@ class ArtifactStore:
         min_bytes: int,
         max_bytes: int | None,
     ) -> tuple[int, str]:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        Path(_native_fs_path(path.parent)).mkdir(parents=True, exist_ok=True)
         _contained(path.parent, self.workspace_root)
         fd: int | None = None
         temp_name: str | None = None
         digest = hashlib.sha256()
         size = 0
         try:
-            fd, temp_name = tempfile.mkstemp(prefix=".dra-", suffix=".tmp", dir=str(path.parent))
+            fd, temp_name = tempfile.mkstemp(
+                prefix=".dra-", suffix=".tmp", dir=_native_fs_path(path.parent)
+            )
             with os.fdopen(fd, "wb") as handle:
                 fd = None
                 for chunk in chunks:
@@ -826,22 +841,7 @@ class ArtifactStore:
             # Re-check the destination and parent after writing.  This catches
             # a stage symlink introduced while the temporary file was open.
             _contained(path.parent, self.workspace_root)
-            if os.name == "nt":
-                # MoveFileEx (used by os.replace) can reject a long destination
-                # even when Python successfully created the adjacent temp file.
-                # Containment was checked above on canonical paths; only the
-                # final OS call needs Windows' extended path spelling.
-                def native(value: str | Path) -> str:
-                    name = os.path.abspath(value)
-                    if name.startswith("\\\\?\\"):
-                        return name
-                    if name.startswith("\\\\"):
-                        return "\\\\?\\UNC\\" + name[2:]
-                    return "\\\\?\\" + name
-
-                os.replace(native(temp_name), native(path))
-            else:
-                os.replace(temp_name, path)
+            _atomic_replace(temp_name, path)
             temp_name = None
             _fsync_directory(path.parent)
             return size, digest.hexdigest()
@@ -864,19 +864,21 @@ class ArtifactStore:
     def _atomic_write_json_unlocked(self, path: Path, payload: str) -> None:
         # Manifest files live below the workspace's framework directory, not in
         # either artifact tree, but still receive the same atomic-write treatment.
-        path.parent.mkdir(parents=True, exist_ok=True)
+        Path(_native_fs_path(path.parent)).mkdir(parents=True, exist_ok=True)
         _contained(path.parent, self._manifest_base)
         fd: int | None = None
         temp_name: str | None = None
         try:
-            fd, temp_name = tempfile.mkstemp(prefix=".dra-", suffix=".tmp", dir=str(path.parent))
+            fd, temp_name = tempfile.mkstemp(
+                prefix=".dra-", suffix=".tmp", dir=_native_fs_path(path.parent)
+            )
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
                 fd = None
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
             _contained(path.parent, self._manifest_base)
-            os.replace(temp_name, path)
+            _atomic_replace(temp_name, path)
             temp_name = None
             _fsync_directory(path.parent)
         finally:
@@ -1066,7 +1068,7 @@ class ArtifactStore:
             max_size=max_size,
         )
         path = self.path_for(safe_slug, safe_stage, safe_name, area=safe_area, create=True)
-        if path.exists() and not overwrite:
+        if not overwrite and Path(_native_fs_path(path)).exists():
             raise FileExistsError(path)
         _json_value(dict(metadata or {}), field_name="artifact metadata")
 
@@ -1144,7 +1146,7 @@ class ArtifactStore:
         safe_name = _validate_relative_name(name)
         safe_area = self._area(area, root=root, kind=kind, destination=destination, output=output)
         path = self.path_for(safe_slug, safe_stage, safe_name, area=safe_area, create=False)
-        if not path.is_file():
+        if not Path(_native_fs_path(path)).is_file():
             raise FileNotFoundError(path)
         if self.max_total_bytes is not None:
             from .artifact_lifecycle import reconcile_quota
@@ -1161,7 +1163,7 @@ class ArtifactStore:
         )
         digest = hashlib.sha256()
         size = 0
-        with path.open("rb") as handle:
+        with Path(_native_fs_path(path)).open("rb") as handle:
             while chunk := handle.read(1024 * 1024):
                 size += len(chunk)
                 if effective_max is not None and size > effective_max:
@@ -1199,7 +1201,7 @@ class ArtifactStore:
         source: str | os.PathLike[str],
         **kwargs: Any,
     ) -> ArtifactRecord:
-        source_path = Path(source).expanduser()
+        source_path = Path(_native_fs_path(Path(source).expanduser()))
         if not source_path.is_file():
             raise FileNotFoundError(source_path)
         with source_path.open("rb") as handle:
@@ -1252,7 +1254,7 @@ class ArtifactStore:
         try:
             digest = hashlib.sha256()
             size = 0
-            with path.open("rb") as handle:
+            with Path(_native_fs_path(path)).open("rb") as handle:
                 while chunk := handle.read(1024 * 1024):
                     size += len(chunk)
                     digest.update(chunk)
@@ -1304,7 +1306,7 @@ class ArtifactStore:
         path = self.absolute_path(artifact)
         with quota_allowance(self.quota_root, self.max_total_bytes, path):
             try:
-                path.unlink()
+                Path(_native_fs_path(path)).unlink()
             except FileNotFoundError:
                 if not missing_ok:
                     raise

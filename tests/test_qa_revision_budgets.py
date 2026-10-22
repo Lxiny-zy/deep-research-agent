@@ -162,22 +162,30 @@ async def test_revision_cycle_stops_when_returning_to_a_checked_draft(settings):
 
 
 @pytest.mark.parametrize("missing_citation", [True, False])
-async def test_default_total_cap_allows_only_one_local_edit(settings, missing_citation):
+@pytest.mark.parametrize("total_limit", [None, 1])
+async def test_total_cap_limits_combined_local_edits(settings, missing_citation, total_limit):
     # Larger category allowances must not implicitly expand the whole-turn cap.
     settings.quality = {"max_revisions": 4, "qa_claim_max_revisions": 4}
+    if total_limit is not None:
+        settings.quality["qa_max_revisions"] = total_limit
+    limit = 2 if total_limit is None else total_limit
     model = BudgetWriter(missing_citation=missing_citation, repair_on=2)
     result = await ask(settings, model)
-    assert result.fallback and model.stream_calls == 1
+    assert result.fallback is (limit - int(missing_citation) < 2)
+    assert model.stream_calls == 1
     assert model.citation_edits == int(missing_citation)
-    assert model.local_edits == int(not missing_citation)
+    assert model.local_edits == limit - int(missing_citation)
     attempts = [row for row in result.thoughts if row.get("category")]
-    assert len(attempts) == 1
+    assert len(attempts) == limit
     assert attempts[0]["category"] == ("mechanical" if missing_citation else "claim")
-    assert attempts[0]["total_attempts"] == 1 and attempts[0]["total_limit"] == 1
-    stop = next(row for row in result.thoughts if "本轮自动修订上限" in row["observation"])
-    assert stop["total_attempts"] == 1 and stop["total_limit"] == 1
+    assert attempts[-1]["total_attempts"] == limit and attempts[-1]["total_limit"] == limit
     assert BAD not in result.answer
-    assert "不能据此证明因果关系" in result.answer
+    if result.fallback:
+        stop = next(row for row in result.thoughts if "本轮自动修订上限" in row["observation"])
+        assert stop["total_attempts"] == limit and stop["total_limit"] == limit
+        assert "不能据此证明因果关系" in result.answer
+    else:
+        assert result.answer == GOOD
 
 
 async def test_zero_total_cap_disables_all_edits_despite_category_allowances(settings):

@@ -23,7 +23,9 @@ def legacy_database(tmp_path):
         conn.execute(sa.text(
             "INSERT INTO qa_conversation VALUES ('orphan','alice','deleted-task','private')"
         ))
-        conn.execute(sa.text("INSERT INTO qa_message VALUES ('m','orphan','done','original answer')"))
+        conn.execute(sa.text(
+            "INSERT INTO qa_message VALUES ('m','orphan','done','original answer')"
+        ))
     return engine, f"sqlite+aiosqlite:///{path.as_posix()}"
 
 

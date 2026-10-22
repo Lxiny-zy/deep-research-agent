@@ -407,7 +407,7 @@ def render_bundle(
             {file.name: file.data for file in files if file.format not in {"png", "xlsx"}}
         )
     )
-    from .gate_classification import blocking_status, classify_gates
+    from .gate_classification import blocking_status, blocks_formal_export, classify_gates
     from .templates import get_template
 
     template = get_template(context["template"])
@@ -437,8 +437,8 @@ def render_bundle(
                 # fail-closed behaviour.
                 hard_format_gate = gate.name in {
                     "citation", "source_processing", "markdown", "consistency",
-                    "territory", "render", "file_readability",
-                }
+                    "territory", "render", "file_readability", "slides",
+                } or blocks_formal_export(gate, context["template"])
                 status = "fail" if gate.status == "fail" and (
                     context["fail_on_quality"] or hard_format_gate
                 ) else "warn"

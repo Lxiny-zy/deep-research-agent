@@ -2369,6 +2369,12 @@ export interface components {
         };
         /** ContentRevisionRequest */
         ContentRevisionRequest: {
+            /**
+             * Mode
+             * @default rewrite
+             * @enum {string}
+             */
+            mode?: "rewrite" | "research";
             /** Request Id */
             request_id: string;
             /** Source Version */
@@ -4369,6 +4375,10 @@ export interface components {
              * @default 0
              */
             total_tokens?: number;
+            /** Workflow */
+            workflow?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * RunManifest

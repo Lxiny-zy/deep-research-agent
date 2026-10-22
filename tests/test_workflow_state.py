@@ -19,7 +19,9 @@ def test_state_routes_issues_to_actions_and_keeps_phase_order():
         _detail(), None, ["缺少章节：结论", "证据覆盖不足：缺少方法正文"]
     )
     assert state["version"] == 1
-    assert state["current_phase"] == "acceptance"
+    assert state["current_phase"] == "evidence"
+    assert state["next_action"] == "retrieve"
+    assert state["phases"][-1]["issues"] == ["缺少章节：结论", "证据覆盖不足：缺少方法正文"]
     assert state["issue_counts"]["rewrite"] == 1
     assert state["issue_counts"]["retrieve"] == 1
     assert [phase["id"] for phase in state["phases"]] == [

@@ -18,6 +18,10 @@ from .provider_limits import ProviderBusyError
 COMMITTED_RESEARCH_PROGRESS_KEY = "_committed_research_progress"
 
 
+class TaskYield(RuntimeError):
+    """A durable stage boundary voluntarily releases the execution slot."""
+
+
 def committed_research_progress(scratch: dict[str, Any]) -> dict[str, str]:
     """Read fingerprints written only after durable subquestion results are verified."""
     raw = scratch.get(COMMITTED_RESEARCH_PROGRESS_KEY)
@@ -93,7 +97,8 @@ def transient_failure(error: BaseException) -> bool:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(
-            current, (ProviderBusyError, TimeoutError, httpx.TransportError, APIConnectionError)
+            current,
+            (TaskYield, ProviderBusyError, TimeoutError, httpx.TransportError, APIConnectionError),
         ):
             return True
         if isinstance(current, APIStatusError):
@@ -117,7 +122,8 @@ def resource_busy(error: BaseException) -> ProviderBusyError | None:
 
 
 def resource_wait_checkpoint(
-    execution: WorkflowRun, settings: Settings, *, retry_after: float, elapsed: float
+    execution: WorkflowRun, settings: Settings, *, retry_after: float, elapsed: float,
+    reason: str = "provider_busy",
 ) -> tuple[WorkflowRun | None, str]:
     """Release a run's slot without charging a failure or no-progress attempt."""
     updated = execution.model_copy(deep=True)
@@ -129,7 +135,7 @@ def resource_wait_checkpoint(
     previous = scratch.get("_resource_wait", {})
     scratch["_resource_wait"] = {
         "count": int(previous.get("count", 0)) + 1,
-        "reason": "provider_busy",
+        "reason": reason,
         "scheduled_at": now,
         # Wake at the final deadline to settle the task without another request.
         "not_before": min(deadline, now + max(1, retry_after)),
@@ -137,7 +143,8 @@ def resource_wait_checkpoint(
     }
     scratch["_attempt_elapsed_origin"] = elapsed
     scratch.setdefault("_runtime_metrics", {})["elapsed"] = elapsed
-    scratch.pop("_deadline_at", None)
+    if reason != "stage_yield":
+        scratch.pop("_deadline_at", None)
     return updated, "scheduled"
 
 

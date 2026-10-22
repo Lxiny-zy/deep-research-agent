@@ -973,6 +973,7 @@ export interface DeliverableItem {
 
 export interface DeliverableRegistry {
   content_revision?: { available: boolean; reason: string; source_version: string }
+  research_continuation?: { available: boolean; reason: string; source_version: string; gaps?: string[]; action?: 'retrieve' | 'read' }
   content_version?: string
   input_version?: string
   parent_version?: string

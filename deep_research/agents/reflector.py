@@ -95,19 +95,21 @@ class Reflector:
         reflection = await self.llm.parse(
             leaf_system_prompt(self.system, self.global_rules), user, Reflection
         )
-        if reflection.is_sufficient and coverage is not None and coverage.open:
-            # 程序计算的交付缺口优先于模型的「已充分」判断：模型常在证据远未达到
-            # 引用下限时就宣布充分。只有给出了新子问题才能继续补洞；否则保持原判，
-            # 由写作与交付门如实报告缺口（不会因此陷入空转）。
-            if reflection.new_sub_questions:
-                reflection.is_sufficient = False
-                reflection.gaps = [*coverage.gaps, *reflection.gaps]
-                self.tracer.emit(
-                    "REFLECTOR",
-                    "info",
-                    "交付要求尚未满足，继续补洞：" + "；".join(coverage.gaps),
-                    data={"coverage": coverage.metrics},
-                )
+        if coverage is not None and coverage.open:
+            reflection.is_sufficient = False
+            reflection.gaps = list(dict.fromkeys([*coverage.gaps, *reflection.gaps]))
+            if not reflection.new_sub_questions:
+                # A missing rescue plan must not turn a measured gap into
+                # success. Supply bounded, gap-directed work for this round.
+                reflection.new_sub_questions = [
+                    f"{query}：补充证据以解决{gap}" for gap in coverage.gaps[:3]
+                ]
+            self.tracer.emit(
+                "REFLECTOR",
+                "info",
+                "交付要求尚未满足，继续补洞：" + "；".join(coverage.gaps),
+                data={"coverage": coverage.metrics},
+            )
         if reflection.is_sufficient:
             self.tracer.emit("REFLECTOR", "info", "证据充分，进入综合")
         else:

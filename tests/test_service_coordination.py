@@ -343,6 +343,73 @@ async def test_provider_wait_queue_is_bounded_and_cancellation_releases_it(sessi
         await coordinator.release(lease)
 
 
+async def test_interactive_provider_calls_overtake_queued_research_without_starving_it(sessions):
+    from deep_research.provider_limits import provider_scope
+
+    coordinator = ProviderCoordinator(sessions, concurrency=1, wait_seconds=5)
+    key = fingerprint("https://provider.example", "interactive-fairness")
+    occupied = await coordinator.acquire(key)
+    order = []
+
+    async def request(name, interactive):
+        with provider_scope(coordinator, interactive=interactive):
+            async with coordinator.slot(key):
+                order.append(name)
+
+    tasks = []
+    try:
+        for name, interactive in [("research", False), *[(f"qa{i}", True) for i in range(5)]]:
+            tasks.append(asyncio.create_task(request(name, interactive)))
+            for _ in range(200):
+                gate = coordinator._gates().get(coordinator._gate_key(key))
+                if gate is not None and gate.waiters == len(tasks):
+                    break
+                await asyncio.sleep(0.001)
+            else:
+                pytest.fail("request did not enter provider queue")
+        assert order == []  # Already-running work is never preempted.
+        await coordinator.release(occupied)
+        await asyncio.wait_for(asyncio.gather(*tasks), 5)
+        assert order == ["qa0", "qa1", "qa2", "research", "qa3", "qa4"]
+        async with sessions() as session:
+            assert not list(await session.scalars(select(ProviderLeaseRow)))
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await coordinator.release(occupied)
+
+
+async def test_cancelled_priority_waiter_does_not_block_research(sessions):
+    from deep_research.provider_limits import provider_scope
+
+    coordinator = ProviderCoordinator(sessions, concurrency=1, wait_seconds=5)
+    key = fingerprint("https://provider.example", "interactive-cancel")
+    occupied = await coordinator.acquire(key)
+    background = asyncio.create_task(coordinator.acquire(key))
+    with provider_scope(coordinator, interactive=True):
+        foreground = asyncio.create_task(coordinator.acquire(key))
+    try:
+        for _ in range(200):
+            gate = coordinator._gates().get(coordinator._gate_key(key))
+            if gate is not None and gate.waiters == 2:
+                break
+            await asyncio.sleep(0.001)
+        else:
+            pytest.fail("requests did not enter provider queue")
+        foreground.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await foreground
+        await coordinator.release(occupied)
+        lease = await asyncio.wait_for(background, 2)
+        await coordinator.release(lease)
+    finally:
+        foreground.cancel()
+        background.cancel()
+        await asyncio.gather(foreground, background, return_exceptions=True)
+        await coordinator.release(occupied)
+
+
 @pytest.mark.asyncio
 async def test_provider_cooldown_request_quota_and_cancellation(sessions):
     first = ProviderCoordinator(sessions, concurrency=1, requests_per_minute=1)

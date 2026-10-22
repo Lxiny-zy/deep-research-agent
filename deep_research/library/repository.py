@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy import case, func, literal, select
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from ..persistence import orm
 from .models import Corpus, LibrarySource, Project, ProjectSummary, SearchChunk, SourceChunk
@@ -392,7 +393,7 @@ class SqlLibraryRepository:
                 # limit. This portable candidate stage avoids excluding old
                 # papers solely because 5,000 newer chunks exist. The existing
                 # BM25/diversity stage still performs the final ranking.
-                score = literal(0)
+                score: ColumnElement[int] = literal(0)
                 for term in terms:
                     score = score + case(
                         (func.lower(orm.LibrarySourceRow.title).contains(term, autoescape=True), 3),

@@ -444,6 +444,7 @@ class RunExecutor:
         provider_token = current_coordinator.set(coordinator_for(ctx.repo, settings))
 
         async def defer_failure(error: BaseException) -> tuple[bool, str]:
+            from .execution_policy import TaskYield
             if lease_owner is None or not transient_failure(error):
                 return False, "execution_failed"
             detail = await ctx.repo.get_run(run_id)
@@ -459,9 +460,12 @@ class RunExecutor:
                 agent.tracer.elapsed if agent is not None else max(0, detail.elapsed, saved_elapsed)
             )
             busy = resource_busy(error)
-            if busy is not None:
+            yielding = isinstance(error, TaskYield)
+            if busy is not None or yielding:
                 updated, reason = resource_wait_checkpoint(
-                    detail.orchestration, settings, retry_after=busy.retry_after, elapsed=elapsed
+                    detail.orchestration, settings,
+                    retry_after=busy.retry_after if busy is not None else 1,
+                    elapsed=elapsed, reason="stage_yield" if yielding else "provider_busy",
                 )
             else:
                 updated, reason = recovery_checkpoint(
@@ -479,7 +483,7 @@ class RunExecutor:
                     total_tokens=agent.tracer.total_tokens,
                     estimated_tokens=agent.tracer.estimated_tokens,
                 )
-            state_key = "_resource_wait" if busy is not None else "_recovery"
+            state_key = "_resource_wait" if busy is not None or yielding else "_recovery"
             recovery = updated.checkpoint["scratch"][state_key]
             if not await ctx.repo.defer_run(
                 run_id, updated, lease_owner=lease_owner, not_before=recovery["not_before"]
@@ -492,7 +496,8 @@ class RunExecutor:
                 stage="ORCHESTRATOR",
                 type="info",
                 message=(
-                    "正在等待供应商资源，已保存进度并安排继续执行"
+                    "阶段结果已保存，已让出执行机会，稍后继续"
+                    if yielding else "正在等待供应商资源，已保存进度并安排继续执行"
                     if busy is not None
                     else "本次尝试中断，已保存进度并安排自动恢复"
                 ),

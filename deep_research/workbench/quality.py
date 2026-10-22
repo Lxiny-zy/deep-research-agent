@@ -311,7 +311,7 @@ def writer_policy(value: Any, scratch: dict[str, Any]) -> QualityPolicy:
         contract = contract_from_scratch(scratch)
         if (
             contract is not None and contract.template not in {"paperRead", "peerReview"}
-            and (contract.tier == "light" or contract.strategy == "quick")
+            and contract.tier == "light"
         ):
             policy = policy.model_copy(update={"max_revisions": min(1, policy.max_revisions)})
     metadata = scratch.get("_active_step_metadata")

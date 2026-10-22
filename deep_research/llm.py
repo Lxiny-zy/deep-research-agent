@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager, suppress
 from typing import Any, TypedDict, TypeVar
 from uuid import uuid4
@@ -26,7 +26,7 @@ from .context_budget import ContextBudget, TokenEstimator, estimate_tokens, obse
 from .model_calls import ModelCall, ModelOperation, current_operation, model_operation
 from .observability import Tracer
 from .prompting import prompt_messages, structured_system_prompt
-from .provider_limits import provider_request
+from .provider_limits import current_interactive, provider_request
 from .security import provider_http_client
 from .token_budget import TokenBudget, TokenReservation
 
@@ -236,6 +236,7 @@ class LLM:
             "role": operation.role,
             "schema": operation.schema,
             "model": self.model,
+            "workload": "interactive" if current_interactive.get() else "research",
         }
         acquired = False
         self.tracer.emit(
@@ -355,6 +356,58 @@ class LLM:
                     operation.retry_reason = "schema_retry"
                     user = user + f"\n\n（上次输出无法解析：{e}；请只输出合法 JSON）"
         raise ValueError(f"结构化输出解析失败：{err}")
+
+    async def parse_verification(
+        self,
+        system: str,
+        user: str,
+        schema: type[T],
+        *,
+        temperature: float = 0.0,
+        reasoning_effort: str | None = None,
+        cache_if: Callable[[T], bool] | None = None,
+        cache_context: Any = None,
+    ) -> T:
+        """Reuse an identical check, including across role-bound client copies.
+
+        Explicit opt-in: ordinary generation, extraction and repair calls never
+        use this cache. Role clients share only their current run's Tracer.
+        """
+        from .generation_policy import generation_options, schema_task
+
+        task = schema_task(schema.__name__)
+        options = (
+            {"reasoning_effort": reasoning_effort} if reasoning_effort is not None
+            else generation_options(self, task) if task is not None else {}
+        )
+        key = hashlib.sha256(json.dumps(
+            {
+                "scope": [self.tracer.run_id, self.tracer.request_id, self.tracer.cache_scope],
+                "evidence_context": cache_context,
+                "endpoint": str(getattr(self.client, "base_url", self.settings.llm_base_url)),
+                "model": self.model,
+                "credential": hashlib.sha256(self.settings.llm_api_key.encode()).hexdigest(),
+                "role": self._call_role, "schema": schema.model_json_schema(),
+                "system": system, "user": str(user),
+                "prefix": getattr(user, "prefix", None),
+                "generation": self._generation_options(temperature, **options),
+                "output_limit": self.settings.llm_max_output_tokens,
+                "context_window": self.context_window_tokens,
+            }, ensure_ascii=False, sort_keys=True,
+        ).encode()).hexdigest()
+
+        async def compute() -> T:
+            result = await self.parse(
+                system, user, schema, temperature=temperature, **options
+            )
+            return result
+
+        def on_hit() -> None:
+            self.tracer.emit("LLM", "info", "复用本轮相同证据的核验结果", data={
+                "verification_reuse": {"role": self._call_role, "schema": schema.__name__},
+            })
+
+        return await self.tracer.verification_cache.get_or_compute(key, compute, on_hit, cache_if)
 
     async def stream(
         self, system: str, user: str, *, temperature: float = 0.4

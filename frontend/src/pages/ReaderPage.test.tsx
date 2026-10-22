@@ -42,7 +42,7 @@ const documents: ReaderDocument[] = [
     note: '该链接没有可直接显示的 PDF，可在原网站查看',
   },
 ]
-const reader: RunReader = { run_id: 'r1', status: 'done', documents, has_report: true }
+const reader: RunReader = { run_id: 'r1', status: 'done', documents, has_report: true, can_ask: true }
 
 const answered: QaConversation = {
   id: 'c1',
@@ -324,7 +324,7 @@ describe('ReaderPage', () => {
     const pendingTurn = screen.getByTestId('qa-streaming-answer').closest('.qa-turn')
     expect(pendingTurn?.querySelectorAll('.qa-avatar')).toHaveLength(1)
     expect(pendingTurn?.querySelector('.brand-ring')).toHaveClass('is-active')
-    expect(screen.getByText('接口返回的思考片段')).toBeVisible()
+    expect(await screen.findByText('接口返回的思考片段')).toBeVisible()
     expect(screen.queryByText('已核验的精读结论')).not.toBeInTheDocument()
     mocks.getConversation.mockResolvedValue({ ...answered, messages: [final] })
     finish(final)
@@ -333,8 +333,11 @@ describe('ReaderPage', () => {
     expect(savedTurn?.querySelectorAll('.qa-avatar')).toHaveLength(1)
     expect(savedTurn?.querySelector('.brand-ring')).not.toHaveClass('is-active')
     await waitFor(() => expect(screen.queryByTestId('qa-streaming-answer')).not.toBeInTheDocument())
-    expect(screen.getByText('接口返回的思考片段')).toBeInTheDocument()
     expect(screen.getByText('思考过程').closest('details')).not.toHaveAttribute('open')
+    expect(screen.queryByText('接口返回的思考片段')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('思考过程'))
+    fireEvent.click(screen.getByText('模型调用 1'))
+    expect(screen.getByText('接口返回的思考片段')).toBeVisible()
   })
 
   it('does not allow questions until the paper intake run is done', async () => {
@@ -382,8 +385,8 @@ describe('ReaderPage', () => {
     await act(async () => { finish(answered.messages[0]) })
   })
 
-  it('disables questions when a completed run has no usable paper sources', async () => {
-    mocks.getReader.mockResolvedValue({ ...reader, can_ask: false })
+  it.each([false, undefined])('disables questions without explicit paper readiness: %s', async (canAsk) => {
+    mocks.getReader.mockResolvedValue({ ...reader, can_ask: canAsk })
     renderPage()
     await screen.findByTestId('pdf')
     expect(screen.getByLabelText('向这篇论文提问')).toBeDisabled()

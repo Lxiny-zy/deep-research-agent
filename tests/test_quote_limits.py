@@ -46,9 +46,9 @@ def test_raw_source_span_cannot_hide_excess_length_behind_normalization():
 
 
 def test_quote_limit_is_configurable_and_exposed_by_quality_settings():
-    assert QualityPolicy().max_evidence_quote_chars == 600
+    assert QualityPolicy().max_evidence_quote_chars == 800
     field = next(item for item in quality_schema() if item["key"] == "max_evidence_quote_chars")
-    assert field["default"] == 600 and field["unit"] == "字"
+    assert field["default"] == 800 and field["unit"] == "字"
     assert (
         EvidenceVerifier(max_quote_chars=1000)
         .verify(finding(quote="x" * 700).as_unverified(), Source(url=URL, content="x" * 700))

@@ -45,12 +45,36 @@ def fingerprint(endpoint: str, secret: str) -> str:
     return hashlib.sha256(f"{origin}\0{secret}".encode()).hexdigest()
 
 
+@dataclass(eq=False)
+class _ProviderWaiter:
+    interactive: bool
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+
+
 @dataclass
 class _WaitGate:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     changed: asyncio.Event = field(default_factory=asyncio.Event)
     waiters: int = 0
     retry_at: float = 0
+    pending: list[_ProviderWaiter] = field(default_factory=list)
+    interactive_streak: int = 0
+
+    def head(self) -> _ProviderWaiter | None:
+        if not self.pending:
+            return None
+        foreground = next((item for item in self.pending if item.interactive), None)
+        background = next((item for item in self.pending if not item.interactive), None)
+        # Prefer a user waiting for an answer, but keep research making progress
+        # even when new interactive requests continuously arrive.
+        if foreground is not None and (background is None or self.interactive_streak < 3):
+            return foreground
+        return background
+
+    def wake_head(self) -> None:
+        if (head := self.head()) is not None:
+            head.ready.set()
+        self.changed.set()
 
 
 # One poller per loop, connection pool and credential, including coordinators
@@ -88,24 +112,33 @@ class ProviderCoordinator:
         gate = gates.setdefault(key, _WaitGate())
         if gate.waiters >= self.max_waiters:
             raise ProviderBusyError(1)
+        waiter = _ProviderWaiter(current_interactive.get())
+        previous = gate.head()
+        gate.pending.append(waiter)
         gate.waiters += 1
+        if gate.head() is not previous:
+            gate.wake_head()
         try:
-            # Followers wait in a bounded, cancellation-safe FIFO, not on SQL.
-            queued = gate.lock.locked()
-            if queued:
-                try:
-                    await asyncio.wait_for(gate.lock.acquire(), max(0, deadline - time.monotonic()))
-                except TimeoutError:
-                    raise ProviderBusyError(1) from None
-            else:
-                await gate.lock.acquire()
-            try:
-                if queued and time.monotonic() >= deadline:
+            backoff = 0.25
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     raise ProviderBusyError(1)
                 if gate.retry_at > time.monotonic():
                     raise ProviderBusyError(gate.retry_at - time.monotonic())
-                backoff = 0.25
-                while True:
+                if gate.head() is not waiter:
+                    waiter.ready.clear()
+                    try:
+                        await asyncio.wait_for(waiter.ready.wait(), remaining)
+                    except TimeoutError:
+                        raise ProviderBusyError(1) from None
+                    continue
+                # Only the selected waiter probes SQL. Release this short lock
+                # between probes so a newly queued interactive turn can go next;
+                # never preempt an already-running provider request.
+                async with gate.lock:
+                    if gate.head() is not waiter:
+                        continue
                     gate.changed.clear()
                     try:
                         lease, earliest = await self._try_acquire(identity)
@@ -113,25 +146,29 @@ class ProviderCoordinator:
                         gate.retry_at = time.monotonic() + exc.retry_after
                         raise
                     if lease is not None:
+                        gate.interactive_streak = (
+                            gate.interactive_streak + 1 if waiter.interactive else 0
+                        )
                         return lease
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise ProviderBusyError(1)
-                    delay = min(remaining, 2.0, backoff * random.uniform(0.8, 1.2))
-                    if earliest is not None:
-                        delay = min(delay, max(0.01, earliest - time.time()))
-                    try:
-                        await asyncio.wait_for(gate.changed.wait(), delay)
-                    except TimeoutError:
-                        if time.monotonic() >= deadline:
-                            raise ProviderBusyError(1) from None
-                    backoff = min(2.0, backoff * 2)
-            finally:
-                gate.lock.release()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ProviderBusyError(1)
+                delay = min(remaining, 2.0, backoff * random.uniform(0.8, 1.2))
+                if earliest is not None:
+                    delay = min(delay, max(0.01, earliest - time.time()))
+                try:
+                    await asyncio.wait_for(gate.changed.wait(), delay)
+                except TimeoutError:
+                    if time.monotonic() >= deadline:
+                        raise ProviderBusyError(1) from None
+                backoff = min(2.0, backoff * 2)
         finally:
+            gate.pending.remove(waiter)
             gate.waiters -= 1
             if not gate.waiters:
                 gates.pop(key, None)
+            else:
+                gate.wake_head()
 
     def _check_state(self, state: ProviderStateRow | None, now: float) -> None:
         if state is None:
@@ -299,6 +336,7 @@ class ProviderCoordinator:
 current_coordinator: ContextVar[ProviderCoordinator | None] = ContextVar(
     "provider_coordinator", default=None
 )
+current_interactive: ContextVar[bool] = ContextVar("provider_interactive", default=False)
 
 
 def coordinator_for(repo: Any, settings: Settings) -> ProviderCoordinator | None:
@@ -315,15 +353,18 @@ def coordinator_for(repo: Any, settings: Settings) -> ProviderCoordinator | None
 
 
 @contextmanager
-def provider_scope(coordinator: ProviderCoordinator | None) -> Iterator[None]:
-    if coordinator is None:
-        yield
-        return
-    token = current_coordinator.set(coordinator)
+def provider_scope(
+    coordinator: ProviderCoordinator | None, *, interactive: bool | None = None
+) -> Iterator[None]:
+    token = current_coordinator.set(coordinator) if coordinator is not None else None
+    priority_token = current_interactive.set(interactive) if interactive is not None else None
     try:
         yield
     finally:
-        current_coordinator.reset(token)
+        if priority_token is not None:
+            current_interactive.reset(priority_token)
+        if token is not None:
+            current_coordinator.reset(token)
 
 
 @asynccontextmanager

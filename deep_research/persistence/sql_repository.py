@@ -248,7 +248,11 @@ class SqlRepository:
                     )
                     if int(count or 0) >= daily_run_quota:
                         raise RunQuotaExceeded("今日研究额度已用完，将于 UTC 零点重置")
-                schedule = schedule_for_execution(execution)
+                schedule = schedule_for_execution(execution, frozen=False)
+                if execution is not None and execution.checkpoint:
+                    execution.checkpoint.setdefault("scratch", {})["_dispatch_schedule"] = {
+                        "kind": schedule.kind, "cost": schedule.cost,
+                    }
                 await self._check_capacity(
                     s, max_inflight, owner_id=owner_id, identity_maximum=max_inflight_per_identity
                 )

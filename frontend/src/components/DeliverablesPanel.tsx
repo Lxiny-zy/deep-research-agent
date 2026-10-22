@@ -250,6 +250,20 @@ export default function DeliverablesPanel({
     }
   }
 
+  async function continueResearch() {
+    if (!registry?.research_continuation?.available || busy !== null) return
+    setBusy('research-continuation')
+    setActionError(null)
+    try {
+      const next = await reviseRunContent(runId, registry.research_continuation.source_version, 'research')
+      onRevisionCreated?.(next.run_id)
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : '继续研究失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function retry(format: string) {
     if (!registry?.content_version || actionBusy) return
     await operation.start({ kind: 'retry', version: registry.content_version, format })
@@ -365,6 +379,16 @@ export default function DeliverablesPanel({
             </div>
           </div>
         )}
+      {registry.research_continuation?.available && registry.can_retry !== false && onRevisionCreated && (
+        <div className="run-validation-note">
+          <div>
+            <p>当前证据仍有缺口，可继续补充检索或补读原文。</p>
+            <button type="button" className="btn btn-secondary" disabled={actionBusy} onClick={continueResearch}>
+              {busy === 'research-continuation' ? '正在继续研究…' : '继续补充研究'}
+            </button>
+          </div>
+        </div>
+      )}
       {registry.status === 'fail' &&
         registry.content_revision &&
         !registry.content_revision.available && (

@@ -19,6 +19,18 @@ STYLE_CODES = frozenset(
 )
 
 
+def blocks_formal_export(gate: GateResult, template: str) -> bool:
+    """Evidence failures keep diagnostic source/data but cannot publish formal files."""
+    return gate.status == "fail" and (
+        gate.name in {
+            "citation", "source_processing", "node_evidence", "provided_corpus", "review_coverage",
+            "evidence_quote_length", "user_requirements", "task_content",
+            "table_evidence", "table_scope",
+        }
+        or (template == "dataAnalysis" and gate.name == "prose_evidence")
+    )
+
+
 def _messages(value: object) -> list[str] | None:
     return (
         list(value) if isinstance(value, list) and all(isinstance(x, str) for x in value) else None

@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import json
 import os
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -24,7 +25,7 @@ from uuid import uuid4
 
 import sqlalchemy as sa
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy.engine import Connection, CursorResult, make_url
+from sqlalchemy.engine import Connection, CursorResult, RowMapping, make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 # Same advisory lock as the normal PostgreSQL migration entry point.
@@ -50,7 +51,10 @@ async def preflight(
         raise ValueError("DATABASE_URL is invalid") from exc
     if url.get_backend_name() == "sqlite":
         database = url.database
-        if not database or database == ":memory:" or not Path(database).is_file():
+        if (
+            not database or database == ":memory:"
+            or not await asyncio.to_thread(Path(database).is_file)
+        ):
             raise ValueError("Select an existing SQLite database; no database will be created")
     # Do not use make_engine: its SQLite startup PRAGMAs can mutate the DB.
     engine = create_async_engine(database_url)
@@ -80,7 +84,8 @@ async def preflight(
                     sa.select(sa.func.count()).select_from(chats).where(orphan)
                 )
                 rows = (await connection.execute(
-                    sa.select(chats.c.id, chats.c.run_id).where(orphan).order_by(chats.c.id).limit(200),
+                    sa.select(chats.c.id, chats.c.run_id)
+                    .where(orphan).order_by(chats.c.id).limit(200),
                 )).mappings().all()
                 return {
                     "orphan_count": count, "conversations": [dict(row) for row in rows],
@@ -118,8 +123,10 @@ async def preflight(
                     sa.select(messages).where(messages.c.conversation_id == cid),
                 )).mappings().all()
                 if any(item.get("status") in {"pending", "running"} for item in child_rows):
-                    raise ValueError("Selected conversation has active requests; resolve them first")
-                event_rows = []
+                    raise ValueError(
+                        "Selected conversation has active requests; resolve them first"
+                    )
+                event_rows: Sequence[RowMapping] = []
                 if events is not None and messages is not None:
                     event_rows = (await connection.execute(sa.select(events).where(
                         events.c.message_id.in_(sa.select(messages.c.id).where(

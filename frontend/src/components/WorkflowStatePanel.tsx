@@ -46,10 +46,10 @@ export default function WorkflowStatePanel({
       {state.issue_total > 0 && (
         <div className="workflow-state-foot">
           <p className="workflow-state-hint">当前有 {state.issue_total} 项待处理，问题已按补证据、修订正文、格式和安全类型分流。</p>
-          {state.next_action === 'rewrite' && onAction && (
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => onAction('rewrite')} disabled={busy}>
+          {['rewrite', 'retrieve', 'read'].includes(state.next_action) && onAction && (
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => onAction(state.next_action)} disabled={busy}>
               <AppIcon name="edit" size={13} aria-hidden="true" />
-              {busy ? '正在创建修订…' : '继续修订正文'}
+              {busy ? '正在创建后续任务…' : state.next_action === 'rewrite' ? '继续修订正文' : '继续补充研究'}
             </button>
           )}
         </div>

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -103,6 +105,41 @@ async def test_long_dialogue_does_not_start_a_summary_model(settings):
         paper_sources=await FakeSearch().search("paper"),
     )
     assert len(model.prompts) == 1
+
+
+async def test_paper_preparation_does_not_block_an_unrelated_question(settings, monkeypatch):
+    from deep_research.workbench import qa_direct
+
+    entered, release = threading.Event(), threading.Event()
+    event_loop_thread = threading.get_ident()
+    select = qa_direct._select_passages
+
+    def slow_selection(*args, **kwargs):
+        assert threading.get_ident() != event_loop_thread
+        entered.set()
+        assert release.wait(3), "test did not release paper preparation"
+        return select(*args, **kwargs)
+
+    monkeypatch.setattr(qa_direct, "_select_passages", slow_selection)
+    model = AnswerOnly()
+    ctx = RunContext(llm=model, search_tool=FakeSearch(), tracer=Tracer(), settings=settings)
+    paper = asyncio.create_task(answer_question(
+        "解释这篇论文的方法", history=[], ctx=ctx,
+        paper_sources=[Source(
+            url="https://paper.test/method", title="Paper", content="A reconstruction method.",
+        )],
+    ))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        quick = await asyncio.wait_for(answer_question(
+            "解释一下什么是矩阵", history=[], ctx=ctx,
+        ), 1)
+        assert quick.answer and not paper.done()
+        release.set()
+        assert (await asyncio.wait_for(paper, 2)).answer
+    finally:
+        release.set()
+        await asyncio.gather(paper, return_exceptions=True)
 
 
 async def test_optional_search_uses_context_without_a_query_planning_model(settings):

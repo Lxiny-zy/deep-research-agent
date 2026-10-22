@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -169,17 +170,21 @@ def test_size_and_mime_limits_fail_before_commit(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize("long_path", [False, True])
 def test_atomic_replacement_keeps_previous_file_on_replace_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, long_path: bool,
 ) -> None:
-    store = ArtifactStore(tmp_path)
+    from deep_research.artifacts import _native_fs_path
+
+    root = tmp_path / ("a" * 90) / ("b" * 90) / ("c" * 90) if long_path else tmp_path
+    store = ArtifactStore(root)
     first = store.write_text("topic", "research", "notes.txt", "old")
-    target = store.absolute_path(first)
+    target = Path(_native_fs_path(store.absolute_path(first)))
 
     original_replace = os.replace
 
     def fail_replace(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
-        if Path(destination) == target:
+        if os.path.samefile(destination, target):
             raise OSError("simulated atomic rename failure")
         original_replace(source, destination)
 
@@ -188,7 +193,82 @@ def test_atomic_replacement_keeps_previous_file_on_replace_failure(
         store.write_text("topic", "research", "notes.txt", "new")
 
     assert target.read_text(encoding="utf-8") == "old"
+    assert store.verify_manifest("topic")
     assert not [item for item in target.parent.iterdir() if item.name.endswith(".tmp")]
+
+
+def test_long_paths_preserve_manifest_control_files_and_overwrite_guard(tmp_path: Path) -> None:
+    # Exercise paths beyond Windows MAX_PATH without modifying system settings.
+    store = ArtifactStore(tmp_path / ("a" * 90) / ("b" * 90) / ("c" * 90))
+    record = store.write_text("topic", "research", "notes.txt", "old")
+    assert len(str(store.absolute_path(record))) > 260
+    assert store.read_text(record) == "old"
+    assert store.verify_manifest("topic")
+    assert store.register("topic", "research", "notes.txt").sha256 == record.sha256
+    with pytest.raises(FileExistsError):
+        store.write_text("topic", "research", "notes.txt", "new", overwrite=False)
+    replacement = store.write_text("topic", "research", "notes.txt", "new")
+    assert store.read_text(replacement) == "new"
+    assert store.verify_manifest("topic")
+    store.write_control_text("checkpoints/state.json", '{"round": 1}')
+    assert store.read_control_text("checkpoints/state.json") == '{"round": 1}'
+    assert store.remove(replacement)
+    assert store.list_artifacts("topic") == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows sharing semantics")
+def test_atomic_replacement_recovers_after_reader_releases_file(tmp_path, monkeypatch):
+    store = ArtifactStore(tmp_path)
+    record = store.write_text("topic", "research", "notes.txt", "old")
+    original_replace = os.replace
+    busy = threading.Event()
+    errors = []
+
+    def observe(source, destination):
+        try:
+            original_replace(source, destination)
+        except PermissionError:
+            busy.set()
+            raise
+
+    def write():
+        try:
+            store.write_text("topic", "research", "notes.txt", "new")
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(os, "replace", observe)
+    reader = store.open(record)
+    writer = threading.Thread(target=write)
+    try:
+        writer.start()
+        assert busy.wait(2), "The held reader must exercise a sharing failure"
+    finally:
+        reader.close()
+        writer.join(3)
+    assert not writer.is_alive() and not errors
+    assert store.read_text(record) == "new"
+    assert store.verify_manifest("topic")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows sharing retry limit")
+def test_persistent_replace_denial_is_bounded_and_preserves_old_file(tmp_path, monkeypatch):
+    store = ArtifactStore(tmp_path)
+    record = store.write_text("topic", "research", "notes.txt", "old")
+    denial = PermissionError(13, "persistent denial")
+    denial.winerror = 5
+    attempts = []
+
+    def deny(source, destination):
+        attempts.append(destination)
+        raise denial
+
+    monkeypatch.setattr(os, "replace", deny)
+    with pytest.raises(PermissionError, match="persistent denial") as raised:
+        store.write_text("topic", "research", "notes.txt", "new")
+    assert raised.value is denial and len(attempts) == 6
+    assert store.read_text(record) == "old" and store.verify_manifest("topic")
+    assert not list(store.absolute_path(record).parent.glob(".dra-*.tmp"))
 
 
 def test_register_and_verify_detect_tampering(tmp_path: Path) -> None:

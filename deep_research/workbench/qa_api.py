@@ -266,7 +266,13 @@ async def _prepare_turn(cid: str, body: AskRequest, request: Request) -> Any:
         raise HTTPException(404, "conversation not found") from exc
 
     async def execute(**callbacks: Any) -> dict[str, Any]:
-        return await _answer(cid, body, request, **callbacks)
+        from ..provider_limits import coordinator_for, provider_scope
+
+        # Also applies to pending turns recovered outside an HTTP request.
+        with provider_scope(
+            coordinator_for(request.app.state.repo, request.app.state.settings), interactive=True
+        ):
+            return await _answer(cid, body, request, **callbacks)
 
     from ..execution_policy import attempt_seconds
 

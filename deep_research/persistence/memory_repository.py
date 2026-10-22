@@ -139,7 +139,11 @@ class InMemoryRepository:
         self._check_capacity(
             max_inflight, owner_id=owner_id, identity_maximum=max_inflight_per_identity
         )
-        schedule = schedule_for_execution(execution)
+        schedule = schedule_for_execution(execution, frozen=False)
+        if execution is not None and execution.checkpoint:
+            execution.checkpoint.setdefault("scratch", {})["_dispatch_schedule"] = {
+                "kind": schedule.kind, "cost": schedule.cost,
+            }
         run_id = str(uuid4())
         record = _RunRecord(
             id=run_id,

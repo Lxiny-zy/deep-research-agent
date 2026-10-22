@@ -87,7 +87,7 @@
 | style_gate（品牌基底出处） | ⚙ | 不适用：不复制品牌基底，DOCX 统一由 `_base_document` 生成 |
 | manuscript_qa 学术文体（成对套话、口语化、半角标点、生产过程叙述、超长句） | ✅ | `workbench/scholarly.check_register` + `gates.scholarly_gate`（`test_register_*`） |
 | 摘要禁引用 / 引用堆砌 / 重复来源 / 孤儿与凑数 | ✅ | `scholarly.check_abstract / check_clusters / check_sources`；只统计正文实际引用的来源 |
-| 独立综述引用下限（参考默认 100） | ⚙ | 默认 20，可在「设置 → 交付质量」调整；不足时继续补洞，仍不足如实报「部分完成」 |
+| 独立综述引用下限（参考默认 100） | ⚙ | 默认 8，可在「设置 → 交付质量」调整；不足时继续补洞，仍不足如实报「部分完成」 |
 | 时效覆盖（点名年份必须有该年份文献） | ✅ | `scholarly.check_recency` + `coverage.coverage_gaps` 驱动补洞 |
 | 检测即返工（remediation loop） | ✅ | `workbench/revision.write_with_revisions`：问题清单交回写作者重写，取最佳版本（`test_writer_revises_draft_that_fails_quality_checks`） |
 

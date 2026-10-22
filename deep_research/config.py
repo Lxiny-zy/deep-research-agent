@@ -202,6 +202,7 @@ class Settings:
     max_run_seconds: int = field(default_factory=lambda: _int_env("MAX_RUN_SECONDS", 0))
     run_timeout_profiles: dict[str, int] = field(default_factory=_run_timeouts)
     research_tier: str = ""
+    run_slice_seconds: float = field(default_factory=lambda: _float_env("DR_RUN_SLICE_SECONDS", 60))
     max_task_seconds: int = field(default_factory=lambda: _int_env("MAX_TASK_SECONDS", 172800))
     max_run_recoveries: int = field(default_factory=lambda: _int_env("MAX_RUN_RECOVERIES", 6))
     max_no_progress_attempts: int = field(
@@ -342,6 +343,8 @@ class Settings:
             raise ValueError("max_run_seconds 必须 >= 0（0 使用任务档位）")
         if self.research_tier not in {"", "light", "standard", "deep"}:
             raise ValueError("research_tier must be light, standard or deep")
+        if not math.isfinite(self.run_slice_seconds) or self.run_slice_seconds < 0:
+            raise ValueError("run_slice_seconds must be finite and nonnegative")
         if not isinstance(self.run_timeout_profiles, dict) or any(
             not isinstance(key, str) or not key.strip() or type(value) is not int or value < 1
             for key, value in self.run_timeout_profiles.items()

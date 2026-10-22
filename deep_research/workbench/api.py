@@ -44,6 +44,7 @@ class ContractPreviewRequest(BaseModel):
 class ContentRevisionRequest(BaseModel):
     source_version: str = Field(pattern=r"^[0-9a-f]{64}$")
     request_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    mode: Literal["rewrite", "research"] = "rewrite"
 
 
 class DeliveryRetryRequest(BaseModel):
@@ -372,6 +373,9 @@ async def get_deliverables(
 
     if detail is not None:
         registry["content_revision"] = revision_offer(detail, bundle.gates)
+        from .research_continuation import continuation_offer
+
+        registry["research_continuation"] = continuation_offer(detail, bundle.gates)
     return registry
 
 
@@ -394,7 +398,9 @@ async def revise_content(
     if detail is None:
         raise HTTPException(404, "run not found")
     key = digest(["content-revision", principal.id, body.request_id])
-    request_hash = digest([principal.id, run_id, body.source_version])
+    request_hash = digest([principal.id, run_id, body.source_version] + (
+        ["research"] if body.mode == "research" else []
+    ))
     try:
         existing = await repo.find_run_once(key, request_hash)
     except IdempotencyConflictError as exc:
@@ -405,7 +411,10 @@ async def revise_content(
     if source_version(detail) != body.source_version:
         raise HTTPException(409, "任务材料或正文已变化，请刷新后再继续修订")
     bundle = await _bundle(request, run_id)
-    offer = revision_offer(detail, bundle.gates)
+    from .research_continuation import continuation_offer, prepare_continuation
+
+    offer_fn = continuation_offer if body.mode == "research" else revision_offer
+    offer = offer_fn(detail, bundle.gates)
     if not offer["available"]:
         raise HTTPException(409, offer["reason"])
     await api_module._check_rate_limit(request)
@@ -416,7 +425,10 @@ async def revise_content(
         if quota_view(await usage_today(repo, principal.id), settings)["exhausted"]:
             raise HTTPException(429, "今日研究额度已用完，将于 UTC 零点重置")
     try:
-        execution, current = await prepare_revision(detail, settings)
+        execution, current = (
+            await prepare_continuation(detail, settings, offer["gaps"])
+            if body.mode == "research" else await prepare_revision(detail, settings)
+        )
         await snapshot_catalog_for_execution(
             execution, getattr(request.app.state, "catalog", None), current
         )

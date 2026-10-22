@@ -1019,9 +1019,9 @@ export function downloadRenderResult(
   )
 }
 
-export function reviseRunContent(runId: string, sourceVersion: string): Promise<CreateRunResponse> {
-  const key = `${runId}/${sourceVersion}`
-  const storageKey = `dr_pending_run_revision:${runId}`
+export function reviseRunContent(runId: string, sourceVersion: string, mode: 'rewrite' | 'research' = 'rewrite'): Promise<CreateRunResponse> {
+  const key = `${runId}/${sourceVersion}/${mode}`
+  const storageKey = `dr_pending_run_revision:${runId}${mode === 'research' ? ':research' : ''}`
   let requestId = revisionRequests.get(key)
   try {
     const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null')
@@ -1046,7 +1046,11 @@ export function reviseRunContent(runId: string, sourceVersion: string): Promise<
     `/api/runs/${encodeURIComponent(runId)}/revise`,
     {
       method: 'POST',
-      body: JSON.stringify({ source_version: sourceVersion, request_id: requestId }),
+      body: JSON.stringify(
+        mode === 'rewrite'
+          ? { source_version: sourceVersion, request_id: requestId }
+          : { source_version: sourceVersion, request_id: requestId, mode },
+      ),
     },
     120_000,
   )

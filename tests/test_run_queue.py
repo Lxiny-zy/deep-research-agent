@@ -125,7 +125,11 @@ async def test_expired_lease_is_taken_over_and_advances_attempt(repo):
     assert second.resumed is True
     assert second.claim_attempts == 2
     assert second.attempt > first.attempt
-    assert second.execution.checkpoint == {"query": "Q", "scratch": {}}
+    assert second.execution.checkpoint == first.execution.checkpoint
+    assert second.execution.checkpoint["query"] == "Q"
+    assert second.execution.checkpoint["scratch"]["_dispatch_schedule"] == {
+        "cost": 4, "kind": "heavy",
+    }
 
 
 @pytest.mark.asyncio
