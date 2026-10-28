@@ -21,7 +21,7 @@ from typing import Any
 from ..artifacts import ArtifactError
 from ..models import Source
 from ..persistence.repository import RunDetail
-from .attachments import attachments_from_scratch, load_original
+from .attachments import ATTACHMENT_URL_PREFIX, attachments_from_scratch, load_original
 from .contract import PaperReference, contract_from_scratch, pasted_paper_text, provided_material
 from .intake import PAPER_SOURCES_KEY, pasted_sources
 
@@ -175,6 +175,56 @@ def _cached(settings: Any, slug: str) -> bytes | None:
         return None
 
 
+# 正文视图的总字数上限：足够覆盖一篇长论文的冻结正文，又不让一次响应无限增长。
+PASSAGE_CHAR_LIMIT = 400_000
+
+
+def document_passages(detail: RunDetail, document_id: str) -> dict[str, Any]:
+    """某份文档已冻结的正文片段，供没有原版 PDF 的文档在阅读页按原文顺序显示。
+
+    只返回该任务登记过的文档；片段来自 checkpoint，不重新联网，也不经过模型。
+    """
+    if not _DOC_ID_RE.fullmatch(document_id):
+        raise ReaderError("文档标识无效")
+    documents = {item["id"]: item for item in reader_documents(detail)}
+    document = documents.get(document_id)
+    if document is None:
+        raise ReaderError("该任务没有这份文档")
+    sources = paper_sources(detail)
+    if document["kind"] == "attachment":
+        marker = ATTACHMENT_URL_PREFIX + document_id.removeprefix("att-")
+        sources = [source for source in sources if source.url.startswith(marker)]
+    elif document["kind"] == "paper":
+        base = str(document.get("url") or "").split("#", 1)[0]
+        sources = [
+            source for source in sources
+            if base and source.url.split("#", 1)[0].startswith(base)
+            and not source.url.startswith(ATTACHMENT_URL_PREFIX)
+        ]
+    passages: list[dict[str, Any]] = []
+    total = 0
+    truncated = False
+    for source in sources:
+        content = source.content.strip()
+        if not content:
+            continue
+        if total + len(content) > PASSAGE_CHAR_LIMIT:
+            truncated = True
+            break
+        total += len(content)
+        passages.append({
+            "locator": source.locator,
+            "section_title": source.section_title,
+            "content": content,
+        })
+    return {
+        "document_id": document_id,
+        "title": document["title"],
+        "passages": passages,
+        "truncated": truncated,
+    }
+
+
 async def load_pdf(detail: RunDetail, document_id: str, settings: Any) -> bytes:
     """读取任务里某份文档的原版 PDF；不属于该任务或取不到时抛 ``ReaderError``。"""
     from ..blocking import run_blocking
@@ -224,7 +274,9 @@ async def load_pdf(detail: RunDetail, document_id: str, settings: Any) -> bytes:
 
 
 __all__ = [
+    "PASSAGE_CHAR_LIMIT",
     "ReaderError",
+    "document_passages",
     "load_pdf",
     "paper_pdf_url",
     "paper_sources",

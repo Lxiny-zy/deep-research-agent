@@ -1,45 +1,33 @@
 import { useEffect, useRef } from 'react'
 import { drawSpectralLines } from '../lib/spectrumRender'
 import {
-  lineLabel,
   padLines,
   PAGE_SPECTRA,
   spectrumKey,
   stepLines,
   TELLURIC,
   type LiveLine,
-  type SpectrumKey,
 } from '../lib/spectralLines'
 
-/**
- * 光谱带的高度（画布高度的比例）。多数页面放在同一高度、透过卡片可见——
- * 换页时只有谱线在移动，像同一台光谱仪换了一种样品；
- * 问答页的对话面板占满全屏，光谱带沉到底边。
- */
-const BAND: Partial<Record<SpectrumKey, number>> = { qa: 0.94 }
-const DEFAULT_BAND = 0.62
-const bandFor = (route: string) => BAND[spectrumKey(route)] ?? DEFAULT_BAND
+/** 光谱带贴近视口底边：像地平线上的一道光，不穿过阅读区。 */
+const BAND = 0.965
 
 /**
  * 全局谱线背景。
  * - 切换页面：谱线沿光谱带滑到新元素的位置，颜色随波长连续变化；
- * - 指针：附近的谱线向指针偏折、变亮；
+ * - 指针：靠近底边时，附近的谱线升得更高、更亮；
  * - 标签页隐藏时停帧；「减少动态效果」时只在变化时画一帧静态画面。
  */
 export default function SpectrumBackdrop({ route, dark }: { route: string; dark: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const page = PAGE_SPECTRA[spectrumKey(route)]
   const target = useRef(padLines(page.lines))
-  const label = useRef(lineLabel(page.line))
-  const band = useRef(bandFor(route))
   const darkRef = useRef(dark)
   const kick = useRef<() => void>(() => {})
 
   useEffect(() => {
     const next = PAGE_SPECTRA[spectrumKey(route)]
     target.current = padLines(next.lines)
-    label.current = lineLabel(next.line)
-    band.current = bandFor(route)
     kick.current()
   }, [route])
 
@@ -64,22 +52,19 @@ export default function SpectrumBackdrop({ route, dark }: { route: string; dark:
     let width = 0
     let height = 0
     let frame = 0
-    let bandY = band.current
     const pointer = { x: -9999, y: -9999, s: 0, tx: -9999, ty: -9999, ts: 0 }
 
     const render = (time: number) => {
       stepLines(lines, target.current, reduced ? 1 : 0.05)
-      bandY += (band.current - bandY) * (reduced ? 1 : 0.05)
       pointer.x += (pointer.tx - pointer.x) * 0.12
       pointer.y += (pointer.ty - pointer.y) * 0.12
       pointer.s += (pointer.ts - pointer.s) * 0.08
       drawSpectralLines(context, {
         width,
         height,
-        band: bandY,
+        band: BAND,
         lines,
         absorption: TELLURIC,
-        label: label.current,
         time,
         pointer,
         dark: darkRef.current,

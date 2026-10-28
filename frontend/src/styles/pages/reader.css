@@ -302,3 +302,49 @@
     min-height: 70vh;
   }
 }
+
+/* 没有原版 PDF 的文档：按原文顺序排版的正文片段 */
+.reader-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0 auto;
+  max-width: 46em;
+  padding: var(--space-5) var(--space-6) var(--space-8);
+}
+
+.reader-text-note {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+  padding-bottom: var(--space-3);
+}
+
+.reader-text-note .hint {
+  margin: 0;
+}
+
+.reader-text-passage h3 {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin: 0 0 6px;
+}
+
+.reader-text-passage p {
+  font-family: var(--font-serif);
+  font-size: var(--text-md);
+  line-height: 1.9;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.reader-text-passage.is-hit {
+  background: var(--warning-soft, rgba(184, 116, 10, 0.12));
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 8px var(--warning-soft, rgba(184, 116, 10, 0.12));
+}

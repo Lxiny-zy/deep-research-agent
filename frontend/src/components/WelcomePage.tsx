@@ -8,7 +8,7 @@ const LEAVE_MS = 1100
  * 欢迎界面：一条横贯画面的光谱带，谱线在其上依次显影。
  * 带以上，谱线笔直垂下——位置由元素决定，像早已写定的命运；
  * 带以下，所有谱线弯向「进入」——许多条思路，最终汇成一个回答。
- * 点击后光谱带向上下铺满画面、随即溶解，露出主界面（或登录框）。
+ * 点击后整幅谱线收拢进「进入」，再从这一点打开圆孔，露出主界面（或登录框）。
  * 明暗两套由主题令牌驱动；「减少动态效果」时跳过过渡直接进入。
  */
 export default function WelcomePage({
@@ -51,7 +51,7 @@ export default function WelcomePage({
     <div
       className={'intro intro-spectral' + (leaving ? ' is-leaving' : '')}
       onAnimationEnd={(event) => {
-        if (event.target === event.currentTarget && event.animationName === 'intro-dissolve')
+        if (event.target === event.currentTarget && event.animationName === 'intro-open')
           finish()
       }}
       data-testid="welcome"

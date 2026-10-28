@@ -1,5 +1,5 @@
 /* 按钮家族：墨色实底（主操作，见 surface.css）· 描线 · 文字 · 圆形图标 · 危险。
-   每一类有自己的悬停语言，一眼能分出主次。首页专属按钮见 buttons-home.css。 */
+   悬停只改变底色与描边，不加彩色光效；首页专属按钮见 buttons-home.css。 */
 
 /* 描线按钮：一道墨色细线框，悬停时墨色从底部涨满、文字反白 */
 .btn-secondary {
@@ -39,15 +39,7 @@
   color: var(--primary-text);
 }
 
-.btn-ghost:not(.icon-button) .app-icon {
-  transition: transform 320ms var(--ease-out);
-}
-
-.btn-ghost:not(.icon-button):hover .app-icon {
-  transform: translateX(-2px) rotate(-8deg);
-}
-
-/* 圆形图标按钮：悬停时外圈亮起一道虹彩细环，图标轻转 */
+/* 圆形图标按钮：悬停时只泛起一层底色 */
 /* :where 让各组件自己的定位 / 圆角规则仍能覆盖这里 */
 :where(.icon-button) {
   position: relative;
@@ -57,50 +49,14 @@
   border-radius: 50%;
 }
 
-.icon-button::before {
-  background: var(--iris);
-  border-radius: 50%;
-  content: '';
-  inset: -1px;
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1px));
-  opacity: 0;
-  pointer-events: none;
-  position: absolute;
-  transition: opacity 280ms var(--ease);
+.btn.icon-button:hover:not(:disabled) {
+  background-color: var(--surface-2);
+  color: var(--text);
 }
 
-.icon-button:hover:not(:disabled)::before,
-.icon-button:focus-visible::before {
-  animation: iris-spin 3s linear infinite;
-  opacity: 1;
-}
-
-.icon-button .app-icon {
-  transition: transform 360ms var(--ease-out);
-}
-
-.icon-button:hover:not(:disabled) .app-icon {
-  transform: rotate(-12deg) scale(1.08);
-}
-
-/* 危险操作：平时低调，悬停时底色泛红、图标轻摇一下 */
+/* 危险操作：平时低调，悬停时底色泛红 */
 .btn.danger:hover:not(:disabled),
 .btn-danger:hover:not(:disabled) {
   background-color: var(--danger-soft);
   color: var(--danger-text);
-}
-
-.btn.danger.icon-button::before {
-  background: var(--danger);
-}
-
-.btn.danger:hover:not(:disabled) .app-icon {
-  animation: nudge 420ms var(--ease-out);
-  transform: none;
-}
-
-@keyframes nudge {
-  25% { rotate: -10deg; }
-  60% { rotate: 8deg; }
 }

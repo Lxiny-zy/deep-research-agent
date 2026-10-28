@@ -352,3 +352,43 @@ async def test_reader_conversations_are_bound_to_their_run(reader_client) -> Non
     assert foreign.status_code == 404
     assert [c["id"] for c in in_run] == [bound.json()["id"]]
     assert [c["id"] for c in in_qa] == [free.json()["id"]]
+
+
+async def test_text_documents_expose_frozen_passages_to_the_owner_only(reader_client) -> None:
+    client, repo, settings = reader_client
+    attachment = Attachment(
+        id="b" * 24,
+        filename="notes.md",
+        kind="markdown",
+        size=120,
+        char_count=60,
+        chunks=[
+            AttachmentChunk(ordinal=0, locator="片段 1", content="第一段：前向模型 y = Phi x。"),
+            AttachmentChunk(ordinal=1, locator="片段 2", content="第二段：PSNR 达到 38.2 dB。"),
+        ],
+    )
+    run_id = await _paper_run(repo, settings, attachments=[attachment])
+    reader = await client.get(f"/api/runs/{run_id}/reader", headers=_headers(ALICE))
+    document = reader.json()["documents"][0]
+    assert document["pdf"] is False
+
+    passages = await client.get(
+        f"/api/runs/{run_id}/reader/{document['id']}/passages", headers=_headers(ALICE)
+    )
+    assert passages.status_code == 200, passages.text
+    body = passages.json()
+    assert [item["content"] for item in body["passages"]] == [
+        "第一段：前向模型 y = Phi x。",
+        "第二段：PSNR 达到 38.2 dB。",
+    ]
+    assert body["passages"][0]["locator"] == "片段 1"
+    assert body["truncated"] is False
+
+    other = await client.get(
+        f"/api/runs/{run_id}/reader/{document['id']}/passages", headers=_headers(BOB)
+    )
+    assert other.status_code == 404
+    unknown = await client.get(
+        f"/api/runs/{run_id}/reader/att-{'c' * 24}/passages", headers=_headers(ALICE)
+    )
+    assert unknown.status_code == 404

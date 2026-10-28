@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import ClarifyDialog from '../components/ClarifyDialog'
@@ -26,16 +26,6 @@ import {
   isUserFacingWorkflow,
 } from '../lib/workflowTemplates'
 import type { ConversationTurn, WorkflowInfo } from '../types'
-import { rgbCss, wavelengthToRgb } from '../lib/spectralLines'
-
-/** 一次研究在首页上的五道谱线：由红到紫，对应执行链路的五个环节。 */
-const HERO_LINES = [
-  { label: '拆解', nm: 656.3, note: '把问题拆成可以独立检索的子问题' },
-  { label: '取证', nm: 589.0, note: '并行检索，来源先过门禁' },
-  { label: '核验', nm: 527.0, note: '逐字比对原文，对得上才算证据' },
-  { label: '补暗线', nm: 486.1, note: '反思缺口，回头补上没有证据的地方' },
-  { label: '汇谱', nm: 410.2, note: '按引用汇成报告，每句话都能回溯' },
-]
 
 const DEFAULT_QUERY = '快照式高光谱成像中，深度展开网络相比端到端网络的优势与局限是什么？'
 const SAMPLES = [
@@ -384,19 +374,6 @@ function ResearchComposer() {
             从一个问题出发：拆成可以检索的子问题，逐条取证，补上暗线，再汇成一份有出处的研究。
           </p>
         </div>
-        <ol className="home-lines" aria-label="一次研究经过的五道谱线">
-          {HERO_LINES.map((line) => (
-            <li
-              key={line.label}
-              style={{ '--line': rgbCss(wavelengthToRgb(line.nm)) } as CSSProperties}
-              title={line.note}
-            >
-              <i aria-hidden="true" />
-              <strong>{line.label}</strong>
-              <small>{line.note}</small>
-            </li>
-          ))}
-        </ol>
         {draft.status !== 'idle' && (
           <div className={'home-draft is-' + draft.status}>
             <span role="status">

@@ -14,22 +14,19 @@ import {
 export interface Frame {
   width: number
   height: number
-  /** 光谱带所在高度：画布高度的比例 */
+  /** 光谱带所在高度：画布高度的比例（贴近视口底边） */
   band: number
   /** 发射谱线（页面切换时插值中的状态） */
   lines: LiveLine[]
   /** 吸收线：在光谱带上刻出的暗缝 */
   absorption: SpectralLine[]
-  /** 标注在第一条谱线旁的记号，如「Hα 656.3 nm」 */
-  label: string
   time: number
   /** 指针位置与影响强度（0 = 指针不在画面内） */
   pointer: { x: number; y: number; s: number }
   dark: boolean
 }
 
-const STRANDS = 3
-const STEP = 8
+const STEP = 6
 
 /** 光谱带在画布上的横向范围：避开左侧导航，右侧留一点边。 */
 export function bandSpan(width: number): [number, number] {
@@ -41,9 +38,8 @@ const tone = (rgb: RGB, dark: boolean): RGB =>
   dark ? rgb : ([rgb[0] * 0.72, rgb[1] * 0.68, rgb[2] * 0.78].map(Math.round) as RGB)
 
 /**
- * 画出谱线背景：一条横贯页面的连续光谱带，若干条竖直谱线从中穿过。
- * 谱线像被固定在光谱带上的丝线——离带越远摆动越大、越淡；指针靠近时，
- * 附近的谱线向指针偏折、变亮。吸收线在光谱带上留下暗缝。
+ * 画出谱线背景：贴着视口底边的一道连续光谱，像地平线上的光；本页的谱线从中升起一小段，
+ * 越高越淡，不穿过阅读区。指针靠近时，附近的谱线升得更高、更亮。吸收线在光谱带上留下暗缝。
  */
 export function drawSpectralLines(ctx: CanvasRenderingContext2D, f: Frame) {
   const { width: W, height: H, dark, time, pointer } = f
@@ -68,9 +64,9 @@ export function drawSpectralLines(ctx: CanvasRenderingContext2D, f: Frame) {
   }
   ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
   for (const [lineWidth, alpha] of [
-    [22, dark ? 0.05 : 0.04],
-    [6, dark ? 0.12 : 0.08],
-    [1, dark ? 0.6 : 0.45],
+    [26, dark ? 0.05 : 0.035],
+    [6, dark ? 0.12 : 0.07],
+    [1, dark ? 0.55 : 0.4],
   ] as const) {
     ctx.strokeStyle = spectrum(alpha)
     ctx.lineWidth = lineWidth
@@ -88,62 +84,36 @@ export function drawSpectralLines(ctx: CanvasRenderingContext2D, f: Frame) {
     ctx.fillRect(x - 1.5, bandY - 14, 3, 28)
   }
 
-  // 发射谱线：每条由一根主线与两根伴线织成
+  // 发射谱线：从光谱带向上升起一小段，顶端轻轻摆动
   ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
   f.lines.forEach((line, index) => {
     if (line.strength < 0.01) return
     const x0 = xOf(line.nm)
     const rgb = tone(wavelengthToRgb(line.nm), dark)
-    const near = pointer.s * gaussian(x0, pointer.x, 90)
-    const base = line.strength * (dark ? 0.5 : 0.42) + near * 0.35
-    const toward = Math.sign(pointer.x - x0) * Math.min(1, Math.abs(pointer.x - x0) / 40)
-
-    for (let s = 0; s < STRANDS; s++) {
-      const alpha = s === 0 ? base : base * 0.32
-      const grad = ctx.createLinearGradient(0, 0, 0, H)
-      grad.addColorStop(0, rgbCss(rgb, 0))
-      grad.addColorStop(Math.max(0, f.band - 0.42), rgbCss(rgb, alpha * 0.25))
-      grad.addColorStop(f.band, rgbCss(rgb, alpha))
-      grad.addColorStop(Math.min(1, f.band + 0.32), rgbCss(rgb, alpha * 0.2))
-      grad.addColorStop(1, rgbCss(rgb, 0))
-      ctx.strokeStyle = grad
-      ctx.lineWidth = s === 0 ? 1.1 : 0.6
-      ctx.beginPath()
-      for (let y = 0; y <= H + STEP; y += STEP) {
-        const reach = Math.abs(y - bandY) / H
-        const sway =
-          (6 + 5 * s) *
-          reach *
-          Math.sin(y * 0.006 + time * 0.0004 * (1 + 0.25 * s) + index * 1.3 + s * 1.7)
-        const pull =
-          pointer.s * 26 * toward * gaussian(y, pointer.y, 170) * gaussian(x0, pointer.x, 220)
-        const x = x0 + sway + pull + (s === 0 ? 0 : (s === 1 ? -1.6 : 1.6) * reach * 3)
-        if (y === 0) ctx.moveTo(x, y)
-        else ctx.lineTo(x, y)
-      }
-      ctx.stroke()
+    const near = pointer.s * gaussian(x0, pointer.x, 90) * gaussian(pointer.y, bandY, H * 0.3)
+    const alpha = Math.min(1, line.strength * (dark ? 0.55 : 0.45) + near * 0.35)
+    const rise = Math.min(bandY, H * (0.08 + 0.14 * line.strength) * (1 + near * 0.6))
+    const top = bandY - rise
+    const grad = ctx.createLinearGradient(0, top, 0, bandY)
+    grad.addColorStop(0, rgbCss(rgb, 0))
+    grad.addColorStop(1, rgbCss(rgb, alpha))
+    ctx.strokeStyle = grad
+    ctx.lineWidth = 1.1
+    ctx.beginPath()
+    for (let y = bandY; y >= top; y -= STEP) {
+      const reach = (bandY - y) / Math.max(1, rise)
+      const sway = 3 * reach * reach * Math.sin(y * 0.02 + time * 0.0005 + index * 1.3)
+      if (y === bandY) ctx.moveTo(x0, y)
+      else ctx.lineTo(x0 + sway, y)
     }
+    ctx.stroke()
 
     // 谱线与光谱带的交点：一枚小光斑
-    const glow = ctx.createRadialGradient(x0, bandY, 0, x0, bandY, 12)
-    glow.addColorStop(0, rgbCss(rgb, Math.min(1, base * 1.6)))
+    const glow = ctx.createRadialGradient(x0, bandY, 0, x0, bandY, 10)
+    glow.addColorStop(0, rgbCss(rgb, Math.min(1, alpha * 1.6)))
     glow.addColorStop(1, rgbCss(rgb, 0))
     ctx.fillStyle = glow
-    ctx.fillRect(x0 - 12, bandY - 12, 24, 24)
+    ctx.fillRect(x0 - 10, bandY - 10, 20, 20)
   })
-
-  // 页面认领的谱线：在交点旁标注记号与波长
-  const first = f.lines[0]
-  if (first && first.strength > 0.5 && f.label) {
-    ctx.globalCompositeOperation = 'source-over'
-    ctx.font = '10px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace'
-    ctx.fillStyle = dark
-      ? `rgba(226, 228, 240, ${(0.55 * first.strength).toFixed(3)})`
-      : `rgba(40, 38, 52, ${(0.5 * first.strength).toFixed(3)})`
-    const x = xOf(first.nm)
-    const flip = x > right - 120
-    ctx.textAlign = flip ? 'right' : 'left'
-    ctx.fillText(f.label, x + (flip ? -10 : 10), bandY - 12)
-  }
   ctx.globalCompositeOperation = 'source-over'
 }

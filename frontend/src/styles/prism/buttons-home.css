@@ -1,42 +1,6 @@
 /* 工作台首页的专属按钮：主 CTA、示例问题、折叠开关、资源预检、附件选择 */
 
-/* 「开始研究」：墨色长条 + 虹彩描边随悬停旋转、一道斜光扫过、箭头前冲 */
-.home-actionbar-go .btn-primary {
-  background:
-    linear-gradient(var(--ink), var(--ink)) padding-box,
-    var(--iris) border-box;
-  border: 1px solid transparent;
-}
-
-.home-actionbar-go .btn-primary:hover:not(:disabled) {
-  animation: iris-spin 2.4s linear infinite;
-  background:
-    linear-gradient(var(--ink-2), var(--ink-2)) padding-box,
-    var(--iris) border-box;
-  box-shadow:
-    0 10px 30px -12px color-mix(in srgb, #b28cff 70%, transparent),
-    var(--shadow-md);
-}
-
-.home-actionbar-go .btn-primary::before {
-  background: linear-gradient(
-    105deg,
-    transparent 30%,
-    rgba(255, 255, 255, 0.28) 48%,
-    transparent 64%
-  );
-  content: '';
-  inset: 0;
-  pointer-events: none;
-  position: absolute;
-  translate: -110% 0;
-}
-
-.home-actionbar-go .btn-primary:hover:not(:disabled)::before {
-  transition: translate 900ms var(--ease-out);
-  translate: 110% 0;
-}
-
+/* 「开始研究」：墨色长条，悬停时箭头前移 */
 .home-actionbar-go .btn-primary .app-icon {
   transition: transform 420ms var(--ease-out);
 }
@@ -45,41 +9,25 @@
   transform: translateX(6px);
 }
 
-/* 示例问题：每条带一颗光谱色点，悬停时同色光从左侧铺开 */
+/* 示例问题：一道细竖线引出问题，悬停时描边加深 */
 .home-example {
-  --chip: #7aa7ff;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--chip) 22%, transparent), transparent)
-    no-repeat left / 0% 100%;
   background-color: var(--surface);
   transition:
-    background-size 420ms var(--ease-out),
     border-color var(--duration) var(--ease),
-    transform 320ms var(--ease-out);
+    color var(--duration) var(--ease);
 }
 
-.home-example:nth-of-type(5n + 2) { --chip: #ff9fc2; }
-.home-example:nth-of-type(5n + 3) { --chip: #ffc56b; }
-.home-example:nth-of-type(5n + 4) { --chip: #8fe3c8; }
-.home-example:nth-of-type(5n + 5) { --chip: #b28cff; }
-
 .home-example::before {
-  background: var(--chip);
-  border-radius: 50%;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chip) 25%, transparent);
+  background: var(--text-3);
   content: '';
-  flex: 0 0 6px;
-  height: 6px;
-  transition: box-shadow 320ms var(--ease-out);
+  flex: 0 0 1px;
+  height: 12px;
+  opacity: 0.6;
 }
 
 .home-page .home-example:hover {
   background-color: var(--surface);
-  background-size: 100% 100%;
-  border-color: var(--chip);
-}
-
-.home-example:hover::before {
-  box-shadow: 0 0 0 5px color-mix(in srgb, var(--chip) 30%, transparent);
+  border-color: var(--text-3);
 }
 
 .home-example .app-icon {
@@ -90,7 +38,7 @@
   transform: translateX(3px);
 }
 
-/* 折叠开关：整行可点，悬停时整行泛起底色，箭头装进一枚金色小圆 */
+/* 折叠开关：整行可点，悬停时整行泛起底色 */
 .home-disclosure > summary,
 .run-params-toggle {
   border-radius: var(--radius-sm);
@@ -104,16 +52,12 @@
 
 .home-disclosure > summary:hover,
 .run-params-toggle:hover {
-  background-color: color-mix(in srgb, var(--gold-soft) 70%, transparent);
+  background-color: var(--surface-2);
 }
 
 .home-disclosure > summary .app-icon,
 .run-params-toggle > .app-icon {
-  background: var(--gold-soft);
-  border-radius: 50%;
-  box-sizing: content-box;
-  color: var(--gold-text);
-  padding: 3px;
+  color: var(--text-3);
 }
 
 .run-params-toggle {
@@ -121,34 +65,25 @@
   font-weight: 600;
 }
 
-/* 资源预检：金色虚线胶囊，悬停时虚线收成实线、盾牌轻轻一跳 */
+/* 资源预检：与其它次要操作同一套细框按钮 */
 .btn-ghost.preflight-button {
   background-image: none;
-  border: 1px dashed color-mix(in srgb, var(--gold) 70%, transparent);
-  border-radius: var(--radius-full);
-  color: var(--gold-text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
   margin-left: 0;
   padding: 0 14px;
 }
 
 .btn-ghost.preflight-button:hover:not(:disabled) {
-  background-color: var(--gold-soft);
-  border-style: solid;
-  color: var(--gold-text);
+  background-color: var(--surface-2);
+  border-color: var(--text-3);
+  color: var(--text);
 }
 
-.btn-ghost.preflight-button:hover:not(:disabled) .app-icon:not(.spin) {
-  animation: shield-hop 520ms var(--ease-out);
-  transform: none;
-}
-
-@keyframes shield-hop {
-  40% { translate: 0 -3px; }
-}
-
-/* 附件「选择文件」：金色下划线从中间向两侧展开 */
+/* 附件「选择文件」：下划线从中间向两侧展开 */
 .attach-zone-pick {
-  background: linear-gradient(var(--gold), var(--gold)) no-repeat center bottom / 0% 1px;
+  background: linear-gradient(currentColor, currentColor) no-repeat center bottom / 0% 1px;
   padding-bottom: 1px;
   transition: background-size 320ms var(--ease-out);
 }

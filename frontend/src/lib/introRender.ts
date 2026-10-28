@@ -52,8 +52,8 @@ export interface IntroFrame {
   elapsed: number
   /** 指针悬停「进入」时为 1 */
   energy: number
-  /** 离场时为 1：光谱带向上下铺满画面 */
-  burst: number
+  /** 离场时由 0 走到 1：谱线与光谱带一起收拢到汇聚点 */
+  gather: number
   pointer: { x: number; y: number; s: number }
   dark: boolean
   threads: IntroThread[]
@@ -68,9 +68,10 @@ const tone = (rgb: RGB, dark: boolean): RGB =>
  * 画一帧欢迎画面：
  * 光谱带以上，谱线笔直垂下——位置由元素决定，像早已写定的命运；
  * 光谱带以下，所有谱线弯向同一个汇聚点——许多条思路，最终汇成一个回答。
+ * 离场时整幅画面收拢进汇聚点，随后由 intro.css 从这一点打开通往主界面的圆孔。
  */
 export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
-  const { width: W, height: H, time, pointer, dark, energy, burst } = f
+  const { width: W, height: H, time, pointer, dark, energy, gather } = f
   ctx.clearRect(0, 0, W, H)
   if (W <= 0 || H <= 0) return
   const left = W * 0.08
@@ -79,11 +80,11 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
   const fx = W / 2
   const fy = H * INTRO_FOCUS
   const xOf = (nm: number) => left + lineX(nm) * (right - left)
-  const bandIn = ease(f.elapsed / 900)
+  const bandIn = ease(f.elapsed / 900) * (1 - gather)
 
   ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
 
-  // 光谱带：自中心向两侧展开；离场时向上下铺满
+  // 光谱带：自中心向两侧展开；离场时向中心收拢
   const spectrum = (alpha: number) => {
     const grad = ctx.createLinearGradient(left, 0, right, 0)
     for (let i = 0; i <= 12; i++) {
@@ -95,12 +96,13 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
     return grad
   }
   const half = ((right - left) / 2) * bandIn
+  ctx.lineCap = 'round'
   for (const [lineWidth, alpha] of [
-    [30 + burst * H * 1.4, (dark ? 0.06 : 0.05) + burst * 0.4],
-    [8 + burst * 40, (dark ? 0.16 : 0.1) + burst * 0.3],
+    [30, dark ? 0.06 : 0.05],
+    [8, dark ? 0.16 : 0.1],
     [1.2, dark ? 0.75 : 0.55],
   ] as const) {
-    ctx.strokeStyle = spectrum(alpha)
+    ctx.strokeStyle = spectrum(alpha * (1 - gather))
     ctx.lineWidth = lineWidth
     ctx.beginPath()
     ctx.moveTo(fx - half, bandY)
@@ -116,15 +118,18 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
   }
   ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
 
-  // 汇聚点的光晕
-  const focusAlpha = (dark ? 0.12 : 0.08) + energy * 0.16
-  const focusR = 70 + energy * 40
-  const focus = ctx.createRadialGradient(fx, fy, 0, fx, fy, focusR)
-  focus.addColorStop(
-    0,
-    dark ? `rgba(255, 246, 228, ${focusAlpha})` : `rgba(120, 96, 60, ${focusAlpha})`,
+  // 汇聚点的光晕：悬停时变亮，离场时收成一颗明亮的光核
+  const focusAlpha = Math.min(
+    0.9,
+    (dark ? 0.12 : 0.08) + energy * 0.16 + gather * (dark ? 0.7 : 0.25),
   )
-  focus.addColorStop(1, 'rgba(255, 255, 255, 0)')
+  const focusR = 70 + energy * 40 - gather * 20
+  const glow = (alpha: number) =>
+    dark ? `rgba(255, 246, 228, ${alpha.toFixed(3)})` : `rgba(120, 96, 60, ${alpha.toFixed(3)})`
+  const focus = ctx.createRadialGradient(fx, fy, 0, fx, fy, focusR)
+  focus.addColorStop(0, glow(focusAlpha))
+  focus.addColorStop(0.3, glow(focusAlpha * 0.3))
+  focus.addColorStop(1, glow(0))
   ctx.fillStyle = focus
   ctx.fillRect(fx - focusR, fy - focusR, focusR * 2, focusR * 2)
 
@@ -139,12 +144,11 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
       ((dark ? 0.2 : 0.16) + (dark ? 0.5 : 0.42) * thread.strength) *
         appear *
         (thread.key ? 1.35 : 1) +
-        near * 0.45 +
-        burst * 0.4,
+        near * 0.45,
     )
 
-    // 上段：从光谱带向上生长，越高越淡，轻微摆动
-    const top = bandY - bandY * appear
+    // 上段：从光谱带向上生长，越高越淡，轻微摆动；离场时缩回光谱带
+    const top = bandY - bandY * appear * (1 - gather)
     const up = ctx.createLinearGradient(0, top, 0, bandY)
     up.addColorStop(0, rgbCss(rgb, 0))
     up.addColorStop(1, rgbCss(rgb, alpha))
@@ -160,7 +164,7 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
     }
     ctx.stroke()
 
-    // 下段：沿二次曲线弯向汇聚点；悬停「进入」时收得更紧、更亮
+    // 下段：沿二次曲线弯向汇聚点；悬停「进入」时收得更紧、更亮；离场时从光谱带一端缩进汇聚点
     const cy = bandY + (fy - bandY) * (0.62 - energy * 0.18)
     const down = ctx.createLinearGradient(0, bandY, 0, fy)
     down.addColorStop(0, rgbCss(rgb, alpha * 0.9))
@@ -169,11 +173,12 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
     ctx.lineWidth = thread.key ? 1.2 : 0.8
     ctx.beginPath()
     const steps = 28
-    for (let i = 0; i <= steps * appear; i++) {
+    const from = Math.min(steps, Math.ceil(steps * gather))
+    for (let i = from; i <= steps * appear; i++) {
       const t = i / steps
       const x = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * x0 + t * t * fx
       const y = (1 - t) * (1 - t) * bandY + 2 * (1 - t) * t * cy + t * t * fy
-      if (i === 0) ctx.moveTo(x, y)
+      if (i === from) ctx.moveTo(x, y)
       else ctx.lineTo(x, y)
     }
     ctx.stroke()
@@ -181,13 +186,13 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
     // 交点光斑
     const r = 3 + 5 * thread.strength
     const dot = ctx.createRadialGradient(x0, bandY, 0, x0, bandY, r)
-    dot.addColorStop(0, rgbCss(rgb, Math.min(1, alpha * 1.5)))
+    dot.addColorStop(0, rgbCss(rgb, Math.min(1, alpha * 1.5) * (1 - gather)))
     dot.addColorStop(1, rgbCss(rgb, 0))
     ctx.fillStyle = dot
     ctx.fillRect(x0 - r, bandY - r, r * 2, r * 2)
 
     if (thread.key) {
-      const labelIn = ease((f.elapsed - thread.delay - 900) / 900) * (1 - burst)
+      const labelIn = ease((f.elapsed - thread.delay - 900) / 900) * (1 - gather)
       if (labelIn > 0) {
         ctx.globalCompositeOperation = 'source-over'
         ctx.font = '11px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace'

@@ -1100,6 +1100,14 @@ export interface ReaderDocument {
   note: string
 }
 
+/** 没有原版 PDF 的文档：任务里冻结的正文片段，按原文顺序排列。 */
+export interface ReaderPassages {
+  document_id: string
+  title: string
+  passages: { locator: string; section_title: string; content: string }[]
+  truncated: boolean
+}
+
 export interface RunReader {
   run_id: string
   status: RunStatus

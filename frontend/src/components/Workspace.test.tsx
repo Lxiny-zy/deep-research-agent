@@ -99,7 +99,7 @@ describe('FileTree', () => {
         <FileTree runId="r1" workspace={workspace} />
       </QueryClientProvider>,
     )
-    expect(screen.getByText(/成品 · final/)).toBeInTheDocument()
+    expect(screen.getByText(/成品 · 最终报告/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /raw.bin/ })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: /report.md/ }))
     expect(await screen.findByText('# 报告正文')).toBeInTheDocument()

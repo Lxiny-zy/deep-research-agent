@@ -14,7 +14,6 @@ import {
   type SpectrumKey,
 } from './lib/spectralLines'
 import { usePointerSpotlight } from './hooks/usePointerSpotlight'
-import { useButtonHues } from './hooks/useButtonHues'
 import { hasSeenIntro, hasSeenTour, markIntroSeen, markTourSeen } from './lib/onboarding'
 import { AppIcon, type AppIconName } from './components/AppIcon'
 import {
@@ -139,7 +138,6 @@ export default function App() {
   const [showTour, setShowTour] = useState(() => hasSeenIntro() && !hasSeenTour())
   const theme = useTheme()
   usePointerSpotlight()
-  useButtonHues()
   const location = useLocation()
   const navigate = useNavigate()
 

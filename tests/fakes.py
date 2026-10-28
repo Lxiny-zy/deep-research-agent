@@ -95,6 +95,33 @@ class FakeLLM:
                 {"pair_id": pair["id"], "verdict": "consistent", "reason": "fixture consistency"}
                 for pair in data["pairs"]
             ]})
+        if schema.__name__ == "SlideDeck":
+            # Offline demo deck: structurally valid and citing the first admitted source,
+            # so the slides chain can reach delivery without a real model.
+            return schema.model_validate({
+                "title": "离线演示文稿",
+                "subtitle": "假模型生成，仅用于验证流程",
+                "slides": [
+                    {"title": "研究背景", "bullets": ["内容A提供了可核验的原文证据"],
+                     "notes": "介绍问题背景与证据来源。", "citations": [1]},
+                    {"title": "主要发现", "bullets": ["发现X"],
+                     "notes": "说明已核验的主要发现。", "citations": [1]},
+                    {"title": "局限与展望", "bullets": ["现有证据有限，结论仍需更多来源验证"],
+                     "notes": "说明结论的边界。", "citations": [1]},
+                ],
+            })
+        if schema.__name__ == "Mindmap":
+            return schema.model_validate({
+                "root": "研究主题",
+                "branches": [
+                    {"label": "主要发现", "details": "发现X", "citations": [1], "children": [
+                        {"label": "原文证据", "details": "内容A提供了可核验的原文证据",
+                         "citations": [1]},
+                    ]},
+                    {"label": "待解问题", "kind": "question",
+                     "details": "现有证据有限，结论仍需更多来源验证"},
+                ],
+            })
         if schema is AnalysisScope:
             data, _ = json.JSONDecoder().raw_decode(user.split("【完整数据列概况】\n", 1)[1])
             identifiers = {

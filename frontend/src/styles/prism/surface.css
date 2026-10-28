@@ -31,6 +31,35 @@
   margin: 0 0 var(--space-2);
 }
 
+/* 有题句的页头：题句是视觉标题，页名退为题句上方的小字标签（顶栏已有页名） */
+.page-header:has(.page-verse) h1 {
+  align-items: center;
+  color: var(--text-3);
+  display: inline-flex;
+  font-family: var(--font-serif);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  gap: 10px;
+  letter-spacing: 0.24em;
+  line-height: 1.4;
+}
+
+.page-header:has(.page-verse) h1::before {
+  background: currentColor;
+  content: '';
+  height: 1px;
+  opacity: 0.6;
+  width: 24px;
+}
+
+.page-header .page-verse {
+  font-size: clamp(24px, 2.4vw, 32px);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.3;
+  margin: 8px 0 6px;
+}
+
 /* 区块标题：左侧一道墨靛竖线（参考稿的「| 科研任务」） */
 .panel-title,
 .section-title,
@@ -67,7 +96,7 @@
   box-shadow: var(--shadow-sm);
 }
 
-/* 主按钮：墨色实底，底边一道虹彩细线；深色主题自动反转为暖白 */
+/* 主按钮：墨色实底；深色主题自动反转为暖白 */
 .btn-primary {
   background: var(--ink);
   border-color: transparent;
@@ -79,26 +108,10 @@
   position: relative;
 }
 
-.btn-primary::after {
-  background: var(--spectrum);
-  bottom: 0;
-  content: '';
-  height: 2px;
-  left: 0;
-  position: absolute;
-  right: 0;
-  transform: scaleX(0.35);
-  transition: transform 500ms var(--ease-out);
-}
-
 .btn-primary:hover:not(:disabled) {
   background: var(--ink-2);
   color: var(--ink-text);
   transform: translateY(-1px);
-}
-
-.btn-primary:hover:not(:disabled)::after {
-  transform: scaleX(1);
 }
 
 .btn:active:not(:disabled) {

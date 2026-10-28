@@ -212,6 +212,10 @@ def test_analysis_runs_tests_and_ignores_id_columns(repeated) -> None:
 def test_analysis_without_data_uses_labelled_synthetic_example() -> None:
     result = analyse("", "", allow_synthetic=True)
     assert result.synthetic and "合成数据" in result.facts()
+    # The demo must exercise a supported inferential design, not a repeated-measures
+    # layout that can only fall back to descriptive statistics.
+    assert not any("重复测量" in issue for issue in result.issues)
+    assert result.tests and result.tests[0]["method"] in {"单因素方差分析", "Welch ANOVA"}
 
 
 def test_number_check_catches_invented_values() -> None:

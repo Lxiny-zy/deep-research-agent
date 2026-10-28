@@ -693,6 +693,20 @@ async def get_reader_pdf(run_id: str, document_id: str, request: Request) -> Res
     )
 
 
+@router.get("/runs/{run_id}/reader/{document_id}/passages")
+async def get_reader_passages(run_id: str, document_id: str, request: Request) -> dict[str, Any]:
+    """没有原版 PDF 的文档：按原文顺序返回任务里冻结的正文片段，只读，不联网。"""
+    from .reader import ReaderError, document_passages
+
+    detail = await request.app.state.repo.get_run(run_id)
+    if detail is None:
+        raise HTTPException(404, "run not found")
+    try:
+        return document_passages(detail, document_id)
+    except ReaderError as exc:
+        raise HTTPException(404, {"code": "passages_unavailable", "message": str(exc)}) from exc
+
+
 @router.get("/runs/{run_id}/narrative")
 async def get_narrative(run_id: str, request: Request) -> dict[str, Any]:
     """人话进度叙述：按阶段聚合的一句话进展，事件的纯函数（不调用模型）。"""

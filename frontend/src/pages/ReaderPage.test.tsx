@@ -9,6 +9,12 @@ import type { QaConversation, ReaderDocument, RunReader } from '../types'
 
 const mocks = vi.hoisted(() => ({
   getReader: vi.fn(),
+  getReaderPassages: vi.fn(async (_runId: string, documentId: string) => ({
+    document_id: documentId,
+    title: '',
+    passages: [] as { locator: string; section_title: string; content: string }[],
+    truncated: false,
+  })),
   getRun: vi.fn(),
   listProjects: vi.fn(),
   listConversations: vi.fn(),
@@ -534,7 +540,7 @@ describe('ReaderPage', () => {
     renderPage()
     await screen.findByTestId('pdf')
     fireEvent.change(screen.getByLabelText('选择论文'), { target: { value: 'paper-0' } })
-    expect(screen.getByText(/没有可直接显示的 PDF/)).toBeInTheDocument()
+    expect(await screen.findByText(/没有可直接显示的 PDF/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /在原网站打开/ })).toHaveAttribute(
       'href',
       'https://doi.org/10.1/x',
@@ -551,5 +557,20 @@ describe('documentForEvidence', () => {
     ).toBe(`att-${ATT}`)
     expect(documentForEvidence('https://doi.org/10.1/x#p2', documents)?.id).toBe('paper-0')
     expect(documentForEvidence('https://elsewhere.org', documents)).toBeUndefined()
+  })
+
+  it('shows the frozen full text for documents without a PDF', async () => {
+    mocks.getReaderPassages.mockResolvedValueOnce({
+      document_id: 'paper-0',
+      title: '论文',
+      passages: [{ locator: '片段 1', section_title: '方法', content: '前向模型 y = Phi x。' }],
+      truncated: false,
+    })
+    renderPage()
+    await screen.findByTestId('pdf')
+    fireEvent.change(screen.getByLabelText('选择论文'), { target: { value: 'paper-0' } })
+    expect(await screen.findByText('前向模型 y = Phi x。')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '方法' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /在原网站打开/ })).toBeInTheDocument()
   })
 })

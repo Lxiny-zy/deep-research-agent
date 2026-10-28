@@ -49,6 +49,7 @@ import type {
   QaActivity,
   QaSourceOption,
   RunNarrative,
+  ReaderPassages,
   RunReader,
   RunWorkspace,
   TierSpec,
@@ -1343,6 +1344,18 @@ async function askQuestionStream(
 
 export function getReader(runId: string, signal?: AbortSignal): Promise<RunReader> {
   return request<RunReader>(`/api/runs/${encodeURIComponent(runId)}/reader`, { signal })
+}
+
+/** 没有原版 PDF 的文档：取回任务里冻结的正文片段（只读，不联网）。 */
+export function getReaderPassages(
+  runId: string,
+  documentId: string,
+  signal?: AbortSignal,
+): Promise<ReaderPassages> {
+  return request<ReaderPassages>(
+    `/api/runs/${encodeURIComponent(runId)}/reader/${encodeURIComponent(documentId)}/passages`,
+    { signal },
+  )
 }
 
 /** 取回原版 PDF 的字节；由前端的 PDF.js 渲染，不交给浏览器内置阅读器。 */

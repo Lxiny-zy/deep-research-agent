@@ -55,7 +55,7 @@ describe('HistoryPage result rows', () => {
     expect(container.querySelector('.history-run-list .history-run-card')).toBeNull()
     expect(screen.getByText(LONG_QUERY)).toHaveAttribute('title', LONG_QUERY)
     expect(screen.getByText(LONG_QUERY).closest('a')).toHaveAttribute('href', '/runs/run-1')
-    expect(screen.getByText('3401 tokens')).toBeInTheDocument()
+    expect(screen.getByText('3,401')).toBeInTheDocument()
     expect(container.querySelector('time[datetime="2026-09-07T03:04:05Z"]')).not.toBeNull()
   })
 

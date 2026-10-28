@@ -8,7 +8,7 @@ import { useEffect } from 'react'
  * 卡片数量随页面变化，委托不需要重新绑定；rAF 合并同一帧内的多次移动。
  */
 const SELECTOR =
-  '.panel, .task-card, .home-card, .home-config, .catalog-card, .builtin-card, .qa-starter, .live-metric, .library-project, .history-run-row, .welcome-feature, .spot'
+  '.catalog-card, .builtin-card, .qa-starter, .library-project, .spot'
 
 export function usePointerSpotlight() {
   useEffect(() => {

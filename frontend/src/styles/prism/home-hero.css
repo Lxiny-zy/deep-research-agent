@@ -1,4 +1,4 @@
-/* 首页题句 + 五道谱线：一句话说出研究的走向，五道线说出它经过哪些环节。 */
+/* 首页题句：一句话说出研究的走向，下一行白话说明怎么做。 */
 
 .home-page .home-hero {
   align-items: start;
@@ -8,9 +8,12 @@
   box-shadow: none;
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   min-height: 0;
-  padding.home-hero-title {
+  padding: 4px 0 0;
+}
+
+.home-hero-title {
   margin: 0;
 }
 
@@ -21,86 +24,6 @@
   font-weight: 700;
   letter-spacing: 0.14em;
   line-height: 1.25;
-}
-
-/* 五道谱线：每道一根带辉光的竖线，线下是环节名；悬停显出一句白话 */
-.home-lines {
-  align-self: center;
-  display: flex;
-  gap: 4px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.home-lines li {
-  align-items: center;
-  cursor: default;
-  display: grid;
-  gap: 8px;
-  justify-items: center;
-  position: relative;
-  width: 64px;
-}
-
-.home-lines i {
-  background: linear-gradient(transparent, var(--line) 30%, var(--line) 70%, transparent);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--line) 70%, transparent);
-  height: 64px;
-  transition:
-    box-shadow 300ms var(--ease),
-    transform 300ms var(--ease);
-  width: 2px;
-}
-
-.home-lines strong {
-  font-family: var(--font-serif);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-}
-
-.home-lines small {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-  color: var(--text-2);
-  font-size: 12px;
-  opacity: 0;
-  padding: 6px 10px;
-  pointer-events: none;
-  position: absolute;
-  top: calc(100% + 6px);
-  transition: opacity 200ms var(--ease);
-  white-space: nowrap;
-  z-index: 5;
-}
-
-.home-lines li:hover i {
-  box-shadow: 0 0 18px var(--line);
-  transform: scaleY(1.12);
-}
-
-.home-lines li:hover small {
-  opacity: 1;
-}
-
-@media (max-width: 1100px) {
-  .home-page .home-hero {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .home-lines {
-    justify-content: flex-start;
-  }
-
-  .home-lines i {
-    height: 40px;
-  }
-}
-
--top: 8px;
 }
 
 .home-page .home-hero-sub {

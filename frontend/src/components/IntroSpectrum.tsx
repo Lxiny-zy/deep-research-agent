@@ -5,7 +5,7 @@ import { drawIntro, introThreads } from '../lib/introRender'
  * 欢迎画面的谱线画布。
  * - 谱线依次显影：先是光谱带，再是一条条谱线；
  * - `hot`：指针悬停「进入」时，下段谱线收紧、汇聚点变亮；
- * - `leaving`：离场时光谱带向上下铺满画面；
+ * - `leaving`：离场时谱线与光谱带在约 0.45 秒内收拢进汇聚点（随后由样式层从这一点打开圆孔）；
  * - 标签页隐藏时停帧，「减少动态效果」时直接画出完成态的一帧。
  */
 export default function IntroSpectrum({
@@ -40,14 +40,17 @@ export default function IntroSpectrum({
     let frame = 0
     let born = -1
     let energy = 0
-    let burst = 0
+    let leaveAt = -1
     const pointer = { x: -9999, y: -9999, s: 0, tx: -9999, ty: -9999, ts: 0 }
 
     const render = (time: number) => {
       const s = state.current
       if (born < 0) born = time
       energy += ((s.hot ? 1 : 0) - energy) * 0.07
-      burst += ((s.leaving ? 1 : 0) - burst) * 0.06
+      if (s.leaving && leaveAt < 0) leaveAt = time
+      if (!s.leaving) leaveAt = -1
+      const t = leaveAt < 0 ? 0 : Math.min(1, (time - leaveAt) / 450)
+      const gather = t * t * (3 - 2 * t)
       pointer.x += (pointer.tx - pointer.x) * 0.1
       pointer.y += (pointer.ty - pointer.y) * 0.1
       pointer.s += (pointer.ts - pointer.s) * 0.06
@@ -57,7 +60,7 @@ export default function IntroSpectrum({
         time,
         elapsed: reduced ? 1e6 : time - born,
         energy: reduced ? 0 : energy,
-        burst: reduced ? 0 : burst,
+        gather: reduced ? 0 : gather,
         pointer,
         dark: s.dark,
         threads,

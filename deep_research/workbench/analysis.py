@@ -366,11 +366,14 @@ def _p_text(value: Any) -> str:
 def _synthetic_csv() -> str:
     import numpy as np
 
+    # 每种方法在各自的 10 个测试场景上评估（场景编号互不重复），是独立样本设计。
+    # 若三种方法共用同一批场景就成了重复测量，当前只能给出描述统计；
+    # 演示数据必须能完整走通「检验 → 事后比较 → 图表 → 报告」这条已支持的路径。
     rng = np.random.default_rng(20260926)
     rows = ["method,scene,psnr"]
-    for method, mu in (("A", 32.0), ("B", 33.5), ("C", 34.2)):
+    for index, (method, mu) in enumerate((("A", 32.0), ("B", 33.5), ("C", 34.2))):
         for scene in range(1, 11):
-            rows.append(f"{method},{scene},{rng.normal(mu, 0.8):.2f}")
+            rows.append(f"{method},{index * 10 + scene},{rng.normal(mu, 0.8):.2f}")
     return "\n".join(rows)
 
 

@@ -24,7 +24,9 @@ export default function TaskTemplatePicker({ templates, value, disabled, onChang
     if (!grid) return
     let disposed = false
     const measure = () => {
-      if (!disposed) setOverflowing(grid.scrollWidth > grid.clientWidth + 1)
+      // 只差几个像素时最后一个标签仍完整可见，不算「还有更多任务」；
+      // 被遮住的部分超过半个标签宽度才提示横向滑动。
+      if (!disposed) setOverflowing(grid.scrollWidth - grid.clientWidth > 48)
     }
     measure()
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)

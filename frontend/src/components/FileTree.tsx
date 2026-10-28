@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AppIcon } from './AppIcon'
 import { readWorkspaceFile } from '../api/client'
-import { humanSize } from '../lib/workbench'
+import { humanSize, stepLabel } from '../lib/workbench'
 import type { RunWorkspace, WorkspaceFile } from '../types'
 
 const PREVIEWABLE = /^(text\/|application\/json)/
@@ -13,11 +13,18 @@ interface Group {
   files: WorkspaceFile[]
 }
 
+/** 产物阶段的中文名：步骤名按角色映射，其余固定阶段单独命名，未知阶段原样显示。 */
+const STAGE_LABEL: Record<string, string> = { final: '最终报告', state: '运行状态' }
+
+function stageLabel(stage: string): string {
+  return STAGE_LABEL[stage] ?? stepLabel(stage, stage)
+}
+
 function groupFiles(files: WorkspaceFile[]): Group[] {
   const groups = new Map<string, Group>()
   for (const file of files) {
     const key = `${file.area}/${file.stage}`
-    const title = `${file.area === 'output' ? '成品' : '中间产物'} · ${file.stage}`
+    const title = `${file.area === 'output' ? '成品' : '中间产物'} · ${stageLabel(file.stage)}`
     const group = groups.get(key) ?? { key, title, files: [] }
     group.files.push(file)
     groups.set(key, group)

@@ -1,4 +1,4 @@
-/* 交互动效：指针聚光（--mx/--my 由 usePointerSpotlight 写入）、悬停抬升、入场与换页 */
+/* 交互动效：可点卡片的指针聚光（--mx/--my 由 usePointerSpotlight 写入）、悬停抬升、入场与换页 */
 
 .panel,
 .home-card,
@@ -13,20 +13,15 @@
   position: relative;
 }
 
-/* 聚光：跟随指针的柔光斑，颜色取光谱中段 */
-.panel::before,
-.home-card::before,
-.home-config::before,
+/* 聚光：只用在可点的小卡片上，一层跟随指针的淡光；大面板保持安静 */
 .catalog-card::before,
 .builtin-card::before,
 .qa-starter::before,
-.live-metric::before,
 .library-project::before,
 .spot::before {
   background: radial-gradient(
-    380px circle at var(--mx, -999px) var(--my, -999px),
-    color-mix(in srgb, #b28cff 16%, transparent),
-    color-mix(in srgb, #ffc56b 8%, transparent) 30%,
+    260px circle at var(--mx, -999px) var(--my, -999px),
+    color-mix(in srgb, var(--text) 6%, transparent),
     transparent 60%
   );
   border-radius: inherit;
@@ -39,13 +34,9 @@
   z-index: -1;
 }
 
-.panel:hover::before,
-.home-card:hover::before,
-.home-config:hover::before,
 .catalog-card:hover::before,
 .builtin-card:hover::before,
 .qa-starter:hover::before,
-.live-metric:hover::before,
 .library-project:hover::before,
 .spot:hover::before {
   opacity: 1;
@@ -66,9 +57,9 @@
 .builtin-card:hover,
 .qa-starter:hover,
 .library-project:hover {
-  border-color: color-mix(in srgb, var(--gold) 55%, var(--border));
+  border-color: color-mix(in srgb, var(--text) 30%, var(--border));
   box-shadow: var(--shadow-md);
-  transform: translateY(-3px);
+  transform: translateY(-2px);
 }
 
 .panel,

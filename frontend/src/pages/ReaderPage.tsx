@@ -6,6 +6,7 @@ import { AppIcon } from '../components/AppIcon'
 import QaMessageView from '../components/QaMessage'
 import QaStreamingAnswer from '../components/QaStreamingAnswer'
 import ReportView from '../components/ReportView'
+import ReaderTextView from '../components/ReaderTextView'
 import PanelErrorBoundary from '../components/PanelErrorBoundary'
 import ReadingMapPanel from '../components/ReadingMapPanel'
 import {
@@ -680,6 +681,15 @@ export default function ReaderPage() {
                 />
               </Suspense>
             </PanelErrorBoundary>
+          ) : id ? (
+            <ReaderTextView
+              key={current.id}
+              runId={id}
+              documentId={current.id}
+              highlight={highlight}
+              note={current.note}
+              url={current.url}
+            />
           ) : (
             <div className="reader-note">
               <p className="hint">{current.note || '这份论文没有可显示的原版 PDF。'}</p>

@@ -368,7 +368,7 @@ export default function HistoryPage() {
                       )}
                     </span>
                     <span role="cell" className="history-col-num numeric">
-                      {run.total_tokens} tokens
+                      {run.total_tokens.toLocaleString('en-US')}
                     </span>
                     <span role="cell" className="history-col-num numeric">
                       {formatElapsed(run.elapsed)}
