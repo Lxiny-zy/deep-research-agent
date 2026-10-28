@@ -304,6 +304,7 @@ export default function App() {
           onToggleTheme={theme.toggle}
           dark={theme.dark}
           reveal={false}
+          held={showLogin}
         />
         {tour}
         {showLogin && (

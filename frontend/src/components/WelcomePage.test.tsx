@@ -70,4 +70,12 @@ describe('WelcomePage', () => {
     })
     expect(onEnter).toHaveBeenCalledTimes(1)
   })
+
+  it('stays gathered while a dialog is held open over it', () => {
+    mockReducedMotion(false)
+    const { rerender } = render(<WelcomePage onEnter={() => {}} reveal={false} held />)
+    expect(screen.getByTestId('welcome')).toHaveClass('is-gathering')
+    rerender(<WelcomePage onEnter={() => {}} reveal={false} held={false} />)
+    expect(screen.getByTestId('welcome')).not.toHaveClass('is-gathering')
+  })
 })

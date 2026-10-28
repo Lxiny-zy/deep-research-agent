@@ -19,6 +19,7 @@ export default function WelcomePage({
   onToggleTheme,
   dark = false,
   reveal = true,
+  held = false,
 }: {
   onEnter: () => void
   onTour?: () => void
@@ -26,6 +27,8 @@ export default function WelcomePage({
   dark?: boolean
   /** 背后是否已有工作台可露出；访客没有，只收拢谱线，不打开圆孔 */
   reveal?: boolean
+  /** 停留在收拢状态（如登录框打开时），文字与谱线不再回到画面上 */
+  held?: boolean
 }) {
   const [leaving, setLeaving] = useState(false)
   const [hot, setHot] = useState(false)
@@ -55,14 +58,15 @@ export default function WelcomePage({
   return (
     <div
       className={
-        'intro intro-spectral' + (leaving ? (reveal ? ' is-leaving' : ' is-gathering') : '')
+        'intro intro-spectral' +
+        (leaving && reveal ? ' is-leaving' : leaving || held ? ' is-gathering' : '')
       }
       onAnimationEnd={(event) => {
         if (event.target === event.currentTarget && event.animationName === 'intro-open') finish()
       }}
       data-testid="welcome"
     >
-      <IntroSpectrum hot={hot} leaving={leaving} dark={dark} />
+      <IntroSpectrum hot={hot} leaving={leaving || held} dark={dark} />
 
       <header className="intro-top">
         <span className="intro-kicker">
