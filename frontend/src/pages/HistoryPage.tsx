@@ -200,21 +200,26 @@ export default function HistoryPage() {
             </button>
           )}
           <div className="history-toolbar-spacer" />
-          {selected.size > 0 && <span className="hint">已选 {selected.size} 条</span>}
-          <button
-            className="btn btn-sm history-bulk-delete"
-            disabled={selected.size === 0 || batchDel.isPending}
-            onClick={removeSelected}
-            type="button"
-          >
-            <AppIcon
-              name={batchDel.isPending ? 'loader' : 'trash'}
-              size={14}
-              aria-hidden="true"
-              className={batchDel.isPending ? 'spin' : ''}
-            />
-            {batchDel.isPending ? '删除中…' : `删除所选 (${selected.size})`}
-          </button>
+          {/* 批量删除只在勾选后出现：没有选择时它只是一颗无法点击的按钮 */}
+          {selected.size > 0 && (
+            <>
+              <span className="hint">已选 {selected.size} 条</span>
+              <button
+                className="btn btn-sm danger history-bulk-delete"
+                disabled={batchDel.isPending}
+                onClick={removeSelected}
+                type="button"
+              >
+                <AppIcon
+                  name={batchDel.isPending ? 'loader' : 'trash'}
+                  size={14}
+                  aria-hidden="true"
+                  className={batchDel.isPending ? 'spin' : ''}
+                />
+                {batchDel.isPending ? '删除中…' : '删除所选'}
+              </button>
+            </>
+          )}
         </div>
 
         {tags.data && tags.data.length > 0 && (
