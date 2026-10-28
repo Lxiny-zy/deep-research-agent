@@ -1,15 +1,14 @@
 # 最新上线记录
 
-最新发布：**2026-10-28，`84d86e6a0ecf1f725e3648992c625b6b78a18d0d`**（谱线主题与运行页进度整理，见 [主计划](IMPROVEMENT_PLAN.md) S1–S4）。
-同时带上此前未发布的 `1cc1ebb`（研究策略流程重构）与 `6acfe69`（执行与交付可靠性修复）。
+最新发布：**2026-10-28，`c187607711be91282a9a19fbd3b0a66ee110a89c`**（过渡、观感与场景链路打磨，见 [主计划](IMPROVEMENT_PLAN.md) S5–S8）。
+当天依次发布 `84d86e6`（谱线主题）、`f61aea8`（过渡 / 观感 / 场景链路 / 精读原文视图）、`eb0a24e` 与 `c187607`（访客进入时只收拢谱线并在登录框背后保持收拢）。
 
-- 发布方式：服务器 `git merge --ff-only origin/main` 后按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-84d86e6a0ecf`，仅替换 api 容器。
-- 镜像：`sha256:abbf1aca74b4cfc708e97990b3712a12e21a7f1dbda8b4df5b1400155b4ef4ac`；原版本 `ac39b3c3db94`。
-- 回滚标签：`deep-research-agent:rollback-ac39b3c3db94-20261028t023101z`。
-- 备份（数据库、appdata、artifacts 卷，已校验可读）：`/www/wwwroot/deep-research-agent-backups/20261028T023101Z-spectral-theme-84d86e6a0ecf`。
-- 发布回执：`/www/wwwroot/deep-research-agent-deploy/spectral-theme-84d86e6a0ecf-20261028T023101Z/deployed.json`。
-- 数据库仍为 **0044**，本次无迁移、无依赖变化；切换前确认无进行中的任务。沿用 inline、任务并发 1、渲染并发 1、1 GiB。
-- 验证：容器 healthy，本地与公网 `/readyz` 均 200，公网首页加载新版前端且无脚本错误。未进行真实付费模型评测。
+- 发布方式：服务器 `git merge --ff-only origin/main`，按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-<sha12>`，仅替换 api 容器；每次切换前确认无进行中的任务。
+- 当前镜像：`sha256:3cda6fb9b227a468b3e69dffa790a0ef64b6073240f2154bf2423d9502befc0c`；回滚标签 `deep-research-agent:rollback-eb0a24ec391d-20261028t105003z`（更早的回滚标签逐次保留）。
+- 备份：每次发布前在 `/www/wwwroot/deep-research-agent-backups/` 下新建目录保存数据库导出；`20261028T023101Z-*` 与 `20261028T095636Z-*` 两次另含 appdata、artifacts 卷归档，均已校验可读。
+- 回执：`/www/wwwroot/deep-research-agent-deploy/` 下对应目录的 `deployed.json`。
+- 数据库仍为 **0044**，无迁移、无依赖变化；新增只读接口 `GET /api/runs/{run_id}/reader/{document_id}/passages`。
+- 验证：容器 healthy，本地与公网 `/readyz` 均 200；公网访客进入流程截图检查无脚本错误。未进行真实付费模型评测。
 
 ---
 
