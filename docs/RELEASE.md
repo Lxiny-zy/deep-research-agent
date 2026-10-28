@@ -1,11 +1,22 @@
 # 最新上线记录
 
-最新有记录的发布：**2026-10-09，`e298b09e5234b055a9b55a46c67e655135d57ca8`**。普通问答已改为默认直接回答，严格核验显式启用。
-同一论文追问真实回放为 1 次模型请求，27.832 秒出现正文，47.503 秒完成。
-该次部署、备份和验证信息见 [Aliyun 直接问答修正发布](archive/2026-10/deployment-direct-qa-20261009.md)。
-2026-10-22 本地修复仅校准文档引用，未重新部署或连接生产环境核实运行版本；本地进度见 [主计划](IMPROVEMENT_PLAN.md)。
+最新发布：**2026-10-28，`84d86e6a0ecf1f725e3648992c625b6b78a18d0d`**（谱线主题与运行页进度整理，见 [主计划](IMPROVEMENT_PLAN.md) S1–S4）。
+同时带上此前未发布的 `1cc1ebb`（研究策略流程重构）与 `6acfe69`（执行与交付可靠性修复）。
+
+- 发布方式：服务器 `git merge --ff-only origin/main` 后按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-84d86e6a0ecf`，仅替换 api 容器。
+- 镜像：`sha256:abbf1aca74b4cfc708e97990b3712a12e21a7f1dbda8b4df5b1400155b4ef4ac`；原版本 `ac39b3c3db94`。
+- 回滚标签：`deep-research-agent:rollback-ac39b3c3db94-20261028t023101z`。
+- 备份（数据库、appdata、artifacts 卷，已校验可读）：`/www/wwwroot/deep-research-agent-backups/20261028T023101Z-spectral-theme-84d86e6a0ecf`。
+- 发布回执：`/www/wwwroot/deep-research-agent-deploy/spectral-theme-84d86e6a0ecf-20261028T023101Z/deployed.json`。
+- 数据库仍为 **0044**，本次无迁移、无依赖变化；切换前确认无进行中的任务。沿用 inline、任务并发 1、渲染并发 1、1 GiB。
+- 验证：容器 healthy，本地与公网 `/readyz` 均 200，公网首页加载新版前端且无脚本错误。未进行真实付费模型评测。
 
 ---
+
+## 历史记录：2026-10-09 及更早
+
+2026-10-09 发布 `e298b09e5234`（普通问答默认直接回答，严格核验显式启用），记录见 [Aliyun 直接问答修正发布](archive/2026-10/deployment-direct-qa-20261009.md)。
+2026-10-16 曾发布 `8bbddcb` 与 `ac39b3c`，回执位于服务器 `deep-research-agent-deploy/` 下对应目录。
 
 ## 历史记录：2026-10-06
 
