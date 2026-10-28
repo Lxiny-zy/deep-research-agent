@@ -34,3 +34,21 @@ def test_state_distinguishes_security_from_repairable_quality():
     assert classify_issue("缺少章节：结论") == "rewrite"
     assert classify_issue("PDF 生成失败") == "render"
     assert classify_issue("全文核查需要补读原文") == "read"
+
+
+def test_running_state_advances_phases_in_order():
+    state = derive_workflow_state(_detail(results=False, report=False), None, [])
+    statuses = {phase["id"]: phase["status"] for phase in state["phases"]}
+    assert statuses["intake"] == "done"
+    assert statuses["evidence"] == "active"
+    # Nothing after the first active phase may claim progress before delivery exists.
+    for later in ("coverage", "draft", "review", "repair", "render", "acceptance"):
+        assert statuses[later] == "pending"
+    assert state["current_phase"] == "evidence"
+
+
+def test_writing_state_keeps_evidence_done_and_waits_on_draft():
+    state = derive_workflow_state(_detail(results=True, report=False), None, [])
+    statuses = [phase["status"] for phase in state["phases"]]
+    assert statuses[:4] == ["done", "done", "done", "active"]
+    assert set(statuses[4:]) == {"pending"}

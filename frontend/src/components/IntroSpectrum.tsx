@@ -1,16 +1,14 @@
 import { useEffect, useRef } from 'react'
-import { drawHalo } from '../lib/haloRender'
-
-/** 画布边长 = 光环直径 × 1.9（见 intro-halo.css）；光环细线在画布半径的这个比例处 */
-const RING_RATIO = 0.972 / 1.9
+import { drawIntro, introThreads } from '../lib/introRender'
 
 /**
- * 欢迎光环外沿的动态光谱画布。
- * - `hot`：指针悬停「进入」时峰更高、光尘飘得更远；
- * - `leaving`：离场时整圈光谱向外爆发；
- * - 指针方向会在环上隆起一座峰；标签页隐藏时停帧，「减少动态效果」时只画一帧。
+ * 欢迎画面的谱线画布。
+ * - 谱线依次显影：先是光谱带，再是一条条谱线；
+ * - `hot`：指针悬停「进入」时，下段谱线收紧、汇聚点变亮；
+ * - `leaving`：离场时光谱带向上下铺满画面；
+ * - 标签页隐藏时停帧，「减少动态效果」时直接画出完成态的一帧。
  */
-export default function IntroHalo({
+export default function IntroSpectrum({
   hot,
   leaving,
   dark,
@@ -36,29 +34,33 @@ export default function IntroHalo({
     const context = ctx
     const motion = window.matchMedia?.('(prefers-reduced-motion: reduce)')
     let reduced = motion?.matches ?? false
-    let size = 0
+    const threads = introThreads()
+    let width = 0
+    let height = 0
     let frame = 0
+    let born = -1
     let energy = 0
     let burst = 0
-    const pointer = { angle: 0, s: 0, ts: 0, ta: 0 }
+    const pointer = { x: -9999, y: -9999, s: 0, tx: -9999, ty: -9999, ts: 0 }
 
     const render = (time: number) => {
       const s = state.current
-      energy += ((s.hot ? 1 : 0) - energy) * 0.06
-      burst += ((s.leaving ? 1 : 0) - burst) * 0.05
+      if (born < 0) born = time
+      energy += ((s.hot ? 1 : 0) - energy) * 0.07
+      burst += ((s.leaving ? 1 : 0) - burst) * 0.06
+      pointer.x += (pointer.tx - pointer.x) * 0.1
+      pointer.y += (pointer.ty - pointer.y) * 0.1
       pointer.s += (pointer.ts - pointer.s) * 0.06
-      // 沿最短方向转向目标角，避免跨过 ±π 时整圈甩动
-      let d = pointer.ta - pointer.angle
-      d = Math.atan2(Math.sin(d), Math.cos(d))
-      pointer.angle += d * 0.1
-      drawHalo(context, {
-        size,
-        radius: (size / 2) * RING_RATIO,
+      drawIntro(context, {
+        width,
+        height,
         time,
-        energy,
-        burst,
+        elapsed: reduced ? 1e6 : time - born,
+        energy: reduced ? 0 : energy,
+        burst: reduced ? 0 : burst,
         pointer,
         dark: s.dark,
+        threads,
       })
     }
     const loop = (time: number) => {
@@ -72,18 +74,22 @@ export default function IntroHalo({
     }
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
-      size = canvas.clientWidth
-      canvas.width = Math.max(1, Math.floor(size * dpr))
-      canvas.height = canvas.width
+      width = canvas.clientWidth
+      height = canvas.clientHeight
+      canvas.width = Math.max(1, Math.floor(width * dpr))
+      canvas.height = Math.max(1, Math.floor(height * dpr))
       context.setTransform(dpr, 0, 0, dpr, 0, 0)
       if (reduced) render(0)
     }
     const onMove = (event: PointerEvent) => {
       if (reduced || event.pointerType === 'touch') return
       const rect = canvas.getBoundingClientRect()
-      const dx = event.clientX - (rect.left + rect.width / 2)
-      const dy = event.clientY - (rect.top + rect.height / 2)
-      pointer.ta = Math.atan2(dy, dx)
+      pointer.tx = event.clientX - rect.left
+      pointer.ty = event.clientY - rect.top
+      if (pointer.s < 0.01) {
+        pointer.x = pointer.tx
+        pointer.y = pointer.ty
+      }
       pointer.ts = 1
     }
     const onLeave = () => {
@@ -91,10 +97,6 @@ export default function IntroHalo({
     }
     const onMotion = () => {
       reduced = motion?.matches ?? false
-      if (reduced) {
-        pointer.s = pointer.ts = 0
-        energy = burst = 0
-      }
       start()
     }
 
@@ -114,7 +116,7 @@ export default function IntroHalo({
       document.removeEventListener('visibilitychange', start)
       motion?.removeEventListener?.('change', onMotion)
     }
-  }, [dark])
+  }, [])
 
-  return <canvas ref={ref} className="intro-halo" aria-hidden="true" />
+  return <canvas ref={ref} className="intro-spectrum" aria-hidden="true" />
 }

@@ -47,11 +47,8 @@
   .sidebar-logo,
   .brand-ring,
   .identity-avatar,
-  .backdrop-leak,
-  .home-hero-word.is-spectral,
   .welcome-tour-visual::before,
-  .intro-ring,
-  .intro-prism span {
+  .intro-thread {
     animation: none !important;
   }
 

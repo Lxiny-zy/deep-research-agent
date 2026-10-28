@@ -442,10 +442,17 @@ export default function RunPage() {
 
       {/* 打印预览独占阅读区域，屏幕中的运行活动由打印样式隐藏。 */}
       <div className={`run-columns run-workbench-grid${printPreview ? ' is-print-preview' : ''}`}>
-        {/* 左栏：步骤轨道 + 人话进度 */}
+        {/* 左栏：先读人话进展；逐步骤的耗时、重试与补救放在可展开的明细里 */}
         <aside className="run-left-pane" aria-label="运行步骤与进展">
-          <StepRail workspace={workspace.data} />
           <RunNarrative narrative={narrative.data} />
+          {narrative.data ? (
+            <details className="run-step-details">
+              <summary>执行明细</summary>
+              <StepRail workspace={workspace.data} />
+            </details>
+          ) : (
+            <StepRail workspace={workspace.data} />
+          )}
         </aside>
         <div
           className={`report-panel run-report-column${liveActive ? ' is-streaming' : ''}${printPreview ? ' is-print-preview' : ''}`}

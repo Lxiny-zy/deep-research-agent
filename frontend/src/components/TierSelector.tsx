@@ -14,14 +14,17 @@ function quotaText(usage: UsageQuota): string | null {
   return parts.length ? parts.join(' · ') : null
 }
 
-/** 研究档位：轻量 / 标准 / 深度（分段单选），附今日额度。 */
+/**
+ * 研究规模：轻量 / 标准 / 深度（分段单选），附今日额度。
+ * 与「检索策略」分工：策略决定证据从哪里来，规模决定问题拆成几条思路、补几轮暗线。
+ */
 export default function TierSelector({ tiers, value, onChange, usage, disabled }: Props) {
   const active = tiers.find((tier) => tier.key === value)
   const quota = usage ? quotaText(usage) : null
   return (
     <fieldset className="home-option" disabled={disabled}>
-      <legend className="home-option-label">研究档位</legend>
-      <div className="segmented home-segmented" role="radiogroup" aria-label="研究档位">
+      <legend className="home-option-label">研究规模</legend>
+      <div className="segmented home-segmented" role="radiogroup" aria-label="研究规模">
         {tiers.map((tier) => (
           <label key={tier.key} className={tier.key === value ? 'is-selected' : ''}>
             <input
@@ -38,8 +41,8 @@ export default function TierSelector({ tiers, value, onChange, usage, disabled }
       </div>
       {active && (
         <span className="hint">
-          {active.description} · 最多 {active.max_sub_questions} 个子问题、{active.max_rounds}{' '}
-          轮补洞
+          {active.description} · 最多拆成 {active.max_sub_questions} 条思路，补 {active.max_rounds}{' '}
+          轮暗线
         </span>
       )}
       {quota && (

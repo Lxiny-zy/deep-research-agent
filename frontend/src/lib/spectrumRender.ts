@@ -1,107 +1,149 @@
-import { gaussian, type Peak } from './spectrum'
+import {
+  gaussian,
+  lineX,
+  rgbCss,
+  VISIBLE_MAX,
+  VISIBLE_MIN,
+  wavelengthToRgb,
+  type LiveLine,
+  type RGB,
+  type SpectralLine,
+} from './spectralLines'
 
 /** 一帧的绘制输入。坐标均为 CSS 像素。 */
 export interface Frame {
   width: number
   height: number
-  baseline: number
-  peaks: Peak[]
+  /** 光谱带所在高度：画布高度的比例 */
+  band: number
+  /** 发射谱线（页面切换时插值中的状态） */
+  lines: LiveLine[]
+  /** 吸收线：在光谱带上刻出的暗缝 */
+  absorption: SpectralLine[]
+  /** 标注在第一条谱线旁的记号，如「Hα 656.3 nm」 */
+  label: string
   time: number
   /** 指针位置与影响强度（0 = 指针不在画面内） */
   pointer: { x: number; y: number; s: number }
   dark: boolean
 }
 
-const STRANDS = 16
+const STRANDS = 3
+const STEP = 8
 
-const rgba = ([r, g, b]: Peak['rgb'], a: number) =>
-  `rgba(${r | 0}, ${g | 0}, ${b | 0}, ${a.toFixed(3)})`
+/** 光谱带在画布上的横向范围：避开左侧导航，右侧留一点边。 */
+export function bandSpan(width: number): [number, number] {
+  const left = Math.min(width * 0.5, Math.max(width * 0.22, 260))
+  return [left, width - 24]
+}
+
+const tone = (rgb: RGB, dark: boolean): RGB =>
+  dark ? rgb : ([rgb[0] * 0.72, rgb[1] * 0.68, rgb[2] * 0.78].map(Math.round) as RGB)
 
 /**
- * 画出光谱：每座峰由一束细丝般的高斯曲线织成，峰体内是竖向谱线，峰顶有标记点。
- * 指针附近的曲线被「吸起」，谱线被点亮——这是背景唯一的交互反馈。
+ * 画出谱线背景：一条横贯页面的连续光谱带，若干条竖直谱线从中穿过。
+ * 谱线像被固定在光谱带上的丝线——离带越远摆动越大、越淡；指针靠近时，
+ * 附近的谱线向指针偏折、变亮。吸收线在光谱带上留下暗缝。
  */
-export function drawSpectrum(ctx: CanvasRenderingContext2D, f: Frame) {
+export function drawSpectralLines(ctx: CanvasRenderingContext2D, f: Frame) {
   const { width: W, height: H, dark, time, pointer } = f
-  const base = f.baseline * H
-  const amp = base * 0.9
-  const step = Math.max(4, Math.round(W / 280))
-  const lift = (x: number) => pointer.s * 52 * gaussian(x, pointer.x, W * 0.045)
+  const [left, right] = bandSpan(W)
+  const span = right - left
+  const bandY = f.band * H
+  const xOf = (nm: number) => left + lineX(nm) * span
 
   ctx.clearRect(0, 0, W, H)
-  ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
+  if (W <= 0 || H <= 0 || span <= 0) return
 
-  // 指针光晕：取离指针最近的峰色
-  if (pointer.s > 0.01) {
-    const near = f.peaks.reduce((a, b) =>
-      b.h > 0.01 && Math.abs(b.x * W - pointer.x) < Math.abs(a.x * W - pointer.x) ? b : a,
-    )
-    const glow = ctx.createRadialGradient(pointer.x, pointer.y, 0, pointer.x, pointer.y, 220)
-    glow.addColorStop(0, rgba(near.rgb, (dark ? 0.2 : 0.14) * pointer.s))
-    glow.addColorStop(1, rgba(near.rgb, 0))
-    ctx.fillStyle = glow
-    ctx.fillRect(pointer.x - 220, pointer.y - 220, 440, 440)
+  // 连续光谱带：三层描边叠出光晕，两端渐隐
+  const spectrum = (alpha: number) => {
+    const grad = ctx.createLinearGradient(left, 0, right, 0)
+    for (let i = 0; i <= 10; i++) {
+      const t = i / 10
+      const nm = VISIBLE_MIN + t * (VISIBLE_MAX - VISIBLE_MIN)
+      const fade = Math.min(1, t * 6, (1 - t) * 6)
+      grad.addColorStop(t, rgbCss(tone(wavelengthToRgb(nm), dark), alpha * fade))
+    }
+    return grad
+  }
+  ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
+  for (const [lineWidth, alpha] of [
+    [22, dark ? 0.05 : 0.04],
+    [6, dark ? 0.12 : 0.08],
+    [1, dark ? 0.6 : 0.45],
+  ] as const) {
+    ctx.strokeStyle = spectrum(alpha)
+    ctx.lineWidth = lineWidth
+    ctx.beginPath()
+    ctx.moveTo(left, bandY)
+    ctx.lineTo(right, bandY)
+    ctx.stroke()
   }
 
-  f.peaks.forEach((p, pi) => {
-    if (p.h < 0.01) return
-    const cx = p.x * W
-    const pw = p.w * W
-    const ph = p.h * amp
-    const left = cx - pw * 6
-    const right = cx + pw * 6
-    const grad = ctx.createLinearGradient(left, 0, right, 0)
-    grad.addColorStop(0, rgba(p.rgb, 0))
-    grad.addColorStop(0.5, rgba(p.rgb, dark ? 0.55 : 0.46))
-    grad.addColorStop(1, rgba(p.rgb, 0))
-    ctx.strokeStyle = grad
-    ctx.lineWidth = dark ? 0.8 : 0.7
+  // 吸收线：在光谱带上刻出暗缝
+  ctx.globalCompositeOperation = 'destination-out'
+  for (const line of f.absorption) {
+    const x = xOf(line.nm)
+    ctx.fillStyle = `rgba(0, 0, 0, ${(0.85 * line.strength).toFixed(3)})`
+    ctx.fillRect(x - 1.5, bandY - 14, 3, 28)
+  }
 
-    // 细丝：宽度逐层展开、高度逐层降低，并随时间轻微呼吸与摆动
+  // 发射谱线：每条由一根主线与两根伴线织成
+  ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
+  f.lines.forEach((line, index) => {
+    if (line.strength < 0.01) return
+    const x0 = xOf(line.nm)
+    const rgb = tone(wavelengthToRgb(line.nm), dark)
+    const near = pointer.s * gaussian(x0, pointer.x, 90)
+    const base = line.strength * (dark ? 0.5 : 0.42) + near * 0.35
+    const toward = Math.sign(pointer.x - x0) * Math.min(1, Math.abs(pointer.x - x0) / 40)
+
     for (let s = 0; s < STRANDS; s++) {
-      const k = s / (STRANDS - 1)
-      const breathe = 1 + 0.07 * Math.sin(time * 0.0007 + s * 0.45 + pi * 1.3)
-      const sw = pw * (0.7 + 0.9 * k)
-      const sh = ph * (0.42 + 0.58 * (1 - k)) * breathe
-      const sway = pw * 0.22 * Math.sin(time * 0.0004 + s * 0.3 + pi)
+      const alpha = s === 0 ? base : base * 0.32
+      const grad = ctx.createLinearGradient(0, 0, 0, H)
+      grad.addColorStop(0, rgbCss(rgb, 0))
+      grad.addColorStop(Math.max(0, f.band - 0.42), rgbCss(rgb, alpha * 0.25))
+      grad.addColorStop(f.band, rgbCss(rgb, alpha))
+      grad.addColorStop(Math.min(1, f.band + 0.32), rgbCss(rgb, alpha * 0.2))
+      grad.addColorStop(1, rgbCss(rgb, 0))
+      ctx.strokeStyle = grad
+      ctx.lineWidth = s === 0 ? 1.1 : 0.6
       ctx.beginPath()
-      for (let x = left; x <= right; x += step) {
-        const g = gaussian(x, cx + sway, sw)
-        const silk = 5 * Math.sin(x * 0.004 + time * 0.0005 + s * 0.5) * (1 - g)
-        const y = base - sh * g - lift(x) * (0.35 + 0.65 * g) + silk
-        if (x === left) ctx.moveTo(x, y)
+      for (let y = 0; y <= H + STEP; y += STEP) {
+        const reach = Math.abs(y - bandY) / H
+        const sway =
+          (6 + 5 * s) *
+          reach *
+          Math.sin(y * 0.006 + time * 0.0004 * (1 + 0.25 * s) + index * 1.3 + s * 1.7)
+        const pull =
+          pointer.s * 26 * toward * gaussian(y, pointer.y, 170) * gaussian(x0, pointer.x, 220)
+        const x = x0 + sway + pull + (s === 0 ? 0 : (s === 1 ? -1.6 : 1.6) * reach * 3)
+        if (y === 0) ctx.moveTo(x, y)
         else ctx.lineTo(x, y)
       }
       ctx.stroke()
     }
 
-    // 谱线：峰体内的竖线，指针经过处变亮
-    ctx.lineWidth = 1
-    for (let x = cx - pw * 2.2; x <= cx + pw * 2.2; x += 6) {
-      const top = base - ph * gaussian(x, cx, pw) - lift(x)
-      const near = pointer.s * gaussian(x, pointer.x, 60)
-      ctx.strokeStyle = rgba(p.rgb, (dark ? 0.2 : 0.15) + near * 0.5)
-      ctx.beginPath()
-      ctx.moveTo(x, base)
-      ctx.lineTo(x, top)
-      ctx.stroke()
-    }
-
-    // 峰顶标记：一根细竖线 + 两个点（不标注数值）
-    // 标记线最高只到画布上沿以内，避免被裁掉一截
-    const peakTop = base - ph - lift(cx)
-    const markTop = Math.max(8, peakTop - H * 0.1)
-    ctx.strokeStyle = dark ? 'rgba(255,255,255,0.28)' : 'rgba(30,28,40,0.28)'
-    ctx.beginPath()
-    ctx.moveTo(cx, base)
-    ctx.lineTo(cx, markTop)
-    ctx.stroke()
-    ctx.fillStyle = rgba(p.rgb, 0.95)
-    for (const y of [peakTop, markTop]) {
-      ctx.beginPath()
-      ctx.arc(cx, y, 2.4, 0, Math.PI * 2)
-      ctx.fill()
-    }
+    // 谱线与光谱带的交点：一枚小光斑
+    const glow = ctx.createRadialGradient(x0, bandY, 0, x0, bandY, 12)
+    glow.addColorStop(0, rgbCss(rgb, Math.min(1, base * 1.6)))
+    glow.addColorStop(1, rgbCss(rgb, 0))
+    ctx.fillStyle = glow
+    ctx.fillRect(x0 - 12, bandY - 12, 24, 24)
   })
+
+  // 页面认领的谱线：在交点旁标注记号与波长
+  const first = f.lines[0]
+  if (first && first.strength > 0.5 && f.label) {
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.font = '10px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace'
+    ctx.fillStyle = dark
+      ? `rgba(226, 228, 240, ${(0.55 * first.strength).toFixed(3)})`
+      : `rgba(40, 38, 52, ${(0.5 * first.strength).toFixed(3)})`
+    const x = xOf(first.nm)
+    const flip = x > right - 120
+    ctx.textAlign = flip ? 'right' : 'left'
+    ctx.fillText(f.label, x + (flip ? -10 : 10), bandY - 12)
+  }
   ctx.globalCompositeOperation = 'source-over'
 }

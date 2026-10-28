@@ -157,6 +157,7 @@ export default function AgentSquarePage() {
       <header className="page-header">
         <div>
           <h1>角色广场</h1>
+          <p className="page-verse">三线相依，各守其位。</p>
           <p>管理研究角色、模型档案与检索资源。工作流按标识引用这里的角色。</p>
         </div>
       </header>

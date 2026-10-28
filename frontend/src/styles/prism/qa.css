@@ -45,12 +45,23 @@
 }
 
 .qa-welcome-kicker {
+  align-items: center;
   color: var(--text-3);
-  font-family: var(--font-display);
-  font-size: 11px;
-  letter-spacing: 0.42em;
-  padding-left: 0.42em;
-  text-transform: uppercase;
+  display: inline-flex;
+  font-family: var(--font-serif);
+  font-size: 12px;
+  gap: 10px;
+  justify-content: center;
+  letter-spacing: 0.2em;
+}
+
+/* 钠 D 双线：两道相隔 0.6 nm 的黄线 */
+.qa-welcome-kicker i {
+  border-left: 2px solid rgb(255, 196, 0);
+  border-right: 2px solid rgb(255, 196, 0);
+  box-shadow: 0 0 8px rgba(255, 196, 0, 0.6);
+  height: 14px;
+  width: 7px;
 }
 
 .qa-welcome h2 {
@@ -235,10 +246,10 @@
 
 .qa-context-motto {
   color: var(--text-2);
-  font-family: var(--font-display);
-  font-size: 17px;
-  font-style: italic;
-  line-height: 1.35;
+  font-family: var(--font-serif);
+  font-size: 15px;
+  letter-spacing: 0.14em;
+  line-height: 1.8;
   margin: auto 0 0;
 }
 

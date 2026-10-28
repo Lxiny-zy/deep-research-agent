@@ -11,7 +11,7 @@ describe('OnboardingTour', () => {
     const onComplete = vi.fn()
     render(<OnboardingTour onClose={onClose} onComplete={onComplete} />)
 
-    expect(screen.getByRole('dialog', { name: '选一项科研任务' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '放入一个问题' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '3')

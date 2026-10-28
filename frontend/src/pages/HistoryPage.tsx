@@ -149,7 +149,7 @@ export default function HistoryPage() {
       <header className="page-header">
         <div>
           <h1>任务记录</h1>
-          <p className="page-verse">重翻旧页，或见新意。</p>
+          <p className="page-verse">旧谱未褪，来路可循。</p>
           <p>查看任务进度，回看研究报告与引用来源。</p>
         </div>
         {canCreate && (
@@ -265,7 +265,7 @@ export default function HistoryPage() {
               filtersActive
                 ? '没有符合条件的记录'
                 : canCreate
-                  ? '此间尚留白，待你落笔。'
+                  ? '此处尚无谱线，待你放入第一束光。'
                   : '还没有任务记录'
             }
             description={

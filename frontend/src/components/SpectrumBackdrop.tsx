@@ -1,24 +1,45 @@
 import { useEffect, useRef } from 'react'
-import { SIGNATURES, padPeaks, signatureKey, stepToward, type Peak } from '../lib/spectrum'
-import { drawSpectrum } from '../lib/spectrumRender'
+import { drawSpectralLines } from '../lib/spectrumRender'
+import {
+  lineLabel,
+  padLines,
+  PAGE_SPECTRA,
+  spectrumKey,
+  stepLines,
+  TELLURIC,
+  type LiveLine,
+  type SpectrumKey,
+} from '../lib/spectralLines'
 
 /**
- * 全局光谱背景：随页面变形的高斯光谱 + 指针交互。
- * - 切换页面：峰的位置 / 宽度 / 高度 / 颜色逐帧插值到新页面的特征；
- * - 指针：附近的曲线被吸起、谱线点亮、带一圈同色光晕；
+ * 光谱带的高度（画布高度的比例）。多数页面放在同一高度、透过卡片可见——
+ * 换页时只有谱线在移动，像同一台光谱仪换了一种样品；
+ * 问答页的对话面板占满全屏，光谱带沉到底边。
+ */
+const BAND: Partial<Record<SpectrumKey, number>> = { qa: 0.94 }
+const DEFAULT_BAND = 0.62
+const bandFor = (route: string) => BAND[spectrumKey(route)] ?? DEFAULT_BAND
+
+/**
+ * 全局谱线背景。
+ * - 切换页面：谱线沿光谱带滑到新元素的位置，颜色随波长连续变化；
+ * - 指针：附近的谱线向指针偏折、变亮；
  * - 标签页隐藏时停帧；「减少动态效果」时只在变化时画一帧静态画面。
  */
 export default function SpectrumBackdrop({ route, dark }: { route: string; dark: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null)
-  const target = useRef(padPeaks(SIGNATURES[signatureKey(route)].peaks))
-  const baseline = useRef(SIGNATURES[signatureKey(route)].baseline)
+  const page = PAGE_SPECTRA[spectrumKey(route)]
+  const target = useRef(padLines(page.lines))
+  const label = useRef(lineLabel(page.line))
+  const band = useRef(bandFor(route))
   const darkRef = useRef(dark)
   const kick = useRef<() => void>(() => {})
 
   useEffect(() => {
-    const signature = SIGNATURES[signatureKey(route)]
-    target.current = padPeaks(signature.peaks)
-    baseline.current = signature.baseline
+    const next = PAGE_SPECTRA[spectrumKey(route)]
+    target.current = padLines(next.lines)
+    label.current = lineLabel(next.line)
+    band.current = bandFor(route)
     kick.current()
   }, [route])
 
@@ -39,25 +60,26 @@ export default function SpectrumBackdrop({ route, dark }: { route: string; dark:
     if (!ctx) return
     const context = ctx
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-    const peaks: Peak[] = target.current.map((p) => ({ ...p, rgb: [...p.rgb] as Peak['rgb'] }))
-    let base = baseline.current
+    const lines: LiveLine[] = target.current.map((line) => ({ ...line }))
     let width = 0
     let height = 0
     let frame = 0
+    let bandY = band.current
     const pointer = { x: -9999, y: -9999, s: 0, tx: -9999, ty: -9999, ts: 0 }
 
     const render = (time: number) => {
-      const rate = reduced ? 1 : 0.045
-      stepToward(peaks, target.current, rate)
-      base += (baseline.current - base) * rate
+      stepLines(lines, target.current, reduced ? 1 : 0.05)
+      bandY += (band.current - bandY) * (reduced ? 1 : 0.05)
       pointer.x += (pointer.tx - pointer.x) * 0.12
       pointer.y += (pointer.ty - pointer.y) * 0.12
       pointer.s += (pointer.ts - pointer.s) * 0.08
-      drawSpectrum(context, {
+      drawSpectralLines(context, {
         width,
         height,
-        baseline: base,
-        peaks,
+        band: bandY,
+        lines,
+        absorption: TELLURIC,
+        label: label.current,
         time,
         pointer,
         dark: darkRef.current,
@@ -91,7 +113,7 @@ export default function SpectrumBackdrop({ route, dark }: { route: string; dark:
         pointer.x = pointer.tx
         pointer.y = pointer.ty
       }
-      pointer.ts = pointer.tx >= 0 ? 1 : 0
+      pointer.ts = 1
     }
     const onLeave = () => {
       pointer.ts = 0

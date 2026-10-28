@@ -80,19 +80,49 @@
 
 .sidebar-link-label small {
   color: var(--sidebar-muted);
-  font-family: var(--font-display);
-  font-size: 12px;
+  font-family: var(--font-sans);
+  font-size: 11px;
   font-weight: 400;
+  letter-spacing: 0.04em;
+}
+
+/* 每个入口左缘一道细谱线：未选中时是暗淡的发丝，选中时点亮成本页的谱线颜色 */
+.sidebar-link {
+  position: relative;
+}
+
+.sidebar-link[style]::after {
+  background: var(--line);
+  bottom: 14px;
+  content: '';
+  left: 10px;
+  opacity: 0.32;
+  position: absolute;
+  top: 14px;
+  transition:
+    opacity var(--duration) var(--ease),
+    box-shadow var(--duration) var(--ease);
+  width: 1px;
+}
+
+.sidebar-link[style]:hover::after {
+  opacity: 0.7;
 }
 
 .sidebar-link.active {
-  background: linear-gradient(90deg, var(--sidebar-active), transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--line, var(--primary)) 14%, transparent), transparent);
 }
 
 .sidebar-link.active::before {
+  background: var(--line, var(--primary));
+  box-shadow: 0 0 12px var(--line, var(--primary));
   height: 100%;
   left: 0;
-  width: 4px;
+  width: 3px;
+}
+
+.sidebar-link.active small {
+  color: color-mix(in srgb, var(--line) 70%, var(--sidebar-text-strong));
 }
 
 .sidebar-footer {
@@ -106,9 +136,9 @@
 
 .sidebar-motto {
   color: var(--sidebar-text);
-  font-family: var(--font-display);
-  font-size: 17px;
-  font-style: italic;
-  line-height: 1.35;
+  font-family: var(--font-serif);
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  line-height: 1.8;
   margin: 0 24px 16px;
 }

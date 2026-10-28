@@ -344,10 +344,11 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
           {empty && !runId && (
             <div className="qa-welcome">
               <span className="qa-welcome-kicker" aria-hidden="true">
-                Ask the literature
+                <i />
+                一问一答，如钠的双线并肩
               </span>
-              <h2>案头有所疑，且向卷中寻。</h2>
-              <p className="hint">选一个示例，或直接写下你的问题。</p>
+              <h2>一念起处，自有谱线。</h2>
+              <p className="hint">选一个示例，或直接写下你的问题；每个回答都会标出它从哪里来。</p>
             </div>
           )}
           {scopeNotice && (
@@ -622,9 +623,9 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
           </ol>
         </section>
         <p className="qa-context-motto" aria-hidden="true">
-          Every claim,
+          言必有据，
           <br />
-          traced to its source.
+          如线必有其源。
         </p>
       </aside>
     </div>

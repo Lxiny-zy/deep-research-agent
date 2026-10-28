@@ -6,17 +6,17 @@ import { useDialogFocus } from '../hooks/useDialogFocus'
 const steps: { icon: AppIconName; title: string; text: string }[] = [
   {
     icon: 'sparkles',
-    title: '选一项科研任务',
-    text: '综述、精读、审稿、数据分析、汇报幻灯片或思维导图。检索深度按任务选择。',
+    title: '放入一个问题',
+    text: '选一项科研任务：综述、精读、审稿、数据分析、汇报幻灯片或思维导图。检索深度按任务选择。',
   },
   {
     icon: 'shield',
-    title: '每条结论都可核验',
-    text: '证据逐字核对原文，交付前经过引用、结构与学术文体检查，不合格会自动返工。',
+    title: '亮线有据，暗线可补',
+    text: '证据逐字核对原文；缺证据的地方会被标出并补充检索，交付前再经引用、结构与文体检查，不合格自动返工。',
   },
   {
     icon: 'download',
-    title: '拿走可用的交付物',
+    title: '带走整张光谱',
     text: 'Word、PDF、PPT 与导图同源生成，留在任务记录里，可随时下载或继续追问。',
   },
 ]

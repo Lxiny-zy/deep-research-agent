@@ -1,11 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import LoginGate from './components/LoginGate'
 import WelcomePage from './components/WelcomePage'
 import OnboardingTour from './components/OnboardingTour'
 import SpectrumBackdrop from './components/SpectrumBackdrop'
-import { signatureKey } from './lib/spectrum'
+import {
+  lineLabel,
+  PAGE_SPECTRA,
+  rgbCss,
+  spectrumKey,
+  wavelengthToRgb,
+  type SpectrumKey,
+} from './lib/spectralLines'
 import { usePointerSpotlight } from './hooks/usePointerSpotlight'
 import { useButtonHues } from './hooks/useButtonHues'
 import { hasSeenIntro, hasSeenTour, markIntroSeen, markTourSeen } from './lib/onboarding'
@@ -27,69 +34,50 @@ type Role = 'admin' | 'researcher' | 'reader'
 interface NavItem {
   to: string
   label: string
-  /** 英文副标题（衬线小字） */
-  en: string
+  /** 这一页认领的谱线（见 lib/spectralLines） */
+  spectrum: SpectrumKey
   icon: AppIconName
   end?: boolean
   roles: Role[]
 }
 
 // 一级入口按科研人员的工作场景组织；工作流构建与角色广场属于高级定制，
-// 归在「高级」分组里，普通研究者不会被它们打扰。
+// 归在「研究工具」分组里，普通研究者不会被它们打扰。
+// 每组内按波长从长到短排列，侧栏从上到下读下来就是一段由红到紫的光谱。
 const WORKSPACE_NAV: NavItem[] = [
-  {
-    to: '/',
-    label: '工作台',
-    en: 'Home',
-    icon: 'sparkles',
-    end: true,
-    roles: ['admin', 'researcher'],
-  },
-  {
-    to: '/qa',
-    label: '学术问答',
-    en: 'Research Q&A',
-    icon: 'chat',
-    roles: ['admin', 'researcher'],
-  },
-  {
-    to: '/history',
-    label: '任务记录',
-    en: 'Task History',
-    icon: 'history',
-    roles: ['admin', 'researcher', 'reader'],
-  },
-  {
-    to: '/library',
-    label: '资料库',
-    en: 'Library',
-    icon: 'library',
-    roles: ['admin', 'researcher', 'reader'],
-  },
+  { to: '/', label: '工作台', spectrum: 'home', icon: 'sparkles', end: true, roles: ['admin', 'researcher'] },
+  { to: '/qa', label: '学术问答', spectrum: 'qa', icon: 'chat', roles: ['admin', 'researcher'] },
+  { to: '/history', label: '任务记录', spectrum: 'history', icon: 'history', roles: ['admin', 'researcher', 'reader'] },
+  { to: '/library', label: '资料库', spectrum: 'library', icon: 'library', roles: ['admin', 'researcher', 'reader'] },
 ]
 
 const ADVANCED_NAV: NavItem[] = [
-  { to: '/workflows', label: '研究策略（工作流构建）', en: 'Research Strategy', icon: 'workflow', roles: ['admin'] },
-  { to: '/agents', label: '角色广场', en: 'Agents', icon: 'users', roles: ['admin'] },
-  { to: '/settings', label: '设置', en: 'Settings', icon: 'settings', roles: ['admin'] },
+  { to: '/workflows', label: '研究策略', spectrum: 'workflows', icon: 'workflow', roles: ['admin'] },
+  { to: '/agents', label: '角色广场', spectrum: 'agents', icon: 'users', roles: ['admin'] },
+  { to: '/settings', label: '设置', spectrum: 'tools', icon: 'settings', roles: ['admin'] },
 ]
 
-const PAGE_TITLE: [RegExp, string, string][] = [
-  [/^\/$/, '科研工作台', 'Workbench'],
-  [/^\/runs\/[^/]+\/read/, '论文精读', 'Paper Reader'],
-  [/^\/runs\//, '任务详情', 'Research Run'],
-  [/^\/history/, '任务记录', 'Task History'],
-  [/^\/qa/, '学术问答', 'Research Q&A'],
-  [/^\/library/, '资料库', 'Library'],
-  [/^\/workflows/, '研究策略', 'Research Strategy'],
-  [/^\/agents/, '角色广场', 'Agents'],
-  [/^\/settings/, '设置', 'Settings'],
+const PAGE_TITLE: [RegExp, string][] = [
+  [/^\/$/, '科研工作台'],
+  [/^\/runs\/[^/]+\/read/, '论文精读'],
+  [/^\/runs\//, '任务详情'],
+  [/^\/history/, '任务记录'],
+  [/^\/qa/, '学术问答'],
+  [/^\/library/, '资料库'],
+  [/^\/workflows/, '研究策略'],
+  [/^\/agents/, '角色广场'],
+  [/^\/settings/, '设置'],
 ]
 
-const ROLE_LABEL: Record<Role, [string, string]> = {
-  admin: ['管理员', 'Administrator'],
-  researcher: ['研究者', 'Researcher'],
-  reader: ['访客', 'Reader'],
+/** 谱线颜色，写成 CSS 变量供侧栏色标与顶栏使用。 */
+function lineStyle(key: SpectrumKey): CSSProperties {
+  return { '--line': rgbCss(wavelengthToRgb(PAGE_SPECTRA[key].line.nm)) } as CSSProperties
+}
+
+const ROLE_LABEL: Record<Role, string> = {
+  admin: '管理员',
+  researcher: '研究者',
+  reader: '访客',
 }
 
 const COLLAPSE_KEY = 'sr_sidebar_collapsed'
@@ -328,9 +316,10 @@ export default function App() {
 
   const titleEntry = PAGE_TITLE.find(([pattern]) => pattern.test(location.pathname))
   const pageTitle = titleEntry?.[1] ?? 'Science Research'
-  const pageTitleEn = titleEntry?.[2] ?? 'Science Research'
+  const pageSpectrum = spectrumKey(location.pathname)
+  const pageLine = PAGE_SPECTRA[pageSpectrum]
   const showIntro = !introDone || location.pathname === '/welcome'
-  const [roleCn, roleEn] = ROLE_LABEL[role]
+  const roleCn = ROLE_LABEL[role]
   const identity = getApiKeyStorage() === 'none' ? '本地研究者' : roleCn
   const visible = (items: NavItem[]) => items.filter((item) => item.roles.includes(role))
   const forbidden =
@@ -354,12 +343,15 @@ export default function App() {
       to={item.to}
       end={item.end}
       className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
-      title={collapsed ? item.label : undefined}
+      title={collapsed ? item.label : PAGE_SPECTRA[item.spectrum].note}
+      style={lineStyle(item.spectrum)}
     >
       <AppIcon name={item.icon} size={19} strokeWidth={1.6} aria-hidden="true" />
       <span className="sidebar-link-label">
         {item.label}
-        <small>{item.en}</small>
+        <small>
+          {PAGE_SPECTRA[item.spectrum].element} · {PAGE_SPECTRA[item.spectrum].line.symbol}
+        </small>
       </span>
     </NavLink>
   )
@@ -392,8 +384,9 @@ export default function App() {
         </nav>
         <div className="sidebar-footer">
           <p className="sidebar-motto" aria-hidden="true">
-            Science illumines
-            <br />a more open tomorrow.
+            亮线是已证之事，
+            <br />
+            暗线是未解之问。
           </p>
           <button
             type="button"
@@ -417,11 +410,8 @@ export default function App() {
         </div>
       </aside>
       <div className="sidebar-scrim" onClick={() => setMobileOpen(false)} aria-hidden="true" />
-      {/* 环境背景：棱镜漏光 + 随页面变形的光谱，固定在内容区后方 */}
-      <div className="backdrop" data-signature={signatureKey(location.pathname)} aria-hidden="true">
-        <span className="backdrop-leak l1" />
-        <span className="backdrop-leak l2" />
-        <span className="backdrop-leak l3" />
+      {/* 环境背景：横贯页面的光谱带与本页认领的谱线，固定在内容区后方 */}
+      <div className="backdrop" data-signature={pageSpectrum} aria-hidden="true">
         <SpectrumBackdrop route={location.pathname} dark={theme.dark} />
       </div>
 
@@ -436,9 +426,12 @@ export default function App() {
           >
             <AppIcon name={mobileOpen ? 'x' : 'menu'} size={18} aria-hidden="true" />
           </button>
-          <span className="topbar-title">
+          <span className="topbar-title" style={lineStyle(pageSpectrum)}>
             {pageTitle}
-            <small>{pageTitleEn}</small>
+            <small title={pageLine.note}>
+              <i className="topbar-line" aria-hidden="true" />
+              {pageLine.element} · {lineLabel(pageLine.line)}
+            </small>
           </span>
           <div className="topbar-actions">
             <button
@@ -475,7 +468,7 @@ export default function App() {
               <span className="identity-text">
                 <strong>{identity}</strong>
                 <small>
-                  {roleEn} · {keyStatus}
+                  {roleCn} · {keyStatus}
                 </small>
               </span>
             </button>

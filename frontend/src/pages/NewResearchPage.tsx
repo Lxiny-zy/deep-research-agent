@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import ClarifyDialog from '../components/ClarifyDialog'
@@ -26,6 +26,16 @@ import {
   isUserFacingWorkflow,
 } from '../lib/workflowTemplates'
 import type { ConversationTurn, WorkflowInfo } from '../types'
+import { rgbCss, wavelengthToRgb } from '../lib/spectralLines'
+
+/** 一次研究在首页上的五道谱线：由红到紫，对应执行链路的五个环节。 */
+const HERO_LINES = [
+  { label: '拆解', nm: 656.3, note: '把问题拆成可以独立检索的子问题' },
+  { label: '取证', nm: 589.0, note: '并行检索，来源先过门禁' },
+  { label: '核验', nm: 527.0, note: '逐字比对原文，对得上才算证据' },
+  { label: '补暗线', nm: 486.1, note: '反思缺口，回头补上没有证据的地方' },
+  { label: '汇谱', nm: 410.2, note: '按引用汇成报告，每句话都能回溯' },
+]
 
 const DEFAULT_QUERY = '快照式高光谱成像中，深度展开网络相比端到端网络的优势与局限是什么？'
 const SAMPLES = [
@@ -366,29 +376,27 @@ function ResearchComposer() {
     <div className="home-page">
       <header className="page-header home-hero">
         <div className="home-hero-copy">
-          <span className="home-hero-kicker" aria-hidden="true">
-            From questions
-            <br />
-            to a brighter
-            <br />
-            tomorrow.
-          </span>
           <h1 className="home-hero-title">
             <span className="visually-hidden">Science Research 科研工作台：</span>
-            <span className="home-hero-word" aria-hidden="true">
-              Science
-            </span>
-            <span className="home-hero-word is-spectral" aria-hidden="true">
-              Research
-            </span>
-            <span className="home-hero-question">半窗晴色，一卷新知。</span>
+            <span className="home-hero-verse">思有千线，终汇一谱。</span>
           </h1>
-          <p className="home-hero-sub">从一个问题开始，查阅文献、比较方法，整理自己的研究思路。</p>
+          <p className="home-hero-sub">
+            从一个问题出发：拆成可以检索的子问题，逐条取证，补上暗线，再汇成一份有出处的研究。
+          </p>
         </div>
-        <div className="home-hero-aside" aria-hidden="true">
-          <span>Knowledge drives human progress</span>
-          <span>Spectrum of knowledge</span>
-        </div>
+        <ol className="home-lines" aria-label="一次研究经过的五道谱线">
+          {HERO_LINES.map((line) => (
+            <li
+              key={line.label}
+              style={{ '--line': rgbCss(wavelengthToRgb(line.nm)) } as CSSProperties}
+              title={line.note}
+            >
+              <i aria-hidden="true" />
+              <strong>{line.label}</strong>
+              <small>{line.note}</small>
+            </li>
+          ))}
+        </ol>
         {draft.status !== 'idle' && (
           <div className={'home-draft is-' + draft.status}>
             <span role="status">
@@ -475,9 +483,6 @@ function ResearchComposer() {
               <label className="home-input-label" htmlFor="query">
                 {activeTemplate?.input_label ?? '研究问题'}
               </label>
-              <span className="home-section-motto" aria-hidden="true">
-                Good research begins with a better question.
-              </span>
             </div>
             <textarea
               id="query"
@@ -603,7 +608,12 @@ function ResearchComposer() {
             <StrategySelector
               strategies={strategies}
               value={strategy ?? strategies[0].key}
-              onChange={(key) => setStrategyChoice({ template: templateKey, key })}
+              onChange={(key) => {
+                setStrategyChoice({ template: templateKey, key })
+                // 规模默认跟随策略（深度检索配深度、快速检索配轻量）；换策略时回到对应默认，
+                // 避免留下「深度检索 + 轻量规模」这种互相矛盾的组合。
+                setTierChoice(null)
+              }}
               disabled={busy}
             />
           )}
@@ -683,20 +693,10 @@ function ResearchComposer() {
             key={customWorkflow ?? strategyWorkflow ?? workflow}
             workflow={customWorkflow ?? strategyWorkflow ?? workflow}
           />
-          <p className="home-config-motto" aria-hidden="true">
-            Not just answers,
-            <br />
-            but new perspectives.
-          </p>
         </aside>
       </fieldset>
 
       <div className="home-actionbar">
-        <p className="home-actionbar-motto" aria-hidden="true">
-          Exploration
-          <br />
-          has no final frontier.
-        </p>
         <div className="home-actionbar-status" role="status">
           <AppIcon
             name={submitting ? 'loader' : clarify ? 'help' : 'circle-dot-dashed'}
@@ -722,7 +722,7 @@ function ResearchComposer() {
             {submitLabel}
             {!submitting && <AppIcon name="arrow-right" size={16} aria-hidden="true" />}
           </button>
-          <span aria-hidden="true">Begin research</span>
+          <span aria-hidden="true">放入第一束光</span>
         </div>
       </div>
     </div>

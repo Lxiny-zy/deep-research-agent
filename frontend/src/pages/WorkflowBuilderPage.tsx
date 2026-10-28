@@ -174,6 +174,7 @@ export default function WorkflowBuilderPage() {
       <header className="page-header">
         <div>
             <h1>研究策略</h1>
+            <p className="page-verse">一线接一线亮起，思路才有次第。</p>
             <p>
             先按研究目标选择策略；日常任务不需要理解 Agent、Step 或分支。底层流程编排保留在本页的高级区域，供管理员调试和扩展。
           </p>

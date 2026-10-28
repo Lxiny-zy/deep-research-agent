@@ -86,13 +86,6 @@
   font-weight: 700;
 }
 
-.task-card-en {
-  color: var(--text-3);
-  font-family: var(--font-display);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
 .task-picker-detail {
   padding-top: 4px;
 }

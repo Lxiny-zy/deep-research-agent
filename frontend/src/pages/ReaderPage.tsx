@@ -326,7 +326,7 @@ export default function ReaderPage() {
             返回任务
           </Link>
           <h1 className="reader-title">{current?.title || detail.data?.query || '论文精读'}</h1>
-          <p className="reader-verse">一灯一卷，与君细论。</p>
+          <p className="reader-verse">逐字读去，如辨谱线。</p>
           <p className="hint">
             右侧对照原文，左侧随时提问。回答默认只引用这篇论文，需要时再勾选资料库或联网检索。
           </p>

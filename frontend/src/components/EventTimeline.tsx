@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppIcon } from './AppIcon'
 import { getStageMeta } from '../lib/stageMeta'
-import { isActivityEvent } from '../lib/researchEvents'
+import { activityText, isActivityEvent } from '../lib/researchEvents'
 import type { ResearchEvent } from '../types'
 
 // Follow the live event feed by default, while allowing readers to pause and inspect older entries.
@@ -54,7 +54,7 @@ export default function EventTimeline({
   }
 
   if (events.length === 0) {
-    return <p className="hint">等待事件…开始研究后这里会实时显示各 Agent 的动作。</p>
+    return <p className="hint">等待事件…开始研究后，这里会逐条显示每一步做了什么。</p>
   }
 
   return (
@@ -137,9 +137,8 @@ export default function EventTimeline({
                 <span className="event-stage">
                   <AppIcon name={meta.icon} size={14} aria-hidden="true" />
                   {meta.label}
-                  {meta.label !== ev.stage && ` · ${ev.stage}`}
                 </span>
-                <div className="event-msg">{ev.message}</div>
+                <div className="event-msg">{activityText(ev)}</div>
               </div>
             </div>
           )

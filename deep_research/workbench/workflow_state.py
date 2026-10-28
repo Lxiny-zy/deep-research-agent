@@ -190,6 +190,17 @@ def derive_workflow_state(
         detail="交付已通过验收" if acceptance_status == "done" else "交付仍有待处理问题",
         issues=all_issues, action=classify_issue(all_issues[0]) if all_issues else "none",
     ))
+    # 交付尚未生成时，研究仍在进行：阶段必须按顺序推进。第一个进行中的阶段之后，
+    # 后续阶段一律视为未开始——否则「要求覆盖」会因为还没有质量门而显示已完成，
+    # 「正文生成」「交付验收」也会与「证据准备」同时显示进行中。
+    if bundle is None:
+        first_open = next(
+            (index for index, phase in enumerate(phases) if phase["status"] == "active"), None
+        )
+        if first_open is not None:
+            for phase in phases[first_open + 1:]:
+                if phase["status"] in {"active", "done", "skipped"}:
+                    phase["status"] = "pending"
     current = next(
         (phase for phase in phases if phase["status"] in {"active", "needs_review", "blocked"}),
         phases[-1],

@@ -1,4 +1,4 @@
-/* 顶栏：通透无边框；左侧中英页名，右侧搜索 / 主题 / 身份头像 */
+/* 顶栏：通透无边框；左侧页名与本页谱线，右侧搜索 / 主题 / 身份头像 */
 
 .topbar {
   -webkit-backdrop-filter: blur(14px);
@@ -18,11 +18,23 @@
 }
 
 .topbar-title small {
+  align-items: center;
   color: var(--text-3);
-  font-family: var(--font-display);
+  display: inline-flex;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   font-size: 11px;
-  letter-spacing: 0.32em;
-  text-transform: uppercase;
+  gap: 8px;
+  letter-spacing: 0.06em;
+}
+
+/* 本页谱线：一道带辉光的竖线，颜色即波长 */
+.topbar-line {
+  background: var(--line);
+  border-radius: 1px;
+  box-shadow: 0 0 8px var(--line);
+  display: inline-block;
+  height: 13px;
+  width: 2px;
 }
 
 .topbar-actions {

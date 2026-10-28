@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { AppIcon } from './AppIcon'
-import { formatLabel, templateEn, templateIcon } from '../lib/workbench'
+import { formatLabel, templateIcon } from '../lib/workbench'
 import type { TaskTemplate } from '../types'
 
 interface Props {
@@ -83,11 +83,6 @@ export default function TaskTemplatePicker({ templates, value, disabled, onChang
               </span>
               <span className="task-card-text">
                 <strong className="task-card-title">{template.title}</strong>
-                {templateEn(template.key) && (
-                  <small className="task-card-en" aria-hidden="true">
-                    {templateEn(template.key)}
-                  </small>
-                )}
               </span>
             </label>
           )

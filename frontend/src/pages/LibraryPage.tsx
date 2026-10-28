@@ -246,7 +246,7 @@ export default function LibraryPage() {
       <header className="page-header">
         <div>
           <h1>资料库</h1>
-          <p className="page-verse">收得片纸，留待来日细读。</p>
+          <p className="page-verse">片纸各有其谱，静待光来照读。</p>
           <p>按项目整理文献与资料，在后续研究中查阅、引用。</p>
         </div>
       </header>

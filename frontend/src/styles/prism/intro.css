@@ -1,14 +1,9 @@
-/* 欢迎界面 · 布局与文字（光环与动效见 intro-motion.css） */
+/* 欢迎界面 · 谱线：画布见 IntroSpectrum；光谱带位于 50% 高度，汇聚点（进入）位于 80% */
 
 .intro {
-  --px: 0;
-  --py: 0;
-  --ring: min(58vmin, 480px);
   background:
-    radial-gradient(ellipse 70% 60% at 50% 50%, transparent 40%, var(--bg-subtle) 100%), var(--bg);
+    radial-gradient(ellipse 80% 55% at 50% 50%, transparent 30%, var(--bg-subtle) 100%), var(--bg);
   color: var(--text);
-  display: flex;
-  flex-direction: column;
   inset: 0;
   isolation: isolate;
   overflow: hidden;
@@ -16,30 +11,64 @@
   z-index: 90;
 }
 
+.intro-spectrum {
+  height: 100%;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+  z-index: 0;
+}
+
 .intro-top,
 .intro-foot {
   align-items: center;
   display: flex;
+  gap: 16px;
   justify-content: space-between;
+  left: 0;
   padding: 28px 40px;
-  position: relative;
+  position: absolute;
+  right: 0;
   z-index: 2;
 }
 
-.intro-kicker,
-.intro-foot > span {
+.intro-top {
+  top: 0;
+}
+
+.intro-foot {
+  bottom: 0;
+}
+
+.intro-kicker {
+  align-items: center;
   color: var(--text-3);
-  font-family: var(--font-display);
-  font-size: 11px;
-  letter-spacing: 0.42em;
-  text-transform: uppercase;
+  display: inline-flex;
+  font-family: var(--font-serif);
+  font-size: 13px;
+  gap: 10px;
+  letter-spacing: 0.16em;
+}
+
+/* 记号：一道氦 D₃ 的黄线 */
+.intro-kicker i {
+  background: rgb(255, 214, 0);
+  box-shadow: 0 0 10px rgba(255, 214, 0, 0.8);
+  display: inline-block;
+  height: 14px;
+  width: 2px;
+}
+
+:root[data-theme='light'] .intro-kicker i {
+  background: rgb(196, 150, 0);
+  box-shadow: none;
 }
 
 .intro-foot > span {
+  color: var(--text-3);
+  font-family: var(--font-serif);
   font-size: 14px;
-  font-style: italic;
-  letter-spacing: 0.02em;
-  text-transform: none;
+  letter-spacing: 0.14em;
 }
 
 .intro-icon-button,
@@ -49,6 +78,7 @@
   border-radius: 999px;
   color: var(--text-2);
   cursor: pointer;
+  flex-shrink: 0;
   font-size: var(--text-sm);
   padding: 8px 14px;
   transition:
@@ -70,40 +100,200 @@
   color: var(--text);
 }
 
-.intro-stage {
-  display: grid;
-  flex: 1;
-  perspective: 1000px;
-  place-items: center;
-  position: relative;
+/* 文字压在光谱带上方：先是史实，再是题句，最后一句白话 */
+.intro-copy {
+  bottom: calc(50% + 44px);
+  left: 50%;
+  position: absolute;
+  text-align: center;
+  transform: translateX(-50%);
+  width: min(820px, calc(100% - 32px));
+  z-index: 2;
 }
 
-.intro-stage > * {
-  grid-area: 1 / 1;
+/* 文字背后一层柔和的底色，让穿过的谱线不干扰阅读 */
+.intro-copy::before {
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--bg) 78%, transparent), transparent);
+  content: '';
+  inset: -40px -60px;
+  position: absolute;
+  z-index: -1;
 }
 
-.intro-brand {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  font-family: var(--font-display);
-  font-size: clamp(22px, 2.4vw, 30px);
-  font-weight: 500;
-  gap: 6px;
-  letter-spacing: 0.02em;
-  transform: translateY(calc(var(--ring) / 2 + 64px));
-}
-
-.intro-brand em {
-  background: var(--spectrum);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.intro-brand span {
+.intro-eyebrow {
+  animation: intro-arrive 1200ms var(--ease-out) 300ms both;
   color: var(--text-3);
-  font-family: var(--font-serif);
   font-size: var(--text-sm);
-  letter-spacing: 0.6em;
+  letter-spacing: 0.08em;
+  line-height: 1.9;
+  margin: 0 0 22px;
+}
+
+.intro-verse {
+  font-family: var(--font-serif);
+  font-size: clamp(30px, 4.4vw, 54px);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.intro-verse span {
+  animation: intro-arrive 1400ms var(--ease-out) both;
+  display: inline-block;
+}
+
+.intro-verse span:first-child {
+  animation-delay: 900ms;
+}
+
+.intro-verse span:last-child {
+  animation-delay: 1500ms;
+}
+
+.intro-lede {
+  animation: intro-arrive 1200ms var(--ease-out) 2100ms both;
+  color: var(--text-2);
+  font-size: var(--text-md);
+  letter-spacing: 0.04em;
+  line-height: 1.8;
+  margin: 18px auto 0;
+  max-width: 40em;
+}
+
+/* 进入：谱线的汇聚点 */
+.intro-enter {
+  -webkit-backdrop-filter: blur(8px);
+  animation: intro-enter-arrive 1000ms var(--ease-out) 1800ms both;
+  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border-radius: 50%;
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+  height: 104px;
+  left: 50%;
+  place-content: center;
+  position: absolute;
+  top: 80%;
+  transition:
+    border-color 400ms var(--ease),
+    box-shadow 400ms var(--ease),
+    transform 400ms var(--ease);
+  translate: -50% -50%;
+  width: 104px;
+  z-index: 3;
+}
+
+.intro-enter:hover,
+.intro-enter:focus-visible {
+  border-color: color-mix(in srgb, var(--text) 50%, transparent);
+  box-shadow: 0 0 40px color-mix(in srgb, var(--text) 14%, transparent);
+  outline: none;
+  transform: scale(1.04);
+}
+
+.intro-enter-cn {
+  font-family: var(--font-serif);
+  font-size: 19px;
+  letter-spacing: 0.3em;
+  padding-left: 0.3em;
+}
+
+.intro-enter-en {
+  color: var(--text-3);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  padding-left: 0.2em;
+}
+
+/* 离场：画布把光谱带铺满画面，文字先退，整页随后溶解 */
+.intro.is-leaving {
+  animation: intro-dissolve 1100ms cubic-bezier(0.65, 0, 0.25, 1) forwards;
+}
+
+.intro.is-leaving :is(.intro-copy, .intro-enter, .intro-top, .intro-foot) {
+  opacity: 0;
+  transition: opacity 360ms ease;
+}
+
+@keyframes intro-arrive {
+  from {
+    filter: blur(6px);
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+
+@keyframes intro-enter-arrive {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+@keyframes intro-dissolve {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .intro-top,
+  .intro-foot {
+    padding: 18px 16px;
+  }
+
+  .intro-kicker {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+  }
+
+  .intro-foot > span {
+    font-size: 12px;
+    letter-spacing: 0.06em;
+  }
+
+  .intro-copy {
+    bottom: calc(50% + 28px);
+  }
+
+  .intro-eyebrow {
+    font-size: 12px;
+    margin-bottom: 14px;
+  }
+
+  .intro-lede {
+    font-size: var(--text-sm);
+  }
+
+  .intro-enter {
+    height: 88px;
+    width: 88px;
+  }
+}
+
+@media (max-height: 620px) {
+  .intro-eyebrow {
+    display: none;
+  }
+
+  .intro-lede {
+    margin-top: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intro,
+  .intro *,
+  .intro.is-leaving * {
+    animation: none;
+    transition: none;
+  }
 }

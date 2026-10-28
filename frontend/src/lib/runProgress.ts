@@ -1,5 +1,6 @@
 import type { ResearchEvent, RunStatus, StepRun, StepRunStatus, WorkflowRun } from '../types'
-import { isActivityEvent } from './researchEvents'
+import { activityText, isActivityEvent } from './researchEvents'
+import { stepLabel } from './workbench'
 import { isTerminalRunStatus } from './runStatus'
 
 const TERMINAL_STEP_STATUSES = new Set<StepRunStatus>([
@@ -158,7 +159,7 @@ function latestActivityLabel(events: ResearchEvent[]): string {
     const event = events[index]
     if (event.type === 'token') return '正在撰写研究报告'
     if (!isActivityEvent(event)) continue
-    if (event.message && event.data?.event_name !== 'checkpoint.saved') return event.message
+    if (event.message && event.data?.event_name !== 'checkpoint.saved') return activityText(event)
   }
   return '正在初始化研究流程'
 }
@@ -221,7 +222,11 @@ export function deriveResearchProgress({
             ? '研究任务已取消'
             : runStatus === 'cancelling'
               ? '正在取消研究任务'
-              : activeStep?.label || readyStep?.label || latestActivityLabel(events)
+              : activeStep
+                ? stepLabel(activeStep.label, activeStep.agent)
+                : readyStep
+                  ? stepLabel(readyStep.label, readyStep.agent)
+                  : latestActivityLabel(events)
 
   return {
     percent,

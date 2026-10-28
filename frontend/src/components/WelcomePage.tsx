@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AppIcon } from './AppIcon'
-import IntroHalo from './IntroHalo'
+import IntroSpectrum from './IntroSpectrum'
 
 const LEAVE_MS = 1100
 
 /**
- * 欢迎界面：一枚缓慢旋转、随指针偏转的虹彩光环，中心是「进入」。
- * 环外一圈光谱随节拍律动、朝指针隆起，并随节拍向外荡出涟漪。
- * 点击后光环向外扩散铺满屏幕、画面溶解，随后露出主界面（或登录框）。
+ * 欢迎界面：一条横贯画面的光谱带，谱线在其上依次显影。
+ * 带以上，谱线笔直垂下——位置由元素决定，像早已写定的命运；
+ * 带以下，所有谱线弯向「进入」——许多条思路，最终汇成一个回答。
+ * 点击后光谱带向上下铺满画面、随即溶解，露出主界面（或登录框）。
  * 明暗两套由主题令牌驱动；「减少动态效果」时跳过过渡直接进入。
  */
 export default function WelcomePage({
@@ -21,7 +22,6 @@ export default function WelcomePage({
   onToggleTheme?: (origin: { x: number; y: number }) => void
   dark?: boolean
 }) {
-  const root = useRef<HTMLDivElement>(null)
   const [leaving, setLeaving] = useState(false)
   const [hot, setHot] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout>>()
@@ -38,16 +38,6 @@ export default function WelcomePage({
     enterCallback.current()
   }
 
-  const track = (event: PointerEvent<HTMLDivElement>) => {
-    const el = root.current
-    if (!el || leaving || event.pointerType === 'touch' ||
-        window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
-    const x = (event.clientX / window.innerWidth) * 2 - 1
-    const y = (event.clientY / window.innerHeight) * 2 - 1
-    el.style.setProperty('--px', x.toFixed(3))
-    el.style.setProperty('--py', y.toFixed(3))
-  }
-
   const enter = () => {
     if (busy.current) return
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
@@ -59,36 +49,20 @@ export default function WelcomePage({
 
   return (
     <div
-      ref={root}
-      className={'intro intro-cinematic' + (leaving ? ' is-leaving' : '')}
-      onPointerMove={track}
-      onPointerLeave={() => {
-        root.current?.style.setProperty('--px', '0')
-        root.current?.style.setProperty('--py', '0')
-      }}
+      className={'intro intro-spectral' + (leaving ? ' is-leaving' : '')}
       onAnimationEnd={(event) => {
-        if (event.target === event.currentTarget && event.animationName === 'intro-portal-leave') finish()
+        if (event.target === event.currentTarget && event.animationName === 'intro-dissolve')
+          finish()
       }}
       data-testid="welcome"
     >
-      <div className="intro-observatory" aria-hidden="true">
-        <div className="intro-coordinate-grid" />
-        {Array.from({ length: 18 }, (_, index) => (
-          <i className="intro-star" key={index} style={{
-            '--star-x': `${(index * 37 + 11) % 96 + 2}%`,
-            '--star-y': `${(index * 23 + 7) % 90 + 5}%`,
-            '--star-delay': `${index * 65}ms`,
-          } as CSSProperties} />
-        ))}
-      </div>
-      <div className="intro-prism" aria-hidden="true">
-        <span />
-        <span />
-        <span />
-      </div>
+      <IntroSpectrum hot={hot} leaving={leaving} dark={dark} />
 
       <header className="intro-top">
-        <span className="intro-kicker">From questions to a brighter tomorrow</span>
+        <span className="intro-kicker">
+          <i aria-hidden="true" />
+          Science Research · 科研工作台
+        </span>
         {onToggleTheme && (
           <button
             type="button"
@@ -105,43 +79,37 @@ export default function WelcomePage({
         )}
       </header>
 
-      <main className="intro-stage">
-        <span className="intro-eyebrow">每一个问题，都是新的起点</span>
-        <h1 className="intro-brand">
-          Science <em>Research</em>
-          <span>科研工作台</span>
+      <main className="intro-copy">
+        <p className="intro-eyebrow">
+          1868 年的日食里，日光中多出一条无人认得的黄线。
+          <br />
+          二十七年后，人们才在地上找到它：氦。
+        </p>
+        <h1 className="intro-verse">
+          <span>万物皆有谱线，</span>
+          <span>答案早在光中。</span>
         </h1>
-        <div className="intro-orbit-stage" aria-hidden="true">
-          <span className="intro-orbit intro-orbit-one" />
-          <span className="intro-orbit intro-orbit-two" />
-          <span className="intro-axis intro-axis-x" />
-          <span className="intro-axis intro-axis-y" />
-          <div className="intro-ring">
-            <IntroHalo hot={hot} leaving={leaving} dark={dark} />
-            <i className="intro-ring-wave" />
-            <i className="intro-ring-wave" />
-            <i className="intro-ring-glow" />
-            <i className="intro-ring-line" />
-            <i className="intro-ring-shine" />
-          </div>
-        </div>
-        <button
-          type="button"
-          className="intro-enter"
-          onClick={enter}
-          disabled={leaving}
-          onPointerEnter={() => setHot(true)}
-          onPointerLeave={() => setHot(false)}
-          onFocus={() => setHot(true)}
-          onBlur={() => setHot(false)}
-        >
-          <span className="intro-enter-cn">进入</span>
-          <span className="intro-enter-en">Enter</span>
-        </button>
+        <p className="intro-lede">
+          把问题交给这里：拆成思路，逐条取证，看它在哪里亮起，又在哪里留下暗线。
+        </p>
       </main>
 
+      <button
+        type="button"
+        className="intro-enter"
+        onClick={enter}
+        disabled={leaving}
+        onPointerEnter={() => setHot(true)}
+        onPointerLeave={() => setHot(false)}
+        onFocus={() => setHot(true)}
+        onBlur={() => setHot(false)}
+      >
+        <span className="intro-enter-cn">进入</span>
+        <span className="intro-enter-en">开始读谱</span>
+      </button>
+
       <footer className="intro-foot">
-        <span>Science illumines a more open tomorrow.</span>
+        <span>亮线是已证之事，暗线是未解之问。</span>
         {onTour && (
           <button type="button" className="intro-link" onClick={onTour} disabled={leaving}>
             使用引导

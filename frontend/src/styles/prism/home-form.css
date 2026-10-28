@@ -9,9 +9,6 @@
   opacity: 0.55;
 }
 
-.home-page .home-section-motto,
-.home-page .home-config-motto,
-.home-page .home-actionbar-motto,
 .home-page .home-actionbar-status::before {
   display: none;
 }
@@ -24,13 +21,11 @@
   justify-content: space-between;
 }
 
-.home-section-motto,
 .home-actionbar-go > span {
   color: var(--text-3);
-  font-family: var(--font-display);
-  font-size: 10px;
-  letter-spacing: 0.34em;
-  text-transform: uppercase;
+  font-family: var(--font-serif);
+  font-size: 11px;
+  letter-spacing: 0.24em;
 }
 
 .home-page .home-input-label {
@@ -85,46 +80,12 @@
   font-weight: 600;
 }
 
-/* 配置栏底部的斜体引言 + 一段虹彩弧线 */
-.home-config-motto {
-  color: var(--text-2);
-  font-family: var(--font-display);
-  font-size: 17px;
-  font-style: italic;
-  line-height: 1.35;
-  margin: var(--space-4) 0 var(--space-2);
-  position: relative;
-}
-
-.home-config-motto::after {
-  background: var(--iris);
-  border-radius: 50%;
-  bottom: -70px;
-  content: '';
-  height: 190px;
-  -webkit-mask: radial-gradient(farthest-side, transparent 97%, #000 98.5%, transparent);
-  mask: radial-gradient(farthest-side, transparent 97%, #000 98.5%, transparent);
-  pointer-events: none;
-  position: absolute;
-  right: -110px;
-  width: 190px;
-}
-
-/* 底部操作行：斜体标语 · 细线 · 状态 · 墨色「开始研究」 */
+/* 底部操作行：状态 · 墨色「开始研究」 */
 .home-page .home-actionbar {
   border-color: color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-sm);
   gap: var(--space-6);
   padding: 12px 16px 10px 24px;
-}
-
-.home-actionbar-motto {
-  color: var(--text-2);
-  font-family: var(--font-display);
-  font-size: 19px;
-  font-style: italic;
-  line-height: 1.2;
-  margin: 0;
 }
 
 .home-page .home-actionbar-status::before {
@@ -149,7 +110,6 @@
 }
 
 @media (max-width: 1100px) {
-  .home-actionbar-motto,
   .home-page .home-actionbar-status::before {
     display: none;
   }

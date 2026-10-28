@@ -4,13 +4,24 @@ import type { RunTemplateInfo } from '../types'
 
 /**
  * 运行详情里的「任务卡」：这次跑的是哪类任务、系统理解了什么、取回了哪些论文章节、
- * 评审分数或统计规模。深度研究（默认模板且无契约）的历史运行不渲染，避免重复信息。
+ * 评审分数或统计规模。没有可补充的事实时不渲染，避免与页头重复。
  */
 export default function RunTaskSummary({ info }: { info: RunTemplateInfo | undefined }) {
   if (!info) return null
   const { template, contract, extras, intake, analysis } = info
   if (template.key === 'autoResearch' && !contract) return null
   const failures = intake?.failures ?? []
+  // 任务类型已经显示在页头；没有任何可补充的事实时不再单占一行。
+  const hasFacts = Boolean(
+    info.revision_source ||
+      (contract?.papers && contract.papers.length > 0) ||
+      intake ||
+      analysis ||
+      extras.stats ||
+      contract?.focus ||
+      typeof extras.score === 'number',
+  )
+  if (!hasFacts) return null
   return (
     <section className="panel run-task-summary" aria-label="任务信息">
       <div className="run-task-head">
