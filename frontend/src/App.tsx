@@ -303,6 +303,7 @@ export default function App() {
           onTour={() => setShowTour(true)}
           onToggleTheme={theme.toggle}
           dark={theme.dark}
+          reveal={false}
         />
         {tour}
         {showLogin && (

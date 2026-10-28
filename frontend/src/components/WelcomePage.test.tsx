@@ -55,4 +55,19 @@ describe('WelcomePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '切换到浅色主题' }))
     expect(onToggleTheme).toHaveBeenCalledWith({ x: expect.any(Number), y: expect.any(Number) })
   })
+
+  it('only gathers the lines for guests, without opening onto an empty page', () => {
+    vi.useFakeTimers()
+    mockReducedMotion(false)
+    const onEnter = vi.fn()
+    render(<WelcomePage onEnter={onEnter} reveal={false} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /进入/ }))
+    expect(screen.getByTestId('welcome')).toHaveClass('is-gathering')
+    expect(screen.getByTestId('welcome')).not.toHaveClass('is-leaving')
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(onEnter).toHaveBeenCalledTimes(1)
+  })
 })

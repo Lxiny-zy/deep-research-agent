@@ -3,6 +3,8 @@ import { AppIcon } from './AppIcon'
 import IntroSpectrum from './IntroSpectrum'
 
 const LEAVE_MS = 1100
+/** 只收拢、不开孔（访客）时的时长：谱线收成光核后直接浮出登录框 */
+const GATHER_MS = 480
 
 /**
  * 欢迎界面：一条横贯画面的光谱带，谱线在其上依次显影。
@@ -16,11 +18,14 @@ export default function WelcomePage({
   onTour,
   onToggleTheme,
   dark = false,
+  reveal = true,
 }: {
   onEnter: () => void
   onTour?: () => void
   onToggleTheme?: (origin: { x: number; y: number }) => void
   dark?: boolean
+  /** 背后是否已有工作台可露出；访客没有，只收拢谱线，不打开圆孔 */
+  reveal?: boolean
 }) {
   const [leaving, setLeaving] = useState(false)
   const [hot, setHot] = useState(false)
@@ -44,15 +49,16 @@ export default function WelcomePage({
     if (reduced) return onEnter()
     busy.current = true
     setLeaving(true)
-    timer.current = setTimeout(finish, LEAVE_MS)
+    timer.current = setTimeout(finish, reveal ? LEAVE_MS : GATHER_MS)
   }
 
   return (
     <div
-      className={'intro intro-spectral' + (leaving ? ' is-leaving' : '')}
+      className={
+        'intro intro-spectral' + (leaving ? (reveal ? ' is-leaving' : ' is-gathering') : '')
+      }
       onAnimationEnd={(event) => {
-        if (event.target === event.currentTarget && event.animationName === 'intro-open')
-          finish()
+        if (event.target === event.currentTarget && event.animationName === 'intro-open') finish()
       }}
       data-testid="welcome"
     >

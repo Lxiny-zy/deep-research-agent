@@ -233,7 +233,8 @@
   );
 }
 
-.intro.is-leaving :is(.intro-copy, .intro-enter, .intro-top, .intro-foot) {
+.intro.is-leaving :is(.intro-copy, .intro-enter, .intro-top, .intro-foot),
+.intro.is-gathering :is(.intro-copy, .intro-enter, .intro-top, .intro-foot) {
   opacity: 0;
   transition: opacity 280ms ease;
 }
