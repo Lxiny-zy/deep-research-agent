@@ -1,10 +1,10 @@
 # 最新上线记录
 
-最新发布：**2026-10-28，`c187607711be91282a9a19fbd3b0a66ee110a89c`**（过渡、观感与场景链路打磨，见 [主计划](IMPROVEMENT_PLAN.md) S5–S8）。
-当天依次发布 `84d86e6`（谱线主题）、`f61aea8`（过渡 / 观感 / 场景链路 / 精读原文视图）、`eb0a24e` 与 `c187607`（访客进入时只收拢谱线并在登录框背后保持收拢）。
+最新发布：**2026-10-28，`dad01f2e38be98dd9e0398c412c790fa7ef21e32`**（过渡、观感与场景链路打磨，见 [主计划](IMPROVEMENT_PLAN.md) S5–S8）。
+当天依次发布 `84d86e6`（谱线主题）、`f61aea8`（过渡 / 观感 / 场景链路 / 精读原文视图）、`eb0a24e` 与 `c187607`（访客进入时只收拢谱线并在登录框背后保持收拢）、`dad01f2`（任务记录勾选后才显示批量删除）。
 
 - 发布方式：服务器 `git merge --ff-only origin/main`，按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-<sha12>`，仅替换 api 容器；每次切换前确认无进行中的任务。
-- 当前镜像：`sha256:3cda6fb9b227a468b3e69dffa790a0ef64b6073240f2154bf2423d9502befc0c`；回滚标签 `deep-research-agent:rollback-eb0a24ec391d-20261028t105003z`（更早的回滚标签逐次保留）。
+- 当前镜像：`sha256:102c97bc127bd3f9d2dd428e08e8705e88a8e7d259368f7a45d1504727aae8bc`；回滚标签 `deep-research-agent:rollback-c187607711be-20261028t111604z`（更早的回滚标签逐次保留）。
 - 备份：每次发布前在 `/www/wwwroot/deep-research-agent-backups/` 下新建目录保存数据库导出；`20261028T023101Z-*` 与 `20261028T095636Z-*` 两次另含 appdata、artifacts 卷归档，均已校验可读。
 - 回执：`/www/wwwroot/deep-research-agent-deploy/` 下对应目录的 `deployed.json`。
 - 数据库仍为 **0044**，无迁移、无依赖变化；新增只读接口 `GET /api/runs/{run_id}/reader/{document_id}/passages`。
