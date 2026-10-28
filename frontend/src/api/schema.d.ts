@@ -1245,6 +1245,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{run_id}/reader/{document_id}/passages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Reader Passages
+         * @description 没有原版 PDF 的文档：按原文顺序返回任务里冻结的正文片段，只读，不联网。
+         */
+        get: operations["get_reader_passages_api_runs__run_id__reader__document_id__passages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{run_id}/reader/{document_id}/pdf": {
         parameters: {
             query?: never;
@@ -8007,6 +8027,43 @@ export interface operations {
             };
             path: {
                 run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_reader_passages_api_runs__run_id__reader__document_id__passages_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-api-key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+                document_id: string;
             };
             cookie?: never;
         };
