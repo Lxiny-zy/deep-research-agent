@@ -26,6 +26,7 @@ import {
   isUserFacingWorkflow,
 } from '../lib/workflowTemplates'
 import type { ConversationTurn, WorkflowInfo } from '../types'
+import { PAGE_VOICE } from '../lib/pageVoice'
 
 const DEFAULT_QUERY = '快照式高光谱成像中，深度展开网络相比端到端网络的优势与局限是什么？'
 const SAMPLES = [
@@ -368,7 +369,7 @@ function ResearchComposer() {
         <div className="home-hero-copy">
           <h1 className="home-hero-title">
             <span className="visually-hidden">Science Research 科研工作台：</span>
-            <span className="home-hero-verse">思有千线，终汇一谱。</span>
+            <span className="home-hero-verse">{PAGE_VOICE.home.verse}</span>
           </h1>
           <p className="home-hero-sub">
             从一个问题出发：拆成可以检索的子问题，逐条取证，补上暗线，再汇成一份有出处的研究。

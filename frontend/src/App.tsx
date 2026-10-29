@@ -6,7 +6,6 @@ import WelcomePage from './components/WelcomePage'
 import OnboardingTour from './components/OnboardingTour'
 import SpectrumBackdrop from './components/SpectrumBackdrop'
 import {
-  lineLabel,
   PAGE_SPECTRA,
   rgbCss,
   spectrumKey,
@@ -33,7 +32,7 @@ type Role = 'admin' | 'researcher' | 'reader'
 interface NavItem {
   to: string
   label: string
-  /** 这一页认领的谱线（见 lib/spectralLines） */
+  /** 这一页在研究流程中的一步（见 lib/spectralLines） */
   spectrum: SpectrumKey
   icon: AppIconName
   end?: boolean
@@ -42,7 +41,7 @@ interface NavItem {
 
 // 一级入口按科研人员的工作场景组织；工作流构建与角色广场属于高级定制，
 // 归在「研究工具」分组里，普通研究者不会被它们打扰。
-// 每组内按波长从长到短排列，侧栏从上到下读下来就是一段由红到紫的光谱。
+// 每一页是研究流程中的一步，由紫到红排开，侧栏从上到下读下来就是一段完整的光谱。
 const WORKSPACE_NAV: NavItem[] = [
   { to: '/', label: '工作台', spectrum: 'home', icon: 'sparkles', end: true, roles: ['admin', 'researcher'] },
   { to: '/qa', label: '学术问答', spectrum: 'qa', icon: 'chat', roles: ['admin', 'researcher'] },
@@ -68,9 +67,9 @@ const PAGE_TITLE: [RegExp, string][] = [
   [/^\/settings/, '设置'],
 ]
 
-/** 谱线颜色，写成 CSS 变量供侧栏色标与顶栏使用。 */
+/** 本页所在一步的颜色，写成 CSS 变量供侧栏色标、顶栏与页面强调色使用。 */
 function lineStyle(key: SpectrumKey): CSSProperties {
-  return { '--line': rgbCss(wavelengthToRgb(PAGE_SPECTRA[key].line.nm)) } as CSSProperties
+  return { '--line': rgbCss(wavelengthToRgb(PAGE_SPECTRA[key].nm)) } as CSSProperties
 }
 
 const ROLE_LABEL: Record<Role, string> = {
@@ -349,9 +348,7 @@ export default function App() {
       <AppIcon name={item.icon} size={19} strokeWidth={1.6} aria-hidden="true" />
       <span className="sidebar-link-label">
         {item.label}
-        <small>
-          {PAGE_SPECTRA[item.spectrum].element} · {PAGE_SPECTRA[item.spectrum].line.symbol}
-        </small>
+        <small>{PAGE_SPECTRA[item.spectrum].stage}</small>
       </span>
     </NavLink>
   )
@@ -430,7 +427,7 @@ export default function App() {
             {pageTitle}
             <small title={pageLine.note}>
               <i className="topbar-line" aria-hidden="true" />
-              {pageLine.element} · {lineLabel(pageLine.line)}
+              {pageLine.stage}
             </small>
           </span>
           <div className="topbar-actions">
@@ -475,7 +472,12 @@ export default function App() {
           </div>
         </header>
 
-        <main className="main-content" id="workspace-main" tabIndex={-1}>
+        <main
+          className="main-content"
+          id="workspace-main"
+          tabIndex={-1}
+          style={lineStyle(pageSpectrum)}
+        >
           <div className={`content-area${wide ? ' is-wide' : ''}`} key={location.pathname}>
             {forbidden ? (
               <section className="panel permission-state" role="status">

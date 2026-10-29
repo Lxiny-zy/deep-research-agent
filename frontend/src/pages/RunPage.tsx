@@ -20,6 +20,7 @@ import FileTree from '../components/FileTree'
 import RunNarrative from '../components/RunNarrative'
 import StepRail from '../components/StepRail'
 import RunTaskSummary from '../components/RunTaskSummary'
+import ResearchSpectrum from '../components/ResearchSpectrum'
 import WorkflowStatePanel from '../components/WorkflowStatePanel'
 import { useDeliverables, useNarrative, useRunTemplate, useWorkspace } from '../hooks/useWorkbench'
 import { AppIcon } from '../components/AppIcon'
@@ -29,6 +30,7 @@ import { countBlockedSources, flattenFindings, reportEvidenceToFindings } from '
 import { displayReportTitle } from '../lib/reportTitle'
 import { deriveResearchProgress } from '../lib/runProgress'
 import { isTerminalRunStatus } from '../lib/runStatus'
+import { deriveThoughtLines } from '../lib/thoughtLines'
 import { finalProseReview } from '../lib/workbench'
 import { reviseRunContent } from '../api/client'
 import type { ReportDocument, RunDetail, RunStatus } from '../types'
@@ -287,6 +289,12 @@ export default function RunPage() {
   const createdAt = detail.data?.created_at
     ? new Date(detail.data.created_at).toLocaleString('zh-CN', { hour12: false })
     : ''
+  // 本题之谱：子问题是线，逐字核验的证据决定亮暗；运行中随事件流实时变化
+  const runFinished = isTerminalRunStatus(status)
+  const thoughtLines = useMemo(
+    () => deriveThoughtLines(stream.events, detail.data, runFinished),
+    [detail.data, runFinished, stream.events],
+  )
 
   if (detail.isError) {
     const notFound = detail.error instanceof ApiError && detail.error.status === 404
@@ -419,6 +427,8 @@ export default function RunPage() {
           </div>
         </div>
       )}
+
+      <ResearchSpectrum lines={thoughtLines} live={liveActive} />
 
       <StatsBar
         stats={stream.stats}

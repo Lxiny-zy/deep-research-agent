@@ -16,9 +16,9 @@ export interface Frame {
   height: number
   /** 光谱带所在高度：画布高度的比例（贴近视口底边） */
   band: number
-  /** 发射谱线（页面切换时插值中的状态） */
+  /** 本页所在的一步（页面切换时插值中的状态） */
   lines: LiveLine[]
-  /** 吸收线：在光谱带上刻出的暗缝 */
+  /** 暗线：在光谱带上刻出的暗缝 */
   absorption: SpectralLine[]
   time: number
   /** 指针位置与影响强度（0 = 指针不在画面内） */
@@ -38,8 +38,8 @@ const tone = (rgb: RGB, dark: boolean): RGB =>
   dark ? rgb : ([rgb[0] * 0.72, rgb[1] * 0.68, rgb[2] * 0.78].map(Math.round) as RGB)
 
 /**
- * 画出谱线背景：贴着视口底边的一道连续光谱，像地平线上的光；本页的谱线从中升起一小段，
- * 越高越淡，不穿过阅读区。指针靠近时，附近的谱线升得更高、更亮。吸收线在光谱带上留下暗缝。
+ * 画出谱线背景：贴着视口底边的一道连续光谱，像地平线上的光；本页所在的一步从中
+ * 升起短短一截，不越过卡片之间的空隙。指针靠近时，附近升得更高、更亮。暗线在光谱带上留下暗缝。
  */
 export function drawSpectralLines(ctx: CanvasRenderingContext2D, f: Frame) {
   const { width: W, height: H, dark, time, pointer } = f
@@ -92,7 +92,7 @@ export function drawSpectralLines(ctx: CanvasRenderingContext2D, f: Frame) {
     const rgb = tone(wavelengthToRgb(line.nm), dark)
     const near = pointer.s * gaussian(x0, pointer.x, 90) * gaussian(pointer.y, bandY, H * 0.3)
     const alpha = Math.min(1, line.strength * (dark ? 0.55 : 0.45) + near * 0.35)
-    const rise = Math.min(bandY, H * (0.08 + 0.14 * line.strength) * (1 + near * 0.6))
+    const rise = Math.min(bandY, H * (0.025 + 0.025 * line.strength) * (1 + near * 0.8))
     const top = bandY - rise
     const grad = ctx.createLinearGradient(0, top, 0, bandY)
     grad.addColorStop(0, rgbCss(rgb, 0))

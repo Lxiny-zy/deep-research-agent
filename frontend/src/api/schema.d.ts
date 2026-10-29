@@ -4477,6 +4477,8 @@ export interface components {
             project_id?: string | null;
             /** Query */
             query: string;
+            /** Spectrum */
+            spectrum?: number[];
             /** Status */
             status: string;
             /** Tags */

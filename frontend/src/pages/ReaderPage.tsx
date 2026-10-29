@@ -27,6 +27,7 @@ import type { QaActivity, QaEvidence, QaSourceOption, QaMessage } from '../types
 import { appendQaActivity } from '../lib/qaActivity'
 import { useCancelQaRequest } from '../hooks/useCancelQaRequest'
 import { latestQaContinuation, savedQaScope, type QaScope } from '../lib/qaRequest'
+import { PAGE_VOICE } from '../lib/pageVoice'
 import { finalProseReview } from '../lib/workbench'
 
 // PDF.js 体积较大，只在打开原文时加载
@@ -327,7 +328,7 @@ export default function ReaderPage() {
             返回任务
           </Link>
           <h1 className="reader-title">{current?.title || detail.data?.query || '论文精读'}</h1>
-          <p className="reader-verse">逐字读去，如辨谱线。</p>
+          <p className="reader-verse">{PAGE_VOICE.reader.verse}</p>
           <p className="hint">
             右侧对照原文，左侧随时提问。回答默认只引用这篇论文，需要时再勾选资料库或联网检索。
           </p>

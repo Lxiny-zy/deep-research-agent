@@ -37,6 +37,8 @@ from .repository import (
     RunQuotaExceeded,
     RunSummary,
     TagCount,
+    finding_lights_line,
+    run_spectrum,
 )
 
 
@@ -70,6 +72,18 @@ class _RunRecord:
     schedule_cost: int = 4
     schedule_class: ScheduleKind = "heavy"
     schedule_priority: int = 1
+
+
+def _record_spectrum(rec: _RunRecord) -> list[int]:
+    """与 SqlRepository._run_spectra 同一口径的谱纹。"""
+    researched: dict[str, int] = {}
+    for result in rec.results:
+        lit = sum(
+            finding_lights_line(f.verification.status, f.verification.semantic_status)
+            for f in result.findings
+        )
+        researched[result.sub_question] = max(researched.get(result.sub_question, 0), lit)
+    return run_spectrum([sq.question for sq in rec.sub_questions], researched)
 
 
 class InMemoryRepository:
@@ -720,6 +734,7 @@ class InMemoryRepository:
                 total_tokens=rec.total_tokens,
                 elapsed=rec.elapsed,
                 tags=list(rec.tags),
+                spectrum=_record_spectrum(rec),
             )
             for rec in recs
         ]

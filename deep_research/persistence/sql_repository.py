@@ -64,6 +64,7 @@ from .repository import (
     RunQuotaExceeded,
     RunSummary,
     TagCount,
+    run_spectrum,
 )
 
 logger = logging.getLogger(__name__)
@@ -1474,6 +1475,7 @@ class SqlRepository:
                 # join 标签表筛选；distinct 防一行多标签时重复
                 stmt = stmt.join(orm.RunTagRow).where(orm.RunTagRow.tag == tag).distinct()
             rows = (await s.scalars(stmt.limit(limit).offset(offset))).all()
+            spectra = await self._run_spectra(s, [r.id for r in rows])
             return [
                 RunSummary(
                     id=r.id,
@@ -1485,9 +1487,47 @@ class SqlRepository:
                     total_tokens=r.total_tokens,
                     elapsed=r.elapsed,
                     tags=[t.tag for t in r.tags],
+                    spectrum=spectra.get(r.id, []),
                 )
                 for r in rows
             ]
+
+    @staticmethod
+    async def _run_spectra(s: AsyncSession, run_ids: list[str]) -> dict[str, list[int]]:
+        """一页任务的谱纹：两次聚合查询，不加载正文与证据全文。"""
+        if not run_ids:
+            return {}
+        questions: dict[str, list[str]] = {}
+        planned = await s.execute(
+            select(orm.SubQuestionRow.run_id, orm.SubQuestionRow.question)
+            .where(orm.SubQuestionRow.run_id.in_(run_ids))
+            .order_by(orm.SubQuestionRow.run_id, orm.SubQuestionRow.idx)
+        )
+        for run_id, question in planned:
+            questions.setdefault(run_id, []).append(question)
+        lit = (orm.FindingRow.verification_status == "verified") & (
+            orm.FindingRow.semantic_status == "supported"
+        )
+        counted = await s.execute(
+            select(
+                orm.ResearchResultRow.run_id,
+                orm.ResearchResultRow.sub_question,
+                func.count(orm.FindingRow.id).filter(lit),
+            )
+            .outerjoin(orm.FindingRow, orm.FindingRow.result_id == orm.ResearchResultRow.id)
+            .where(orm.ResearchResultRow.run_id.in_(run_ids))
+            .group_by(orm.ResearchResultRow.id)
+            .order_by(orm.ResearchResultRow.run_id, orm.ResearchResultRow.id)
+        )
+        researched: dict[str, dict[str, int]] = {}
+        for run_id, question, count in counted:
+            # 同一思路在补洞轮次里重查时取最好的一次，避免重复计数
+            seen = researched.setdefault(run_id, {})
+            seen[question] = max(seen.get(question, 0), int(count or 0))
+        return {
+            run_id: run_spectrum(questions.get(run_id, []), researched.get(run_id, {}))
+            for run_id in run_ids
+        }
 
     async def get_run(self, run_id: str) -> RunDetail | None:
         async with self._sm() as s:

@@ -1,33 +1,24 @@
 import { useEffect, useRef } from 'react'
 import { drawSpectralLines } from '../lib/spectrumRender'
-import {
-  padLines,
-  PAGE_SPECTRA,
-  spectrumKey,
-  stepLines,
-  TELLURIC,
-  type LiveLine,
-} from '../lib/spectralLines'
+import { DARK_LINES, pageLines, spectrumKey, stepLines, type LiveLine } from '../lib/spectralLines'
 
 /** 光谱带贴近视口底边：像地平线上的一道光，不穿过阅读区。 */
 const BAND = 0.965
 
 /**
- * 全局谱线背景。
- * - 切换页面：谱线沿光谱带滑到新元素的位置，颜色随波长连续变化；
- * - 指针：靠近底边时，附近的谱线升得更高、更亮；
+ * 全局谱线背景：一道贴着底边的光谱，本页所在的那一步在其上亮起。
+ * - 切换页面：亮点沿光谱带滑到新一步的位置，颜色随之连续变化；
+ * - 指针：靠近底边时，亮点附近升得更高、更亮；
  * - 标签页隐藏时停帧；「减少动态效果」时只在变化时画一帧静态画面。
  */
 export default function SpectrumBackdrop({ route, dark }: { route: string; dark: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null)
-  const page = PAGE_SPECTRA[spectrumKey(route)]
-  const target = useRef(padLines(page.lines))
+  const target = useRef(pageLines(spectrumKey(route)))
   const darkRef = useRef(dark)
   const kick = useRef<() => void>(() => {})
 
   useEffect(() => {
-    const next = PAGE_SPECTRA[spectrumKey(route)]
-    target.current = padLines(next.lines)
+    target.current = pageLines(spectrumKey(route))
     kick.current()
   }, [route])
 
@@ -64,7 +55,7 @@ export default function SpectrumBackdrop({ route, dark }: { route: string; dark:
         height,
         band: BAND,
         lines,
-        absorption: TELLURIC,
+        absorption: DARK_LINES,
         time,
         pointer,
         dark: darkRef.current,

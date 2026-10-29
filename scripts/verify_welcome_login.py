@@ -82,7 +82,7 @@ async def verify(origin: str) -> None:
                     errors: list[str] = []
                     page.on("pageerror", lambda error, target=errors: target.append(str(error)))
                     await page.goto(origin.rstrip("/") + "/history")
-                    enter = page.get_by_role("button", name="进入 Enter", exact=True)
+                    enter = page.get_by_role("button", name="进入 开始读谱", exact=True)
                     await enter.click()
                     dialog = page.get_by_role("dialog", name="连接你的研究工作台")
                     key = dialog.get_by_label("访问密钥", exact=True)

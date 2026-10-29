@@ -2,6 +2,7 @@ import { useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import AgentCardEditor, { type RolePreset } from '../components/AgentCardEditor'
 import BuiltinRoleGallery from '../components/BuiltinRoleGallery'
+import PageHeader from '../components/PageHeader'
 import ModelProfileCard from '../components/ModelProfileCard'
 import ModelProfileEditor from '../components/ModelProfileEditor'
 import SearchKeyCard from '../components/SearchKeyCard'
@@ -154,13 +155,9 @@ export default function AgentSquarePage() {
 
   return (
     <div className="stack page-stack catalog-page">
-      <header className="page-header">
-        <div>
-          <h1>角色广场</h1>
-          <p className="page-verse">三线相依，各守其位。</p>
-          <p>管理研究角色、模型档案与检索资源。工作流按标识引用这里的角色。</p>
-        </div>
-      </header>
+      <PageHeader page="agents" title="角色广场">
+        管理研究角色、模型档案与检索资源。工作流按标识引用这里的角色。
+      </PageHeader>
 
       <div className="tabs agent-tabs" role="tablist" aria-label="角色广场分类">
         {TABS.map((t) => (

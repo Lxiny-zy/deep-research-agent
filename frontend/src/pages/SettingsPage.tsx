@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Skeleton from '../components/Skeleton'
+import PageHeader from '../components/PageHeader'
 import { AppIcon, type AppIconName } from '../components/AppIcon'
 import { useModels, useSearchKeys } from '../hooks/useCatalog'
 import { useConfig, useUpdateConfig } from '../hooks/useConfig'
@@ -294,13 +295,9 @@ export default function SettingsPage() {
 
   return (
     <div className="stack page-stack settings-page">
-      <header className="page-header">
-        <div>
-          <h1>设置</h1>
-          <p className="page-verse">先校准仪器，再去读谱。</p>
-          <p>设置默认模型、检索档案、研究参数与交付质量。保存后对新建任务生效。</p>
-        </div>
-      </header>
+      <PageHeader page="tools" title="设置">
+        设置默认模型、检索档案、研究参数与交付质量。保存后对新建任务生效。
+      </PageHeader>
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="设置分区">

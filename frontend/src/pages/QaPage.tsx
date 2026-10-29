@@ -23,6 +23,7 @@ import {
 import { appendQaActivity } from '../lib/qaActivity'
 import { useCancelQaRequest } from '../hooks/useCancelQaRequest'
 import { latestQaContinuation, savedQaScope, type QaScope } from '../lib/qaRequest'
+import { PAGE_VOICE } from '../lib/pageVoice'
 import type { QaActivity, QaMessage } from '../types'
 
 const STARTERS = [
@@ -343,11 +344,7 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
           </div>}
           {empty && !runId && (
             <div className="qa-welcome">
-              <span className="qa-welcome-kicker" aria-hidden="true">
-                <i />
-                一问一答，如钠的双线并肩
-              </span>
-              <h2>一念起处，自有谱线。</h2>
+              <h2>{PAGE_VOICE.qa.verse}</h2>
               <p className="hint">选一个示例，或直接写下你的问题；每个回答都会标出它从哪里来。</p>
             </div>
           )}

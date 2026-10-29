@@ -42,6 +42,11 @@ export interface RunSummary {
   total_tokens: number
   elapsed: number
   tags: string[]
+  /**
+   * 谱纹：按子问题顺序，每条思路一个数。-1 尚未检索；0 检索过但没有可用证据；
+   * n > 0 为通过逐字核验且语义支持的发现数。旧服务端可能不返回。
+   */
+  spectrum?: number[]
 }
 
 export type CancelRunResponse = Wire<'CancelRunResponse'>

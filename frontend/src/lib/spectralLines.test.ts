@@ -1,16 +1,14 @@
 import {
-  lineLabel,
   lineX,
-  MAX_LINES,
-  padLines,
   PAGE_SPECTRA,
+  pageLines,
   spectrumKey,
   stepLines,
   wavelengthToRgb,
 } from './spectralLines'
 
 describe('spectral line identity', () => {
-  it('assigns every area of the app its own element', () => {
+  it('gives every area of the app its own step in the research flow', () => {
     expect(spectrumKey('/')).toBe('home')
     expect(spectrumKey('/qa')).toBe('qa')
     expect(spectrumKey('/history')).toBe('history')
@@ -21,20 +19,18 @@ describe('spectral line identity', () => {
     expect(spectrumKey('/workflows')).toBe('workflows')
     expect(spectrumKey('/agents')).toBe('agents')
 
-    const elements = Object.values(PAGE_SPECTRA).map((page) => page.element)
-    expect(new Set(elements).size).toBe(elements.length)
+    const stages = Object.values(PAGE_SPECTRA).map((page) => page.stage)
+    expect(new Set(stages).size).toBe(stages.length)
     for (const page of Object.values(PAGE_SPECTRA)) {
-      expect(page.lines).toContain(page.line)
-      expect(page.lines.length).toBeLessThanOrEqual(MAX_LINES)
-      for (const line of page.lines) {
-        expect(line.nm).toBeGreaterThanOrEqual(380)
-        expect(line.nm).toBeLessThanOrEqual(780)
-      }
+      expect(page.nm).toBeGreaterThanOrEqual(400)
+      expect(page.nm).toBeLessThanOrEqual(700)
     }
   })
 
-  it('labels a line with its symbol and wavelength', () => {
-    expect(lineLabel(PAGE_SPECTRA.home.line)).toBe('Hα 656.3 nm')
+  it('orders the sidebar from violet to red, one continuous spectrum', () => {
+    const nav = ['home', 'qa', 'history', 'library', 'workflows', 'agents', 'tools'] as const
+    const positions = nav.map((key) => PAGE_SPECTRA[key].nm)
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions)
   })
 
   it('maps wavelength to a plausible colour and position', () => {
@@ -49,11 +45,9 @@ describe('spectral line identity', () => {
     expect(lineX(780)).toBe(1)
   })
 
-  it('pads with dark lines and slides toward the next element', () => {
-    const current = padLines(PAGE_SPECTRA.home.lines)
-    expect(current).toHaveLength(MAX_LINES)
-    expect(current.slice(4).every((line) => line.strength === 0)).toBe(true)
-    const target = padLines(PAGE_SPECTRA.history.lines)
+  it('slides the page line toward the next step', () => {
+    const current = pageLines('home')
+    const target = pageLines('history')
     let moving = stepLines(current, target, 0.5)
     expect(moving).toBe(true)
     for (let i = 0; i < 80 && moving; i++) moving = stepLines(current, target, 0.5)

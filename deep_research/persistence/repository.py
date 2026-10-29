@@ -68,6 +68,22 @@ class RunSummary:
     total_tokens: int = 0
     elapsed: float = 0.0
     tags: list[str] = field(default_factory=list)
+    # 谱纹：按子问题顺序，每条思路一个数。-1 尚未检索；0 检索过但没有可用证据；
+    # n > 0 为通过逐字核验且语义支持的发现数。只作列表概览，报告准入仍以任务详情为准。
+    spectrum: list[int] = field(default_factory=list)
+
+
+def finding_lights_line(verification_status: str, semantic_status: str) -> bool:
+    """谱纹计数口径：逐字核验通过且语义支持。SQL 与内存仓库共用，保持两边一致。"""
+    return verification_status == "verified" and semantic_status == "supported"
+
+
+def run_spectrum(questions: list[str], researched: dict[str, int]) -> list[int]:
+    """按子问题顺序生成谱纹；检索结果里出现、计划里没有的问题按出现顺序补在后面。"""
+    spectrum = [researched.get(question, -1) for question in questions]
+    planned = set(questions)
+    spectrum.extend(count for question, count in researched.items() if question not in planned)
+    return spectrum
 
 
 @dataclass

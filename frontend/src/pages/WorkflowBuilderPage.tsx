@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import BuiltinTemplateGallery from '../components/BuiltinTemplateGallery'
+import PageHeader from '../components/PageHeader'
 import Skeleton from '../components/Skeleton'
 import EmptyState from '../components/EmptyState'
 import WorkflowEditor from '../components/WorkflowEditor'
@@ -171,21 +172,18 @@ export default function WorkflowBuilderPage() {
 
   return (
     <div className="stack page-stack workflow-page">
-      <header className="page-header">
-        <div>
-            <h1>研究策略</h1>
-            <p className="page-verse">一线接一线亮起，思路才有次第。</p>
-            <p>
-            先按研究目标选择策略；日常任务不需要理解 Agent、Step 或分支。底层流程编排保留在本页的高级区域，供管理员调试和扩展。
-          </p>
-        </div>
-        <div className="page-header-actions">
+      <PageHeader
+        page="workflows"
+        title="研究策略"
+        actions={
           <button className="btn btn-primary" onClick={() => openEditor(null)} type="button">
             <AppIcon name="plus" size={15} aria-hidden="true" />
             新建高级策略
           </button>
-        </div>
-      </header>
+        }
+      >
+        研究的次第：广泛检索，追问来源，反思补洞，逐字核验，落笔成文。先按研究目标选择策略；日常任务不需要理解 Agent、Step 或分支。底层流程编排保留在本页的高级区域，供管理员调试和扩展。
+      </PageHeader>
 
       <details className="panel workflow-templates" ref={templatesRef} open>
         <summary>

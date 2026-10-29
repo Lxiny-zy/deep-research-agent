@@ -1093,6 +1093,55 @@ async def test_list_runs_status_and_query_filter(repo):
     assert {s.id for s in await repo.list_runs(q="深度")} == {b}
 
 
+def _lit_finding(semantic: str = "supported") -> Finding:
+    return Finding(
+        statement="s",
+        source_url="https://a.example",
+        evidence_quote="verbatim",
+        verification=EvidenceVerification(
+            status="verified",
+            method="normalized_quote",
+            source_content_hash="h",
+            reason="quote_found_in_source",
+            semantic_status=semantic,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_runs_carries_the_research_spectrum(repo):
+    """谱纹按子问题顺序：未检索 -1，检索过但无可用证据 0，否则为核验且语义支持的发现数。"""
+    run_id = await repo.create_run("一问一谱")
+    empty = await repo.create_run("尚未拆解")
+    await repo.save_plan(
+        run_id,
+        ResearchPlan(
+            interpretation="",
+            sub_questions=[SubQuestion(question=q) for q in ("亮", "暗", "待")],
+        ),
+    )
+    await repo.add_sub_questions(run_id, [SubQuestion(question="补")], origin="reflection", round=1)
+    await repo.save_result(
+        run_id,
+        ResearchResult(
+            sub_question="亮",
+            findings=[_lit_finding(), _lit_finding(), _lit_finding("unsupported")],
+        ),
+    )
+    await repo.save_result(
+        run_id,
+        ResearchResult(
+            sub_question="暗",
+            findings=[Finding(statement="s", source_url="https://b.example")],
+        ),
+    )
+    await repo.save_result(run_id, ResearchResult(sub_question="补", findings=[_lit_finding()]))
+
+    rows = {row.id: row for row in await repo.list_runs()}
+    assert rows[run_id].spectrum == [2, 0, -1, 1]
+    assert rows[empty].spectrum == []
+
+
 def _postgres_url() -> str:
     url = os.getenv("DATABASE_URL")
     if not url or "postgresql" not in url:

@@ -1,9 +1,8 @@
 import {
+  DARK_LINES,
   gaussian,
   lineX,
-  PAGE_SPECTRA,
   rgbCss,
-  TELLURIC,
   VISIBLE_MAX,
   VISIBLE_MIN,
   wavelengthToRgb,
@@ -19,29 +18,26 @@ export interface IntroThread {
   strength: number
   /** 显影延迟（毫秒） */
   delay: number
-  /** 氦 D₃：唯一带标注的那一条 */
-  key: boolean
 }
 
 /**
- * 欢迎画面上的全部谱线：各页认领的元素谱线合在一起，按波长排好。
- * 相距不足 1 nm 的谱线合并为一条，避免在屏幕上叠成一团。
+ * 欢迎画面上的思路线：一个问题拆开后的千条思路，铺满可见光谱。
+ * 用固定种子的伪随机数排布——每次打开都是同一幅谱，不对应任何元素。
  */
-export function introThreads(): IntroThread[] {
-  const all = Object.values(PAGE_SPECTRA)
-    .flatMap((page) => page.lines)
-    .sort((a, b) => a.nm - b.nm)
-  const merged: { nm: number; strength: number }[] = []
-  for (const line of all) {
-    const last = merged[merged.length - 1]
-    if (last && line.nm - last.nm < 1) last.strength = Math.max(last.strength, line.strength)
-    else merged.push({ nm: line.nm, strength: line.strength })
+export function introThreads(count = 34): IntroThread[] {
+  let seed = 20261028
+  const random = () => {
+    seed = (seed * 16807) % 2147483647
+    return (seed - 1) / 2147483646
   }
-  return merged.map((line, index) => ({
-    ...line,
-    delay: 240 + ((index * 37) % 23) * 62,
-    key: Math.abs(line.nm - 587.6) < 0.05,
-  }))
+  return Array.from({ length: count }, (_, index) => {
+    const slot = (index + 0.2 + random() * 0.6) / count
+    return {
+      nm: 400 + slot * 310,
+      strength: 0.3 + 0.7 * random(),
+      delay: 240 + ((index * 37) % 23) * 62,
+    }
+  })
 }
 
 export interface IntroFrame {
@@ -110,9 +106,9 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
     ctx.stroke()
   }
 
-  // 吸收线：大气在光谱带上留下的暗缝
+  // 暗线：未解之问，在光谱带上留下暗缝
   ctx.globalCompositeOperation = 'destination-out'
-  for (const line of TELLURIC) {
+  for (const line of DARK_LINES) {
     ctx.fillStyle = `rgba(0, 0, 0, ${(0.8 * line.strength * bandIn).toFixed(3)})`
     ctx.fillRect(xOf(line.nm) - 1.5, bandY - 16, 3, 32)
   }
@@ -141,10 +137,7 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
     const near = pointer.s * gaussian(x0, pointer.x, 70) * gaussian(pointer.y, bandY * 0.6, H * 0.4)
     const alpha = Math.min(
       1,
-      ((dark ? 0.2 : 0.16) + (dark ? 0.5 : 0.42) * thread.strength) *
-        appear *
-        (thread.key ? 1.35 : 1) +
-        near * 0.45,
+      ((dark ? 0.2 : 0.16) + (dark ? 0.5 : 0.42) * thread.strength) * appear + near * 0.45,
     )
 
     // 上段：从光谱带向上生长，越高越淡，轻微摆动；离场时缩回光谱带
@@ -153,7 +146,7 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
     up.addColorStop(0, rgbCss(rgb, 0))
     up.addColorStop(1, rgbCss(rgb, alpha))
     ctx.strokeStyle = up
-    ctx.lineWidth = thread.key ? 1.4 : 1
+    ctx.lineWidth = 1
     ctx.beginPath()
     for (let y = bandY; y >= top; y -= 8) {
       const reach = (bandY - y) / Math.max(1, bandY)
@@ -170,7 +163,7 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
     down.addColorStop(0, rgbCss(rgb, alpha * 0.9))
     down.addColorStop(1, rgbCss(rgb, alpha * (0.2 + energy * 0.5)))
     ctx.strokeStyle = down
-    ctx.lineWidth = thread.key ? 1.2 : 0.8
+    ctx.lineWidth = 0.8
     ctx.beginPath()
     const steps = 28
     const from = Math.min(steps, Math.ceil(steps * gather))
@@ -190,21 +183,6 @@ export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
     dot.addColorStop(1, rgbCss(rgb, 0))
     ctx.fillStyle = dot
     ctx.fillRect(x0 - r, bandY - r, r * 2, r * 2)
-
-    if (thread.key) {
-      const labelIn = ease((f.elapsed - thread.delay - 900) / 900) * (1 - gather)
-      if (labelIn > 0) {
-        ctx.globalCompositeOperation = 'source-over'
-        ctx.font = '11px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace'
-        ctx.textAlign = 'left'
-        ctx.fillStyle = dark
-          ? `rgba(236, 232, 220, ${(0.72 * labelIn).toFixed(3)})`
-          : `rgba(48, 42, 30, ${(0.7 * labelIn).toFixed(3)})`
-        // 窄屏上标注放到光谱带下方，避免压住上方的说明文字
-        ctx.fillText('He I 587.6 nm · 1868', x0 + 10, W < 720 ? bandY + 24 : bandY - 14)
-        ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
-      }
-    }
   })
   ctx.globalCompositeOperation = 'source-over'
 }

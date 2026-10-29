@@ -5,8 +5,27 @@ import StatusBadge from '../components/StatusBadge'
 import EmptyState from '../components/EmptyState'
 import Skeleton from '../components/Skeleton'
 import OperationsOverview from '../components/OperationsOverview'
+import PageHeader from '../components/PageHeader'
+import SpectrumStrip from '../components/SpectrumStrip'
 import { useBatchDeleteRuns, useDeleteRun, useRunsList, useTags } from '../hooks/useRuns'
+import { stripFromSummary, tallyLines } from '../lib/thoughtLines'
 import type { RunStatus } from '../types'
+
+/** 每条任务的谱纹：几条思路、几条已证、几条仍暗，一眼可见。没有拆分思路的任务不画。 */
+function RunFingerprint({ spectrum, finished }: { spectrum?: number[]; finished: boolean }) {
+  const lines = stripFromSummary(spectrum, finished)
+  if (lines.length === 0) return null
+  const { lit, dark, pending } = tallyLines(lines)
+  const label =
+    `谱纹：${lines.length} 条思路，${lit} 条已证` +
+    (dark ? `，${dark} 条暗线` : '') +
+    (pending ? `，${pending} 条待显` : '')
+  return (
+    <span className="history-fingerprint" title={label}>
+      <SpectrumStrip lines={lines} className="history-spectrum" label={label} />
+    </span>
+  )
+}
 
 const PAGE = 20
 
@@ -146,21 +165,20 @@ export default function HistoryPage() {
 
   return (
     <div className="stack page-stack history-page">
-      <header className="page-header">
-        <div>
-          <h1>任务记录</h1>
-          <p className="page-verse">旧谱未褪，来路可循。</p>
-          <p>查看任务进度，回看研究报告与引用来源。</p>
-        </div>
-        {canCreate && (
-          <div className="page-header-actions">
+      <PageHeader
+        page="history"
+        title="任务记录"
+        actions={
+          canCreate && (
             <Link className="btn btn-primary" to="/">
               <AppIcon name="plus" size={15} aria-hidden="true" />
               新建任务
             </Link>
-          </div>
-        )}
-      </header>
+          )
+        }
+      >
+        查看任务进度，回看研究报告与引用来源。每条任务下的谱纹，亮线是已证的思路，暗线是仍待补的缺口。
+      </PageHeader>
 
       <OperationsOverview allowWorkspace={access?.role === 'admin'} />
 
@@ -352,6 +370,7 @@ export default function HistoryPage() {
                       <Link to={`/runs/${run.id}`} className="history-run-query" title={run.query}>
                         {run.query}
                       </Link>
+                      <RunFingerprint spectrum={run.spectrum} finished={!active} />
                       {run.tags.length > 0 && (
                         <span className="history-run-tags">
                           {run.tags.map((item) => (
