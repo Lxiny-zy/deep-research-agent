@@ -1,14 +1,14 @@
 # 最新上线记录
 
-最新发布：**2026-10-28，`dad01f2e38be98dd9e0398c412c790fa7ef21e32`**（过渡、观感与场景链路打磨，见 [主计划](IMPROVEMENT_PLAN.md) S5–S8）。
-当天依次发布 `84d86e6`（谱线主题）、`f61aea8`（过渡 / 观感 / 场景链路 / 精读原文视图）、`eb0a24e` 与 `c187607`（访客进入时只收拢谱线并在登录框背后保持收拢）、`dad01f2`（任务记录勾选后才显示批量删除）。
+最新发布：**2026-10-29，`8c62e1a4ae4b5a5aeea3725d59a79a9dc4b7917a`**（一问一谱：每次研究读作一组思路线，见 [主计划](IMPROVEMENT_PLAN.md) S9）。
+此前 2026-10-28 依次发布 `84d86e6`（谱线主题）、`f61aea8`（过渡 / 观感 / 场景链路 / 精读原文视图，新增只读接口 `GET /api/runs/{run_id}/reader/{document_id}/passages`）、`eb0a24e` 与 `c187607`（访客进入时只收拢谱线并在登录框背后保持收拢）、`dad01f2`（任务记录勾选后才显示批量删除）。
 
 - 发布方式：服务器 `git merge --ff-only origin/main`，按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-<sha12>`，仅替换 api 容器；每次切换前确认无进行中的任务。
-- 当前镜像：`sha256:102c97bc127bd3f9d2dd428e08e8705e88a8e7d259368f7a45d1504727aae8bc`；回滚标签 `deep-research-agent:rollback-c187607711be-20261028t111604z`（更早的回滚标签逐次保留）。
-- 备份：每次发布前在 `/www/wwwroot/deep-research-agent-backups/` 下新建目录保存数据库导出；`20261028T023101Z-*` 与 `20261028T095636Z-*` 两次另含 appdata、artifacts 卷归档，均已校验可读。
-- 回执：`/www/wwwroot/deep-research-agent-deploy/` 下对应目录的 `deployed.json`。
-- 数据库仍为 **0044**，无迁移、无依赖变化；新增只读接口 `GET /api/runs/{run_id}/reader/{document_id}/passages`。
-- 验证：容器 healthy，本地与公网 `/readyz` 均 200；公网访客进入流程截图检查无脚本错误。未进行真实付费模型评测。
+- 当前镜像：`sha256:6d6067beddab7ccc39012a9a2e4ff445424afd6b7e8aa67a68a4cc45dde4f520`；回滚标签 `deep-research-agent:rollback-dad01f2e38be-20261029t045319z`（更早的回滚标签逐次保留）。
+- 备份：每次发布前在 `/www/wwwroot/deep-research-agent-backups/` 下新建目录保存数据库导出；`20261028T023101Z-*` 与 `20261028T095636Z-*` 两次另含 appdata、artifacts 卷归档，均已校验可读。本次为 `20261029T045319Z-thought-spectrum-8c62e1a4ae4b`（数据库导出 5.2 MB，`gzip -t` 通过）。
+- 回执：`/www/wwwroot/deep-research-agent-deploy/` 下对应目录的 `deployed.json`（本次 `thought-spectrum-8c62e1a4ae4b-20261029T045319Z`）。
+- 数据库仍为 **0044**，无迁移、无依赖变化；任务列表接口每条任务新增 `spectrum`（按子问题顺序：未检索 -1，检索过但无可用证据 0，否则为核验且语义支持的发现数），每页两条聚合查询，不加载证据正文。
+- 验证：切换前无进行中的任务；容器 healthy，本地与公网 `/readyz` 均 200；生产 PostgreSQL 上任务列表查询 18 个任务耗时 101 ms（含建立连接），17 个带谱纹、共 12 条暗线；公网前端已加载新版任务页研究谱。未进行真实付费模型评测。
 
 ---
 
