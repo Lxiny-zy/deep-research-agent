@@ -57,7 +57,7 @@
 }
 
 /* 新得证据的线从光谱带上「亮起」；运行中待显的线缓慢明灭 */
-.spectrum-strip.is-full .strip-line.is-lit {
+.spectrum-strip .strip-line.is-lit {
   animation: strip-ignite 900ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
   transform-box: fill-box;
   transform-origin: 50% 50%;
@@ -317,22 +317,149 @@
   width: 1px;
 }
 
-/* ---- 任务记录：每行一枚谱纹 ---- */
-.history-fingerprint {
-  display: block;
-}
-
-.history-spectrum {
-  display: block;
-  height: 14px;
-  margin-top: 6px;
+/* ---- 任务记录：每行一枚谱纹。一条思路一道细线，已证的线带光，暗线灰，待显短而淡 ---- */
+.run-print {
+  --print-gap: 5px;
+  --print-dim: color-mix(in srgb, var(--text) 17%, transparent);
+  align-items: center;
+  display: inline-flex;
+  gap: 10px;
   max-width: 100%;
-  width: 168px;
 }
 
-/* 深色底上谱纹太细，带子提亮一些，暗线的缺口才看得出 */
-:root[data-theme='dark'] .history-spectrum {
-  --strip-band: 0.4;
+.run-print.is-dense {
+  --print-gap: 3px;
+}
+
+.run-print-lines {
+  align-items: center;
+  display: flex;
+  gap: var(--print-gap);
+  height: 20px;
+  padding: 0 3px;
+}
+
+.run-print-line {
+  --core: var(--print-dim);
+  animation: print-rise 620ms cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+  animation-delay: calc(var(--i) * 38ms);
+  flex: none;
+  height: 14px;
+  position: relative;
+  transition: transform 260ms var(--ease);
+  width: 2px;
+}
+
+/* 线芯在上、光晕在下：::before 是光晕，::after 是线芯，光晕不会把线晕虚 */
+.run-print-line::after {
+  background: var(--core);
+  border-radius: 1px;
+  content: '';
+  inset: 0;
+  position: absolute;
+}
+
+.run-print-line.is-lit {
+  /* 浅色底上光晕只作一点余温，线本身要清楚 */
+  --glow-base: calc(0.12 + 0.24 * var(--glow));
+  --core: oklch(0.6 0.17 var(--h));
+}
+
+/* 光晕单独一层：只动透明度，不动阴影，几十行一起亮也不卡 */
+.run-print-line.is-lit::before {
+  background: oklch(0.72 0.2 var(--h));
+  border-radius: 2px;
+  content: '';
+  filter: blur(2.5px);
+  inset: 0 -1.5px;
+  opacity: var(--glow-base);
+  position: absolute;
+}
+
+.run-print-line.is-pending {
+  height: 6px;
+}
+
+.history-run-row.is-live .run-print-line.is-pending {
+  animation:
+    print-rise 620ms cubic-bezier(0.2, 0.7, 0.2, 1) backwards,
+    print-breathe 2.4s ease-in-out 700ms infinite;
+  animation-delay: calc(var(--i) * 38ms), calc(700ms + var(--i) * 120ms);
+}
+
+/* 悬停或键盘聚焦到这一行：亮线由左至右依次一闪 */
+.history-run-row:hover .run-print-line.is-lit,
+.history-run-row:focus-within .run-print-line.is-lit {
+  transform: scaleY(1.14);
+}
+
+.history-run-row:hover .run-print-line.is-lit::before,
+.history-run-row:focus-within .run-print-line.is-lit::before {
+  animation: print-flare 900ms ease-out both;
+  animation-delay: calc(var(--i) * 45ms);
+}
+
+.run-print-count {
+  color: var(--text-3);
+  font: 500 var(--text-xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.run-print-count b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+:root[data-theme='dark'] .run-print {
+  --print-dim: color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+:root[data-theme='dark'] .run-print-line.is-lit {
+  --glow-base: calc(0.4 + 0.5 * var(--glow));
+  --core: oklch(0.8 0.15 var(--h));
+}
+
+:root[data-theme='dark'] .run-print-line.is-lit::before {
+  background: oklch(0.72 0.19 var(--h));
+}
+
+@keyframes print-rise {
+  from {
+    opacity: 0;
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes print-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes print-flare {
+  0% {
+    opacity: var(--glow-base);
+  }
+  30% {
+    opacity: 0.95;
+    transform: scaleY(1.6);
+  }
+  100% {
+    opacity: calc(var(--glow-base) + 0.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-print-line,
+  .run-print-line::before {
+    animation: none !important;
+    transition: none;
+  }
 }
 
 /* ---- 页头：页名前的短线取本页所在一步的颜色；引用原句注明出处 ---- */

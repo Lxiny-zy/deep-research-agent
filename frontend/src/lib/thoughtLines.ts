@@ -133,6 +133,14 @@ export function stripX(index: number, total: number): number {
   return (thoughtNm(index, total) - STRIP_FROM) / (STRIP_TO - STRIP_FROM)
 }
 
+/**
+ * 任务记录谱纹里第 index 条线的色相（OKLCH）：与研究谱同一走向，由紫到红。
+ * 列表里按等亮度取色，黄、绿线在浅色底上也和蓝、红线一样清楚。
+ */
+export function thoughtHue(index: number, total: number): number {
+  return Math.round(300 - (275 * (index + 0.5)) / Math.max(1, total))
+}
+
 /** 亮度：一条证据即亮，四条及以上最亮。 */
 export function lineGlow(verified: number): number {
   return verified <= 0 ? 0 : 0.55 + 0.45 * Math.min(1, (verified - 1) / 3)

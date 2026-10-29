@@ -4,6 +4,7 @@ import {
   lineGlow,
   stripFromSummary,
   tallyLines,
+  thoughtHue,
   thoughtNm,
 } from './thoughtLines'
 
@@ -81,5 +82,12 @@ describe('research spectrum', () => {
     expect(lineGlow(0)).toBe(0)
     expect(lineGlow(1)).toBeCloseTo(0.55)
     expect(lineGlow(9)).toBe(1)
+  })
+
+  it('colours list lines from violet to red in order', () => {
+    const hues = Array.from({ length: 8 }, (_, index) => thoughtHue(index, 8))
+    expect(hues[0]).toBeGreaterThan(270)
+    expect(hues[7]).toBeLessThan(50)
+    expect(hues.every((hue, index) => index === 0 || hue < hues[index - 1])).toBe(true)
   })
 })

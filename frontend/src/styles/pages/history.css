@@ -114,8 +114,8 @@
   align-items: center;
   display: grid;
   gap: var(--space-4);
-  grid-template-columns: 28px minmax(260px, 1fr) 96px 136px 104px 76px 36px;
-  min-width: 820px;
+  grid-template-columns: 28px minmax(260px, 1fr) 128px 96px 136px 104px 76px 36px;
+  min-width: 960px;
   padding: 0 var(--space-5);
 }
 
@@ -259,6 +259,7 @@
     gap: 6px var(--space-3);
     grid-template-areas:
       'check main main action'
+      'check print print print'
       'check status time time'
       'check tokens elapsed elapsed';
     grid-template-columns: 24px auto 1fr 32px;
@@ -276,6 +277,14 @@
     grid-area: main;
   }
 
+  .history-run-row > .history-col-print {
+    grid-area: print;
+  }
+
+  .history-run-row > .history-col-print:empty {
+    display: none;
+  }
+
   .history-run-row > .history-col-status {
     grid-area: status;
   }
@@ -284,12 +293,12 @@
     grid-area: time;
   }
 
-  .history-run-row > .history-col-num:nth-of-type(5) {
+  .history-run-row > .history-col-tokens {
     grid-area: tokens;
     text-align: left;
   }
 
-  .history-run-row > .history-col-num:nth-of-type(6) {
+  .history-run-row > .history-col-elapsed {
     grid-area: elapsed;
     text-align: left;
   }

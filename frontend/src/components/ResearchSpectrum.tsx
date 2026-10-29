@@ -55,7 +55,7 @@ export default function ResearchSpectrum({
       </header>
 
       <div className="research-spectrum-stage" onMouseLeave={() => setActive(null)}>
-        <SpectrumStrip lines={lines} size="full" live={live} active={active} />
+        <SpectrumStrip lines={lines} live={live} active={active} />
         <ol className="research-spectrum-marks">
           {lines.map((line, index) => (
             <li key={index} style={{ left: `${left(index)}%` }}>

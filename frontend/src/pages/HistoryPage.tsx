@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { Link, useLocation, useNavigate, useOutletContext } from 'react-router-dom'
 import { AppIcon } from '../components/AppIcon'
 import StatusBadge from '../components/StatusBadge'
@@ -6,23 +6,47 @@ import EmptyState from '../components/EmptyState'
 import Skeleton from '../components/Skeleton'
 import OperationsOverview from '../components/OperationsOverview'
 import PageHeader from '../components/PageHeader'
-import SpectrumStrip from '../components/SpectrumStrip'
 import { useBatchDeleteRuns, useDeleteRun, useRunsList, useTags } from '../hooks/useRuns'
-import { stripFromSummary, tallyLines } from '../lib/thoughtLines'
+import { lineGlow, stripFromSummary, tallyLines, thoughtHue } from '../lib/thoughtLines'
 import type { RunStatus } from '../types'
 
-/** 每条任务的谱纹：几条思路、几条已证、几条仍暗，一眼可见。没有拆分思路的任务不画。 */
+/**
+ * 每条任务的谱纹：一条思路一道细线。已证的线带光，暗线是灰的，待显的线短而淡；
+ * 旁边是「已证 / 总数」。没有拆分思路的任务留空。
+ */
 function RunFingerprint({ spectrum, finished }: { spectrum?: number[]; finished: boolean }) {
   const lines = stripFromSummary(spectrum, finished)
   if (lines.length === 0) return null
   const { lit, dark, pending } = tallyLines(lines)
   const label =
-    `谱纹：${lines.length} 条思路，${lit} 条已证` +
+    `${lines.length} 条思路，${lit} 条已证` +
     (dark ? `，${dark} 条暗线` : '') +
     (pending ? `，${pending} 条待显` : '')
   return (
-    <span className="history-fingerprint" title={label}>
-      <SpectrumStrip lines={lines} className="history-spectrum" label={label} />
+    <span
+      className={`run-print${lines.length > 12 ? ' is-dense' : ''}`}
+      role="img"
+      aria-label={`谱纹：${label}`}
+      title={label}
+    >
+      <span className="run-print-lines" aria-hidden="true">
+        {lines.map((line, index) => (
+          <i
+            key={index}
+            className={`run-print-line is-${line.state}`}
+            style={
+              {
+                '--i': index,
+                '--h': thoughtHue(index, lines.length),
+                '--glow': lineGlow(line.verified),
+              } as CSSProperties
+            }
+          />
+        ))}
+      </span>
+      <span className="run-print-count" aria-hidden="true">
+        <b>{lit}</b>/{lines.length}
+      </span>
     </span>
   )
 }
@@ -328,14 +352,17 @@ export default function HistoryPage() {
                 />
               </span>
               <span role="columnheader">任务</span>
+              <span role="columnheader" className="history-col-print">
+                研究谱
+              </span>
               <span role="columnheader">状态</span>
               <span role="columnheader" className="history-col-time">
                 创建时间
               </span>
-              <span role="columnheader" className="history-col-num">
+              <span role="columnheader" className="history-col-num history-col-tokens">
                 Token
               </span>
-              <span role="columnheader" className="history-col-num">
+              <span role="columnheader" className="history-col-num history-col-elapsed">
                 耗时
               </span>
               <span role="columnheader" className="history-col-action">
@@ -348,7 +375,7 @@ export default function HistoryPage() {
                 const isSelected = selected.has(run.id)
                 return (
                   <div
-                    className={`history-run-row${isSelected ? ' is-selected' : ''}`}
+                    className={`history-run-row${isSelected ? ' is-selected' : ''}${active ? ' is-live' : ''}`}
                     key={run.id}
                     role="row"
                     onClick={(event) => {
@@ -370,7 +397,6 @@ export default function HistoryPage() {
                       <Link to={`/runs/${run.id}`} className="history-run-query" title={run.query}>
                         {run.query}
                       </Link>
-                      <RunFingerprint spectrum={run.spectrum} finished={!active} />
                       {run.tags.length > 0 && (
                         <span className="history-run-tags">
                           {run.tags.map((item) => (
@@ -380,6 +406,9 @@ export default function HistoryPage() {
                           ))}
                         </span>
                       )}
+                    </span>
+                    <span role="cell" className="history-col-print">
+                      <RunFingerprint spectrum={run.spectrum} finished={!active} />
                     </span>
                     <span role="cell" className="history-col-status">
                       <StatusBadge status={run.status as RunStatus} />
@@ -391,10 +420,10 @@ export default function HistoryPage() {
                         '—'
                       )}
                     </span>
-                    <span role="cell" className="history-col-num numeric">
+                    <span role="cell" className="history-col-num history-col-tokens numeric">
                       {run.total_tokens.toLocaleString('en-US')}
                     </span>
-                    <span role="cell" className="history-col-num numeric">
+                    <span role="cell" className="history-col-num history-col-elapsed numeric">
                       {formatElapsed(run.elapsed)}
                     </span>
                     <span role="cell" className="history-col-action">
