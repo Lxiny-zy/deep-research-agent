@@ -7,10 +7,15 @@
 * ``cluster``   —— 单处并列引用过多（引用堆砌）；
 * ``sources``   —— 重复来源（同一文献以不同 URL 重复计数）、引用下限；
 * ``recency``   —— 任务点名年份时，已核验来源里必须真有该年份及之后的文献；
-* ``limitations`` —— 需要说明局限的任务必须有局限 / 不确定性段落。
+* ``limitations`` —— 需要说明局限的任务必须有局限 / 不确定性段落；
+* ``phrasing``  —— 空壳句式、空洞评价、读者指令、段首连接词堆叠、自指起句与长破折号过密；
+* ``claims``    —— 无数值的优劣比较、无检验依据的「显著」、无来源的「首次」、
+  把实验结果写成「证明」、无引用的泛化文献归因；
+* ``repetition`` —— 同一句话在两处各写一遍（每个论点只在一处展开）。
 
 每项检查都返回可直接交给写作者返工的**具体问题**（带原句摘录），而不是一个分数。
-检查全部确定性、只读正文与运行数据，不调用模型。
+检查全部确定性、只读正文与运行数据，不调用模型。``phrasing``、``claims`` 与 ``repetition``
+只作建议（``ADVISORY_CODES``）：同类措辞在有数值、检验或来源时完全正当，命中一次不足以判定失败。
 """
 
 from __future__ import annotations
@@ -104,6 +109,107 @@ _YEAR_REQUEST = re.compile(
 _YEAR_ANY = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
 _SINCE_EN = re.compile(r"(?:since|after|from)\s+((?:19|20)\d{2})", re.I)
 
+# 空壳句式：删去后句意不变，只制造强调或总结的节奏
+_EMPTY_SHELLS = (
+    "值得注意的是",
+    "需要指出的是",
+    "需要强调的是",
+    "需要重申的是",
+    "必须说明的是",
+    "不可忽视的是",
+    "不难看出",
+    "换言之",
+    "归根结底",
+    "从本质上看",
+    "由此可见",
+    "综上所述",
+)
+# 空洞评价与泛背景：没有对象、数值或证据的价值判断
+_VAGUE_EVALUATION = re.compile(
+    r"具有(?:十分|非常|极其|极为)?重要(?:的)?(?:意义|价值)"
+    r"|提供了?(?:一种)?(?:新的|全新的|新)(?:思路|视角|途径)"
+    r"|提供了?(?:有益|重要)的?(?:参考|借鉴)"
+    r"|应用前景(?:十分|非常)?广阔|广阔的应用前景"
+    r"|(?:日益|越来越)(?:受到|引起)(?:广泛|普遍)?的?(?:关注|重视)"
+    r"|随着[^，。；,;]{1,24}的?(?:快速|飞速|迅速|蓬勃|迅猛)发展"
+)
+_READER_DIRECTIVE = re.compile(
+    r"读者(?:可以|可|不难|能够)(?:看到|发现|验算|注意到)|请(?:读者)?注意"
+)
+# 顺序或附加型段首连接词；因果、转折类连接词表达真实关系，不计入
+_STACKED_OPENER = re.compile(
+    r"^(?:首先|其次|再次|此外|另外|与此同时|同时|最后|综上|总之|总而言之"
+    r"|Moreover|Furthermore|Additionally|In addition)",
+    re.I,
+)
+_SELF_REFERENCE = re.compile(
+    r"^(?:本文|本研究|本工作|本报告|本综述|本节|我们"
+    r"|This (?:paper|work|study|review|report)|Our (?:work|study))",
+    re.I,
+)
+# 引号与书名号里的文字是引文或题名，不按写作者的措辞检查
+_QUOTED = re.compile(r"“[^”]*”|「[^」]*」|《[^》]*》|\"[^\"]*\"")
+
+_CITE_OR_YEAR = re.compile(r"\[\d+(?:\s*[,，]\s*\d+)*\]|(?<!\d)(?:19|20)\d{2}(?!\d)\s*年?")
+_SUPERIORITY = re.compile(r"优于|胜过|超越|领先于|outperform\w*|superior to|surpass\w*", re.I)
+_SIGNIFICANCE = re.compile(
+    r"显著地?(?:优于|提升|提高|降低|改善|增加|减少|高于|低于|增强|下降|改进|缩短|加快)"
+    r"|statistically significant"
+    r"|significantly (?:better|higher|lower|improv|outperform|reduc|increas)",
+    re.I,
+)
+_STAT_ANCHOR = re.compile(
+    r"[pP]\s*[<=≤＜]|[pP]\s*值|置信区间|\bCI\b|检验|±|标准差|标准误|显著性水平|统计学?意义"
+    r"|\b[tFz]\s*\(|χ²|chi-?square",
+    re.I,
+)
+_NOVELTY = re.compile(
+    r"首次|首个|首创|前所未有|开创性|for the first time|the first to|first-ever", re.I
+)
+_PROOF = re.compile(
+    r"(?:实验|结果|数据|仿真|实测|测试)(?:结果)?(?:充分|进一步|有力)?地?证明"
+    r"|(?:experiments?|results?) (?:prove|proves|proved)\b",
+    re.I,
+)
+_GENERIC_ATTRIBUTION = re.compile(
+    r"(?:已有|大量|许多|很多|诸多|相关|既有|现有)研究(?:表明|显示|指出|发现)|有研究(?:表明|指出|发现)"
+    r"|(?:研究者们?|学界|业界)(?:普遍|一致)?认为"
+    r"|(?:many|several|previous|prior) studies (?:have )?(?:shown|show|suggest)",
+    re.I,
+)
+# 转述作者自己的主张（精读、评审常见）不是写作者在下断言
+_ATTRIBUTED = re.compile(
+    r"作者们?(?:声称|称|宣称|认为|表示|指出|提出)|据[^，。；]{0,12}(?:称|报道|介绍)"
+    r"|(?:the )?authors? (?:claims?|states?|argues?|reports?)",
+    re.I,
+)
+_CLAIM_MESSAGES = {
+    "unquantified-superiority": (
+        "比较结论没有给出指标数值或条件，请补充差值、数据集或设置，或改为有边界的表述"
+    ),
+    "significance-without-test": (
+        "「显著」没有统计检验或区间依据：若指统计显著请给出检验与 p 值或区间，"
+        "若只是幅度大请写出具体差值"
+    ),
+    "unattributed-novelty": "「首次」类优先权声明没有来源，请注明出处或限定检索范围",
+    "proof-overclaim": "把实验或数据结果写成「证明」：除形式证明外建议写「表明」「支持」并给出条件",
+    "generic-attribution": "泛化的文献归因没有对应引用，请给出具体来源或删去",
+}
+
+# 只作建议的检查代码：交付分级与返工循环都按建议处理，不阻断、不消耗返工次数
+ADVISORY_CODES = frozenset(
+    {
+        "empty-phrase",
+        "vague-evaluation",
+        "reader-directive",
+        "connective-stacking",
+        "self-reference-density",
+        "dash-density",
+        "repeated-sentence",
+        *_CLAIM_MESSAGES,
+    }
+)
+
 _ABSTRACT_TITLES = ("摘要", "一句话总结", "abstract", "tl;dr", "summary", "执行摘要", "概述")
 _LIMITATION_WORDS = (
     "局限",
@@ -131,8 +237,11 @@ def _sentences(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def _prose_lines(markdown: str) -> list[str]:
-    """正文段落与列表项的纯文本（去掉标题、代码、表格、公式与图片）。"""
+def _prose_lines(markdown: str, *, quotes: bool = True, lists: bool = True) -> list[str]:
+    """正文段落与列表项的纯文本（去掉标题、代码、表格、公式与图片）。
+
+    ``quotes=False`` 不取引用块（逐字引文）；``lists=False`` 只取正文段落。
+    """
     lines: list[str] = []
 
     def add(inlines: list) -> None:  # type: ignore[type-arg]
@@ -141,9 +250,9 @@ def _prose_lines(markdown: str) -> list[str]:
             lines.append(text.strip())
 
     for block in parse_blocks(_body(markdown)):
-        if block.kind in {"paragraph", "quote"}:
+        if block.kind == "paragraph" or (quotes and block.kind == "quote"):
             add(block.inlines)
-        elif block.kind == "list":
+        elif lists and block.kind == "list":
             for item in block.items:
                 add(item.inlines)
     return lines
@@ -216,10 +325,164 @@ def check_register(markdown: str, policy: QualityPolicy) -> list[Finding]:
     return list(unique.values())[:12]
 
 
+def _unquoted(text: str) -> str:
+    return _QUOTED.sub("", text)
+
+
+def _advice(code: str, message: str, excerpts: list[str]) -> Finding:
+    """同一代码只报一条：首处原句作摘录，其余计数。"""
+    more = f"（共 {len(excerpts)} 处）" if len(excerpts) > 1 else ""
+    return Finding(code, "warning", message + more, _short(excerpts[0]))
+
+
+def check_phrasing(markdown: str) -> list[Finding]:
+    """模板化语体。只作建议：单个连接词或评价词并不错，密集、机械地出现才需要改写。"""
+    hits: dict[str, list[str]] = {}
+    labels: dict[str, str] = {}
+
+    def hit(code: str, label: str, sentence: str) -> None:
+        hits.setdefault(code, []).append(sentence)
+        labels.setdefault(code, label)
+
+    sentences = [s for line in _prose_lines(markdown, quotes=False) for s in _sentences(line)]
+    for sentence in sentences:
+        text = _unquoted(sentence)
+        shell = next((phrase for phrase in _EMPTY_SHELLS if phrase in text), None)
+        if shell:
+            hit("empty-phrase", shell, sentence)
+        for code, pattern in (
+            ("vague-evaluation", _VAGUE_EVALUATION),
+            ("reader-directive", _READER_DIRECTIVE),
+        ):
+            match = pattern.search(text)
+            if match:
+                hit(code, match.group(0), sentence)
+    findings = [
+        _advice(code, message.format(labels[code]), hits[code])
+        for code, message in (
+            ("empty-phrase", "空壳句式「{}」：删去后直接陈述其后的实质命题"),
+            ("vague-evaluation", "空洞评价「{}」：改为具体的对象、数值、比较或明确的限制"),
+            ("reader-directive", "读者指令「{}」：直接报告事实、推导或图表引用"),
+        )
+        if code in hits
+    ]
+
+    paragraphs = _prose_lines(markdown, quotes=False, lists=False)
+    openers = [p for p in paragraphs if _STACKED_OPENER.match(_unquoted(p))]
+    if len(paragraphs) >= 5 and len(openers) >= 3 and len(openers) * 10 >= len(paragraphs) * 3:
+        findings.append(
+            _advice(
+                "connective-stacking",
+                f"{len(openers)}/{len(paragraphs)} 段以「首先」「此外」「最后」等连接词起句，"
+                "请按实际的因果、转折或条件关系衔接",
+                openers[:1],
+            )
+        )
+    selves = [s for s in sentences if _SELF_REFERENCE.match(s)]
+    if len(selves) >= 5 and len(selves) * 10 >= len(sentences):
+        findings.append(
+            _advice(
+                "self-reference-density",
+                f"{len(selves)} 句以「本文」「我们」等自指起句，请让研究对象、方法或证据作主语",
+                selves[:1],
+            )
+        )
+    dashed = [s for s in sentences if "——" in _unquoted(s)]
+    dashes = sum(_unquoted(s).count("——") for s in sentences)
+    if dashes >= 4 and dashes * 400 >= sum(len(s) for s in sentences):
+        findings.append(
+            _advice(
+                "dash-density",
+                f"长破折号「——」出现 {dashes} 次，主张与解释、因果或列举请改用明确的连词或标点",
+                dashed[:1],
+            )
+        )
+    return findings
+
+
+def check_claims(markdown: str) -> list[Finding]:
+    """比较、显著性、优先权与「证明」类措辞须有数值、检验或来源撑着。只作建议。"""
+    hits: dict[str, list[str]] = {}
+    for line in _prose_lines(markdown, quotes=False):
+        for sentence in _sentences(line):
+            text = _unquoted(sentence)
+            cited = bool(_CITE.search(text))
+            attributed = bool(_ATTRIBUTED.search(text))
+            checks = (
+                (
+                    "unquantified-superiority",
+                    bool(_SUPERIORITY.search(text))
+                    and not re.search(r"\d", _CITE_OR_YEAR.sub("", text)),
+                ),
+                (
+                    "significance-without-test",
+                    bool(_SIGNIFICANCE.search(text)) and not _STAT_ANCHOR.search(text),
+                ),
+                (
+                    "unattributed-novelty",
+                    bool(_NOVELTY.search(text)) and not (cited or attributed),
+                ),
+                ("proof-overclaim", bool(_PROOF.search(text)) and not attributed),
+                ("generic-attribution", bool(_GENERIC_ATTRIBUTION.search(text)) and not cited),
+            )
+            for code, matched in checks:
+                if matched:
+                    hits.setdefault(code, []).append(sentence)
+    return [
+        _advice(code, _CLAIM_MESSAGES[code], hits[code])
+        for code in _CLAIM_MESSAGES
+        if code in hits
+    ]
+
+
 def _sections(markdown: str) -> list[tuple[str, str]]:
     """(二级标题, 该节正文) 列表。"""
     parts = re.split(r"(?m)^##\s+(.+?)\s*$", _body(markdown))
     return [(parts[i].strip(), parts[i + 1]) for i in range(1, len(parts) - 1, 2)]
+
+
+_TRANSLATION_TITLE = re.compile(r"翻译|译文|translation", re.I)
+_REPEAT_MIN_CHARS = 30
+
+
+def _fingerprint(sentence: str) -> str:
+    """句子主干：去掉引号内原文、引用角标、空白与标点。"""
+    return re.sub(r"\W", "", _CITE.sub("", _unquoted(sentence))).casefold()
+
+
+def check_repetition(markdown: str) -> list[Finding]:
+    """同一句话写了两遍：每个论点只在一处展开。只作建议。
+
+    比对句子主干，较短的一句整体出现在另一句里也算；译文节逐句对应原文，不参与比对。
+    """
+    seen: list[tuple[str, str]] = []
+    pairs: list[tuple[str, str, str]] = []
+    for title, text in _sections(markdown):
+        if _TRANSLATION_TITLE.search(title):
+            continue
+        for line in _prose_lines(text, quotes=False):
+            for sentence in _sentences(line):
+                key = _fingerprint(sentence)
+                if len(key) < _REPEAT_MIN_CHARS:
+                    continue
+                home = next(
+                    (at for seen_key, at in seen if key in seen_key or seen_key in key), None
+                )
+                if home is None:
+                    seen.append((key, title))
+                else:
+                    pairs.append((home, title, sentence))
+    if not pairs:
+        return []
+    first, second, _ = pairs[0]
+    where = f"「{first}」节内" if first == second else f"「{first}」与「{second}」"
+    return [
+        _advice(
+            "repeated-sentence",
+            f"同一句话在{where}重复出现；每个论点只在一处展开，其他位置改为概括或删去",
+            [sentence for _, _, sentence in pairs],
+        )
+    ]
 
 
 def check_abstract(markdown: str) -> list[Finding]:
@@ -376,6 +639,23 @@ _ABSTRACT_TEMPLATES = {"litReview", "autoResearch", "paperRead"}
 _REGISTER_TEMPLATES = {"litReview", "autoResearch", "paperRead", "peerReview", "dataAnalysis"}
 
 
+def writing_rules(template_key: str) -> str:
+    """写作提示里的表述要求。与建议级检查共用同一份词表：写作时先避开，检查只兜底。"""
+    if template_key not in _REGISTER_TEMPLATES:
+        return ""
+    shells = "」「".join(_EMPTY_SHELLS[:6])
+    return (
+        f"表述要求：直接陈述内容，不用「{shells}」等空壳句式；"
+        "不写「具有重要意义」「提供了新的思路」「应用前景广阔」这类没有内容的评价，"
+        "改为写明具体作用、条件或数值；不用「读者可以看到」等读者指令；"
+        "段首不机械堆叠「首先」「此外」「最后」，不连续以「本文」「我们」起句，少用破折号插入说明。"
+        "比较优劣写出指标数值、数据集或设置；「显著」只用于给出统计检验或区间的结果；"
+        "「首次」类说法须有来源，或写明是作者的说法；实验与数据结果写「表明」「支持」，不写「证明」；"
+        "「已有研究表明」须紧跟具体引用。同一论点只在一处展开，其他位置概括或省略，不整句重复。"
+        "引文与译文忠实于原文，不按以上要求改写。"
+    )
+
+
 def evaluate(
     markdown: str,
     *,
@@ -393,6 +673,9 @@ def evaluate(
     report = ScholarlyReport()
     if policy.register_check and template_key in _REGISTER_TEMPLATES:
         report.findings += check_register(markdown, policy)
+        report.findings += check_phrasing(markdown)
+        report.findings += check_claims(markdown)
+        report.findings += check_repetition(markdown)
     if policy.forbid_abstract_citations and template_key in _ABSTRACT_TEMPLATES:
         report.findings += check_abstract(markdown)
     if citations:
@@ -427,16 +710,21 @@ def revision_brief(report: ScholarlyReport, extra: list[str] | None = None) -> s
 
 
 __all__ = [
+    "ADVISORY_CODES",
     "Finding",
     "ScholarlyReport",
     "abstract_sections",
     "check_abstract",
+    "check_claims",
     "check_clusters",
     "check_limitations",
+    "check_phrasing",
     "check_recency",
     "check_register",
+    "check_repetition",
     "check_sources",
     "evaluate",
     "requested_year",
     "revision_brief",
+    "writing_rules",
 ]

@@ -19,11 +19,15 @@ from deep_research.workbench.quality import (
 )
 from deep_research.workbench.revision import Assessment, write_with_revisions
 from deep_research.workbench.scholarly import (
+    ADVISORY_CODES,
     check_abstract,
+    check_claims,
     check_clusters,
     check_limitations,
+    check_phrasing,
     check_recency,
     check_register,
+    check_repetition,
     check_sources,
     requested_year,
 )
@@ -108,6 +112,143 @@ def test_abstract_citation_cluster_and_limitations() -> None:
     assert check_clusters(body, POLICY)[0].code == "citation-cluster"
     assert check_limitations(body)[0].code == "missing-limitations"
     assert check_limitations(body + "\n## 局限\n\n样本量有限 [1]。\n") == []
+
+
+def test_phrasing_flags_template_prose_only_as_advice() -> None:
+    body = (
+        "## 分析\n\n值得注意的是，展开网络在 KAIST 上更稳定 [1]。该方向具有重要意义 [2]。"
+        "读者可以看到误差随阶段数下降 [1]。\n\n> 值得注意的是，引用块里的原文不查 [1]。\n"
+    )
+    findings = check_phrasing(body)
+    assert {f.code for f in findings} == {"empty-phrase", "vague-evaluation", "reader-directive"}
+    assert all(f.severity == "warning" and f.code in ADVISORY_CODES for f in findings)
+
+
+def test_phrasing_density_needs_repeated_patterns() -> None:
+    paragraphs = [
+        "首先，A 成立 [1]。",
+        "此外，B 成立 [1]。",
+        "C 成立 [2]。",
+        "最后，D 成立 [2]。",
+        "E 成立 [3]。",
+    ]
+    stacked = "## 分析\n\n" + "\n\n".join(paragraphs) + "\n"
+    assert [f.code for f in check_phrasing(stacked)] == ["connective-stacking"]
+    self_reference = "## 分析\n\n" + "".join(f"本文讨论第 {i} 点 [1]。" for i in range(6)) + "\n"
+    assert [f.code for f in check_phrasing(self_reference)] == ["self-reference-density"]
+    dashes = "## 分析\n\n方法 A——即展开网络——更准 [1]。方法 B——即端到端网络——更快 [2]。\n"
+    assert [f.code for f in check_phrasing(dashes)] == ["dash-density"]
+    sparse = "## 分析\n\n本文比较两类方法 [1]。此外，方法 B——端到端网络——更快 [2]。\n"
+    assert check_phrasing(sparse) == []
+
+
+def test_claims_need_numbers_tests_or_sources() -> None:
+    unsupported = (
+        "## 分析\n\nDAUHST 优于 MST [3]。该方法显著提升了重建质量 [1]。"
+        "该团队首次将扩散模型用于 CASSI 重建。实验结果证明了该模块的有效性 [2]。"
+        "已有研究表明，掩膜失配会降低重建精度。\n"
+    )
+    assert [f.code for f in check_claims(unsupported)] == [
+        "unquantified-superiority",
+        "significance-without-test",
+        "unattributed-novelty",
+        "proof-overclaim",
+        "generic-attribution",
+    ]
+    supported = (
+        "## 分析\n\nDAUHST 优于 MST，平均 PSNR 高 1.2 dB [3]。"
+        "2024 年后的方法显著提升了 PSNR（t 检验，p = 0.003）[1]。Meng 等首次提出 TSA-Net [4]。"
+        "作者从理论上证明了收敛性 [2]。已有研究表明掩膜失配会降低重建精度 [5]。"
+        "作者写道“本方法首次实现了实时重建”[1]。"
+        "作者声称首次在原型上验证了该设计。作者称实验证明了掩膜校准的必要性。\n"
+    )
+    assert check_claims(supported) == []
+
+
+def test_repetition_flags_a_sentence_written_in_two_places() -> None:
+    point = "深度展开网络把迭代优化的每一步映射为可学习的网络层，从而兼顾可解释性与重建精度"
+    body = (
+        f"## 摘要\n\n{point}。\n\n"
+        f"## 分析\n\n{point} [1]。掩膜失配会降低重建精度 [2]。\n\n"
+        f"## 结论\n\n总体来看，{point}，但实测数据仍然有限 [1]。\n"
+    )
+    findings = check_repetition(body)
+    assert [f.code for f in findings] == ["repeated-sentence"]
+    assert "「摘要」与「分析」" in findings[0].message and "共 2 处" in findings[0].message
+    assert "repeated-sentence" in ADVISORY_CODES and findings[0].severity == "warning"
+    same_section = f"## 分析\n\n{point} [1]。\n\n- {point} [2]。\n"
+    assert "「分析」节内" in check_repetition(same_section)[0].message
+
+
+def test_repetition_ignores_parallel_claims_quotes_and_translations() -> None:
+    parallel = (
+        "## 分析\n\n该方法在 CAVE 数据集上的重建精度高于全部对比方法且参数量更少 [1]。\n\n"
+        "## 比较\n\n该方法在 KAIST 数据集上的重建精度高于全部对比方法且参数量更少 [2]。\n"
+    )
+    assert check_repetition(parallel) == []
+    short = "## 分析\n\n该方法有效 [1]。\n\n## 结论\n\n该方法有效 [1]。\n"
+    assert check_repetition(short) == []
+    original = "Unrolled networks map each iteration of the solver to a learnable stage"
+    quoted = (
+        f"## 分析\n\n作者写道“{original}”[1]。\n\n> {original}.\n\n"
+        f"## 结论\n\n正如作者所说，“{original}”[1]。\n"
+    )
+    assert check_repetition(quoted) == []
+    claim = "本文提出一种把迭代优化展开为可学习网络层的方法，兼顾可解释性与重建精度。"
+    translated = f"## 摘要翻译\n\n{claim}\n\n## 核心贡献\n\n- {claim}\n"
+    assert check_repetition(translated) == []
+
+
+def test_writer_prompt_shares_the_advisory_vocabulary_and_section_pitfalls() -> None:
+    from deep_research.workbench.scholarly import _EMPTY_SHELLS, writing_rules
+    from deep_research.workbench.writers import _skeleton
+
+    rules = writing_rules("litReview")
+    assert all(shell in rules for shell in _EMPTY_SHELLS[:6]) and "译文忠实于原文" in rules
+    assert writing_rules("slides") == "" and writing_rules("mindmap") == ""
+    template = get_template("litReview")
+    assert template is not None
+    prompt = _skeleton(template)
+    assert prompt.endswith(rules)
+    assert all(f"避免：{s.avoid}" in prompt for s in template.sections if s.avoid)
+    slides = get_template("slides")
+    assert slides is not None and "表述要求" not in _skeleton(slides)
+    # 常见错误只进写作提示，模板接口仍只给标题与撰写要求
+    assert "avoid" not in template.to_public()["sections"][0]
+
+
+def test_paper_tasks_choose_their_focus_by_paper_type() -> None:
+    from deep_research.workbench.writers import PaperReader, PeerReviewer, ResearchWriter
+
+    for writer, key in ((PaperReader(), "paperRead"), (PeerReviewer(), "peerReview")):
+        template = get_template(key)
+        assert template is not None
+        prompt = writer.system_prompt(template, None)
+        assert "先判断论文类型" in prompt and "不写成论文缺陷" in prompt
+    research = get_template("autoResearch")
+    assert research is not None
+    assert "先判断论文类型" not in ResearchWriter().system_prompt(research, None)
+
+
+def test_advisory_findings_reach_the_overview_without_blocking_delivery() -> None:
+    from deep_research.workbench.gate_classification import classify_gates
+    from deep_research.workbench.gates import scholarly_gate
+
+    template = get_template("litReview")
+    assert template is not None
+    body = "## 分析\n\n值得注意的是，DAUHST 优于 MST [1]。\n\n## 局限\n\n样本只覆盖仿真数据 [1]。\n"
+    gate = scholarly_gate(
+        body,
+        template=template,
+        query="CASSI 重建综述",
+        citations=["https://example.org/a"],
+        min_citations=1,
+        policy=POLICY,
+    )
+    classify_gates([gate])
+    assert gate.status == "pass" and gate.blocking_issues == []
+    assert any("空壳句式" in item for item in gate.advisories)
+    assert any("比较结论" in item for item in gate.advisories)
 
 
 def test_aliases_count_once_without_requiring_writer_to_remove_valid_locations() -> None:

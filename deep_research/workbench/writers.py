@@ -34,7 +34,7 @@ from .paper_abstract import abstract_section_support, checked_abstracts, prepare
 from .prose_review import PROSE_REVIEW_KEY, ProseReviewer
 from .quality import QualityPolicy, completion_feedback, writer_policy
 from .revision import Assessment, RevisionLog, assess_draft, write_with_revisions
-from .scholarly import abstract_sections
+from .scholarly import abstract_sections, writing_rules
 from .support import SupportReviewer, evidence_records
 from .tables import TABLE_INSTRUCTIONS, TABLES_KEY, render_specs, review_tables, table_preview
 from .templates import TaskTemplate, get_template
@@ -123,11 +123,17 @@ def eligible_material(
 
 
 def _skeleton(template: TaskTemplate) -> str:
+    """章节契约：标题顺序、每节要求与常见错误，以及与学术检查共用的表述要求。"""
     if not template.sections:
         return ""
     lines = ["必须按以下顺序使用这些二级标题，不可省略；撰写要求只指导内容，不写进标题："]
-    lines += [f"## {section.title}\n撰写要求：{section.guidance}" for section in template.sections]
-    return "\n".join(lines)
+    lines += [
+        f"## {section.title}\n撰写要求：{section.guidance}"
+        + (f"\n避免：{section.avoid}" if section.avoid else "")
+        for section in template.sections
+    ]
+    rules = writing_rules(template.key)
+    return "\n".join(lines) + (f"\n\n{rules}" if rules else "")
 
 
 class WriterState(BaseModel):
@@ -979,6 +985,17 @@ class SurveyWriter(TemplateWriter):
         return brief
 
 
+# 精读与评审共用：先判论文类型，再按类型确定重点；只用于组织重点，不另起章节
+_PAPER_TRIAGE = (
+    "\n先判断论文类型，可兼属多类：方法或算法类看问题设定与假设、基线比较是否同数据集同指标同设置、"
+    "消融能否支撑各模块的作用、计算代价；实验或测量类看实验设计与对照、样本量与重复次数、"
+    "误差与不确定度、标定与可重复性；理论类看假设是否明确、关键推导步骤与适用边界；"
+    "数据集或基准类看采集与标注流程、划分与泄漏风险、评测协议；综述类看检索与纳入范围、"
+    "分类框架与比较口径。类型只用于确定重点，不单独成节；素材未覆盖的检查项写成待核查，"
+    "不写成论文缺陷。"
+)
+
+
 @register("peer_reviewer")
 class PeerReviewer(TemplateWriter):
     """评审写作者。
@@ -1031,7 +1048,7 @@ class PeerReviewer(TemplateWriter):
             "评分是审稿人的主观结论，不能代替有出处的事实评价。" + PEER_REVIEW_RULES
             + "\n建议写明行动对象、具体动作，以及作者完成后应报告或检查什么；"
             "不要只写‘补充实验’或‘进一步说明’。建议不等于已证实缺陷，"
-            "事实性问题仍逐条引用原文和适用条件。"
+            "事实性问题仍逐条引用原文和适用条件。" + _PAPER_TRIAGE
         )
 
     async def write(
@@ -1071,7 +1088,7 @@ class PaperReader(TemplateWriter):
             "\n正文第一行给出简短、准确的报告标题（# 一级标题），概括研究对象，不复述任务指令；"
             "用户明确要求标题时遵从其要求。"
             "\n摘要翻译章节的依据是单独提供的【摘要翻译专用资料】，须全文忠实翻译；"
-            "其他章节仍只使用已核验素材，不因看到了原摘要就加入未经核验的新事实。"
+            "其他章节仍只使用已核验素材，不因看到了原摘要就加入未经核验的新事实。" + _PAPER_TRIAGE
         )
 
     async def step(self, bb: Blackboard, ctx: RunContext) -> Blackboard:

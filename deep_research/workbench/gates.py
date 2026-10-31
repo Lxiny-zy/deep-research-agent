@@ -9,7 +9,7 @@
 * ``structure``  —— 模板承诺的章节都在（按标题或别名匹配），导图结构完整且不重复；
 * ``length``     —— 正文不短于模板下限；
 * ``consistency``—— 同源多格式交叉计数：DOCX 内嵌图 = HTML 内联图 = Markdown 图数，
-                    PDF 可抽出正文且末段不缺失；
+                    PDF 可抽出正文且末段不缺失；PDF 缺字形、压字与窄列逐字换行只作建议；
 * ``slides``     —— PPTX 页数、备注覆盖率与版面溢出估算；
 * ``review``     —— 评审必须给出 1–10 的整数评分。
 """
@@ -278,15 +278,22 @@ def consistency_gate(markdown: str, files: dict[str, bytes]) -> GateResult:
         if b"<script" in html.lower():
             issues.append("自包含 HTML 含脚本")
             failed.add("html")
+    advisories: list[str] = []
     if pdf is not None:
         try:
-            from .delivery.pdf import verify_pdf
+            from .delivery.pdf import pdf_layout_advisories, verify_pdf
 
             verify_pdf(pdf, markdown)
             metrics["pdf"] = "ok"
         except Exception as exc:
             issues.append(f"PDF 自检失败：{exc}")
             failed.add("pdf")
+        else:
+            try:
+                advisories = pdf_layout_advisories(pdf)
+            except Exception as exc:
+                # 建议级检查没跑成也要说出来，不能显示成「已检查、无问题」
+                advisories = [f"PDF 版面建议检查未完成：{type(exc).__name__}"]
     for fmt, data in (("html", html), ("docx", docx), ("pdf", pdf)):
         if data is None:
             continue
@@ -298,7 +305,11 @@ def consistency_gate(markdown: str, files: dict[str, bytes]) -> GateResult:
             issues.extend(residue)
             failed.add(fmt)
     metrics["failed_formats"] = sorted(failed)
-    return GateResult("consistency", "fail" if issues else "pass", issues, metrics)
+    if advisories:
+        metrics["pdf_layout"] = advisories
+    if issues:
+        return GateResult("consistency", "fail", issues, metrics)
+    return GateResult("consistency", "pass", [f"（建议）{item}" for item in advisories], metrics)
 
 
 def slides_gate(pptx: bytes, deck: dict[str, Any], markdown: str | None = None) -> GateResult:

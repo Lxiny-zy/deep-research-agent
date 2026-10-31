@@ -34,13 +34,17 @@ STRATEGY_LABELS: dict[str, tuple[str, str]] = {
 
 @dataclass(frozen=True)
 class SectionSpec:
-    """正文必须出现的一个章节。``aliases`` 用于验收时容忍等价标题。"""
+    """正文必须出现的一个章节。``aliases`` 用于验收时容忍等价标题。
+
+    ``avoid`` 是该节的常见错误，只进写作提示，不对外展示。
+    """
 
     key: str
     title: str
     guidance: str
     aliases: tuple[str, ...] = ()
     required: bool = True
+    avoid: str = ""
 
 
 @dataclass(frozen=True)
@@ -148,9 +152,18 @@ AUTO_RESEARCH = TaskTemplate(
     input_label="研究问题",
     input_placeholder="例如：快照式高光谱成像中，深度展开网络相比端到端网络的优势与局限？",
     sections=(
-        SectionSpec("summary", "摘要", "3–5 句给出核心结论", ("概述", "执行摘要", "Summary")),
-        SectionSpec("analysis", "分析", "按主题展开，每段都有引用", ("详细分析", "主题分析")),
-        SectionSpec("conclusion", "结论", "回答原始问题并指出不确定性", ("总结", "结论与建议")),
+        SectionSpec(
+            "summary", "摘要", "3–5 句给出核心结论", ("概述", "执行摘要", "Summary"),
+            avoid="罗列检索过程或来源清单；写入正文没有展开的结论",
+        ),
+        SectionSpec(
+            "analysis", "分析", "按主题展开，每段都有引用", ("详细分析", "主题分析"),
+            avoid="逐条复述素材而不归纳；把不同数据集、指标或设置下的数值直接比较",
+        ),
+        SectionSpec(
+            "conclusion", "结论", "回答原始问题并指出不确定性", ("总结", "结论与建议"),
+            avoid="引入正文没有出现的新证据；整句重复摘要",
+        ),
     ),
     deliverables=_DOC_SUITE,
     examples=(
@@ -178,21 +191,33 @@ LIT_REVIEW = TaskTemplate(
     input_label="综述主题",
     input_placeholder="例如：面向快照光谱成像的深度展开重建方法",
     sections=(
-        SectionSpec("abstract", "摘要", "综述范围、检索口径与主要发现", ("Abstract",)),
-        SectionSpec("introduction", "引言", "研究背景、动机与综述边界", ("背景", "Introduction")),
+        SectionSpec(
+            "abstract", "摘要", "综述范围、检索口径与主要发现", ("Abstract",),
+            avoid="罗列文献而不给出主要发现",
+        ),
+        SectionSpec(
+            "introduction", "引言", "研究背景、动机与综述边界", ("背景", "Introduction"),
+            avoid="泛泛铺陈领域重要性而不交代综述边界",
+        ),
         SectionSpec(
             "themes", "主题综述", "按主题分节，每节对比代表工作",
             ("研究现状", "方法综述", "技术路线分类", "研究进展", "Related Work"),
+            avoid="逐篇罗列文献而不按主题比较异同",
         ),
         SectionSpec(
             "comparison", "方法对比", "用表格或段落横向比较主流方法",
             ("对比分析", "比较", "横向评估", "Comparison"),
+            avoid="把不同数据集、指标或设置下的数值直接比高低；比较维度前后不一",
         ),
         SectionSpec(
             "open_problems", "开放问题", "尚未解决的问题与未来方向",
             ("未来方向", "挑战", "展望", "Future Work", "Open Problems"),
+            avoid="只写「有待进一步研究」而不指出具体缺口及其依据",
         ),
-        SectionSpec("conclusion", "结论", "收束全文", ("总结",)),
+        SectionSpec(
+            "conclusion", "结论", "收束全文", ("总结",),
+            avoid="引入正文没有出现的新证据；整句重复摘要",
+        ),
     ),
     deliverables=_DOC_SUITE,
     examples=(
@@ -225,9 +250,18 @@ PEER_REVIEW = TaskTemplate(
     input_label="待评审论文",
     input_placeholder="粘贴 arXiv 链接 / DOI / 论文摘要，例如 https://arxiv.org/abs/2501.12705",
     sections=(
-        SectionSpec("summary", "论文摘要", "用自己的话概括问题、方法与主要结论", ("Summary",)),
-        SectionSpec("strengths", "优点", "逐条列出，每条说明为什么是优点", ("Strengths",)),
-        SectionSpec("weaknesses", "不足", "逐条列出，区分根本性与可修复问题", ("Weaknesses",)),
+        SectionSpec(
+            "summary", "论文摘要", "用自己的话概括问题、方法与主要结论", ("Summary",),
+            avoid="照抄论文摘要；混入评价",
+        ),
+        SectionSpec(
+            "strengths", "优点", "逐条列出，每条说明为什么是优点", ("Strengths",),
+            avoid="空泛称赞而不指向具体章节、图表或实验",
+        ),
+        SectionSpec(
+            "weaknesses", "不足", "逐条列出，区分根本性与可修复问题", ("Weaknesses",),
+            avoid="把表述问题与根本性缺陷混为一谈；写没有原文依据的推测",
+        ),
         SectionSpec(
             "comments", "详细意见", "按章节给出具体可操作的修改建议", ("Detailed Comments",)
         ),
@@ -236,6 +270,7 @@ PEER_REVIEW = TaskTemplate(
             "总体推荐",
             "给出接收建议与 1–10 分评分及理由",
             ("Recommendation", "总体评价"),
+            avoid="评分与前文所列缺陷的严重程度不一致",
         ),
     ),
     deliverables=("md", "docx", "pdf", "html"),
@@ -273,11 +308,26 @@ PAPER_READ = TaskTemplate(
     input_label="待精读论文",
     input_placeholder="粘贴 arXiv 链接 / DOI / PDF 地址，可附上你关心的问题",
     sections=(
-        SectionSpec("one_liner", "一句话总结", "一句话说清这篇论文做了什么", ("TL;DR",)),
-        SectionSpec("contributions", "核心贡献", "逐条列出作者声称的贡献", ("贡献",)),
-        SectionSpec("method", "方法", "关键模型、公式与设计选择", ("方法概述",)),
-        SectionSpec("results", "主要结果", "关键实验与数值结果", ("实验结果", "结果")),
-        SectionSpec("limitations", "局限与未解问题", "作者承认与你发现的局限", ("局限",)),
+        SectionSpec(
+            "one_liner", "一句话总结", "一句话说清这篇论文做了什么", ("TL;DR",),
+            avoid="复述论文标题",
+        ),
+        SectionSpec(
+            "contributions", "核心贡献", "逐条列出作者声称的贡献", ("贡献",),
+            avoid="把作者声称的贡献写成已证实的结论",
+        ),
+        SectionSpec(
+            "method", "方法", "关键模型、公式与设计选择", ("方法概述",),
+            avoid="只列模块名称而不说明设计动机与关键公式",
+        ),
+        SectionSpec(
+            "results", "主要结果", "关键实验与数值结果", ("实验结果", "结果"),
+            avoid="只报数值而不注明数据集、指标与对比基线",
+        ),
+        SectionSpec(
+            "limitations", "局限与未解问题", "作者承认与你发现的局限", ("局限",),
+            avoid="把素材没有涉及的内容写成论文缺陷",
+        ),
         SectionSpec(
             "translation", "摘要翻译", "忠实、完整的中文翻译", ("摘要的忠实中文翻译", "摘要译文")
         ),
@@ -312,7 +362,10 @@ DATA_ANALYSIS = TaskTemplate(
         SectionSpec("data", "数据概况", "样本量、变量与缺失情况", ("数据描述",)),
         SectionSpec("statistics", "统计结果", "描述统计与检验结果（含 p 值）", ("统计分析",)),
         SectionSpec("figures", "图表", "每张图的含义与口径", ("可视化",)),
-        SectionSpec("findings", "结论", "用中文总结发现与局限", ("发现", "总结")),
+        SectionSpec(
+            "findings", "结论", "用中文总结发现与局限", ("发现", "总结"),
+            avoid="把相关关系写成因果关系",
+        ),
     ),
     deliverables=("md", "docx", "pdf", "html", "xlsx"),
     examples=("比较三种重建方法在 10 个场景上的 PSNR 是否有显著差异",),

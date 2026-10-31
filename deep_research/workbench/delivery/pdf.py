@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import math
 import re
@@ -19,6 +20,7 @@ import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from html import unescape
+from typing import Any
 
 from .html import pdf_html
 from .math import MathAsset
@@ -515,4 +517,130 @@ def verify_pdf(
                     raise PdfRenderError("PDF 图像超出页面范围")
 
 
-__all__ = ["PdfRenderError", "pdf_text", "render_pdf", "verify_pdf"]
+_HAN = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
+# 词框需有两个以上字母、数字或汉字才参与压字判断：公式重音、上下标等单个符号本就叠放
+_WORDLIKE = re.compile(r"[\w㐀-鿿]{2}")
+
+
+def _ink_signature(page: Any, bbox: Any, pymupdf: Any) -> str:
+    """字形墨迹签名：放大渲染、二值化并裁到墨迹外框，与字在页面上的位置无关。空白返回空串。"""
+    pix = page.get_pixmap(
+        clip=pymupdf.Rect(bbox), matrix=pymupdf.Matrix(3, 3), colorspace=pymupdf.csGRAY, alpha=False
+    )
+    rows = [pix.samples[y * pix.stride : y * pix.stride + pix.width] for y in range(pix.height)]
+    inked = [y for y, row in enumerate(rows) if min(row, default=255) < 128]
+    if not inked:
+        return ""
+    band = rows[inked[0] : inked[-1] + 1]
+    columns = [x for x in range(pix.width) if any(row[x] < 128 for row in band)]
+    bits = "\n".join(
+        "".join("1" if row[x] < 128 else "0" for x in range(columns[0], columns[-1] + 1))
+        for row in band
+    )
+    return hashlib.sha1(bits.encode()).hexdigest()
+
+
+def _stacked_runs(lines: list[dict[str, Any]]) -> list[str]:
+    """同一文本块里连续三行以上各只有一个汉字且左缘对齐：列太窄，中文被逐字折行。"""
+    runs: list[str] = []
+    run: list[str] = []
+    left: float | None = None
+    for line in lines:
+        text = "".join(char["c"] for span in line["spans"] for char in span["chars"]).strip()
+        single = len(text) == 1 and bool(_HAN.match(text))
+        x0 = float(line["bbox"][0])
+        if single and run and left is not None and abs(x0 - left) < 2:
+            run.append(text)
+        else:
+            if len(run) >= 3:
+                runs.append("".join(run))
+            run = [text] if single else []
+        left = x0 if single else None
+    if len(run) >= 3:
+        runs.append("".join(run))
+    return runs
+
+
+def _collisions(words: list[Any], page_number: int, limit: int = 5) -> list[str]:
+    """不同文字行的词框相交达较小框面积的三成；同字同位的重复绘制（模拟加粗）不算。"""
+    found: list[str] = []
+    ordered = sorted(
+        (word for word in words if _WORDLIKE.search(str(word[4]))), key=lambda word: word[1]
+    )
+    for index, first in enumerate(ordered):
+        for second in ordered[index + 1 :]:
+            if second[1] >= first[3]:
+                break
+            if (first[5], first[6]) == (second[5], second[6]):
+                continue
+            width = min(first[2], second[2]) - max(first[0], second[0])
+            height = min(first[3], second[3]) - max(first[1], second[1])
+            smaller = min(
+                (first[2] - first[0]) * (first[3] - first[1]),
+                (second[2] - second[0]) * (second[3] - second[1]),
+            )
+            if width <= 0 or height <= 0 or smaller <= 0 or width * height < 0.3 * smaller:
+                continue
+            if first[4] == second[4] and width * height > 0.9 * smaller:
+                continue
+            found.append(f"第 {page_number} 页「{first[4]}」与「{second[4]}」")
+            if len(found) >= limit:
+                return found
+    return found
+
+
+def pdf_layout_advisories(data: bytes, *, glyph_sample: int = 240) -> list[str]:
+    """文字层看起来正常、读者却看不清的问题：缺字形、压字、窄列逐字换行。只作建议。
+
+    替换字符、末段截断、表格越界与图像尺寸由 ``verify_pdf`` 硬判。这里的问题在抽取文本里
+    往往码位齐全，要靠渲染或坐标计算：不同汉字渲染成同一形状（缺字方框）或空白、
+    两段文字的词框相交、窄列把中文压成一行一个字。
+    """
+    pymupdf = _fitz()
+    unreadable = 0
+    blank: set[str] = set()
+    shapes: dict[str, set[str]] = {}
+    sampled: set[str] = set()
+    collisions: list[str] = []
+    stacked: list[str] = []
+    with pymupdf.open(stream=data, filetype="pdf") as document:
+        for number, page in enumerate(document, start=1):
+            for block in page.get_text("rawdict")["blocks"]:
+                lines = block.get("lines", [])
+                stacked += [f"第 {number} 页「{run}」" for run in _stacked_runs(lines)]
+                for char in (c for line in lines for span in line["spans"] for c in span["chars"]):
+                    value = char["c"]
+                    if value and ord(value[0]) < 32 and value not in "\t\n\r":
+                        unreadable += 1
+                        continue
+                    key = unicodedata.normalize("NFKC", value)
+                    if not _HAN.match(value) or key in sampled or len(sampled) >= glyph_sample:
+                        continue
+                    sampled.add(key)
+                    signature = _ink_signature(page, char["bbox"], pymupdf)
+                    if signature:
+                        shapes.setdefault(signature, set()).add(key)
+                    else:
+                        blank.add(key)
+            if len(collisions) < 5:
+                collisions += _collisions(page.get_text("words"), number, 5 - len(collisions))
+    advisories: list[str] = []
+    if unreadable:
+        advisories.append(f"PDF 文字层有 {unreadable} 个无法识别的字符，对应字形可能缺失")
+    if len(blank) >= 3:
+        sample = "".join(sorted(blank)[:5])
+        advisories.append(f"PDF 中 {len(blank)} 个汉字渲染为空白（如「{sample}」），疑似字体缺字")
+    same = sorted((chars for chars in shapes.values() if len(chars) >= 3), key=len, reverse=True)
+    if same:
+        sample = "".join(sorted(same[0])[:5])
+        advisories.append(
+            f"PDF 中 {sum(map(len, same))} 个不同汉字渲染成同一形状（如「{sample}」），疑似缺字方框"
+        )
+    if collisions:
+        advisories.append(f"PDF 有 {len(collisions)} 处文字互相重叠，如{collisions[0]}")
+    if stacked:
+        advisories.append(f"PDF 有 {len(stacked)} 处窄列中文逐字换行，如{stacked[0]}")
+    return advisories
+
+
+__all__ = ["PdfRenderError", "pdf_layout_advisories", "pdf_text", "render_pdf", "verify_pdf"]

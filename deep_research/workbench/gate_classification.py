@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .gates import GateResult
+from .scholarly import ADVISORY_CODES
 
 COMPLETION_POLICY_VERSION = 2
 ADVISORY_LENGTH_RATIO = 0.6
@@ -15,6 +16,7 @@ STYLE_CODES = frozenset(
         "cjk-ascii-punctuation",
         "citation-cluster",
         "abstract-citation",
+        *ADVISORY_CODES,
     }
 )
 
