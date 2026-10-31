@@ -40,7 +40,9 @@ def derivation_offer(detail: RunDetail, version: str | None = None) -> dict[str,
     reason = ""
     if detail.status not in {"done", "needs_review"} or detail.report is None:
         reason = "请先完成当前任务。"
-    elif contract is None or contract.template not in DERIVABLE:
+    elif contract is None:
+        reason = "此历史任务缺少任务信息，不能直接生成。"
+    elif contract.template not in DERIVABLE:
         reason = "只有课题调研和文献综述可以直接生成幻灯片或思维导图。"
     elif contract.strategy == "none":
         # 指定材料任务的验收要逐份核对原材料，派生任务拿不到这层契约

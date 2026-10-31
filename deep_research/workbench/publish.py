@@ -250,7 +250,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 67,
+        "format_version": 68,
         "support_policy": SUPPORT_POLICY_VERSION,
         "mindmap_policy": MINDMAP_POLICY_VERSION,
         "query": detail.query,

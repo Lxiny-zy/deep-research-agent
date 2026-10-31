@@ -103,6 +103,9 @@ async def test_derivation_needs_finished_open_research_with_verified_evidence(se
     empty = deepcopy(parent)
     empty.results = []
     assert "核验" in derivation_offer(empty)["reason"]
+    legacy = deepcopy(parent)
+    del legacy.orchestration.checkpoint["scratch"][CONTRACT_SCRATCH_KEY]
+    assert "缺少任务信息" in derivation_offer(legacy)["reason"]
     for token, expected in [("revision-bob", 404), ("revision-reader", 403)]:
         result = await _derive(
             client, parent, "slides", f"derive-{token}", Authorization=f"Bearer {token}"

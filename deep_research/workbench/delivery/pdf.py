@@ -108,6 +108,22 @@ def _squash(text: str) -> str:
     return re.sub(r"[\s\[\]\d.,，。:：;；|*`#>-]+", "", unicodedata.normalize("NFC", text))
 
 
+# 子集化后的 CJK 字体通常不到 2 MB；仍超过这个大小，说明整套字体被原样嵌入
+_FULL_FONT_BYTES = 4 * 2**20
+
+
+def _subset_fonts(document) -> None:  # type: ignore[no-untyped-def]
+    """字体子集化：整套 CJK 字体动辄 10–25 MB，子集后只保留用到的字形。
+
+    MuPDF 自带的子集化遇到 Noto CJK 的 CFF 字形会报「Reserved charstring byte」，
+    但不抛错、原样保留整套字体，单页 PDF 也有 20 MB；这时改用 fontTools 子集化。
+    """
+    document.subset_fonts()
+    fonts = {font[0] for page in document for font in page.get_fonts(full=True)}
+    if any(len(document.extract_font(xref)[3] or b"") > _FULL_FONT_BYTES for xref in fonts):
+        document.subset_fonts(fallback=True)
+
+
 def render_pdf(
     markdown: str,
     *,
@@ -279,8 +295,7 @@ def render_pdf(
                 fontsize=8,
                 color=(0.45, 0.5, 0.56),
             )
-        # 字体子集化：整套 CJK 字体动辄 10 MB，子集后只保留用到的字形（通常 < 100 KB）。
-        document.subset_fonts()
+        _subset_fonts(document)
         data = document.tobytes(deflate=True, garbage=3)
     finally:
         document.close()

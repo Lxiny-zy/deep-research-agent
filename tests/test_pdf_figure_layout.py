@@ -51,6 +51,50 @@ def report_pdf() -> tuple[str, bytes]:
     return markdown, render_pdf(markdown, title="重建方法对比")
 
 
+def test_rendered_pdf_embeds_only_a_font_subset():
+    _, pdf = report_pdf()
+    document = pymupdf.open(stream=pdf, filetype="pdf")
+    fonts = {font[0] for page in document for font in page.get_fonts(full=True)}
+    sizes = [len(document.extract_font(xref)[3] or b"") for xref in fonts]
+    assert sizes and max(sizes) <= pdf_module._FULL_FONT_BYTES and len(pdf) < 2 * 2**20
+
+
+def test_full_fonts_left_by_native_subsetting_fall_back_to_fonttools():
+    class Program(bytes):
+        def __new__(cls, size: int):  # type: ignore[no-untyped-def]
+            program = super().__new__(cls, b"x")
+            program.size = size
+            return program
+
+        def __len__(self) -> int:
+            return self.size
+
+    class Page:
+        def get_fonts(self, full=False):  # type: ignore[no-untyped-def]
+            return [(7, "otf", "Type0", "Noto Serif CJK SC Regular", "F1", "Identity-H", 0)]
+
+    class Document:
+        def __init__(self, sizes: list[int]) -> None:
+            self.calls: list[dict] = []
+            self.sizes = sizes
+
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            return iter([Page()])
+
+        def subset_fonts(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            self.calls.append(kwargs)
+
+        def extract_font(self, xref: int):  # type: ignore[no-untyped-def]
+            return ("Noto Serif CJK SC Regular", "otf", "Type0", Program(self.sizes[-1]))
+
+    broken = Document([24 * 2**20])
+    pdf_module._subset_fonts(broken)
+    assert broken.calls == [{}, {"fallback": True}]
+    working = Document([300_000])
+    pdf_module._subset_fonts(working)
+    assert working.calls == [{}]
+
+
 def test_layout_advisories_stay_silent_on_a_rendered_report():
     _, pdf = report_pdf()
     assert pdf_layout_advisories(pdf) == []
