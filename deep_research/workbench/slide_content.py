@@ -217,7 +217,11 @@ def compile_deck(
                     row.label,
                     *[
                         (row.cell(c.key).value or "未报告")
-                        + "".join(f"[{i}]" for i in row.cell(c.key).citations)
+                        + "".join(
+                            f"[{i}]"
+                            for i in ([] if row.cell(c.key).cited_inline
+                                      else row.cell(c.key).citations)
+                        )
                         for c in block.columns
                     ],
                 ]

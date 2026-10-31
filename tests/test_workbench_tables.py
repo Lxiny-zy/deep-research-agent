@@ -480,3 +480,30 @@ def test_live_preview_hides_partial_and_complete_model_table_specs():
         assert "finding_id" not in preview and "private-spec" not in preview
         assert "正文" in preview
     assert "后文" in table_preview(raw)
+
+
+def test_cell_with_several_statements_cites_each_statement_in_place():
+    from deep_research.workbench.tables import render_specs, table_issues
+
+    a = admitted("A 把迭代优化展开为可学习网络。", entity="A")
+    b = admitted("A 的先验不足会导致重建不可控。", entity="A").model_copy(
+        update={"source_url": "https://example.org/other"}
+    )
+    results = [ResearchResult(sub_question="比较", findings=[a, b])]
+    mapping = {"https://example.org/paper": 1, "https://example.org/other": 2}
+    spec = {
+        "id": "t1",
+        "title": "表 1 定性比较",
+        "columns": [{"key": "s", "label": "要点", "field": "statement"}],
+        "rows": [{"label": "A", "cells": {"s": [evidence_id(a), evidence_id(b)]}}],
+    }
+    raw = "```evidence-table\n" + json.dumps(spec, ensure_ascii=False) + "\n```\n"
+    body, record = render_specs(raw, results, mapping, statement_citations=True)
+    # 逐格核验按句切分：角标只挂格末时，第一条陈述会被当成没有出处的句子
+    assert "可学习网络 [1]；A 的先验不足会导致重建不可控 [2] |" in body
+    assert not table_issues(body, results, mapping, record, require_review=False)
+    legacy_body, legacy = render_specs(raw, results, mapping)
+    assert "重建不可控。 [1] [2] |" in legacy_body and "statement_citations_version" not in legacy
+    # 旧记录仍按旧格式重算，不会因为新渲染规则判为失配；两种格式也不能混用
+    assert not table_issues(legacy_body, results, mapping, legacy, require_review=False)
+    assert table_issues(body, results, mapping, legacy, require_review=False)

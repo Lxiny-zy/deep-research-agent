@@ -193,3 +193,52 @@ async def test_cached_support_with_invalid_evidence_is_rejudged(ids):
     assert decision.verdict == "supported"
     assert decision.evidence_ids == ["a"]
     assert decision.reason != "historical"
+
+
+async def _judged(text, evidence, ids, *, kind="claim"):
+    reviewer = SupportReviewer(SelectedJudge(ids), evidence, 50000)
+    unit = SupportUnit("u", text, kind=kind, citations=sorted({e["citation"] for e in evidence}))
+    return (await reviewer.review([unit]))[0]
+
+
+async def test_excerpt_for_an_unnamed_sentence_need_not_carry_a_sibling_sentences_name():
+    # 线上结论段：同一来源的两条摘录各支持一句，不应要求两条都含第一句的专名
+    evidence = [
+        item("a", "Alpha networks unroll iterative optimization."),
+        item("b", "Inaccurate priors lead to uncontrollable reconstruction."),
+    ]
+    text = "Alpha 网络把迭代优化展开为可学习网络 [1]。先验不准确会导致重建不可控 [1]。"
+    assert (await _judged(text, evidence, ["a", "b"])).verdict == "supported"
+
+
+async def test_unnamed_sentence_cannot_hide_a_subject_mismatch_in_a_named_one():
+    decision = await _judged(
+        "Alpha 得分为 95 [1]。该结果来自仿真数据 [1]。", [item("b", "Beta score 95")], ["b"]
+    )
+    assert decision.verdict == "unsupported"
+    assert decision.alignment_review["unanchored_evidence_ids"] == ["b"]
+
+
+async def test_chinese_method_family_is_anchored_by_its_english_name_only():
+    text = "在 CASSI 中，深度展开网络保持了可解释性 [1]。"
+    same = [item("a", "Deep unfolding networks keep interpretability grounded in optimization.")]
+    assert (await _judged(text, same, ["a"])).verdict == "supported"
+    other = [item("a", "Plug-and-play priors rely on pretrained denoisers.")]
+    assert (await _judged(text, other, ["a"])).verdict == "unsupported"
+
+
+async def test_uncited_summary_needs_an_anchored_excerpt_for_each_named_sentence():
+    text = "在 CASSI 中，深度展开网络结合物理模型与学习。泛化能力受训练数据影响。"
+    family = item("a", "Deep unfolding networks combine physics and learning.", 1)
+    data = item("b", "Learning-based methods depend on the training data.", 2)
+    assert (await _judged(text, [family, data], ["a", "b"], kind="summary")).verdict == "supported"
+    decision = await _judged(text, [family, data], ["b"], kind="summary")
+    assert decision.verdict == "unsupported"
+
+
+def test_single_letter_entity_is_not_found_inside_ordinary_words():
+    from deep_research.workbench.support_alignment import _names
+
+    evidence = [dict(item("a", "A coverage 0.908"), entity="A")]
+    assert _names("coverage：0.908", evidence) == set()
+    assert _names("A；coverage：0.908", evidence) == {"a"}

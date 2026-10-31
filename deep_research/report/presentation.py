@@ -43,6 +43,8 @@ def presentation_document(document: ReportDocument) -> ReportDocument:
                         cell.citations = list(
                             dict.fromkeys(by_index.get(i, i) for i in cell.citations)
                         )
+                        if cell.cited_inline:
+                            cell.value = project_citations(cell.value, catalog, links=False)
     return result
 
 

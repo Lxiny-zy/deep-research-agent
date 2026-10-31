@@ -63,6 +63,18 @@ def test_correct_scope_rounding_and_nonassertive_numbers_remain_valid(body):
     assert not statistic_scope_issues(body, LEDGER)
 
 
+def test_method_plan_naming_a_confidence_level_is_not_an_unbound_statistic():
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    # 线上数据分析第 17 行：方法说明列出要报告的统计量，95 是置信水平
+    plan = (
+        "采用的方法：以配对 t 检验比较该差值的均值是否为 0，报告统计量、p 值、自由度、平均差、"
+        "差值标准差与 95% 均值差置信区间；以 Shapiro-Wilk 检验检查配对差值的分布前提。"
+    )
+    assert not statistic_scope_issues(plan, LEDGER)
+    assert statistic_scope_issues("报告统计量、p 值与 3.7 的差值。", LEDGER)
+
+
 async def test_model_approval_and_cached_pass_cannot_hide_swapped_group_means():
     from deep_research.workbench.prose_review import reviewer_for_report
     from tests.fakes import FakeLLM

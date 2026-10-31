@@ -156,7 +156,7 @@ def _cell_text(cell: TableCell) -> str:
         return "未报告"
     text = _inline(cell.value)
     # 多来源就把来源都列出来——交叉印证过的数值显示两个引用，正是双源门禁的产物。
-    for citation in cell.citations:
+    for citation in [] if cell.cited_inline else cell.citations:
         text = f"{text} [{citation}]"
     if cell.note_ref:
         text = f"{text}（注 {cell.note_ref}）"

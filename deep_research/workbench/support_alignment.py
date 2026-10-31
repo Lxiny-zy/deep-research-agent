@@ -27,17 +27,32 @@ _NAME_ALIASES = {
     "hsi": ("hyperspectral imaging", "高光谱成像"),
     "admm": ("alternating direction method of multipliers", "交替方向乘子法"),
     "mcfa": ("multispectral color filter array", "多光谱彩色滤波阵列"),
+    "pnp": ("plug-and-play", "plug and play", "即插即用"),
+    "deep unfolding": (
+        "deep unrolling", "unfolding", "unrolling", "unfolded", "unrolled", "深度展开",
+    ),
 }
+# Chinese terms whose English names appear in quotes. They only let a quote
+# anchor the sentence; they never make an otherwise anchor-free sentence require one.
+_TRANSLATED_NAMES = {"深度展开": "deep unfolding", "展开网络": "deep unfolding", "即插即用": "pnp"}
 
 
 def _names(text: str, evidence: list[dict[str, Any]]) -> set[str]:
     text = unicodedata.normalize("NFKC", replace_citations(text, lambda _: ""))
     names = {match[0].casefold() for match in _NAMES.finditer(text)} - _ORDINARY
     # Explicit extraction entities also cover non-Latin proper names without
-    # treating arbitrary Chinese word overlap as evidence support.
+    # treating arbitrary Chinese word overlap as evidence support. A Latin
+    # entity must be a whole word: entity "A" is not named by "coverage".
+    folded = text.casefold()
     for record in evidence:
         entity = record.get("entity")
-        if isinstance(entity, str) and entity.strip() and entity.casefold() in text.casefold():
+        if (
+            isinstance(entity, str)
+            and entity.strip()
+            and re.search(
+                r"(?<![a-z0-9])" + re.escape(entity.casefold()) + r"(?![a-z0-9])", folded
+            )
+        ):
             names.add(entity.casefold())
     return names
 
@@ -124,9 +139,14 @@ def alignment_issue(
     """Check actual selected quotes, never other findings or the proposed statement.
 
     Numbers use the same citation/figure masking and explicit arithmetic policy
-    as final-report validation. Each selected quote needs a number/name anchor
-    when the referring sentence has one. Anchor-free prose remains model-reviewed;
-    lexical matching is not a substitute for entailment or cross-language NER.
+    as final-report validation. A sentence with a number/name and its own
+    citation needs at least one selected quote carrying one of them. Every
+    selected quote cited by such a sentence needs an anchor there or in another
+    sentence, unless a sentence citing it has no number or name: that sentence
+    may be what the quote supports, and only semantic review can tell. Without
+    any explicit citation in the unit, every sentence binds the unit's citations.
+    Anchor-free prose remains model-reviewed; lexical matching is not a
+    substitute for entailment or cross-language NER.
     """
     from ..report.validation import _computed_numbers, _numbers
 
@@ -141,14 +161,26 @@ def alignment_issue(
     if not ids or not set(ids).issubset(allowed):
         return fail("invalid_evidence_scope", "核验未提供本单元引用范围内的有效依据")
     selected = [record for record in evidence if record["id"] in ids]
-    sentences = _segments(text)
-    anchored: set[str] = set(anchored_ids or ())
+    sentences = [
+        (
+            sentence,
+            {
+                int(n)
+                for match in _CITATIONS.finditer(sentence)
+                for n in re.findall(r"\d+", match[1])
+            },
+        )
+        for sentence in _segments(text)
+    ]
+    implicit_unit = not any(explicit for _, explicit in sentences)
+    preanchored: set[str] = set(anchored_ids or ())
+    anchored: set[str] = set(preanchored)
     requires_anchor: set[str] = set()
-    for sentence in sentences:
-        explicit = {
-            int(n) for match in _CITATIONS.finditer(sentence) for n in re.findall(r"\d+", match[1])
-        }
+    hosted: set[str] = set()
+    unsupported: set[str] = set()
+    for sentence, explicit in sentences:
         scope = explicit or set(citations)
+        binds = bool(explicit) or implicit_unit
         records = [record for record in selected if record["citation"] in scope]
         numeric_sentence = _numeric_text(sentence)
         names, numbers = _names(sentence, evidence), _numbers(numeric_sentence)
@@ -174,25 +206,37 @@ def alignment_issue(
                 "unsupported_number_or_calculation",
                 "所选依据不支持句中数值或显式计算" + (f"：{values}" if values else ""),
             )
+        if not numbers and not names:
+            if binds:
+                hosted.update(record["id"] for record in records)
+            continue
+        matches = names | {
+            name for term, name in _TRANSLATED_NAMES.items() if term in sentence
+        }
+        sentence_anchored = False
         for record in records:
             raw_quote = str(record.get("quote", ""))
             quote = unicodedata.normalize(
                 "NFKC", normalize_scientific_numbers(raw_quote)
             ).casefold()
             key = record["id"]
-            if not numbers and not names:
-                continue
             requires_anchor.add(key)
-            name_match = any(_contains(quote, name) for name in names)
+            name_match = any(_contains(quote, name) for name in matches)
             # Coincidentally equal values must not hide an explicit subject
             # mismatch. Unnamed excerpts still rely on semantic review.
             if names and _names(raw_quote, evidence) and not name_match:
+                sentence_anchored = sentence_anchored or key in preanchored
                 continue
             if numbers.intersection(_numbers(quote)) or name_match:
                 anchored.add(key)
-    if requires_anchor - anchored:
+                sentence_anchored = True
+            sentence_anchored = sentence_anchored or key in preanchored
+        if binds and records and not sentence_anchored:
+            unsupported.update(record["id"] for record in records)
+    unanchored = (requires_anchor - anchored - hosted) | unsupported
+    if unanchored:
         if diagnostics is not None:
-            diagnostics["unanchored_evidence_ids"] = sorted(requires_anchor - anchored)
+            diagnostics["unanchored_evidence_ids"] = sorted(unanchored)
         return fail(
             "selected_excerpt_missing_anchor",
             "所选摘录缺少对应句中的数值或专名，请重新选择实际支持该句的依据",

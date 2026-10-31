@@ -430,6 +430,7 @@ class TemplateWriter:
                 corroboration=require_corroboration,
                 previous=bb.scratch.get(TABLES_KEY),
                 comparison_context=template.key in {"autoResearch", "litReview"},
+                statement_citations=True,
             )
             bb.scratch[TABLES_KEY] = table_record
             table_records[body] = table_record

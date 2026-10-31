@@ -71,6 +71,9 @@ _VALUE = re.compile(
 _INTERVAL = re.compile(
     r"\s*(?:为|是|=|:)?\s*\[\s*(?P<low>" + _NUMBER + r")\s*[,，]\s*(?P<high>" + _NUMBER + r")\s*\]"
 )
+_CONFIDENCE_LEVEL = re.compile(
+    r"\s*%\s*(?:的\s*)?(?:均值差|平均差|差值|均值)?\s*(?:置信|CI\b|confidence)", re.I
+)
 _NONASSERTIVE = re.compile(
     r"是否|假设|如果|不是|并非|不等于|不能|不得|[？?]|\bif\b",
     re.I,
@@ -676,7 +679,16 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                             f"（{target}）"
                         )
             for start, end, metric in unresolved:
-                number = re.search(_NUMBER, clause[end:])
+                rest = clause[end:]
+                # 方法说明里「95% 均值差置信区间」的 95 是置信水平，不是这个统计量的取值
+                number = next(
+                    (
+                        item
+                        for item in re.finditer(_NUMBER, rest)
+                        if not _CONFIDENCE_LEVEL.match(rest, item.end())
+                    ),
+                    None,
+                )
                 if number is not None and not any(
                     start <= offset <= end + number.start() for _, offset, _ in matches
                 ):

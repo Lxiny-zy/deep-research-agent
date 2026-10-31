@@ -32,6 +32,8 @@ from .support import (
 TABLES_KEY = "_evidence_tables"
 TABLES_VERSION = 1
 COMPARISON_CONTEXT_VERSION = 1
+# 一格多条定性陈述时逐条带出处。旧记录没有这个键，仍按格末统一角标重算，不会失配。
+STATEMENT_CITATIONS_VERSION = 1
 TABLE_RULES = (
     "逐格核对表格。每个单元格只允许使用指定的发现，不得借其他格的证据。"
     "同时检查表题、行名、列名、单位与口径。训练块尺寸不能放在仿真输入尺寸列，"
@@ -192,6 +194,21 @@ def _conditions_key(finding: Finding) -> str:
     return digest(finding.conditions.model_dump() if finding.conditions else None)
 
 
+def _statement_cell(findings: list[Finding], mapping: dict[str, int]) -> TableCell:
+    """一格多条陈述时各自带出处；角标只挂格末，核验会把前几条当作无出处的句子。"""
+    cited: dict[str, set[int]] = {}
+    for finding in findings:
+        cited.setdefault(finding.statement, set()).add(mapping[finding.source_url])
+    return TableCell(
+        value="；".join(
+            statement.rstrip("。；; ") + " " + " ".join(f"[{i}]" for i in sorted(indices))
+            for statement, indices in cited.items()
+        ),
+        citations=sorted(set().union(*cited.values())),
+        cited_inline=True,
+    )
+
+
 def render_table(
     spec: TableSpec,
     results: list[ResearchResult],
@@ -200,6 +217,7 @@ def render_table(
     corroboration: bool = False,
     ledger: dict[str, Any] | None = None,
     comparison_context: bool = False,
+    statement_citations: bool = False,
 ) -> RenderedTable:
     findings = admitted_findings(results, mapping, corroboration)
     rendered = RenderedTable(TableBlock(id=spec.id, title=spec.title))
@@ -364,7 +382,16 @@ def render_table(
                             )
                         if value:
                             values.append(value)
-                    cell = TableCell(value="；".join(dict.fromkeys(values)), citations=citations)
+                    if (
+                        statement_citations
+                        and column.field == "statement"
+                        and len(dict.fromkeys(values)) > 1
+                    ):
+                        cell = _statement_cell(selected, mapping)
+                    else:
+                        cell = TableCell(
+                            value="；".join(dict.fromkeys(values)), citations=citations
+                        )
                 if selected and cell.reported:
                     contexts = list(dict.fromkeys(f.statement for f in selected))
                     condition_text = ""
@@ -439,6 +466,7 @@ def render_specs(
     previous: dict[str, Any] | None = None,
     ledger: dict[str, Any] | None = None,
     comparison_context: bool = False,
+    statement_citations: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     lines = markdown.splitlines(keepends=True)
     tokens = [
@@ -457,6 +485,10 @@ def render_specs(
         **(
             {"comparison_context_version": COMPARISON_CONTEXT_VERSION} if comparison_context else {}
         ),
+        **(
+            {"statement_citations_version": STATEMENT_CITATIONS_VERSION}
+            if statement_citations else {}
+        ),
     }
     replacements: list[tuple[int, int, str]] = []
     for token in tokens:
@@ -465,7 +497,7 @@ def render_specs(
             spec = TableSpec.model_validate_json(token.content)
             table = render_table(
                 spec, results, mapping, corroboration=corroboration, ledger=ledger,
-                comparison_context=comparison_context,
+                comparison_context=comparison_context, statement_citations=statement_citations,
             )
             record["specs"].append(spec.model_dump(mode="json"))
             replacements.append((token.map[0], token.map[1], table.markdown + "\n"))
@@ -485,6 +517,8 @@ def _compiled(
 ) -> list[RenderedTable]:
     if record.get("comparison_context_version") not in {None, COMPARISON_CONTEXT_VERSION}:
         raise ValueError("比较条件展示版本不受支持")
+    if record.get("statement_citations_version") not in {None, STATEMENT_CITATIONS_VERSION}:
+        raise ValueError("表格陈述出处展示版本不受支持")
     specs = [TableSpec.model_validate(spec) for spec in record["specs"]]
     if len({spec.id for spec in specs}) != len(specs):
         raise ValueError("表格规格编号重复")
@@ -493,6 +527,9 @@ def _compiled(
             spec, results, mapping, corroboration=corroboration, ledger=ledger,
             comparison_context=(
                 record.get("comparison_context_version") == COMPARISON_CONTEXT_VERSION
+            ),
+            statement_citations=(
+                record.get("statement_citations_version") == STATEMENT_CITATIONS_VERSION
             ),
         )
         for spec in specs

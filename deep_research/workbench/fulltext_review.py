@@ -39,6 +39,9 @@ def explicit_absence(text: str) -> bool:
         r"不代表原文(?:全文)?(?:没有|未)报告[。.]?",
         "", normalized,
     )
+    # Report tables are rendered from evidence specs only; a cell that is just
+    # 未报告 is that scope marker, not a claim about the source.
+    normalized = re.sub(r"(?<=\|)[ \t]*未报告[ \t]*(?=\|)", " ", normalized)
     return bool(_ABSENCE.search(normalized) or _UNRESOLVED.search(normalized))
 
 

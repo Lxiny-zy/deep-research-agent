@@ -74,6 +74,9 @@ class TableCell(BaseModel):
     # 多个来源报告了不同数值。表里并列呈现（不静默挑一个），但**排除出图表**：
     # 有争议的值画成一个点等于替读者做了裁决。
     disputed: bool = False
+    # 一格里有多条定性陈述时，每条后面直接跟自己的出处（``value`` 已含角标）。
+    # ``citations`` 仍列出全部出处供统计；渲染器不能再在格末重复追加。
+    cited_inline: bool = False
 
     @property
     def reported(self) -> bool:

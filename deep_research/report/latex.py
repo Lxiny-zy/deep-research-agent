@@ -229,7 +229,9 @@ def _table(table: TableBlock) -> str:
         for column in table.columns:
             cell = row.cell(column.key)
             citation_suffix = (
-                f" [{', '.join(str(c) for c in cell.citations)}]" if cell.citations else ""
+                f" [{', '.join(str(c) for c in cell.citations)}]"
+                if cell.citations and not cell.cited_inline
+                else ""
             )
             values.append(_cell(cell.value) + citation_suffix)
         lines.append(" & ".join(values) + r" \\")

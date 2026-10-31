@@ -139,7 +139,7 @@ def _cell_value(cell: TableCell) -> str:
         return "未报告"
 
     value = cell.value
-    if cell.citations:
+    if cell.citations and not cell.cited_inline:
         value += " " + " ".join(f"[{citation}]" for citation in cell.citations)
     if cell.note_ref is not None:
         value += f" [注 {cell.note_ref}]"
