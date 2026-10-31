@@ -14,6 +14,7 @@ export default function RunTaskSummary({ info }: { info: RunTemplateInfo | undef
   // 任务类型已经显示在页头；没有任何可补充的事实时不再单占一行。
   const hasFacts = Boolean(
     info.revision_source ||
+      info.derived_source ||
       (contract?.papers && contract.papers.length > 0) ||
       intake ||
       analysis ||
@@ -46,6 +47,17 @@ export default function RunTaskSummary({ info }: { info: RunTemplateInfo | undef
             <dd>
               本次复用原任务资料继续修订。{' '}
               <a href={`/runs/${encodeURIComponent(info.revision_source.parent_run_id)}`}>
+                查看原任务
+              </a>
+            </dd>
+          </>
+        )}
+        {info.derived_source && (
+          <>
+            <dt>证据来源</dt>
+            <dd>
+              复用原任务已核验的证据与引用生成，未重新检索。{' '}
+              <a href={`/runs/${encodeURIComponent(info.derived_source.parent_run_id)}`}>
                 查看原任务
               </a>
             </dd>

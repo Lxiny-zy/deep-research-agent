@@ -227,6 +227,32 @@ describe('DeliverablesPanel', () => {
     expect(screen.getByText('评审（PDF）')).toBeInTheDocument()
   })
 
+  it('creates slides or a mind map from the verified evidence of a finished research', async () => {
+    const created = vi.fn()
+    mocks.reviseRunContent.mockResolvedValue({ run_id: 'slides-child' })
+    render(
+      <DeliverablesPanel
+        runId="survey"
+        registry={{
+          ...registry,
+          derivation: {
+            available: true,
+            reason: '',
+            source_version: 'c'.repeat(64),
+            targets: ['slides', 'mindmap'],
+          },
+        }}
+        loading={false}
+        error={null}
+        onRevisionCreated={created}
+      />,
+    )
+    expect(screen.getByRole('button', { name: '生成思维导图' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: '生成幻灯片' }))
+    await waitFor(() => expect(created).toHaveBeenCalledWith('slides-child'))
+    expect(mocks.reviseRunContent).toHaveBeenCalledWith('survey', 'c'.repeat(64), 'slides')
+  })
+
   it('does not offer content revision to a read-only user', () => {
     render(
       <DeliverablesPanel
@@ -387,6 +413,23 @@ describe('RunTaskSummary', () => {
       'href',
       '/runs/original',
     )
+  })
+
+  it('names the research whose evidence a derived task reused', () => {
+    render(
+      <RunTaskSummary
+        info={{
+          template: template(),
+          contract,
+          extras: {},
+          analysis: null,
+          intake: null,
+          derived_source: { parent_run_id: 'survey', from_template: 'litReview', template: 'slides' },
+        }}
+      />,
+    )
+    expect(screen.getByText(/未重新检索/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '查看原任务' })).toHaveAttribute('href', '/runs/survey')
   })
   it('shows the review score and intake failures', () => {
     render(

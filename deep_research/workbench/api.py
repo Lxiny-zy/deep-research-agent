@@ -44,7 +44,7 @@ class ContractPreviewRequest(BaseModel):
 class ContentRevisionRequest(BaseModel):
     source_version: str = Field(pattern=r"^[0-9a-f]{64}$")
     request_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
-    mode: Literal["rewrite", "research"] = "rewrite"
+    mode: Literal["rewrite", "research", "slides", "mindmap"] = "rewrite"
 
 
 class DeliveryRetryRequest(BaseModel):
@@ -376,6 +376,11 @@ async def get_deliverables(
         from .research_continuation import continuation_offer
 
         registry["research_continuation"] = continuation_offer(detail, bundle.gates)
+        from .derivation import derivation_offer
+
+        registry["derivation"] = derivation_offer(
+            detail, registry["content_revision"]["source_version"]
+        )
     return registry
 
 
@@ -399,7 +404,7 @@ async def revise_content(
         raise HTTPException(404, "run not found")
     key = digest(["content-revision", principal.id, body.request_id])
     request_hash = digest([principal.id, run_id, body.source_version] + (
-        ["research"] if body.mode == "research" else []
+        [body.mode] if body.mode != "rewrite" else []
     ))
     try:
         existing = await repo.find_run_once(key, request_hash)
@@ -410,13 +415,21 @@ async def revise_content(
         return {"run_id": existing}
     if source_version(detail) != body.source_version:
         raise HTTPException(409, "任务材料或正文已变化，请刷新后再继续修订")
-    bundle = await _bundle(request, run_id)
+    from .derivation import derivation_offer, prepare_derivation
     from .research_continuation import continuation_offer, prepare_continuation
 
-    offer_fn = continuation_offer if body.mode == "research" else revision_offer
-    offer = offer_fn(detail, bundle.gates)
-    if not offer["available"]:
-        raise HTTPException(409, offer["reason"])
+    # 生成幻灯片 / 导图只看原任务的已核验证据，不需要先构建原任务的交付
+    derived = body.mode in {"slides", "mindmap"}
+    if derived:
+        offer = derivation_offer(detail)
+        if body.mode not in offer["targets"]:
+            raise HTTPException(409, offer["reason"] or "该任务不能生成这种交付形式")
+    else:
+        bundle = await _bundle(request, run_id)
+        offer_fn = continuation_offer if body.mode == "research" else revision_offer
+        offer = offer_fn(detail, bundle.gates)
+        if not offer["available"]:
+            raise HTTPException(409, offer["reason"])
     await api_module._check_rate_limit(request)
     settings = request.app.state.settings
     if settings.daily_run_quota is not None:
@@ -427,7 +440,10 @@ async def revise_content(
     try:
         execution, current = (
             await prepare_continuation(detail, settings, offer["gaps"])
-            if body.mode == "research" else await prepare_revision(detail, settings)
+            if body.mode == "research"
+            else prepare_derivation(detail, settings, body.mode)
+            if derived
+            else await prepare_revision(detail, settings)
         )
         await snapshot_catalog_for_execution(
             execution, getattr(request.app.state, "catalog", None), current
@@ -752,6 +768,7 @@ async def get_run_template(run_id: str, request: Request) -> dict[str, Any]:
         "analysis": analysis if isinstance(analysis, dict) else None,
         "intake": intake if isinstance(intake, dict) else None,
         "revision_source": scratch.get("content_revision") if isinstance(scratch, dict) else None,
+        "derived_source": scratch.get("derived_from") if isinstance(scratch, dict) else None,
     }
 
 

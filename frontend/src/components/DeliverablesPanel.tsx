@@ -4,7 +4,13 @@ import InfoTip from './InfoTip'
 import { formatLabel, humanSize } from '../lib/workbench'
 import { fetchDeliverable, getDeliverables, reviseRunContent } from '../api/client'
 import { downloadBlob } from '../lib/download'
-import type { DeliverableItem, DeliverableRegistry, GateResult, GateStatus } from '../types'
+import type {
+  DeliverableItem,
+  DeliverableRegistry,
+  DerivedTemplate,
+  GateResult,
+  GateStatus,
+} from '../types'
 import { useRenderOperation } from '../hooks/useRenderOperation'
 
 const GATE_LABEL: Record<string, string> = {
@@ -250,6 +256,27 @@ export default function DeliverablesPanel({
     }
   }
 
+  async function derive(target: DerivedTemplate) {
+    if (!registry?.derivation?.available || busy !== null) return
+    setBusy(`derive-${target}`)
+    setActionError(null)
+    try {
+      const next = await reviseRunContent(runId, registry.derivation.source_version, target)
+      onRevisionCreated?.(next.run_id)
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : '创建任务失败')
+      if (cause instanceof Error && 'status' in cause && cause.status === 409) {
+        try {
+          onUpdated?.(await getDeliverables(runId))
+        } catch {
+          /* Keep the original error. */
+        }
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function continueResearch() {
     if (!registry?.research_continuation?.available || busy !== null) return
     setBusy('research-continuation')
@@ -386,6 +413,28 @@ export default function DeliverablesPanel({
             <button type="button" className="btn btn-secondary" disabled={actionBusy} onClick={continueResearch}>
               {busy === 'research-continuation' ? '正在继续研究…' : '继续补充研究'}
             </button>
+          </div>
+        </div>
+      )}
+      {registry.derivation?.available && registry.can_retry !== false && onRevisionCreated && (
+        <div className="run-validation-note">
+          <div>
+            <p>复用本次已核验的证据与引用另建任务，不重新检索。</p>
+            {registry.derivation.targets.map((target) => (
+              <button
+                key={target}
+                type="button"
+                className="btn btn-secondary"
+                disabled={actionBusy}
+                onClick={() => derive(target)}
+              >
+                {busy === `derive-${target}`
+                  ? '正在创建任务…'
+                  : target === 'slides'
+                    ? '生成幻灯片'
+                    : '生成思维导图'}
+              </button>
+            ))}
           </div>
         </div>
       )}

@@ -976,9 +976,13 @@ export interface DeliverableItem {
   issues: string[]
 }
 
+/** 已完成的调研 / 综述可以直接生成的交付形式。 */
+export type DerivedTemplate = 'slides' | 'mindmap'
+
 export interface DeliverableRegistry {
   content_revision?: { available: boolean; reason: string; source_version: string }
   research_continuation?: { available: boolean; reason: string; source_version: string; gaps?: string[]; action?: 'retrieve' | 'read' }
+  derivation?: { available: boolean; reason: string; source_version: string; targets: DerivedTemplate[] }
   content_version?: string
   input_version?: string
   parent_version?: string
@@ -998,6 +1002,7 @@ export interface DeliverableRegistry {
 
 export interface RunTemplateInfo {
   revision_source?: { parent_run_id: string; source_version: string } | null
+  derived_source?: { parent_run_id: string; from_template: TemplateKey; template: DerivedTemplate } | null
   template: TaskTemplate
   contract: TaskContract | null
   extras: { score?: number | null; stats?: Record<string, number>; figures?: number }

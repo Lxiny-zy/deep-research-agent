@@ -13,6 +13,7 @@ import type {
   ConfigView,
   CreateRunRequest,
   CreateRunResponse,
+  DerivedTemplate,
   ModelProfile,
   ModelProfileInput,
   ModelProbeInput,
@@ -1020,9 +1021,13 @@ export function downloadRenderResult(
   )
 }
 
-export function reviseRunContent(runId: string, sourceVersion: string, mode: 'rewrite' | 'research' = 'rewrite'): Promise<CreateRunResponse> {
+export function reviseRunContent(
+  runId: string,
+  sourceVersion: string,
+  mode: 'rewrite' | 'research' | DerivedTemplate = 'rewrite',
+): Promise<CreateRunResponse> {
   const key = `${runId}/${sourceVersion}/${mode}`
-  const storageKey = `dr_pending_run_revision:${runId}${mode === 'research' ? ':research' : ''}`
+  const storageKey = `dr_pending_run_revision:${runId}${mode === 'rewrite' ? '' : `:${mode}`}`
   let requestId = revisionRequests.get(key)
   try {
     const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null')
