@@ -1,6 +1,18 @@
 # 最新上线记录
 
-最新发布：**2026-10-29，`80236f80f99a82352015f64f73246110579a7347`**（任务记录谱纹改为独立的「研究谱」列，见 [主计划](IMPROVEMENT_PLAN.md) S10）。
+最新发布：**2026-10-31，`e4d59fd31e87b5b6df5a3f26b770afa118684ab1`**（PDF 中文字体子集化，见 [主计划](IMPROVEMENT_PLAN.md) S24）。
+当天先发布 `60039cd5e50d3aed637778f3ad542c96f7f5002c`（交付内容质量规则 S15–S17、S21–S23，以及 10-30 本地完成的 S11–S14：Word 行距、PDF 分段函数间距、幻灯片真实标题、导图分支页）。
+
+- 发布方式：同前，服务器 `git merge --ff-only origin/main`，按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-<sha12>`，仅替换 api 容器；两次切换前均确认无进行中的任务。
+- 当前镜像：`sha256:e89abdc08fceefa0675dc48ea36b0def8010f980d109b4c5486df176b9834be5`；回滚标签 `deep-research-agent:rollback-60039cd5e50d-20261031t104834z`，`60039cd` 发布前打的是 `deep-research-agent:rollback-80236f80f99a-20261031t095209z`。
+- 备份：`20261031T095209Z-delivery-quality-60039cd5e50d` 与 `20261031T104834Z-pdf-font-subset-e4d59fd31e87`（数据库导出约 5.3 MB，`gzip -t` 通过）。
+- 回执：`/www/wwwroot/deep-research-agent-deploy/` 下 `delivery-quality-60039cd5e50d-20261031T095209Z` 与 `pdf-font-subset-e4d59fd31e87-20261031T104834Z` 的 `deployed.json`。
+- 数据库仍为 **0044**，无迁移、无依赖变化。交付格式指纹由 66 升至 68，历史任务下次打开时按新规则重算交付登记并重新渲染。
+- 验证：容器 healthy，本地与公网 `/readyz` 均 200，切换后日志无错误；公网前端分包已含「生成幻灯片」「生成思维导图」与「证据来源」。发布后复核历史任务，发现线上 PDF 内嵌整套 Noto Serif CJK 字体（单页报告约 20 MB），修复后同一任务的 PDF 为 142 KB。线上真实模型场景测试的结果记入主计划 S25。
+
+## 历史记录：2026-10-28 至 2026-10-29
+
+2026-10-29 发布 **`80236f80f99a82352015f64f73246110579a7347`**（任务记录谱纹改为独立的「研究谱」列，见 [主计划](IMPROVEMENT_PLAN.md) S10）。
 当天先发布 `8c62e1a`（一问一谱：每次研究读作一组思路线，S9；任务列表接口每条任务新增 `spectrum`，按子问题顺序：未检索 -1，检索过但无可用证据 0，否则为核验且语义支持的发现数，每页两条聚合查询，不加载证据正文）。
 此前 2026-10-28 依次发布 `84d86e6`（谱线主题）、`f61aea8`（过渡 / 观感 / 场景链路 / 精读原文视图，新增只读接口 `GET /api/runs/{run_id}/reader/{document_id}/passages`）、`eb0a24e` 与 `c187607`（访客进入时只收拢谱线并在登录框背后保持收拢）、`dad01f2`（任务记录勾选后才显示批量删除）。
 
