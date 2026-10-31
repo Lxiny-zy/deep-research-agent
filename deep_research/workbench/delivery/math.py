@@ -170,6 +170,28 @@ def _cjk_font(characters: str) -> Any:
     return result
 
 
+def _spaced_cases(root: ET.Element) -> ET.Element:
+    """Give each case the \\quad LaTeX puts between its value and its condition.
+
+    The converter emits ``cases`` as a brace followed by a table without column
+    spacing, and the vector renderer then sets ``x^2`` and ``x>0`` almost touching.
+    Its em follows the px size passed in (body pt / 0.75), so 0.75em is one body em.
+    Aligned environments carry their own spacing and are left alone.
+    """
+    namespace = "{http://www.w3.org/1998/Math/MathML}"
+    for row in root.iter(namespace + "mrow"):
+        children = list(row)
+        if (
+            len(children) >= 2
+            and children[0].tag == namespace + "mo"
+            and (children[0].text or "").strip() == "{"
+            and children[1].tag == namespace + "mtable"
+            and "columnspacing" not in children[1].attrib
+        ):
+            children[1].set("columnspacing", "0.75em")
+    return root
+
+
 @lru_cache(maxsize=256)
 def math_asset(tex: str, display: bool = False, size: float = 10.5) -> MathAsset:
     import ziafont
@@ -212,7 +234,10 @@ def math_asset(tex: str, display: bool = False, size: float = 10.5) -> MathAsset
         )
         try:
             equation = ziamath.Math(
-                ET.fromstring(value), size=size / 0.75, font="dr-composite", title=tex
+                _spaced_cases(ET.fromstring(value)),
+                size=size / 0.75,
+                font="dr-composite",
+                title=tex,
             )
             svg = equation.svgxml()
             width, height = float(svg.attrib["width"]) * 0.75, float(svg.attrib["height"]) * 0.75

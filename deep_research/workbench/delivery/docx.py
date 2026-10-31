@@ -13,7 +13,7 @@ from collections.abc import Mapping
 
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
@@ -36,6 +36,13 @@ def _set_east_asian(run_or_style, name: str) -> None:  # type: ignore[no-untyped
         rpr.append(fonts)
     for attr in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
         fonts.set(qn(attr), name)
+
+
+def _at_least(paragraph_format, height: Pt) -> None:  # type: ignore[no-untyped-def]
+    # 微软雅黑在 Word 里的单倍行距已约为字号的 1.7 倍，再叠加倍数行距会松成近双倍；
+    # 改用「最小值」与 PDF 的行高对齐，行内公式更高时 Word 仍会自动撑开这一行。
+    paragraph_format.line_spacing = height
+    paragraph_format.line_spacing_rule = WD_LINE_SPACING.AT_LEAST
 
 
 def _page_number_footer(section) -> None:  # type: ignore[no-untyped-def]
@@ -66,7 +73,7 @@ def _base_document():  # type: ignore[no-untyped-def]
     normal.font.name = _BODY_FONT
     normal.font.size = Pt(10.5)
     _set_east_asian(normal, _BODY_FONT)
-    normal.paragraph_format.line_spacing = 1.35
+    _at_least(normal.paragraph_format, Pt(18))  # PDF 正文 10.5pt × 1.7
     normal.paragraph_format.space_after = Pt(4)
     for level, size in ((1, 20), (2, 15), (3, 12.5), (4, 11)):
         style = document.styles[f"Heading {level}"]
@@ -200,7 +207,7 @@ def render_docx(
                 paragraph.paragraph_format.keep_together = True
                 paragraph.paragraph_format.left_indent = Pt(16)
                 paragraph.paragraph_format.first_line_indent = Pt(-16)
-                paragraph.paragraph_format.line_spacing = 1.25
+                _at_least(paragraph.paragraph_format, Pt(15))
                 for run in paragraph.runs:
                     run.font.size = Pt(9.5)
         elif block.kind == "quote":

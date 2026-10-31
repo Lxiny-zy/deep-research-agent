@@ -4,9 +4,24 @@ import re
 import pymupdf
 import pytest
 from docx import Document
+from docx.enum.text import WD_LINE_SPACING
+from docx.shared import Pt
 
 from deep_research.workbench.delivery.docx import render_docx
 from deep_research.workbench.delivery.pdf import PdfRenderError, render_pdf, verify_pdf
+
+
+def test_word_line_height_matches_pdf_instead_of_multiplying_font_metrics():
+    # A multiple of YaHei's own single spacing (≈1.7× the font size) printed as near
+    # double spacing: the same report took 9 Word pages against 7 PDF pages.
+    markdown = "## 分析\n\n正文结论。\n\n## 参考文献\n\n[1] Author. A study 研究报告. 2026."
+    word = Document(io.BytesIO(render_docx(markdown, title="行距")))
+    normal = word.styles["Normal"].paragraph_format
+    assert normal.line_spacing_rule == WD_LINE_SPACING.AT_LEAST
+    assert normal.line_spacing == Pt(18)
+    reference = next(p for p in word.paragraphs if p.text.startswith("[1]"))
+    assert reference.paragraph_format.line_spacing_rule == WD_LINE_SPACING.AT_LEAST
+    assert reference.paragraph_format.line_spacing == Pt(15)
 
 
 def test_bibliography_entries_stay_on_one_page_with_complete_content():

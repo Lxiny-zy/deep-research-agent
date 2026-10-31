@@ -97,6 +97,7 @@ def _text(frame, text: str, *, size: int, bold: bool = False, color: RGBColor = 
     frame.margin_top = frame.margin_bottom = 0
     paragraph = frame.paragraphs[0]
     _paragraph(paragraph, text, size=size, bold=bold, color=color)
+    paragraph.alignment = PP_ALIGN.LEFT
 
 
 def _band(slide, top: int, height: int, color: RGBColor) -> None:  # type: ignore[no-untyped-def]
@@ -104,6 +105,20 @@ def _band(slide, top: int, height: int, color: RGBColor) -> None:  # type: ignor
     shape.fill.solid()
     shape.fill.fore_color.rgb = color
     shape.line.fill.background()
+    # Keep decorative bands behind the layout's title placeholder.
+    tree = slide.shapes._spTree
+    tree.remove(shape._element)
+    tree.insert(2, shape._element)
+
+
+def _title(slide, left: int, top: int, width: int, height: int):  # type: ignore[no-untyped-def]
+    """Use the layout title placeholder so outline view and accessibility see a title."""
+    shape = slide.shapes.title
+    shape.left, shape.top, shape.width, shape.height = (
+        Emu(left), Emu(top), Emu(width), Emu(height)
+    )
+    shape.text_frame.vertical_anchor = MSO_ANCHOR.TOP
+    return shape
 
 
 def _weight(char: str, reference: bool = False) -> int:
@@ -346,13 +361,13 @@ def render_pptx(
     deck = paginate_deck(deck)
     presentation = Presentation()
     presentation.slide_width, presentation.slide_height = _W, _H
-    blank = presentation.slide_layouts[6]
+    blank = presentation.slide_layouts[5]  # "Title Only": real title placeholder
 
     content_cover = _has_title_slide(deck)
     if not content_cover:
         cover = presentation.slides.add_slide(blank)
         _band(cover, 0, _H, _ACCENT)
-        box = cover.shapes.add_textbox(Emu(800000), Emu(2200000), Emu(10600000), Emu(1400000))
+        box = _title(cover, 800000, 2200000, 10600000, 1400000)
         _text(
             box.text_frame,
             deck.get("title", "研究汇报"),
@@ -370,7 +385,7 @@ def render_pptx(
         slide = presentation.slides.add_slide(blank)
         _band(slide, 0, Emu(1150000), _SOFT)
         _band(slide, Emu(1150000), Emu(40000), _ACCENT)
-        title = slide.shapes.add_textbox(Emu(600000), Emu(250000), Emu(11000000), Emu(750000))
+        title = _title(slide, 600000, 250000, 11000000, 750000)
         heading = str(spec.get("title", ""))
         if content_cover and number == 1 and "".join(heading.casefold().split()) in _COVER_LABELS:
             heading = str(deck.get("title", heading))
@@ -421,7 +436,7 @@ def render_pptx(
     for page_index, references in enumerate(reference_pages(citations or [])):
         refs = presentation.slides.add_slide(blank)
         _band(refs, 0, Emu(1150000), _SOFT)
-        title = refs.shapes.add_textbox(Emu(600000), Emu(250000), Emu(11000000), Emu(750000))
+        title = _title(refs, 600000, 250000, 11000000, 750000)
         heading = "参考文献" if page_index == 0 else "参考文献（续）"
         _text(title.text_frame, heading, size=28, bold=True)
         body = refs.shapes.add_textbox(Emu(700000), Emu(1450000), Emu(10800000), Emu(4800000))

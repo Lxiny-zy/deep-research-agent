@@ -64,6 +64,15 @@ def test_formula_fence_in_list_preserves_following_item():
     assert blocks[0].items[1].inlines[0].text == "second"
 
 
+def test_pdf_cases_keep_a_quad_between_value_and_condition():
+    # Without column spacing the vector renderer printed "x² x > 0" almost touching.
+    two = math_asset(r"\begin{cases}a&b\end{cases}", True).width
+    one = math_asset(r"\begin{cases}ab\end{cases}", True).width
+    assert 9.5 <= two - one <= 11.5  # one em at the 10.5pt body size, as \quad
+    aligned = math_asset(r"\begin{aligned}y&=Ax\end{aligned}", True).width
+    assert aligned == pytest.approx(math_asset(r"\begin{aligned}y=Ax\end{aligned}", True).width)
+
+
 def test_word_contains_native_fractions_scripts_and_matrices():
     body = "\n\n".join("$$\n" + tex + "\n$$" for tex in FORMULAS)
     data = render_docx(body, title="公式")

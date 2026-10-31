@@ -147,7 +147,6 @@ def branch_markdown(
         f"# {model.root} · 分支 {branch + 1}",
         "",
         "完整说明与必要条件保留如下；节点路径与导图索引一致。",
-        f"内容版本：`{index['mindmap_version']}`",
         "",
     ]
     if diagram_names:
@@ -164,7 +163,7 @@ def branch_markdown(
             lines.extend([f"![分支 {branch + 1} 图块 {number}]({name})", ""])
     for path in selected["node_paths"]:
         node = nodes[path]
-        parent = path.rsplit(".", 1)[0] if "." in path else "root"
+        parent = f"节点 {path.rsplit('.', 1)[0]}" if "." in path else model.root
         kind = {"claim": "结论", "question": "待研究", "concept": "概念"}[node.kind]
         cite = "".join(f"[{value}]" for value in displayed[path])
         lines += [
