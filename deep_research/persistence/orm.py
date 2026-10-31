@@ -367,6 +367,9 @@ class ResearchResultRow(Base):
     )
     sub_question: Mapped[str] = mapped_column(Text)
     extraction_audit: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 写入顺序。核验签名、表格与导图记录都按证据顺序计算；Postgres 在整批重写后
+    # 不保证按插入顺序读回，所以读取时按它排序。历史行为 NULL，保持原读出顺序。
+    position: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
 
     run: Mapped[ResearchRun] = relationship(back_populates="results")
     findings: Mapped[list[FindingRow]] = relationship(
@@ -381,6 +384,8 @@ class FindingRow(Base):
     result_id: Mapped[str] = mapped_column(
         ForeignKey("research_result.id", ondelete="CASCADE"), index=True
     )
+    # 在所属结果中的写入顺序，含义同 ResearchResultRow.position。
+    position: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     statement: Mapped[str] = mapped_column(Text)
     # 对照表的"行"：该论断描述的对象（方法名 / 方案名 / 数据集名）。
     entity: Mapped[str] = mapped_column(Text, default="")

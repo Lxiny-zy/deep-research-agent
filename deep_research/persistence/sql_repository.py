@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 from uuid import uuid4
 
 from sqlalchemy import CursorResult, func, or_, select, update
@@ -68,6 +68,7 @@ from .repository import (
 )
 
 logger = logging.getLogger(__name__)
+_PositionedRow = TypeVar("_PositionedRow", orm.ResearchResultRow, orm.FindingRow)
 
 _SOURCE_CONTEXT_FIELDS = {
     "section_title",
@@ -99,16 +100,20 @@ def _sub_question_row(
     )
 
 
-def _research_result_row(run_id: str, result: ResearchResult) -> orm.ResearchResultRow:
+def _research_result_row(
+    run_id: str, result: ResearchResult, position: int
+) -> orm.ResearchResultRow:
     row = orm.ResearchResultRow(
         run_id=run_id,
         sub_question=result.sub_question,
         extraction_audit=result.extraction_audit.model_dump(mode="json")
         if result.extraction_audit
         else None,
+        position=position,
     )
     row.findings = [
         orm.FindingRow(
+            position=index,
             statement=finding.statement,
             entity=finding.entity,
             source_url=finding.source_url,
@@ -144,9 +149,16 @@ def _research_result_row(run_id: str, result: ResearchResult) -> orm.ResearchRes
             corroborates_claim_ids=finding.verification.corroborates_claim_ids,
             corroboration_reason=finding.verification.corroboration_reason,
         )
-        for finding in result.findings
+        for index, finding in enumerate(result.findings)
     ]
     return row
+
+
+def _ordered(rows: list[_PositionedRow]) -> list[_PositionedRow]:
+    """按写入顺序读回；缺少位置的历史行保持数据库给出的顺序，不重新洗牌。"""
+    if rows and all(row.position is not None for row in rows):
+        return sorted(rows, key=lambda row: row.position or 0)
+    return list(rows)
 
 
 def _workflow_run(row: orm.WorkflowRunRow) -> WorkflowRun:
@@ -634,19 +646,26 @@ class SqlRepository:
     ) -> None:
         async with self._sm() as s, s.begin():
             await self._owned_workflow_row(s, run_id, lease_owner)
+            position = await s.scalar(
+                select(func.count())
+                .select_from(orm.ResearchResultRow)
+                .where(orm.ResearchResultRow.run_id == run_id)
+            )
             row = orm.ResearchResultRow(
                 run_id=run_id,
                 sub_question=result.sub_question,
                 extraction_audit=result.extraction_audit.model_dump(mode="json")
                 if result.extraction_audit
                 else None,
+                position=position,
             )
             s.add(row)
             await s.flush()
-            for f in result.findings:
+            for index, f in enumerate(result.findings):
                 s.add(
                     orm.FindingRow(
                         result_id=row.id,
+                        position=index,
                         statement=f.statement,
                         entity=f.entity,
                         source_url=f.source_url,
@@ -808,8 +827,8 @@ class SqlRepository:
                         )
                     )
                     index += 1
-            for result in results:
-                s.add(_research_result_row(run_id, result))
+            for position, result in enumerate(results):
+                s.add(_research_result_row(run_id, result, position))
             s.add(
                 orm.ReportRow(run_id=run_id, markdown=report.markdown, citations=report.citations)
             )
@@ -1613,10 +1632,10 @@ class SqlRepository:
                                 corroboration_reason=f.corroboration_reason,
                             ),
                         )
-                        for f in rr.findings
+                        for f in _ordered(rr.findings)
                     ],
                 )
-                for rr in run.results
+                for rr in _ordered(run.results)
             ]
             report = (
                 Report(

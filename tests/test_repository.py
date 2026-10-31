@@ -1282,3 +1282,38 @@ async def test_postgres_failed_resume_has_one_requeue_winner():
                 await repo.release_lease(run_id, claimed_owner)
             await repo.delete_run(run_id)
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_findings_read_back_in_write_order_after_rows_move(repo):
+    """Postgres 在整批重写后不保证按插入顺序读回；核验签名、表格与导图记录都依赖证据顺序。"""
+    if isinstance(repo, InMemoryRepository):
+        pytest.skip("内存仓储没有物理行顺序")
+    findings = [
+        Finding(statement=f"s{i}", source_url="https://a.com", evidence_quote=f"quote {i}")
+        for i in range(4)
+    ]
+    run_id = await repo.create_run("Q")
+    await repo.replace_artifacts(
+        run_id,
+        plan=None,
+        reflection_rounds=[],
+        results=[ResearchResult(sub_question="a", findings=findings)],
+        report=Report(query="Q", markdown="m", citations=[]),
+    )
+    await repo.save_result(run_id, ResearchResult(sub_question="b", findings=findings[:2]))
+    async with repo._sm() as s, s.begin():
+        # 模拟行被挪到别的页：同样的行，物理顺序倒过来
+        await s.execute(text("CREATE TEMP TABLE moved AS SELECT * FROM finding"))
+        await s.execute(text("DELETE FROM finding"))
+        await s.execute(text("INSERT INTO finding SELECT * FROM moved ORDER BY position DESC"))
+        await s.execute(text("DROP TABLE moved"))
+    restored = await repo.get_run(run_id)
+    assert [r.sub_question for r in restored.results] == ["a", "b"]
+    assert [f.statement for f in restored.results[0].findings] == ["s0", "s1", "s2", "s3"]
+    assert [f.statement for f in restored.results[1].findings] == ["s0", "s1"]
+    async with repo._sm() as s, s.begin():
+        await s.execute(text("UPDATE finding SET position = NULL"))
+    legacy = await repo.get_run(run_id)
+    # 历史行没有位置：保持数据库给出的顺序，不另行洗牌
+    assert [f.statement for f in legacy.results[0].findings] == ["s3", "s2", "s1", "s0"]
