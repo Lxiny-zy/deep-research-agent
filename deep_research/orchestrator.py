@@ -32,7 +32,7 @@ from .blocking import run_blocking
 from .checkpoints import RUN_SETTINGS_KEY as RUN_SETTINGS_CHECKPOINT_KEY
 from .checkpoints import SCHEMA_VERSION, SETTING_FIELDS
 from .config import Settings
-from .execution_policy import resolved_settings, transient_failure
+from .execution_policy import resolved_settings, transient_failure, with_scholarly_backends
 from .llm import LLM, VerificationGenerationOptions
 from .models import Finding, Report, ResearchResult, SubQuestion
 from .observability import Event, Tracer
@@ -160,7 +160,9 @@ async def snapshot_catalog_for_execution(
 
     workflow = Workflow.model_validate(execution.definition)
     snapshot = await create_catalog_runtime_snapshot(
-        catalog_repo, workflow_catalog_roles(workflow), settings
+        catalog_repo,
+        workflow_catalog_roles(workflow),
+        with_scholarly_backends(settings, execution.workflow_name) if settings else settings,
     )
     scratch[RUN_CATALOG_CHECKPOINT_KEY] = snapshot.model_dump(mode="json")
 
@@ -1303,6 +1305,7 @@ class DeepResearchAgent:
         reviewed_mindmap = False
         workbench = bb.scratch.get("workbench", {})
         if isinstance(workbench, dict) and workbench.get("template") == "mindmap":
+            from .workbench.contract import contract_from_scratch, open_evidence
             from .workbench.mindmap_contract import checked_review
 
             extras = workbench.get("extras", {})
@@ -1313,6 +1316,7 @@ class DeepResearchAgent:
                     bb.results,
                     extras.get("node_review"),
                     bb.report.markdown,
+                    open_evidence=open_evidence(contract_from_scratch(bb.scratch)),
                 )
                 if reviewed_mindmap:
                     # A concept hierarchy is not a sequence of factual prose
@@ -1571,6 +1575,7 @@ class DeepResearchAgent:
             assert candidate.report is not None
             record = stored_review(candidate.scratch)
             if contract.template == "mindmap":
+                from .workbench.contract import open_evidence
                 from .workbench.mindmap_contract import checked_review
 
                 extras = candidate.scratch.get("workbench", {}).get("extras", {})
@@ -1580,6 +1585,7 @@ class DeepResearchAgent:
                     candidate.results,
                     extras.get("node_review"),
                     candidate.report.markdown,
+                    open_evidence=open_evidence(contract),
                 )
                 if not bound:
                     raise ValueError("自动修订后的导图记录未绑定正文")

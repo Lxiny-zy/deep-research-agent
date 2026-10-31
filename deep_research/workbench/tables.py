@@ -345,12 +345,19 @@ def render_table(
     if spec.ledger_path:
         value: Any = ledger
         for part in spec.ledger_path:
-            if isinstance(value, dict) and isinstance(part, str):
-                value = value.get(part)
+            if isinstance(value, dict) and isinstance(part, str) and part in value:
+                value = value[part]
             elif isinstance(value, list) and isinstance(part, int) and 0 <= part < len(value):
                 value = value[part]
             else:
-                raise ValueError("统计表路径不在当前台账中")
+                shown = json.dumps(spec.ledger_path, ensure_ascii=False)
+                usable = "、".join(
+                    json.dumps(path, ensure_ascii=False) for path in ledger_paths(ledger)
+                )
+                raise ValueError(f"统计表路径 {shown} 不在当前台账中；可用路径：{usable}")
+        # 单条检验记录写成一行表，与整组检验同一套列
+        if isinstance(value, dict) and list(spec.ledger_path) in ledger_paths(ledger):
+            value = [value]
         if (
             not isinstance(value, list)
             or not value
@@ -394,8 +401,12 @@ def render_table(
             cells = {}
             for column in spec.columns:
                 ids = list(dict.fromkeys(row.cells[column.key]))
-                if any(key not in findings for key in ids):
-                    raise ValueError("表格引用了不存在或未通过核验的发现")
+                missing = [key for key in ids if key not in findings]
+                if missing:
+                    raise ValueError(
+                        f"表格引用了不存在或未通过核验的发现：行「{row.label}」列「{column.key}」的"
+                        f" {missing[0][:16]}…；发现编号须从素材中逐字复制"
+                    )
                 # A model cannot erase an admitted value by returning an empty list.
                 if column.field == "quantity":
 
@@ -558,6 +569,69 @@ def table_preview(markdown: str) -> str:
     return "".join(lines)
 
 
+def _records(value: Any) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(row, dict) for row in value)
+
+
+def ledger_paths(ledger: dict[str, Any] | None) -> list[list[str | int]]:
+    """当前统计台账中可以制表的路径；写进提示词，模型不必猜测路径。"""
+    if not isinstance(ledger, dict):
+        return []
+    paths: list[list[str | int]] = [
+        [key] for key in ("describe", "composition", "correlations", "tests")
+        if _records(ledger.get(key))
+    ]
+    for index, test in enumerate(ledger.get("tests") or []):
+        if isinstance(test, dict):
+            paths.append(["tests", index])
+            paths.extend(
+                ["tests", index, key] for key in ("group_summaries", "posthoc")
+                if _records(test.get(key))
+            )
+    return paths
+
+
+def _one_edit(left: str, right: str) -> bool:
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right, strict=True)) <= 1
+    if abs(len(left) - len(right)) != 1:
+        return False
+    short, long = sorted((left, right), key=len)
+    index = next(
+        (i for i, (a, b) in enumerate(zip(short, long, strict=False)) if a != b), len(short)
+    )
+    return short[index:] == long[index + 1 :]
+
+
+def _known_id(key: str, known: list[str]) -> str:
+    if key in known or len(key) < 32:
+        return key
+    close = [item for item in known if _one_edit(key.strip().lower(), item)]
+    return close[0] if len(close) == 1 else key
+
+
+def resolve_finding_ids(spec: TableSpec, findings: dict[str, Finding]) -> TableSpec:
+    """模型抄写 64 位发现编号时偶尔漏、多或错一个字符，整张表因此无法渲染。
+
+    只与唯一一个已核验编号相差一个字符时才视为同一发现；数值仍取该发现的结构化
+    字段，行标签、指标与范围照常核对，存下的规格写回正确编号。
+    """
+    known = list(findings)
+    rows = [
+        row.model_copy(
+            update={
+                "cells": {
+                    column: [_known_id(key, known) for key in keys]
+                    for column, keys in row.cells.items()
+                }
+            }
+        )
+        for row in spec.rows
+    ]
+    source = _known_id(spec.source_finding_id, known) if spec.source_finding_id else ""
+    return spec.model_copy(update={"rows": rows, "source_finding_id": source})
+
+
 def render_specs(
     markdown: str,
     results: list[ResearchResult],
@@ -598,6 +672,7 @@ def render_specs(
         assert token.map is not None
         try:
             spec = TableSpec.model_validate_json(token.content)
+            spec = resolve_finding_ids(spec, admitted_findings(results, mapping, corroboration))
             table = render_table(
                 spec, results, mapping, corroboration=corroboration, ledger=ledger,
                 comparison_context=comparison_context, statement_citations=statement_citations,
@@ -672,7 +747,9 @@ def table_issues(
         token.type == "fence" and token.info.strip() == "evidence-table"
         for token in _parser().parse(markdown)
     ):
-        return ["表格规格尚未成功渲染"]
+        errors = record.get("errors") if isinstance(record, dict) else None
+        reasons = [str(item) for item in errors or []][:2]
+        return ["表格规格尚未成功渲染" + ("：" + "；".join(reasons) if reasons else "")]
     if re.search(r"<table\b|\\begin\{(?:tabular|longtable)\}", markdown, re.I):
         return ["正文含未绑定规格的 HTML/LaTeX 表格"]
     if not texts:

@@ -114,7 +114,7 @@ def citation_gate(
 
 
 def markdown_gate(markdown: str) -> GateResult:
-    from .delivery.math_residual import raw_tex_fragments
+    from .delivery.math_residual import raw_tex_fragments, tex_issue_messages
 
     issues: list[str] = []
     raw = _RAW_TAG.findall(markdown)
@@ -126,7 +126,11 @@ def markdown_gate(markdown: str) -> GateResult:
         issues.append("存在未闭合的代码块")
     bare_math = raw_tex_fragments(citation_text(markdown, mask_escapes=False))
     if bare_math:
-        issues.append("公式缺少数学标记：" + "、".join(fragment[:60] for fragment in bare_math[:3]))
+        issues.extend(
+            tex_issue_messages(
+                [fragment[:60] for fragment in bare_math], formula_prefix="公式缺少数学标记"
+            )
+        )
     return GateResult(
         "markdown", "fail" if raw or bare_math else ("warn" if issues else "pass"), issues,
     )

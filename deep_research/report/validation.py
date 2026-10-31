@@ -30,6 +30,27 @@ _STRUCTURAL_REF = re.compile(
     re.I,
 )
 _TABLE_NOTE_REF = re.compile(r"[（(]\s*注\s*\d+\s*[）)]")
+_NUMBER_WORDS = {
+    word: index
+    for index, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+        "fifteen sixteen seventeen eighteen nineteen twenty".split()
+    )
+} | {"thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80,
+     "ninety": 90, "hundred": 100}
+_NUMBER_WORD = re.compile(
+    r"\b(" + "|".join(_NUMBER_WORDS) + r")(?:-(one|two|three|four|five|six|seven|eight|nine))?\b",
+    re.I,
+)
+_CHINESE_DIGITS = {"两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+                   "十": 10}
+_CHINESE_COUNT = re.compile(
+    r"([两二三四五六七八九十])\s*(?:个|种|组|幅|层|类|项|次|名|篇|张|帧|步|轮|段|维|阶段|通道|波段)"
+)
+# 维度与卷积核写作 3×3、$conv3\times3$；乘号两侧的数是独立的数值，不是标识符的一部分。
+_FACTOR = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?=(?:\\times|×)\s*\d)|(?:\\times|×)\s*(\d+(?:\.\d+)?)(?![\d.]|\s*\^)"
+)
 
 
 @dataclass(frozen=True)
@@ -67,6 +88,27 @@ def _numbers(text: str) -> set[Decimal]:
             values.add(Decimal(raw.replace(",", "")))
         except InvalidOperation:
             pass
+    return values
+
+
+def evidence_numbers(text: str) -> set[Decimal]:
+    """依据原文写出的数值，含英文数词、中文量词前的数字和乘号两侧的因子。
+
+    论文写 "Five real HSIs"、"$conv3\\times3$"，报告写 5 个、3×3；只认阿拉伯数字时
+    这些忠实转述都被判为无依据。只用于依据一侧，报告正文仍按原规则逐个取数。
+    """
+    values = _numbers(text)
+    normalized = unicodedata.normalize("NFKC", text)
+    for left, right in _FACTOR.findall(normalized):
+        values.add(Decimal(left or right))
+    for word, unit in _NUMBER_WORD.findall(normalized):
+        value = _NUMBER_WORDS[word.casefold()]
+        if unit and 20 <= value < 100:
+            value += _NUMBER_WORDS[unit.casefold()]
+        elif unit:
+            values.add(Decimal(_NUMBER_WORDS[unit.casefold()]))
+        values.add(Decimal(value))
+    values.update(Decimal(_CHINESE_DIGITS[digit]) for digit in _CHINESE_COUNT.findall(normalized))
     return values
 
 
@@ -177,12 +219,23 @@ def validate_body(
     if not all_indices.issubset(evidence):
         issues.append("invalid_citation")
         unknown = sorted(all_indices - set(evidence))
-    all_support = _numbers("\n".join(text for items in evidence.values() for text in items))
+    all_support = evidence_numbers(
+        "\n".join(text for items in evidence.values() for text in items)
+    )
     frames = set(framing_paragraphs(body).values())
     heading = ""
     paragraphs = validation_paragraphs(body)
     rejected: set[int] = set()
     for position, paragraph in enumerate(paragraphs):
+        # 未渲染的表格规格不能交付；其 JSON 中的编号片段不是正文数值，不按数字报错。
+        if paragraph.lstrip().startswith("```evidence-table"):
+            rejected.add(position)
+            issues.append("unrendered_table")
+            problems.append((
+                "unrendered_table", _excerpt(paragraph),
+                "表格规格未能渲染，规格原文不能交付；按表格检查给出的原因修正或删除该表",
+            ))
+            continue
         headings = [
             line.lstrip("# ").strip()
             for line in paragraph.splitlines()
@@ -213,7 +266,7 @@ def validate_body(
             None,
         )
         if dedicated is not None:
-            unsupported = sorted(_numbers(content) - _numbers(dedicated))
+            unsupported = sorted(_numbers(content) - evidence_numbers(dedicated))
             if unsupported:
                 rejected.add(position)
                 issues.append("unsupported_number")
@@ -255,7 +308,7 @@ def validate_body(
             ))
             continue
         support = "\n".join(text for index in indices for text in evidence[index])
-        absent, invalid = _computed_numbers(content, _numbers(support))
+        absent, invalid = _computed_numbers(content, evidence_numbers(support))
         if invalid:
             rejected.add(position)
             issues.append("invalid_calculation")

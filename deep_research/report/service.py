@@ -158,6 +158,7 @@ class ReportService:
 
                 document.title = analysis_title(scratch["analysis"])
             if workbench.get("template") == "mindmap":
+                from ..workbench.contract import contract_from_scratch, open_evidence
                 from ..workbench.mindmap_contract import checked_review
                 from ..workbench.titles import mindmap_title
 
@@ -171,6 +172,7 @@ class ReportService:
                         detail.results,
                         extras["node_review"],
                         detail.report.markdown,
+                        open_evidence=open_evidence(contract_from_scratch(scratch)),
                     )
                     document.final_validation = FinalReportValidation(
                         scope="model_assessed_node_evidence_and_relations",

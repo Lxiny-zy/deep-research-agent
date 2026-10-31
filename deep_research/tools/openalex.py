@@ -32,7 +32,7 @@ import httpx
 
 from ..models import ScholarlyMetadata, Source
 from .base import SearchTool, reading_question, required_sections
-from .fanout import expand_in_order
+from .fanout import SEARCH_FULLTEXT_CHARS, SEARCH_FULLTEXT_PAPERS, expand_leading
 from .oa_pdf_fulltext import OaPdfFetcher, OaPdfFulltextError
 
 logger = logging.getLogger(__name__)
@@ -135,7 +135,7 @@ class OpenAlexSearch(SearchTool):
                 logger.warning("OA PDF unavailable for %s: %s", source.url, exc)
                 return [source]
 
-        return await expand_in_order(candidates, expand, limit=requested)
+        return await expand_leading(candidates, expand, papers=SEARCH_FULLTEXT_PAPERS)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -155,7 +155,7 @@ class OpenAlexSearch(SearchTool):
         return await fetcher.sections(
             source,
             query,
-            max_chars=self._fulltext_max_chars,
+            max_chars=min(self._fulltext_max_chars, SEARCH_FULLTEXT_CHARS),
             required=required,
         )
 

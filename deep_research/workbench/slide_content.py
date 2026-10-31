@@ -14,6 +14,7 @@ from ..models import ResearchResult
 from .tables import TableSpec, admitted_findings, render_specs, render_table
 
 SLIDE_POLICY_VERSION = 2
+_INLINE_CITATION = re.compile(r"\[\d+\]")
 _EMPTY_NOTES = {"", "无", "无备注", "暂无", "暂无备注", "none", "n/a", "notes"}
 
 
@@ -126,7 +127,11 @@ def deck_to_markdown(deck: SlideDeck) -> str:
     for number, slide in enumerate(deck.slides, 1):
         cite = "".join(f"[{i}]" for i in slide.citations)
         lines.append(f"## {number}. {slide.title}")
-        lines += [f"- {bullet} {cite}".rstrip() for bullet in slide.bullets]
+        # 要点自带角标时不再附整页引用，否则这一条要为整页文献逐一负责
+        lines += [
+            f"- {bullet}" if _INLINE_CITATION.search(bullet) else f"- {bullet} {cite}".rstrip()
+            for bullet in slide.bullets
+        ]
         if slide.visual:
             lines += ["", "```evidence-table", slide.visual.table.model_dump_json(), "```", ""]
         if slide.image:
@@ -160,11 +165,14 @@ def compile_deck(
     *,
     corroboration: bool = False,
     image_sources: dict[str, Any] | None = None,
+    statement_citations: bool = False,
 ) -> tuple[dict[str, Any], str]:
     """Rebuild visible data from admitted findings; model-supplied data is ignored.
 
     This does not declare evidence verified. Existing table/prose gates must pass
     before publication. The same specification goes through review_tables.
+    ``statement_citations`` must match how the reviewed body rendered its tables;
+    otherwise every deck with a table differs from its body and loses its pages.
     """
     deck = SlideDeck.model_validate(raw)
     compiled = deck.model_dump(mode="json")
@@ -200,7 +208,10 @@ def compile_deck(
         if spec.id in ids:
             raise ValueError("同一表格不能在多页重复，请合并或使用独立规格")
         ids.add(spec.id)
-        table = render_table(spec, results, mapping, corroboration=corroboration)
+        table = render_table(
+            spec, results, mapping, corroboration=corroboration,
+            statement_citations=statement_citations,
+        )
         block = table.block
         if len(block.columns) > 5:
             raise ValueError("幻灯片表格最多五个数据列，请按比较问题拆分规格")
@@ -263,7 +274,8 @@ def compile_deck(
             )
         target["visual_data"] = data
     markdown, record = render_specs(
-        deck_to_markdown(deck), results, mapping, corroboration=corroboration
+        deck_to_markdown(deck), results, mapping, corroboration=corroboration,
+        statement_citations=statement_citations,
     )
     if record.get("errors"):
         raise ValueError("；".join(record["errors"]))

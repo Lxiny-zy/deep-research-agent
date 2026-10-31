@@ -643,3 +643,107 @@ def test_report_reference_list_uses_scholarly_citations_but_keeps_url_citations(
     assert "[1] 作者. 标题. 期刊, 2024. https://doi.org/10.1/a" in report.markdown
     # 没有学术元数据的来源退回裸 URL 行，与改造前一致。
     assert "[2] https://blog.test/p" in report.markdown
+
+
+# ── 开放检索的学术全文通道 ───────────────────────────────────────────────────
+
+
+def _feed(*numbers: str) -> str:
+    entries = "".join(
+        f"<entry><id>http://arxiv.org/abs/{number}v1</id><title>Paper {number}</title>"
+        f"<summary>Abstract {number}</summary><published>2024-01-01T00:00:00Z</published>"
+        "<author><name>Author</name></author></entry>"
+        for number in numbers
+    )
+    return f'<feed xmlns="http://www.w3.org/2005/Atom">{entries}</feed>'
+
+
+def test_search_profiles_are_extended_with_scholarly_sources() -> None:
+    from deep_research.execution_policy import resolved_settings
+
+    # 线上配了检索档案：search_backends 不再生效，曾导致综述和调研一篇全文都没读
+    settings = Settings(search_profile_ids=("builtin:tavily", "builtin:serper"))
+    expected = ("builtin:tavily", "builtin:serper", "builtin:openalex", "builtin:arxiv")
+    for workflow in ("research", "research_quick", "lit_review", "lit_review_quick", "slides"):
+        assert resolved_settings(settings, workflow).search_profile_ids == expected
+    assert resolved_settings(settings, "deep").search_profile_ids == settings.search_profile_ids
+    twice = resolved_settings(resolved_settings(settings, "research"), "research")
+    assert twice.search_profile_ids == expected
+    # 没配档案时不凭空造出档案，否则会切换到目录检索路径
+    assert resolved_settings(Settings(), "research").search_profile_ids == ()
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        (
+            "deep unrolling for coded aperture imaging",
+            [
+                "all:deep AND all:unrolling AND all:coded AND all:aperture AND all:imaging",
+                "all:deep AND all:unrolling AND all:coded",
+            ],
+        ),
+        ("spectral unfolding", ["all:spectral AND all:unfolding"]),
+        ("MST 光谱重建", ["all:MST 光谱重建"]),
+        ("CASSI", ["all:CASSI"]),
+        ("光谱重建", ["all:光谱重建"]),
+        ("mask AND dispersion", ["all:mask AND all:dispersion"]),
+    ],
+)
+def test_arxiv_query_requires_every_term_then_relaxes(query, expected) -> None:
+    from deep_research.tools.arxiv_search import search_expressions
+
+    assert search_expressions(query) == expected
+
+
+@pytest.mark.asyncio
+async def test_arxiv_relaxes_a_query_that_matches_too_few_papers() -> None:
+    expressions: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        expressions.append(request.url.params["search_query"])
+        feed = _feed("2401.00001") if len(expressions) == 1 else _feed("2401.00001", "2401.00002")
+        return httpx.Response(200, text=feed)
+
+    tool = ArxivSearch(request_gap=0)
+    tool._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        sources = await tool.search("deep unrolling coded aperture imaging", max_results=2)
+    finally:
+        await tool.aclose()
+    assert len(expressions) == 2 and len(sources) == 2
+    assert [source.url for source in sources] == [
+        "https://arxiv.org/abs/2401.00001v1",
+        "https://arxiv.org/abs/2401.00002v1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_open_search_reads_a_bounded_amount_of_full_text() -> None:
+    from deep_research.tools.fanout import SEARCH_FULLTEXT_CHARS, SEARCH_FULLTEXT_PAPERS
+
+    budgets: list[int] = []
+
+    class Fetcher:
+        async def sections(self, source, query, *, max_chars=12_000, required=()):
+            budgets.append(max_chars)
+            return [source.model_copy(update={"content": "full text"})]
+
+        async def aclose(self):
+            return None
+
+    numbers = [f"2401.0000{index}" for index in range(5)]
+    tool = ArxivSearch(eprint_fetcher=Fetcher(), fulltext_max_chars=120_000, request_gap=0)
+    tool._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text=_feed(*numbers)))
+    )
+    try:
+        sources = await tool.search("spectral unfolding", max_results=5)
+    finally:
+        await tool.aclose()
+    assert [source.content for source in sources] == [
+        *["full text"] * SEARCH_FULLTEXT_PAPERS,
+        "Abstract 2401.00003",
+        "Abstract 2401.00004",
+    ]
+    assert budgets == [SEARCH_FULLTEXT_CHARS] * SEARCH_FULLTEXT_PAPERS

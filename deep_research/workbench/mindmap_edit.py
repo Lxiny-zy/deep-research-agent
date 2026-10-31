@@ -95,6 +95,7 @@ def prime_review(
         mindmap_to_markdown(model),
         corpus=reviewer.fulltext_corpus,
         query=query,
+        open_evidence=reviewer.open_evidence,
     )
     if not bound:
         return False
@@ -147,6 +148,7 @@ async def repair_nodes(
         mindmap_to_markdown(model),
         corpus=reviewer.fulltext_corpus,
         query=query,
+        open_evidence=reviewer.open_evidence,
     )
     if not bound:
         return None

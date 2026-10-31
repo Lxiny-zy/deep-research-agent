@@ -148,7 +148,7 @@ def alignment_issue(
     Anchor-free prose remains model-reviewed; lexical matching is not a
     substitute for entailment or cross-language NER.
     """
-    from ..report.validation import _computed_numbers, _numbers
+    from ..report.validation import _computed_numbers, _numbers, evidence_numbers
 
     def fail(code: str, message: str) -> str:
         if diagnostics is not None:
@@ -186,7 +186,7 @@ def alignment_issue(
         names, numbers = _names(sentence, evidence), _numbers(numeric_sentence)
         support_numbers = set().union(
             *(
-                _numbers(normalize_scientific_numbers(str(record.get("quote", ""))))
+                evidence_numbers(normalize_scientific_numbers(str(record.get("quote", ""))))
                 for record in records
             )
         )
@@ -231,7 +231,7 @@ def alignment_issue(
             if names and _names(raw_quote, evidence) and not name_match:
                 sentence_anchored = sentence_anchored or key in preanchored
                 continue
-            if numbers.intersection(_numbers(quote)) or name_match:
+            if numbers.intersection(evidence_numbers(quote)) or name_match:
                 anchored.add(key)
                 sentence_anchored = True
             sentence_anchored = sentence_anchored or key in preanchored

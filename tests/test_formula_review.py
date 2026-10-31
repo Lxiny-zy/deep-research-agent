@@ -274,6 +274,46 @@ async def test_a_general_judge_cannot_bind_another_excerpt_after_formula_verific
 
 
 @pytest.mark.asyncio
+async def test_a_formula_from_a_long_paper_is_checked_around_its_excerpts():
+    from deep_research.document_corpus import FullTextCorpus
+    from deep_research.models import Source
+
+    url = "https://example.org/dauhst.pdf"
+    quote = "The prior step is the Gaussian denoising problem of Equation (11)."
+    later = "Ablation results are reported on ten simulated scenes."
+    filler = "Coded aperture snapshot imaging background. " * 1500
+    content = filler + quote + f"\n${CORRECT}$ (11)\n" + filler + later + filler
+    corpus = FullTextCorpus([Source(url=url, content=content, locator="page 4")], {url: 1})
+
+    class Focused(Specialist):
+        async def parse(self, system, user, schema, **kwargs):
+            result = await super().parse(system, user, schema, **kwargs)
+            if schema is SupportDecisions:
+                for row in result.decisions:
+                    row.evidence_ids = ["prior"]
+            return result
+
+    llm = Focused()
+    reviewer = SupportReviewer(
+        llm,
+        [
+            dict(id="prior", citation=1, quote=quote, source=url),
+            dict(id="ablation", citation=1, quote=later, source=url),
+        ],
+        50000,
+        fulltext_corpus=corpus,
+    )
+    unit = SupportUnit("eq11", f"论文式(11)： $${CORRECT}$$ [1]。", kind="prose", citations=[1])
+    decision = (await reviewer.review([unit]))[0]
+    record = decision.formula_review
+    assert record["status"] == "pass" and record["source_window"] in (12_000, 6_000)
+    sent = llm.inspections[0]
+    assert all(len(source["context"]) < 2 * 12_000 + 100 for source in sent["sources"])
+    assert CORRECT in sent["sources"][0]["context"]
+    assert decision.verdict == "supported"
+
+
+@pytest.mark.asyncio
 async def test_a_specialist_cannot_return_an_entire_long_source_as_its_witness():
     source = RAW_PDF * 5
     reviewer = SupportReviewer(

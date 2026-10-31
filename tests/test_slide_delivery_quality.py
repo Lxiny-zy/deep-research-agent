@@ -307,3 +307,50 @@ def test_bibliography_links_do_not_break_native_table_consistency():
     bundle = render_bundle(context, [])
     output = next(f for f in bundle.files if f.format == "pptx")
     assert output.status == "pass", output.issues
+
+
+def test_a_bullet_with_its_own_citation_does_not_answer_for_the_whole_slide():
+    from deep_research.workbench.slide_content import Slide
+
+    deck = SlideDeck(
+        title="演示",
+        slides=[
+            Slide(
+                title="方法",
+                bullets=["方法甲采用双分支网络 [2]。", "两种方法都依赖编码孔径。"],
+                citations=[1, 2],
+            )
+        ],
+    )
+    lines = deck_to_markdown(deck).splitlines()
+    assert "- 方法甲采用双分支网络 [2]。" in lines
+    assert "- 两种方法都依赖编码孔径。 [1][2]" in lines
+
+
+def test_a_deck_with_a_statement_table_matches_the_body_the_writer_reviewed():
+    from deep_research.workbench.slide_content import Slide, SlideVisual
+    from deep_research.workbench.tables import TableSpec, render_specs
+    from tests.test_workbench_tables import admitted
+
+    a = admitted("A 把迭代优化展开为可学习网络。", entity="A")
+    b = admitted("A 的先验不足会导致重建不可控。", entity="A").model_copy(
+        update={"source_url": "https://example.org/other"}
+    )
+    results = [ResearchResult(sub_question="比较", findings=[a, b])]
+    mapping = {"https://example.org/paper": 1, "https://example.org/other": 2}
+    spec = TableSpec.model_validate({
+        "id": "t1",
+        "title": "表 1 定性比较",
+        "columns": [{"key": "s", "label": "要点", "field": "statement"}],
+        "rows": [{"label": "A", "cells": {"s": [evidence_id(a), evidence_id(b)]}}],
+    })
+    deck = SlideDeck(title="演示", slides=[Slide(
+        title="方法", bullets=["A 展开迭代优化 [1]。"], notes="说明 [1]。", citations=[1, 2],
+        visual=SlideVisual(kind="table", table=spec),
+    )])
+    body, _ = render_specs(deck_to_markdown(deck), results, mapping, statement_citations=True)
+    # 线上汇报：正文按陈述逐条挂角标，组装幻灯片时却按旧格式渲染，整套页面被丢弃
+    _, expected = compile_deck(deck.model_dump(), results, mapping, statement_citations=True)
+    assert expected == body
+    _, legacy = compile_deck(deck.model_dump(), results, mapping)
+    assert legacy != body

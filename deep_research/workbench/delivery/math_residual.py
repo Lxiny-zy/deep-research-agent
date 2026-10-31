@@ -16,13 +16,37 @@ _TEX = re.compile(
     r"mathbf|mathrm|mathbb|mathcal|text|operatorname|alpha|beta|gamma|delta|"
     r"lambda|sigma|theta|mu|tau|Phi|phi|epsilon|varepsilon|eta|rho|varrho|"
     r"xi|psi|omega|zeta|kappa|nu|pi|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Psi|Omega|"
-    r"times|cdot|infty|partial|nabla)\b)"
+    r"times|cdot|infty|partial|nabla|sim|approx|le|leq|ge|geq|neq|pm|ldots|cdots|"
+    r"propto|rightarrow|in)\b)"
+)
+# LaTeX 文本命令要改写成 Markdown，不是补数学标记；混为一谈时写作者会把网址包进公式。
+_TEXT_COMMANDS = frozenset(
+    {"url", "href", "textbf", "textit", "texttt", "emph", "cite", "citep", "citet", "ref",
+     "eqref", "label", "footnote"}
 )
 _MONO = re.compile(r"consolas|courier|mono", re.I)
 
 
 def raw_tex_fragments(text: str) -> list[str]:
     return list(dict.fromkeys(match.group() for match in _TEX.finditer(text)))
+
+
+def tex_issue_messages(
+    fragments: list[str], *, formula_prefix: str = "为未渲染公式补齐数学标记，保留原表达式及条件"
+) -> list[str]:
+    """把未渲染片段分成文本命令与公式，各自给出能照做的修改要求。"""
+    commands = [item for item in fragments if item.strip().lstrip("\\") in _TEXT_COMMANDS]
+    formulas = [item for item in fragments if item not in commands]
+    messages = []
+    if commands:
+        messages.append(
+            "LaTeX 文本命令不会渲染，改写为 Markdown（网址直接写出或写成 [文字](网址)，"
+            "强调用 **…**，删去引用与标签命令）："
+            + "、".join(item.strip() for item in commands[:3])
+        )
+    if formulas:
+        messages.append(formula_prefix + "：" + "、".join(formulas[:3]))
+    return messages
 
 
 class _VisibleHTML(HTMLParser):

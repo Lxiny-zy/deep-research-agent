@@ -78,6 +78,7 @@ _CONFIDENCE_LEVEL = re.compile(
 _COUNT_NOUN = re.compile(r"\s*(?:个|对|组|行|列|项|次|名|例|条|份)")
 _COUNT_METRICS = {"n", "n_total", "n_pairs", "excluded_pairs", "df", "df_between", "df_within"}
 _NUMBERED_LABEL = re.compile(r"(?:表|图|第|Table|Figure|Fig\.?)\s*$", re.I)
+_PAIR_REFERENCE = re.compile(r"两列|两个?变量|两项测量|二者|两者")
 _NONASSERTIVE = re.compile(
     r"是否|假设|如果|不是|并非|不等于|不能|不得|[？?]|\bif\b",
     re.I,
@@ -547,9 +548,18 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 if not inheritable:
                     selected_variables = []
                     current_variables = []
-                elif metric == "r" and not selected_variables:
-                    # 全表只有一条相关记录时，「相关性 r=…」不会指向别的变量对
+                if (
+                    metric == "r"
+                    and not selected_variables
+                    and only_correlation
+                    and (inheritable or _PAIR_REFERENCE.search(prefix))
+                ):
+                    # 全表只有一条相关记录时，「两列的相关结果 r=…」不会指向别的变量对；
+                    # 点名了台账外的变量（如 height）则不能借用这条记录
                     selected_variables = current_variables = list(only_correlation)
+                if metric == "std" and re.search(r"差值|配对差", prefix):
+                    # 「配对差值（右 − 左）的标准差」是检验的差值标准差，不是各变量的标准差
+                    metric = "difference_std"
                 if not metric.startswith("ci_"):
                     previous_end = match.end()
                 scope = "variable"
@@ -571,7 +581,8 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 }:
                     scope = "comparison"
                 paired = "配对" in current_method
-                if metric == "n" and paired:
+                # 只点名一个变量的 n 是该变量自己的有效样本量，即使同一行后面提到配对检验
+                if metric == "n" and paired and len(selected_variables) != 1:
                     scope = "comparison"
                 if metric == "r" or (
                     len(selected_variables) == 2
@@ -603,6 +614,15 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                     selected_variables = [background_column]
                 if metric == "n" and re.match(r"\s*行", clause[match.end() :]):
                     scope, selected_variables = "dataset", [""]
+                if scope == "comparison" and not selected_variables and current_method:
+                    owners = {
+                        tuple(sorted(row.get("variables", [row["variable"]])))
+                        for row in by_statistic.get((scope, metric), [])
+                        if row.get("method") == current_method
+                    }
+                    if len(owners) == 1:
+                        # 台账里这种方法只有一项检验：「配对 t 检验记录中排除配对为 0」只能指它
+                        selected_variables = list(next(iter(owners)))
                 candidates = by_statistic.get((scope, metric), [])
                 if not selected_variables and scope != "dataset":
                     candidates = []

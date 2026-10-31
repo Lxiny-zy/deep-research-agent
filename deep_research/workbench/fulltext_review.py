@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from ..document_corpus import FullTextCorpus, content_hash
+from ..guardrails import _normalized_span
 from ..persistence.repository import LeaseLostError
 from ..prompting import structured_system_prompt
 
@@ -81,9 +82,11 @@ def requires_fulltext(unit: Any, *, open_evidence: bool = False) -> bool:
     text = _without_evidence_gaps(unit.text) if open_evidence else unit.text
     if explicit_absence(text):
         return True
+    if open_evidence:
+        return False
     if unit.kind == "question" and unit.citations:
         return True
-    if open_evidence or unit.text.lstrip().startswith("#"):
+    if unit.text.lstrip().startswith("#"):
         return False
     return bool(_CRITIQUE.search(unit.context.split("\n", 1)[0]))
 
@@ -406,7 +409,16 @@ class FullTextReviewer:
                 return record
             allowed = {entry["id"] for entry in catalog}
             if not target.document_ids or not set(target.document_ids) <= allowed:
-                raise ValueError("全文核查未确定有效的目标文献")
+                # 判断没有落到某篇已引用文献上，写作者可以补上引用或删去该判断；
+                # 记为核查未完成会连带整篇停止修订（线上导图节点 3.2.2/3.2.3）。
+                record.update(
+                    failure_kind="target_unresolved",
+                    reason=(
+                        "不能确定该判断评价的是哪篇已引用文献；请为缺失或缺陷判断附上"
+                        "所评价文献的引用，或删去该判断"
+                    ),
+                )
+                return record
             target.document_ids = list(dict.fromkeys(target.document_ids))
             if any(not _unambiguous(self.corpus.documents[key]) for key in target.document_ids):
                 # This is an evidence limitation, not a failed model service.
@@ -479,34 +491,7 @@ class FullTextReviewer:
             for index, batch in enumerate(batches, 1):
                 if self.on_progress is not None:
                     self.on_progress(f"正在回查原文（第 {index}/{len(batches)} 批）…")
-                response = await self.llm.parse(
-                    _CHECK_SYSTEM,
-                    json.dumps({**base, "parts": batch}, ensure_ascii=False),
-                    FullTextChecks,
-                    temperature=0.0,
-                    **verification_generation_options(self.llm),
-                )
-                expected = {part["id"]: part for part in batch}
-                ids = [item.part_id for item in response.checks]
-                if len(ids) != len(expected) or set(ids) != set(expected):
-                    raise ValueError("全文核查分段遗漏、重复或越界")
-                for item in response.checks:
-                    part = expected[item.part_id]
-                    quote = item.quote.strip()
-                    offset = part["text"].find(quote) if quote else -1
-                    if item.verdict in {"refutes", "supports"} and (
-                        offset < 0 or not quote or len(quote) > 600
-                    ):
-                        raise ValueError("全文核查引文不在当前原文区间")
-                    record["scanned"].append(
-                        {
-                            **{key: value for key, value in part.items() if key != "text"},
-                            "verdict": item.verdict,
-                            "quote": quote,
-                            "quote_start": part["start"] + offset if offset >= 0 else None,
-                            "reason": item.reason,
-                        }
-                    )
+                record["scanned"].extend(await self._check_batch(base, batch))
                 if any(row["verdict"] == "refutes" for row in record["scanned"]):
                     record["status"] = "refuted"
                     hit = next(row for row in record["scanned"] if row["verdict"] == "refutes")
@@ -538,3 +523,65 @@ class FullTextReviewer:
                 raise
             record.update(status="uncertain", reason=f"全文核查未完成：{type(exc).__name__}: {exc}")
         return record
+
+    async def _check_batch(
+        self, base: dict[str, Any], batch: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """逐段取得判断。漏回、重复矛盾或引文无法定位的分段只补发一次，仍不成立的记为不确定。
+
+        线上精读时模型偶尔漏回几个 part_id，或引文的空白与抽取文本不同。原先整条
+        断言因此记为「核查未完成」，连带整篇停止修订；不确定的分段仍不能支持缺失判断。
+        """
+        from ..llm import verification_generation_options
+
+        done: dict[str, dict[str, Any]] = {}
+        pending = batch
+        for attempt in range(2):
+            if attempt and self.on_progress is not None:
+                self.on_progress(f"补发 {len(pending)} 个未得到可用判断的分段…")
+            response = await self.llm.parse(
+                _CHECK_SYSTEM,
+                json.dumps({**base, "parts": pending}, ensure_ascii=False),
+                FullTextChecks,
+                temperature=0.0,
+                **verification_generation_options(self.llm),
+            )
+            expected = {part["id"]: part for part in pending}
+            answers: dict[str, list[FullTextPartDecision]] = {}
+            for item in response.checks:
+                if item.part_id in expected:
+                    answers.setdefault(item.part_id, []).append(item)
+            for part_id, items in answers.items():
+                if len({(item.verdict, item.quote.strip()) for item in items}) == 1:
+                    row = _checked_row(expected[part_id], items[0])
+                    if row is not None:
+                        done[part_id] = row
+            pending = [part for part in pending if part["id"] not in done]
+            if not pending:
+                break
+        for part in pending:
+            done[part["id"]] = {
+                **{key: value for key, value in part.items() if key != "text"},
+                "verdict": "uncertain",
+                "quote": "",
+                "quote_start": None,
+                "reason": "核查模型未给出该分段可定位的判断",
+            }
+        return [done[part["id"]] for part in batch]
+
+
+def _checked_row(part: dict[str, Any], item: FullTextPartDecision) -> dict[str, Any] | None:
+    """引文按空白与大小写归一化定位，保存原文中的逐字片段；支持或反驳必须能定位。"""
+    quote = item.quote.strip()
+    span = _normalized_span(part["text"], quote) if quote else None
+    if span is not None:
+        quote = part["text"][span[0] : span[1]]
+    if item.verdict in {"refutes", "supports"} and (span is None or len(quote) > 600):
+        return None
+    return {
+        **{key: value for key, value in part.items() if key != "text"},
+        "verdict": item.verdict,
+        "quote": quote,
+        "quote_start": part["start"] + span[0] if span is not None else None,
+        "reason": item.reason,
+    }

@@ -142,6 +142,15 @@ PAIRED = {
         "相关性 r=0.9889（p=1.2801014e-09，n=12）。",
         "局限：配对差值的 Shapiro-Wilk 检验（统计量=0.9234，p=0.31516107，n=12）未拒绝分布前提。",
         "配对 t 检验 p=2.2300848e-09，相关性 r=0.9889，p=1.2801014e-09。",
+        # 线上数据分析 503a6d89 的原句
+        "样本量按三种口径分别陈述：总样本量为 12 行；单个测量的有效样本量分别为 "
+        "`baseline_psnr` n=12、`proposed_psnr` n=12；变量对样本量即 `baseline_psnr` 与 "
+        "`proposed_psnr` 的完整配对数为 12，台账配对 t 检验记录中的排除不完整配对为 0。",
+        "三种离散量含义不同，需分别读：`baseline_psnr` 的标准差为 1.008，"
+        "`proposed_psnr` 的标准差为 0.9727，配对差值（`proposed_psnr` − `baseline_psnr`）"
+        "的标准差为 0.1514，配对平均差为 0.765。",
+        "两列的相关结果为 Pearson r=0.9889，p=1.2801014e-09，有效样本量 n=12，"
+        "描述的是两列测量之间的线性关联；配对差异的结论来自上述配对 t 检验。",
     ],
 )
 def test_correct_paired_report_sentences_bind_to_their_records(body):
@@ -163,6 +172,11 @@ def test_correct_paired_report_sentences_bind_to_their_records(body):
         "配对 t 检验 p=2.2300848e-09，相关性 r=0.9889，p=2.2300848e-09。",
         "有效样本量共 13 个。",
         "height 的相关系数 r=0.9889。",
+        "单个测量的有效样本量分别为 `baseline_psnr` n=13、`proposed_psnr` n=12。",
+        "台账配对 t 检验记录中的排除不完整配对为 1。",
+        "配对差值（`proposed_psnr` − `baseline_psnr`）的标准差为 1.008。",
+        "两列的相关结果为 Pearson r=0.95，p=1.2801014e-09，有效样本量 n=12。",
+        "两列的相关结果为 Pearson r=0.9889，p=1.2801014e-09，有效样本量 n=13。",
     ],
 )
 def test_wrong_values_stay_rejected_when_the_scope_is_inferred(body):

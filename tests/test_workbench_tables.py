@@ -632,3 +632,82 @@ def test_cell_with_several_statements_cites_each_statement_in_place():
     # 旧记录仍按旧格式重算，不会因为新渲染规则判为失配；两种格式也不能混用
     assert not table_issues(legacy_body, results, mapping, legacy, require_review=False)
     assert table_issues(body, results, mapping, legacy, require_review=False)
+
+
+def _flops_spec(cell_id):
+    return {
+        "id": "t1",
+        "title": "表 1 计算量",
+        "columns": [{"key": "flops", "label": "FLOPS", "field": "quantity", "metric": "FLOPS"}],
+        "rows": [{"label": "CQR", "cells": {"flops": [cell_id]}}],
+    }
+
+
+def test_a_finding_id_copied_with_one_character_missing_still_renders_its_table():
+    from deep_research.workbench.tables import render_specs
+
+    finding = admitted(
+        "CQR FLOPS 79.5", quantity=Quantity(metric="FLOPS", value=79.5, rendered="79.50")
+    )
+    key = evidence_id(finding)
+    # 线上精读终稿：模型把 64 位编号抄成了 63 位，整张表因此没有渲染
+    body = "```evidence-table\n" + json.dumps(_flops_spec(key[:20] + key[21:])) + "\n```\n"
+    markdown, record = render_specs(body, *inputs(finding))
+    assert "79.50" in markdown and "evidence-table" not in markdown
+    assert record["errors"] == []
+    assert record["specs"][0]["rows"][0]["cells"]["flops"] == [key]
+
+
+def test_an_unknown_finding_id_names_the_cell_and_blocks_delivery_of_the_spec():
+    from deep_research.report.validation import validate_body
+    from deep_research.workbench.tables import render_specs, table_issues
+
+    finding = admitted(
+        "CQR FLOPS 79.5", quantity=Quantity(metric="FLOPS", value=79.5, rendered="79.50")
+    )
+    key = evidence_id(finding)
+    wrong = key[:10] + ("0" if key[10] != "0" else "1") + key[11:30] + key[32:]
+    body = "CQR 的计算量见表 1 [1]。\n\n```evidence-table\n" + json.dumps(_flops_spec(wrong))
+    body += "\n```\n"
+    markdown, record = render_specs(body, *inputs(finding))
+    assert "evidence-table" in markdown
+    issues = table_issues(markdown, *inputs(finding), record)
+    assert issues[0].startswith("表格规格尚未成功渲染：表格引用了不存在或未通过核验的发现")
+    assert "行「CQR」列「flops」" in issues[0]
+    results, mapping = inputs(finding)
+    check = validate_body(markdown, results, mapping, fallback=False)
+    assert "unrendered_table" in check.issues and "unsupported_number" not in check.issues
+    final = validate_body(markdown, results, mapping, preserve_valid=True)
+    assert "evidence-table" not in final.body
+
+
+def test_ledger_paths_are_listed_and_a_single_test_renders_as_one_row():
+    from deep_research.workbench.tables import ledger_paths, render_specs
+
+    ledger = {
+        "composition": [{"column": "scene", "n": 12, "missing": 0, "distinct": 12}],
+        "describe": [{"variable": "x", "n": 12, "mean": 1.0}],
+        "tests": [{
+            "paired": True, "variable": "y − x", "group": "同一行配对", "method": "配对 t 检验",
+            "statistic": 17.4981, "p_value": 2.2300848e-09, "significant": True, "n_pairs": 12,
+            "excluded_pairs": 0, "mean_difference": 0.765, "difference_std": 0.1514,
+            "assumptions": [],
+        }],
+        "correlations": [],
+        "figures": [{"name": "fig.png"}],
+    }
+    assert ledger_paths(ledger) == [["describe"], ["composition"], ["tests"], ["tests", 0]]
+
+    def render(path):
+        spec = {"id": "t1", "title": "表 1 配对检验", "ledger_path": path}
+        body = "```evidence-table\n" + json.dumps(spec, ensure_ascii=False) + "\n```\n"
+        return render_specs(body, [], {}, ledger=ledger, ledger_columns=True)
+
+    # 线上数据分析：单条检验路径与不存在的顶层路径都让表格整张失败
+    body, record = render(["tests", 0])
+    assert record["errors"] == [] and "0.1514" in body and "17.4981" in body
+    _, record = render(["group_summaries"])
+    assert record["errors"] == [
+        '统计表路径 ["group_summaries"] 不在当前台账中；可用路径：'
+        '["describe"]、["composition"]、["tests"]、["tests", 0]'
+    ]

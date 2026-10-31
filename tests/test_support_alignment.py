@@ -74,6 +74,9 @@ def item(key, quote, citation=1, statement=""):
         "Alpha 得分95 [1]而Beta 得分90 [2]。",
         [item("a", "Alpha score 90"), item("b", "Beta score 95", 2)], ["a", "b"],
     ),
+    # 科学计数的底数 10 不是论文写出的数值
+    ("Alpha 的学习率降为 10 [1]。", [item("a", "Alpha uses a rate of $4\\times10^{-4}$.")], ["a"]),
+    ("Alpha 有 7 个分支 [1]。", [item("a", "Alpha has three-four stages.")], ["a"]),
 ])
 async def test_optimistic_verdict_cannot_bind_unrelated_evidence(text, evidence, selected):
     reviewer = SupportReviewer(SelectedJudge(selected), evidence, 50000)
@@ -97,6 +100,18 @@ async def test_optimistic_verdict_cannot_bind_unrelated_evidence(text, evidence,
     ("Paragraph 20", "Some original text."),
     ("Alpha error is $10^{-3}$ [1].", "Alpha error is 0.001."),
     ("Alpha error is $1 \\times 10^{-3}$ [1].", "Alpha error is 1e-3."),
+    # 线上精读的原句：论文用英文数词和 $conv3\times3$ 写出同一数值
+    (
+        "真实实验使用由 CASSI 系统采集的 5 个真实 HSI 进行测试 [1]。",
+        "Five real HSIs collected by the CASSI system are used for testing.",
+    ),
+    (
+        "Alpha 的估计器含一个带步长的 $3\\times3$ 卷积与三个全连接层 [1]。",
+        "Alpha consists of a $conv1\\times1$, a strided $conv3\\times3$, and three fully"
+        " connected layers.",
+    ),
+    ("Alpha 的光谱维共 28 个波段 [1]。", "Alpha keeps twenty-eight spectral bands."),
+    ("Alpha 共采集 5 个场景 [1]。", "Alpha 共采集五个场景。"),
 ])
 async def test_alignment_preserves_supported_values_arithmetic_and_translated_prose(text, quote):
     reviewer = SupportReviewer(SelectedJudge(["a"]), [item("a", quote)], 50000)

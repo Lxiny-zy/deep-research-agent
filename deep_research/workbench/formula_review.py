@@ -346,6 +346,52 @@ def validate_formula_record(
         return "公式核验记录不完整或格式无效"
 
 
+# 精读时一条摘录的 context 是整篇全文；一个单元引用同一篇的几条摘录，整篇就重复几次，
+# 必然超过核验容量。放不下时依次缩小到所引摘录前后的原文窗口。窗口是原文的连续
+# 片段，source_quote 与参考式编号仍按整篇核对；记录绑定的仍是完整原文。
+_SOURCE_WINDOWS = (12_000, 6_000, 3_000, 1_500)
+
+
+def _payload(
+    unit: Any,
+    pending: list[dict[str, Any]],
+    packets: list[dict[str, Any]],
+    refs: list[dict[str, Any]],
+    capacity: int,
+) -> tuple[str | None, int | None]:
+    overhead = len(structured_system_prompt(_SYSTEM, FormulaDecisions))
+    for width in (None, *_SOURCE_WINDOWS):
+        sources, kept = packets, refs
+        if width is not None:
+            sources = [_windowed(packet, width) for packet in packets]
+            contexts = {packet["id"]: packet["context"] for packet in sources}
+            kept = [ref for ref in refs if ref["tex"] in contexts[ref["source_id"]]]
+        body: dict[str, Any] = {
+            "unit": asdict(unit),
+            "formulas": pending,
+            "sources": sources,
+            "reference_formulas": kept,
+        }
+        if width is not None:
+            body["source_scope"] = (
+                f"原文较长，每条来源只给出所引摘录前后各约 {width} 字的连续原文；"
+                "窗口外的公式无法确认时用 uncertain。"
+            )
+        payload = json.dumps(body, ensure_ascii=False)
+        if overhead + len(payload) <= capacity:
+            return payload, width
+    return None, None
+
+
+def _windowed(packet: dict[str, Any], width: int) -> dict[str, Any]:
+    context = packet["context"]
+    span = _normalized_span(context, packet["quote"]) if packet["quote"] else None
+    if span is None or len(context) <= span[1] - span[0] + 2 * width:
+        return packet
+    start, end = max(0, span[0] - width), min(len(context), span[1] + width)
+    return {**packet, "context": context[start:end]}
+
+
 class FormulaReviewer:
     def __init__(
         self, llm: Any, evidence: list[dict[str, Any]], corpus: FullTextCorpus, capacity: int
@@ -404,22 +450,13 @@ class FormulaReviewer:
                     continue
             pending.append(formula)
         if pending:
-            payload = json.dumps(
-                {
-                    "unit": asdict(unit),
-                    "formulas": pending,
-                    "sources": packets,
-                    "reference_formulas": refs,
-                },
-                ensure_ascii=False,
-            )
+            payload, width = _payload(unit, pending, packets, refs, self.capacity)
+            if width is not None:
+                record["source_window"] = width
             try:
                 if not packets and any(not _not_source_claim(unit, formula) for formula in pending):
                     raise ValueError("缺少对应公式原文")
-                if (
-                    len(structured_system_prompt(_SYSTEM, FormulaDecisions)) + len(payload)
-                    > self.capacity
-                ):
+                if payload is None:
                     raise ValueError("公式与原文超过核验容量，未截断内容")
                 response = await self.llm.parse(_SYSTEM, payload, FormulaDecisions, temperature=0.0)
                 ids = [row.formula_id for row in response.decisions]

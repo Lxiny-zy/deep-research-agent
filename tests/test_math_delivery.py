@@ -175,6 +175,32 @@ def test_citation_masks_keep_offsets_and_protect_code_links_and_nested_math(newl
     assert "https://example.test/[6]" in rewritten and r"\[9]" in rewritten
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_an_unpaired_dollar_does_not_swallow_the_next_paragraphs_math(newline):
+    from deep_research.workbench.gates import markdown_gate
+
+    # 线上精读终稿：前一段的 S1$\sim$S10 没有配对，曾把后文正常公式报成裸 TeX
+    body = newline.join([
+        "仿真对比表在 10 个仿真场景（S1$\\sim$S10）上比较 DAUHST [5]。",
+        "",
+        "## 局限与未解问题",
+        "",
+        "- 退化模型只给出加性噪声项 $\\mathbf{n} \\in \\mathbb{R}^{n}$ [1]。",
+        "- $\\beta_k \\stackrel{\\rm def}{=} \\mu_k/\\tau_k$ 的定义 [2]。",
+    ])
+    gate = markdown_gate(body)
+    assert gate.status == "fail"
+    assert gate.issues == ["公式缺少数学标记：\\sim"]
+
+
+def test_latex_text_commands_are_rewritten_as_markdown_not_wrapped_in_math():
+    from deep_research.workbench.gates import markdown_gate
+
+    gate = markdown_gate("代码公开于 \\url{https://github.com/example/mst} [1]。")
+    assert gate.status == "fail" and len(gate.issues) == 1
+    assert gate.issues[0].startswith("LaTeX 文本命令不会渲染") and "数学标记" not in gate.issues[0]
+
+
 def test_all_citation_quality_checks_ignore_equation_indices():
     from deep_research.workbench.gates import citation_gate
     from deep_research.workbench.revision import _used_indices

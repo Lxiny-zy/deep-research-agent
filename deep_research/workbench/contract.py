@@ -317,6 +317,15 @@ def provided_review(contract: TaskContract | None) -> bool:
     return contract is not None and contract.template == "litReview" and contract.strategy == "none"
 
 
+def open_evidence(contract: TaskContract | None) -> bool:
+    """开放检索的综合任务：证据来自检索，不是用户指定、逐篇读完的文献。"""
+    return (
+        contract is not None
+        and contract.template in {"autoResearch", "litReview", "slides", "mindmap"}
+        and contract.strategy != "none"
+    )
+
+
 def provided_material(contract: TaskContract | None) -> bool:
     return (
         contract is not None
@@ -332,5 +341,6 @@ __all__ = [
     "build_contract",
     "contract_from_scratch",
     "extract_papers",
+    "open_evidence",
     "pasted_paper_text",
 ]

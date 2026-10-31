@@ -215,6 +215,63 @@ async def test_missing_checks_and_invented_counterquotes_never_become_fulltext_p
     assert record["status"] == "uncertain"
 
 
+class SkipsOnce(FullTextJudge):
+    skipped = False
+
+    async def parse(self, system, user, schema, **kwargs):
+        result = await super().parse(system, user, schema, **kwargs)
+        if schema is FullTextChecks and not self.skipped:
+            self.skipped = True
+            return FullTextChecks(checks=result.checks[:-1])
+        return result
+
+
+@pytest.mark.asyncio
+async def test_a_part_the_model_skipped_is_asked_again_and_the_check_completes():
+    _, corpus = make_corpus(complete=True)
+    llm = SkipsOnce()
+    unit = SupportUnit("u", "本次取得的全文文本中未见 dropout 设置。", kind="prose")
+    record = await FullTextReviewer(llm, corpus, 20000).review(unit)
+    assert record["status"] == "absence_confirmed"
+    assert validate_fulltext_record(unit, record, corpus) is None
+    # Target, the batch, then only the skipped part.
+    assert llm.calls == 3 and len(llm.parts) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_counterquote_with_reflowed_whitespace_is_kept_verbatim():
+    class Reflowed(FullTextJudge):
+        async def parse(self, system, user, schema, **kwargs):
+            result = await super().parse(system, user, schema, **kwargs)
+            if schema is FullTextChecks:
+                for row in result.checks:
+                    row.quote = " ".join(row.quote.split())
+            return result
+
+    counter = "We set T = 4 in our im-\nplementation"
+    _, corpus = make_corpus(second=DGSMP_PAGE8, complete=True)
+    llm = Reflowed(counter)
+    unit = SupportUnit("u", SC32_CLAIM)
+    record = await FullTextReviewer(llm, corpus, 20000).review(unit)
+    assert record["status"] == "refuted" and llm.calls == 2
+    assert [row["quote"] for row in record["scanned"] if row["verdict"] == "refutes"] == [counter]
+    assert validate_fulltext_record(unit, record, corpus) is None
+
+
+@pytest.mark.asyncio
+async def test_a_part_left_unanswered_stays_unproven_without_stopping_revision():
+    from deep_research.workbench.prose_review import can_revise
+
+    _, corpus = make_corpus(complete=True)
+    llm = FullTextJudge(omit=True)
+    decisions = await SupportReviewer(llm, [], 20000, fulltext_corpus=corpus).review(
+        [SupportUnit("u", SC32_CLAIM)]
+    )
+    assert decisions[0].verdict == "uncertain"
+    assert decisions[0].fulltext_review["scanned"][-1]["verdict"] == "uncertain"
+    assert can_revise(decisions)
+
+
 @pytest.mark.asyncio
 async def test_all_bytes_are_checked_when_a_document_needs_multiple_model_requests():
     source = mark_complete_sources(
@@ -478,3 +535,69 @@ def test_open_evidence_follows_the_task_contract():
     assert reviewer("litReview", "none") is False
     assert reviewer("paperRead", "none") is False
     assert reviewer("peerReview", "none") is False
+
+
+def test_open_synthesis_mindmap_question_is_a_direction_unless_it_asserts_absence():
+    from deep_research.workbench.fulltext_review import requires_fulltext
+
+    question = SupportUnit(
+        "q", "MST++ 的注意力能否迁移到 DOE 编码？", kind="question", citations=[2]
+    )
+    assert requires_fulltext(question) is True
+    assert requires_fulltext(question, open_evidence=True) is False
+    absent = SupportUnit("q", "MST++ 为何未报告真实数据结果？", kind="question", citations=[2])
+    assert requires_fulltext(absent, open_evidence=True) is True
+
+
+@pytest.mark.asyncio
+async def test_open_synthesis_mindmap_record_follows_its_own_scope():
+    from deep_research.workbench.mindmap_contract import Mindmap, checked_review, review_record
+    from deep_research.workbench.mindmap_edit import review_units
+    from deep_research.workbench.support import evidence_records
+    from deep_research.workbench.writers import mindmap_to_markdown
+
+    sources, corpus = make_corpus(complete=True)
+    results = research_material(sources)
+    model = Mindmap(
+        root="Alpha",
+        branches=[{"label": "Alpha 能否用于 DOE 编码", "kind": "question", "citations": [1]}],
+    )
+    llm = FullTextJudge()
+    reviewer = SupportReviewer(
+        llm,
+        evidence_records(results, {sources[0].url: 1}),
+        20000,
+        fulltext_corpus=corpus,
+        open_evidence=True,
+    )
+    decisions = await reviewer.review(review_units(model, "Alpha"))
+    assert not any(part for part in llm.parts)
+    record = review_record(model.model_dump(), [sources[0].url], results, decisions)
+    assert record["status"] == "pass"
+    arguments = (model.model_dump(), [sources[0].url], results, record, mindmap_to_markdown(model))
+    assert checked_review(*arguments, corpus=corpus, query="Alpha", open_evidence=True) == (
+        True,
+        [],
+    )
+    assert checked_review(*arguments, corpus=corpus, query="Alpha")[1]
+
+
+@pytest.mark.asyncio
+async def test_an_unattributed_absence_claim_asks_for_a_citation_and_allows_revision():
+    from deep_research.workbench.prose_review import can_revise
+
+    class NoTarget(FullTextJudge):
+        async def parse(self, system, user, schema, **kwargs):
+            if schema is FullTextTarget:
+                self.calls += 1
+                return FullTextTarget(kind="absence", document_ids=[], reason="未指明对象")
+            return await super().parse(system, user, schema, **kwargs)
+
+    _, corpus = make_corpus(complete=True)
+    decisions = await SupportReviewer(NoTarget(), [], 20000, fulltext_corpus=corpus).review(
+        [SupportUnit("u", SC32_CLAIM)]
+    )
+    assert decisions[0].verdict == "uncertain"
+    assert decisions[0].fulltext_review["failure_kind"] == "target_unresolved"
+    assert "附上所评价文献的引用" in decisions[0].reason
+    assert can_revise(decisions)

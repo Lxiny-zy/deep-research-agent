@@ -93,11 +93,16 @@ def coverage_issues(scratch: dict[str, Any], results: list[ResearchResult]) -> l
 
 
 def _question(request: str, unit: MethodUnit) -> str:
+    # 评审要求只决定抽取重点。线上评审把“重点评价退化建模与实验设计”拼进每一节的
+    # 问题，核对模型据此要求 Transformer 一节也写出实验设计，整篇评审因此无法起草。
     return (
-        f"同行评审任务：{request}\n当前仅检查章节「{unit.title}」。"
-        "判断来自本章节的已核验证据能否说明其核心方法、组成部分、操作或论证步骤及适用条件。"
+        f"当前仅检查章节「{unit.title}」。"
+        "判断来自本章节的已核验证据能否说明本章节自身承担的核心方法、组成部分、"
+        "操作或论证步骤及适用条件。只按本章节实际讨论的内容判断是否充分；"
+        "评审关注的其他方面（如实验设计、其他章节的方法）由对应章节负责，不计入本章节的缺口。"
         "不能以引言贡献口号、其他章节的证据或基线数字代替。"
         "只抽取当前展示范围中的信息，保持引句连续完整；未抽取到不等于原文没有。"
+        f"\n评审任务（只用于确定本章节的抽取重点）：{request}"
     )
 
 
@@ -127,6 +132,7 @@ async def check_methods(
     researcher.system = ctx.system_prompt(researcher.system)
     documents: list[dict[str, Any]] = []
     pending: list[tuple[MethodUnit, dict[str, Any]]] = []
+    reads: dict[str, set[str]] = {}
     added = False
 
     async def check(
@@ -140,6 +146,12 @@ async def check_methods(
         except LeaseLostError:
             raise
         except Exception as exc:
+            if not read and str(exc).startswith("补读计划仍无效") and unit.sources():
+                # 还没有为本节补读就想保留缺口：先读本节原文再复核，而不是判为核对未完成。
+                entry.update(status="fail", missing_topics=["本章节原文尚未按评审重点补读"])
+                return EvidencePlan(
+                    next_step="read_selected", reading_reason="保留缺口前先查阅本章节原文"
+                )
             entry.update(
                 status="fail",
                 missing_topics=[f"章节覆盖核对未完成：{type(exc).__name__}: {exc}"[:300]],
@@ -163,7 +175,7 @@ async def check_methods(
                                      "status": "fail"}
             doc["sections"].append(entry)
             pending.append((unit, entry))
-            read: set[str] = set()
+            read: set[str] = reads.setdefault(unit.id, set())
             researcher.source_context = unit.context
             ranges: dict[tuple[str, str], list[tuple[int, int]]] = {}
             for part in unit.parts:
@@ -217,7 +229,8 @@ async def check_methods(
         )
         for unit, entry in pending:
             if before[unit.id] != [_key(f) for f in unit.findings(bb.results)]:
-                await check(unit, entry, set())
+                # 复核沿用本节已补读的来源；空集合会让已查阅后的保留缺口被判为无效计划。
+                await check(unit, entry, reads[unit.id])
     bb.scratch[REVIEW_COVERAGE_KEY] = {
         "version": VERSION, "kind": "peer_methods", "input_hash": _input(bb.scratch, bb.results),
         "documents": documents, "run_id": ctx.run_id,

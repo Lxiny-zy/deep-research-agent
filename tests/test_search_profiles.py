@@ -194,6 +194,25 @@ async def test_builtin_snapshot_does_not_adopt_new_keys(catalog):
     await runtime.aclose()
 
 
+async def test_scholarly_workflow_run_freezes_scholarly_profiles(catalog):
+    from deep_research.orchestrator import (
+        RUN_CATALOG_CHECKPOINT_KEY,
+        create_initial_execution,
+        snapshot_catalog_for_execution,
+    )
+
+    settings = Settings(search_profile_ids=("builtin:arxiv",))
+    execution = create_initial_execution("q", "research", settings)
+    await snapshot_catalog_for_execution(execution, catalog, settings)
+    frozen = execution.checkpoint["scratch"][RUN_CATALOG_CHECKPOINT_KEY]
+    assert frozen["default_search_profile_ids"] == ["builtin:arxiv", "builtin:openalex"]
+
+    runtime = await load_catalog_runtime(catalog, Tracer(), settings, snapshot=frozen)
+    tool = await runtime.resolve_search("researcher")
+    assert {"ArxivSearch", "OpenAlexSearch"} <= set(tool.backend_name.split("+"))
+    await runtime.aclose()
+
+
 async def test_recovery_preserves_key_priority_order(catalog):
     first, first_key = await make_profile(catalog, "first")
     _, second_key = await make_profile(catalog, "second")

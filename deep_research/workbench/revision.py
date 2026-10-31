@@ -143,16 +143,14 @@ def assess_draft(
     if missing_sections:
         local_problems = None
     from .delivery.math_markdown import validation_paragraphs
-    from .delivery.math_residual import raw_tex_fragments
+    from .delivery.math_residual import raw_tex_fragments, tex_issue_messages
 
     for paragraph in validation_paragraphs(body):
         fragments = raw_tex_fragments(citation_text(paragraph, mask_escapes=False))
-        if not fragments:
-            continue
-        message = "为未渲染公式补齐数学标记，保留原表达式及条件：" + "、".join(fragments[:3])
-        hard.append(message)
-        if local_problems is not None:
-            local_problems.append((paragraph.strip(), message))
+        for message in tex_issue_messages(fragments):
+            hard.append(message)
+            if local_problems is not None:
+                local_problems.append((paragraph.strip(), message))
     from .coverage_review import table_scope_issues
 
     table_issues = table_scope_issues(body)

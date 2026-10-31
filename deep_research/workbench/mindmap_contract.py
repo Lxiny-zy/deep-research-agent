@@ -268,6 +268,7 @@ def checked_review(
     *,
     corpus: FullTextCorpus | None = None,
     query: str = "",
+    open_evidence: bool = False,
 ) -> tuple[bool, list[str]]:
     """Check coverage and binding; bool indicates a current review, not a pass."""
     from .gates import _body_without_references
@@ -300,6 +301,7 @@ def checked_review(
             results,
             {url: i for i, url in enumerate(citations, 1)},
         ),
+        open_evidence=open_evidence,
     )
     problems = structural
     for decision in decisions:

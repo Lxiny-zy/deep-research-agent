@@ -18,6 +18,7 @@ expat 默认不解析外部实体，因此 XXE（读本地文件 / 打内网）�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -28,7 +29,7 @@ import httpx
 from ..models import ScholarlyMetadata, Source
 from .arxiv_fulltext import ArxivEprintFetcher, ArxivFulltextError
 from .base import SearchTool, reading_question, required_sections
-from .fanout import expand_in_order
+from .fanout import SEARCH_FULLTEXT_CHARS, SEARCH_FULLTEXT_PAPERS, expand_leading
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,33 @@ _ARXIV = "{http://arxiv.org/schemas/atom}"
 # 从 abs URL 尾部取版本号：.../abs/2205.10102v2 → v2
 _VERSION_RE = re.compile(r"(v\d+)$")
 _WHITESPACE_RE = re.compile(r"\s+")
+_QUERY_TERM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9+.-]*")
+_MAX_QUERY_TERMS = 8
+# arXiv API 要求连续请求至少间隔 3 秒。
+_REQUEST_GAP = 3.0
+_STOPWORDS = frozenset(
+    "a an and are as at by for from in is of on or the to versus via vs with without".split()
+)
+
+
+def search_expressions(query: str) -> list[str]:
+    """把检索式译成 arXiv 查询，先严后宽。
+
+    ``all:a b c`` 只把第一个词限定在字段里，其余词几乎不参与匹配，线上「deep unrolling
+    coded aperture」排出了循环展开和取栓手术的论文；逐词 AND 才是原意。词多时 AND
+    可能一篇都没有，再放宽到前一半的词。靠前的词由检索式生成阶段排定，通常更关键。
+    """
+    terms = [
+        term
+        for term in _QUERY_TERM_RE.findall(query)
+        if term.casefold() not in _STOPWORDS and term not in {"AND", "OR", "ANDNOT"}
+    ][:_MAX_QUERY_TERMS]
+    if len(terms) < 2:
+        return [f"all:{query}"]
+    joined = [" AND ".join(f"all:{term}" for term in terms)]
+    if len(terms) > 3:
+        joined.append(" AND ".join(f"all:{term}" for term in terms[: len(terms) // 2 + 1]))
+    return joined
 
 
 class ArxivFeedError(RuntimeError):
@@ -57,6 +85,7 @@ class ArxivSearch(SearchTool):
         fulltext: bool = False,
         fulltext_max_chars: int = 12_000,
         eprint_fetcher: ArxivEprintFetcher | None = None,
+        request_gap: float = _REQUEST_GAP,
     ) -> None:
         self._client = httpx.AsyncClient(
             timeout=timeout,
@@ -64,6 +93,7 @@ class ArxivSearch(SearchTool):
         )
         self._fulltext = fulltext
         self._fulltext_max_chars = fulltext_max_chars
+        self._request_gap = request_gap
         self._eprint_fetcher = eprint_fetcher or (
             ArxivEprintFetcher(timeout=timeout) if fulltext else None
         )
@@ -76,21 +106,27 @@ class ArxivSearch(SearchTool):
         if max_results <= 0:
             return []
         requested = min(max_results, _MAX_RESULTS)
-        response = await self._client.get(
-            _ENDPOINT,
-            params={
-                # 每个库的检索式翻译（同义词扩展、字段限定）属于「检索策略生成」
-                # 阶段的职责；本后端只负责如实转发，不在这里塞领域启发式规则。
-                "search_query": f"all:{query}",
-                "start": 0,
-                "max_results": requested,
-                "sortBy": "relevance",
-                "sortOrder": "descending",
-            },
-        )
-        response.raise_for_status()
-        entries = _parse_feed(response.content)
-        candidates = [source for source in map(_to_source, entries) if source is not None]
+        found: dict[str, Source] = {}
+        for attempt, expression in enumerate(search_expressions(query)):
+            if attempt:
+                await asyncio.sleep(self._request_gap)
+            response = await self._client.get(
+                _ENDPOINT,
+                params={
+                    "search_query": expression,
+                    "start": 0,
+                    "max_results": requested,
+                    "sortBy": "relevance",
+                    "sortOrder": "descending",
+                },
+            )
+            response.raise_for_status()
+            for source in map(_to_source, _parse_feed(response.content)):
+                if source is not None:
+                    found.setdefault(source.url, source)
+            if len(found) >= requested:
+                break
+        candidates = list(found.values())
         if self._eprint_fetcher is None:
             return candidates[:requested]
 
@@ -109,7 +145,7 @@ class ArxivSearch(SearchTool):
                 logger.warning("arXiv full-text unavailable for %s: %s", source.url, exc)
                 return [source]
 
-        return await expand_in_order(candidates, expand, limit=requested)
+        return await expand_leading(candidates, expand, papers=SEARCH_FULLTEXT_PAPERS)
 
     async def lookup(self, identifier: str) -> list[Source]:
         """按 arXiv 编号精确取一篇论文（元数据 + 可用时的全文章节）。
@@ -159,7 +195,7 @@ class ArxivSearch(SearchTool):
         sections = await fetcher.sections(
             source,
             query,
-            max_chars=self._fulltext_max_chars,
+            max_chars=min(self._fulltext_max_chars, SEARCH_FULLTEXT_CHARS),
             required=required,
         )
         return sections

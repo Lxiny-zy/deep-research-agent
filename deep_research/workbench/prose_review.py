@@ -294,6 +294,7 @@ class ProseReviewer:
             CoverageReviewer(llm, self.contract, capacity) if self.contract is not None else None
         )
         from .analysis_review import STATISTICS_RULES
+        from .contract import open_evidence
 
         self.reviewer = SupportReviewer(
             llm,
@@ -304,11 +305,7 @@ class ProseReviewer:
             fulltext_corpus=fulltext_corpus,
             check_fulltext=statistics is None,
             check_formulas=statistics is None,
-            open_evidence=(
-                self.contract is not None
-                and self.contract.template in {"autoResearch", "litReview", "slides"}
-                and self.contract.strategy != "none"
-            ),
+            open_evidence=open_evidence(self.contract),
         )
         self.records: dict[str, dict[str, Any]] = {}
         self.peer = None

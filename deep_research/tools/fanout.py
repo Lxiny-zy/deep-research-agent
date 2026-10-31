@@ -18,6 +18,20 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
+# 开放检索每个检索式最多读几篇全文、每篇读多少。一个子问题有多个检索式、多个学术
+# 后端，不设限时单次任务要读上百篇；其余相关文献保留摘要，仍可作为证据。
+SEARCH_FULLTEXT_PAPERS = 3
+SEARCH_FULLTEXT_CHARS = 20_000
+
+
+async def expand_leading(
+    items: Sequence[T], expand: Callable[[T], Awaitable[list[T]]], *, papers: int
+) -> list[T]:
+    """展开排在最前的 ``papers`` 篇，其余条目原样保留在其后。"""
+    leading = await expand_in_order(items[:papers], expand, limit=papers)
+    return [*leading, *items[papers:]]
+
+
 async def expand_in_order(
     items: Sequence[T],
     expand: Callable[[T], Awaitable[list[R]]],

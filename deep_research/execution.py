@@ -36,6 +36,7 @@ from .execution_policy import (
     resource_wait_checkpoint,
     start_window,
     transient_failure,
+    with_scholarly_backends,
 )
 from .observability import Event, EventHub
 from .orchestration import WorkflowRun
@@ -57,44 +58,6 @@ _CANCEL_POLL_SECONDS = 0.5
 # 当前进程配置，恢复一个旧 run 不应复活一份旧凭据。
 _CHECKPOINT_SETTING_FIELDS = SETTING_FIELDS
 
-# 学术工作流必须命中学术源：只有 openalex / arxiv 提供 DOI、机构、撤稿标记与开放
-# 全文位置，而全文解析、数值校验与「同一 work」独立性判定都依赖这些字段。二者均
-# 无需 API key，因此补齐不引入新的凭据要求。
-_SCHOLARLY_SEARCH_BACKENDS = ("openalex", "arxiv")
-# 学术写作类工作台任务（综述 / 汇报 / 知识导图）的证据应首选论文，而不是通用网页。
-_SCHOLARLY_WORKFLOWS = frozenset(
-    {
-        "hsi_review",
-        "lit_review",
-        "lit_review_quick",
-        "slides",
-        "slides_deep",
-        "mindmap",
-        "mindmap_deep",
-    }
-)
-
-
-def _with_scholarly_backends(settings: Settings, workflow: str | None) -> Settings:
-    """Ensure a scholarly workflow actually queries the scholarly backends.
-
-    The intent policies declare ``source_strategy="scholarly_multi_source"``, but
-    that string only reaches the Planner prompt; nothing downstream selects a
-    backend from it.  Without this, selecting ``hsi_review`` under the default
-    ``("tavily",)`` configuration silently runs an abstract-only web search and
-    ``fulltext_enabled`` has nothing to act on.
-
-    Backends the operator already configured are preserved and kept first, so an
-    explicit ``DR_SEARCH_BACKENDS`` still decides priority.  Only the missing
-    scholarly backends are appended.
-    """
-    if workflow not in _SCHOLARLY_WORKFLOWS:
-        return settings
-    configured = tuple(settings.search_backends)
-    missing = tuple(name for name in _SCHOLARLY_SEARCH_BACKENDS if name not in configured)
-    if not missing:
-        return settings
-    return replace(settings, search_backends=configured + missing)
 
 
 def settings_for_resume(base: Settings, execution: WorkflowRun) -> Settings:
@@ -244,7 +207,7 @@ class RunExecutor:
             from .catalog.search import MissingSearchTool
 
             return MissingSearchTool()
-        settings = _with_scholarly_backends(settings, workflow)
+        settings = with_scholarly_backends(settings, workflow)
         backends: list[SearchTool] = []
         tavily = await self._build_tavily(settings)
         if tavily is not None:

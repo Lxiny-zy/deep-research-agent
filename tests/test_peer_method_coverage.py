@@ -442,3 +442,32 @@ async def test_peer_workflow_fills_method_gap_before_writing_and_export_gate_che
 
     review_data = next(f for f in blocked.files if f.name.endswith("-review-items.json"))
     assert json.loads(review_data.data)["delivery_blocked"] is True
+
+
+class GapsBeforeReading(Reader):
+    """线上评审：核对模型在补读之前就想保留缺口，两次计划都无效。"""
+
+    def __init__(self, sources):
+        super().__init__(sources)
+        self.questions = []
+
+    async def parse(self, system, user, schema, **kwargs):
+        if schema is PaperEvidenceSelection:
+            self.questions.append(str(user))
+            if "【本轮已补读来源】\n[]" in user:
+                return PaperEvidenceSelection(
+                    sufficient=False, finding_ids=["e1"], missing_topics=["参数取值"],
+                    next_step="answer_with_gaps", reading_reason="现有证据已说明主要结构",
+                )
+        return await super().parse(system, user, schema, **kwargs)
+
+
+async def test_a_gap_kept_before_reading_the_section_reads_it_instead_of_failing(settings):
+    bb, sources = material()
+    reader = GapsBeforeReading(sources)
+    await ReviewEvidenceCoverage().step(bb, context(reader, settings))
+    assert not coverage_issues(bb.scratch, bb.results)
+    assert NETWORK in reader.reads and FORMULATION in reader.reads
+    # 评审要求只决定抽取重点，不是每一节都要覆盖的清单
+    question = reader.questions[0]
+    assert question.index("当前仅检查章节") < question.index("评审任务（只用于确定本章节")

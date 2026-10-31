@@ -28,7 +28,7 @@ from ..prompting import MEASUREMENT_SCOPE_RULES, SCIENTIFIC_MARKDOWN, PrefixProm
 from ..registry import register
 from ..report.validation import finalize_report
 from ..token_budget import TokenBudgetExceeded
-from .contract import TaskContract, contract_from_scratch, provided_review
+from .contract import TaskContract, contract_from_scratch, open_evidence, provided_review
 from .mindmap_contract import Mindmap, MindmapNode, review_record, structural_issues
 from .paper_abstract import abstract_section_support, checked_abstracts, prepare_abstracts
 from .prose_review import PROSE_REVIEW_KEY, ProseReviewer
@@ -472,6 +472,7 @@ class TemplateWriter:
                         compiled, _ = compile_deck(
                             candidate, bb.results, url_to_idx, corroboration=require_corroboration,
                             image_sources=bb.scratch.get("_slide_image_sources"),
+                            statement_citations=True,
                         )
                         slide_issues, _ = slide_quality_issues(compiled)
                         assessment.hard.extend(issue.message for issue in slide_issues)
@@ -758,6 +759,7 @@ class TemplateWriter:
                 fulltext_corpus=corpus_from_inputs(
                     bb.results, url_to_idx, bb.scratch, ctx.evidence_sources
                 ),
+                open_evidence=open_evidence(contract),
             )
 
         figure = None
@@ -1213,6 +1215,7 @@ class SlideWriter(TemplateWriter):
                     deck, bb.results, {url: i for i, url in enumerate(report.citations, 1)},
                     corroboration=bool(bb.scratch.get("require_corroboration", False)),
                     image_sources=bb.scratch.get("_slide_image_sources"),
+                    statement_citations=True,
                 )
             except ValueError as exc:
                 return {"structured_output_issue": "幻灯片图表不能从证据重建：" + str(exc)}
@@ -1383,6 +1386,7 @@ class MindmapWriter(TemplateWriter):
             fulltext_corpus=corpus_from_inputs(
                 bb.results, url_to_idx, bb.scratch, ctx.evidence_sources
             ),
+            open_evidence=open_evidence(contract),
         )
         from .mindmap_edit import repair_nodes, review_units
         from .prose_review import can_revise

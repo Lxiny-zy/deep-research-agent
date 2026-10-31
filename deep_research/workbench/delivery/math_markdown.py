@@ -139,12 +139,14 @@ def citation_text(text: str, *, mask_escapes: bool = True) -> str:
         if token.map and token.type in {"math_block", "fence", "code_block"}:
             mask(offsets[token.map[0]], offsets[token.map[1]])
 
+    origin = 0
+
     def protect(rule: Callable[[StateInline, bool], bool]) -> Callable[[StateInline, bool], bool]:
         def wrapped(state: StateInline, silent: bool) -> bool:
             start = state.pos
             matched = rule(state, silent)
             if matched and not silent:
-                mask(start, state.pos)
+                mask(origin + start, origin + state.pos)
             return matched
 
         return wrapped
@@ -166,7 +168,12 @@ def citation_text(text: str, *, mask_escapes: bool = True) -> str:
             md.inline.ruler.at(name, protect(rule))
     # parseInline runs core normalization (CRLF -> LF), which would invalidate
     # source coordinates. The inline parser itself keeps the original offsets.
-    md.inline.parse("".join(chars), md, environment, [])
+    # Inline syntax ends at a blank line, as in rendering: an unmatched dollar
+    # must not pair with a later paragraph's dollar and expose its math as text.
+    source = "".join(chars)
+    for segment in re.finditer(r"(?:[^\n]|\n(?![ \t\r]*(?:\n|$)))+", source):
+        origin = segment.start()
+        md.inline.parse(segment[0], md, environment, [])
     for start, end in interval_spans("".join(chars)):
         mask(start, end)
     return "".join(chars)

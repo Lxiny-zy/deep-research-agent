@@ -198,6 +198,7 @@ def check_figure(
     record: Any,
     *,
     corpus: Any = None,
+    open_evidence: bool = False,
 ) -> list[str]:
     structural = structure_issues(figure)
     if structural:
@@ -219,7 +220,9 @@ def check_figure(
     if len(decisions) != len(units) or {d.unit_id for d in decisions} != {u.id for u in units}:
         return ["图示核验决定缺失或重复"]
     by_id = {unit.id: unit for unit in units}
-    checker = SupportReviewer(None, evidence, 0, fulltext_corpus=corpus)
+    checker = SupportReviewer(
+        None, evidence, 0, fulltext_corpus=corpus, open_evidence=open_evidence
+    )
     return [
         d.reason or "图示未通过关系核验"
         for d in decisions

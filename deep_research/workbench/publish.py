@@ -28,7 +28,7 @@ from functools import partial
 from typing import Any, cast
 
 from ..persistence.repository import RunDetail
-from .contract import contract_from_scratch
+from .contract import contract_from_scratch, open_evidence
 from .gate_classification import blocks_formal_export
 from .gates import (
     GateResult,
@@ -390,7 +390,9 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         from ..report.service import requires_corroboration
         from .gates import _body_without_references
         from .slide_content import compile_deck
+        from .tables import STATEMENT_CITATIONS_VERSION, TABLES_KEY
 
+        tables = scratch.get(TABLES_KEY)
         try:
             compiled_deck, projected = compile_deck(
                 extras["deck"],
@@ -398,6 +400,8 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 {url: i for i, url in enumerate(citations, 1)},
                 corroboration=requires_corroboration(detail),
                 image_sources=extras.get("slide_image_sources"),
+                statement_citations=isinstance(tables, dict)
+                and tables.get("statement_citations_version") == STATEMENT_CITATIONS_VERSION,
             )
             extras = {**extras, "deck": compiled_deck}
         except ValueError:
@@ -474,6 +478,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                     scratch,
                     detail.sources,
                 ),
+                open_evidence=open_evidence(contract),
             )
             if issues:
                 input_gates.append(
@@ -736,6 +741,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                 detail.sources,
             ),
             query=detail.query,
+            open_evidence=open_evidence(contract),
         )
         status: Status = "fail" if issues else "pass"
         if review is None and issues and issues[0].startswith("历史导图"):

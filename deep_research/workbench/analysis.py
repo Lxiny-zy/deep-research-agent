@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -1171,14 +1172,18 @@ class DataAnalyst:
             "明确区分所选测量、比较分组和仅作背景的列；未参与检验不表示原始数据未提供。"
         )
         user = f"分析问题：{question or '对数据做探索性分析'}\n\n## 统计台账\n{facts}\n"
-        from .tables import TABLES_KEY, render_specs, review_tables, table_preview
+        from .tables import TABLES_KEY, ledger_paths, render_specs, review_tables, table_preview
 
         system += (
             "表格只能用 evidence-table 代码块写 JSON 规格："
             '{"id":"t1","title":"表 1 描述统计","ledger_path":["describe"]}。'
-            "ledger_path 指向统计台账中的记录数组，代码按记录取值并写中文表头；"
-            "不直接写 Markdown、HTML 或 LaTeX 表格。可用路径包括 describe、tests、correlations，"
-            "以及 tests 下的数字序号、group_summaries、posthoc。"
+            "ledger_path 指向统计台账中的记录，代码按记录取值并写中文表头；"
+            "不直接写 Markdown、HTML 或 LaTeX 表格。"
+            "ledger_path 只能从当前台账的可用路径中逐字选择："
+            + "、".join(
+                json.dumps(path, ensure_ascii=False) for path in ledger_paths(result.snapshot())
+            )
+            + "。"
         )
         table_records: dict[str, dict[str, Any]] = {}
         from .gates import structure_gate

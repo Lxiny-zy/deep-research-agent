@@ -38,6 +38,26 @@ def committed_research_progress(scratch: dict[str, Any]) -> dict[str, str]:
     return {key: value for key, value in raw.items() if digest(key) and digest(value)}
 
 
+# 学术工作流必须命中学术源：只有 openalex / arxiv 提供 DOI、机构、撤稿标记与开放
+# 全文位置，而全文解析、数值校验与「同一 work」独立性判定都依赖这些字段。二者均
+# 无需 API key，因此补齐不引入新的凭据要求。
+_SCHOLARLY_SEARCH_BACKENDS = ("openalex", "arxiv")
+# 面向文献的工作台任务（调研 / 综述 / 汇报 / 知识导图）的证据应首选论文，而不是通用网页。
+_SCHOLARLY_WORKFLOWS = frozenset(
+    {
+        "hsi_review",
+        "research",
+        "research_quick",
+        "lit_review",
+        "lit_review_quick",
+        "slides",
+        "slides_deep",
+        "mindmap",
+        "mindmap_deep",
+    }
+)
+
+
 def attempt_seconds(settings: Settings, workflow: str | None) -> int:
     if settings.max_run_seconds:
         return settings.max_run_seconds
@@ -61,8 +81,42 @@ def attempt_seconds(settings: Settings, workflow: str | None) -> int:
     return settings.run_timeout_profiles.get(tier, default)
 
 
+def with_scholarly_backends(settings: Settings, workflow: str | None) -> Settings:
+    """Ensure a scholarly workflow actually queries the scholarly backends.
+
+    The intent policies declare ``source_strategy="scholarly_multi_source"``, but
+    that string only reaches the Planner prompt; nothing downstream selects a
+    backend from it.  Without this, selecting ``hsi_review`` under the default
+    ``("tavily",)`` configuration silently runs an abstract-only web search and
+    ``fulltext_enabled`` has nothing to act on.
+
+    Backends the operator already configured are preserved and kept first, so an
+    explicit ``DR_SEARCH_BACKENDS`` still decides priority.  Only the missing
+    scholarly backends are appended.  Selected search profiles replace
+    ``search_backends`` at run time, so they are extended the same way; otherwise
+    a deployment with profiles never reaches a scholarly source.
+    """
+    if workflow not in _SCHOLARLY_WORKFLOWS:
+        return settings
+    backends = tuple(settings.search_backends)
+    profiles = tuple(settings.search_profile_ids)
+    return replace(
+        settings,
+        search_backends=backends
+        + tuple(name for name in _SCHOLARLY_SEARCH_BACKENDS if name not in backends),
+        search_profile_ids=profiles
+        + tuple(
+            f"builtin:{name}"
+            for name in _SCHOLARLY_SEARCH_BACKENDS
+            if profiles and f"builtin:{name}" not in profiles
+        ),
+    )
+
+
 def resolved_settings(settings: Settings, workflow: str | None) -> Settings:
-    return replace(settings, max_run_seconds=attempt_seconds(settings, workflow))
+    return with_scholarly_backends(
+        replace(settings, max_run_seconds=attempt_seconds(settings, workflow)), workflow
+    )
 
 
 def start_window(execution: WorkflowRun, seconds: int, total_seconds: int) -> None:
