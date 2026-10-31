@@ -1,10 +1,22 @@
 # 最新上线记录
 
-最新发布：**2026-10-31，`e4d59fd31e87b5b6df5a3f26b770afa118684ab1`**（PDF 中文字体子集化，见 [主计划](IMPROVEMENT_PLAN.md) S24）。
+最新发布：**2026-11-01，`88ff116cfa8cf9cbc2f2961e90d718ca449ebfae`**（第二轮线上真测的修复，见 [主计划](IMPROVEMENT_PLAN.md) S32–S40，含未单独发布的 `8b850d3`）。
+当天先发布 `923d062344309dc09bcb6a633073a2f032106244`（第一轮线上真测的修复 S26–S31）。
+
+- 发布方式：同前，服务器 `git merge --ff-only origin/main`，按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-<sha12>`，仅替换 api 容器；两次切换前均确认无进行中的任务。
+- 当前镜像：`sha256:c01629e8613b31a9205c652a048de47189c1f3803196722a0c138d629779c516`；回滚标签 `deep-research-agent:rollback-923d06234430-20261031t222116z`，`923d062` 发布前打的是 `deep-research-agent:rollback-e4d59fd31e87-20261031t173224z`（`923d062` 的镜像为 `sha256:b5e4d1e8933c551dcbcf010b7ed9a80f33bb039c40486e450ae3ca49ceebaa77`）。
+- 备份：`20261031T173224Z-online-round1-fixes-923d06234430`（数据库导出 12 MB）与 `20261031T222116Z-online-round2-fixes-88ff116cfa8c`（24 MB），`gzip -t` 均通过。
+- 回执：`/www/wwwroot/deep-research-agent-deploy/` 下 `online-round1-fixes-923d06234430-20261031T173224Z` 与 `online-round2-fixes-88ff116cfa8c-20261031T222116Z` 的 `deployed.json`。
+- 数据库：`923d062` 迁移到 **0045**（结果与发现增加写入位置，S26）；`88ff116` 无迁移、无依赖变化。交付格式指纹仍为 68，核验策略版本未变，历史任务不因这两次发布重新渲染。
+- 验证：两次切换后容器均 healthy，本地与公网 `/readyz` 均 200，日志无错误。`88ff116` 发布前本地全量回归 4019 通过、2 跳过（排除 PostgreSQL 用例），ruff、mypy 通过。线上真实模型场景测试的结果记入主计划 S25。
+
+## 历史记录：2026-10-31
+
+2026-10-31 发布 **`e4d59fd31e87b5b6df5a3f26b770afa118684ab1`**（PDF 中文字体子集化，见 [主计划](IMPROVEMENT_PLAN.md) S24）。
 当天先发布 `60039cd5e50d3aed637778f3ad542c96f7f5002c`（交付内容质量规则 S15–S17、S21–S23，以及 10-30 本地完成的 S11–S14：Word 行距、PDF 分段函数间距、幻灯片真实标题、导图分支页）。
 
 - 发布方式：同前，服务器 `git merge --ff-only origin/main`，按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-<sha12>`，仅替换 api 容器；两次切换前均确认无进行中的任务。
-- 当前镜像：`sha256:e89abdc08fceefa0675dc48ea36b0def8010f980d109b4c5486df176b9834be5`；回滚标签 `deep-research-agent:rollback-60039cd5e50d-20261031t104834z`，`60039cd` 发布前打的是 `deep-research-agent:rollback-80236f80f99a-20261031t095209z`。
+- 镜像：`sha256:e89abdc08fceefa0675dc48ea36b0def8010f980d109b4c5486df176b9834be5`；回滚标签 `deep-research-agent:rollback-60039cd5e50d-20261031t104834z`，`60039cd` 发布前打的是 `deep-research-agent:rollback-80236f80f99a-20261031t095209z`。
 - 备份：`20261031T095209Z-delivery-quality-60039cd5e50d` 与 `20261031T104834Z-pdf-font-subset-e4d59fd31e87`（数据库导出约 5.3 MB，`gzip -t` 通过）。
 - 回执：`/www/wwwroot/deep-research-agent-deploy/` 下 `delivery-quality-60039cd5e50d-20261031T095209Z` 与 `pdf-font-subset-e4d59fd31e87-20261031T104834Z` 的 `deployed.json`。
 - 数据库仍为 **0044**，无迁移、无依赖变化。交付格式指纹由 66 升至 68，历史任务下次打开时按新规则重算交付登记并重新渲染。
