@@ -445,6 +445,9 @@ async def test_rejected_writer_draft_is_retained_for_repair_without_repeating_re
     assert "99.99" in extras["unapproved_draft"]
     bundle = build_bundle(detail)
     assert next(g for g in bundle.gates if g.name == "task_content").status == "fail"
+    assert next(g for g in bundle.gates if g.name == "task_content").issues == [
+        "课题调研正文有段落未通过引用或数值复核，已标为待核验，修订通过前不生成正式文件"
+    ]
     assert bundle.status == "fail" and {file.format for file in bundle.files} == {"md"}
     assert bundle.files[0].status == "fail"
     assert checked and not any("已验证素材摘要" in user for user in checked)
@@ -494,6 +497,61 @@ async def test_peer_review_uses_named_paper_not_open_search(settings, monkeypatc
     bundle = build_bundle(detail)
     review = next(g for g in bundle.gates if g.name == "review")
     assert review.status == "pass" and review.metrics["score"] == 7
+
+
+def test_content_failure_says_what_the_delivered_body_kept():
+    from deep_research.workbench.publish import content_failure
+
+    replaced = {"fallback": True}
+    assert "仅保留证据摘录" in content_failure(
+        "课题调研", "## 已验证素材摘要\n\n- a", replaced, None
+    )
+    assert "只保留了通过的段落" in content_failure(
+        "课题调研", "## 分析\n\n通过的段落 [1]。", {"fallback": True, "partial": True}, None
+    )
+    assert "只保留了通过的段落" in content_failure(
+        "论文精读", "正文", None, {"body_replaced": True, "partial": True}
+    )
+    assert "已标为待核验" in content_failure(
+        "课题调研", "本段结论待进一步核验，当前不作确定性判断。", replaced, None
+    )
+
+
+@pytest.mark.asyncio
+async def test_abstract_only_paper_is_recorded_as_incomplete_input(settings, monkeypatch) -> None:
+    from deep_research.workbench import intake
+
+    async def abstract_only(paper, ctx):  # type: ignore[no-untyped-def]
+        return [
+            Source(
+                title="DAUHST",
+                url="https://arxiv.org/abs/2205.10102v3",
+                content="We model the degradation of CASSI and unfold the reconstruction.",
+                scholarly={"work_id": "arxiv:2205.10102", "section": "abstract"},
+            )
+        ]
+
+    monkeypatch.setattr(intake, "fetch_paper", abstract_only)
+    template, execution = _execution("https://arxiv.org/abs/2205.10102", "peerReview", settings)
+    repo = InMemoryRepository()
+    run_id = await repo.create_run("q", execution=execution)
+    agent = DeepResearchAgent(
+        settings,
+        llm=WorkbenchLLM("## 论文摘要\n发现X [1]"),
+        search_tool=FakeSearch(),
+        workflow=template.workflow,
+        repo=repo,
+        run_id=run_id,
+        initial_execution=execution,
+    )
+    await agent.run("https://arxiv.org/abs/2205.10102")
+    detail = await repo.get_run(run_id)
+    assert detail is not None
+    record = detail.orchestration.checkpoint["scratch"]["intake_sources"]
+    assert any("仅有作者摘要" in failure["error"] for failure in record["failures"])
+    assert record["documents"][0]["truncated"] is True
+    coverage = next(g for g in build_bundle(detail).gates if g.name == "review_coverage")
+    assert any("不能只凭摘要" in issue for issue in coverage.issues)
 
 
 @pytest.mark.asyncio

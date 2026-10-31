@@ -124,16 +124,22 @@ class ArxivSearch(SearchTool):
         response.raise_for_status()
         entries = _parse_feed(response.content)
         candidates = [source for source in map(_to_source, entries) if source is not None]
-        if not candidates or self._eprint_fetcher is None:
+        if not candidates:
             return candidates
-        try:
-            # 精读/评审要覆盖全文骨架：摘要、引言、方法、实验、结果、结论一并取回。
-            return await self._eprint_fetcher.sections(
-                candidates[0], "", max_chars=self._fulltext_max_chars * 3, required=True
-            )
-        except (ArxivFulltextError, RuntimeError) as exc:
-            logger.warning("arXiv full-text unavailable for %s: %s", candidates[0].url, exc)
-            return candidates[:1]
+        if self._eprint_fetcher is not None:
+            try:
+                # 精读/评审要覆盖全文骨架：摘要、引言、方法、实验、结果、结论一并取回。
+                return await self._eprint_fetcher.sections(
+                    candidates[0], "", max_chars=self._fulltext_max_chars * 3, required=True
+                )
+            except (ArxivFulltextError, RuntimeError) as exc:
+                logger.warning("arXiv full-text unavailable for %s: %s", candidates[0].url, exc)
+        # 元数据正文就是作者摘要：标明章节，摘要翻译和章节判断才不会把它当正文
+        fallback = candidates[0]
+        if fallback.scholarly is not None:
+            abstract = fallback.scholarly.model_copy(update={"section": "abstract"})
+            fallback = fallback.model_copy(update={"scholarly": abstract})
+        return [fallback]
 
     async def aclose(self) -> None:
         await self._client.aclose()

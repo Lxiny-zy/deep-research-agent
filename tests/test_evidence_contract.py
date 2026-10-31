@@ -147,3 +147,36 @@ async def test_lost_lease_always_propagates():
 
     with pytest.raises(LeaseLostError):
         await SemanticEvidenceVerifier().verify_batch([candidate()], LostLease())
+
+
+class Truncating(Judge):
+    """线上：25 条候选一批核验，思考占满 20000 输出上限，整批被判为不确定。"""
+
+    def __init__(self, largest):
+        super().__init__()
+        self.largest = largest
+
+    async def parse(self, system, user, schema, **kwargs):
+        from deep_research.llm import ModelOutputTruncated
+
+        if sum(line.startswith("Index: ") for line in user.splitlines()) > self.largest:
+            self.requests.append((system, user))
+            raise ModelOutputTruncated(20000)
+        return await super().parse(system, user, schema, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_truncated_verification_batch_is_halved_instead_of_marked_uncertain():
+    findings = [candidate(f"Alpha result {i} was evaluated on the held-out CAVE split.")
+                for i in range(5)]
+    judge = Truncating(largest=2)
+    results = await SemanticEvidenceVerifier().verify_batch(findings, judge)
+    assert all(report_eligible(f) for f in results)
+    assert [f.evidence_quote for f in results] == [f.evidence_quote for f in findings]
+    # 拆分有上限：单条仍被截断时如实判为不确定，不无限重试
+    stubborn = Truncating(largest=0)
+    results = await SemanticEvidenceVerifier().verify_batch(findings[:4], stubborn)
+    assert len(stubborn.requests) == 7
+    assert {f.verification.semantic_reason for f in results} == {
+        "semantic_verifier_failed:ModelOutputTruncated"
+    }

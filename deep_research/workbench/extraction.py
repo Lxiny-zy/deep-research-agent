@@ -26,6 +26,9 @@ from ..prompting import PrefixPrompt, structured_system_prompt
 from .quality import policy_from
 from .quote_repair import quote_options, resolve_quote
 
+# 输出被截断时按来源对半拆批的最多次数（每次多一次模型调用）
+_OUTPUT_SPLITS = 3
+
 
 @dataclass(frozen=True)
 class SourceWindow:
@@ -186,6 +189,7 @@ async def extract_with_context_budget(
     allow_partition: bool,
 ) -> ResearchResult:
     from ..generation_policy import generation_options
+    from ..llm import ModelOutputTruncated
 
     results: list[ResearchResult] = []
     records: list[dict[str, Any]] = []
@@ -218,7 +222,9 @@ async def extract_with_context_budget(
                 }
                 for index, context in enumerate(contexts, 1)
             ]
-        for index, context in enumerate(contexts):
+        index = splits = 0
+        while index < len(contexts):
+            context = contexts[index]
             if partitioned:
                 researcher.tracer.emit(
                     "RESEARCHER",
@@ -226,12 +232,44 @@ async def extract_with_context_budget(
                     f"正在分批抽取来源（{index + 1}/{len(contexts)}）",
                     data={"category": "extraction_context", **records[index]},
                 )
-            extracted = await researcher.llm.parse(
-                system,
-                context.prompt,
-                ExtractedFindingList,
-                **generation_options(researcher.llm, "extraction"),
-            )
+            try:
+                extracted = await researcher.llm.parse(
+                    system,
+                    context.prompt,
+                    ExtractedFindingList,
+                    **generation_options(researcher.llm, "extraction"),
+                )
+            except ModelOutputTruncated:
+                if not allow_partition or len(context.windows) < 2 or splits >= _OUTPUT_SPLITS:
+                    raise
+                # 思考与输出超过渠道上限，与输入容量无关：按来源对半拆开重试
+                splits += 1
+                half = len(context.windows) // 2
+                parts = [context.windows[:half], context.windows[half:]]
+                contexts[index : index + 1] = [
+                    ExtractionContext(part, _window_prompt(part, dynamic)) for part in parts
+                ]
+                split = [
+                    {
+                        "sources": [window.record() for window in part],
+                        "status": "pending",
+                        "split": "output_limit",
+                    }
+                    for part in parts
+                ]
+                if partitioned:
+                    records[index : index + 1] = split
+                else:
+                    partitioned, records = True, split
+                for number, record in enumerate(records, 1):
+                    record["batch"] = number
+                researcher.tracer.emit(
+                    "RESEARCHER",
+                    "info",
+                    "抽取输出超过模型输出上限，已按来源拆成两批重试",
+                    data={"category": "extraction_context", "splits": splits},
+                )
+                continue
             result = await check_extraction(
                 researcher,
                 extracted,
@@ -250,6 +288,7 @@ async def extract_with_context_budget(
                 # A transport/output failure is not a reason to repeat it over
                 # every remaining batch. All untouched sources remain in audit.
                 break
+            index += 1
         if not partitioned and results:
             return results[0]
     except LeaseLostError:

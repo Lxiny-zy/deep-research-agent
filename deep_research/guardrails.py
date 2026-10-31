@@ -495,8 +495,9 @@ class SemanticEvidenceVerifier:
         system: str,
         *,
         raise_errors: bool,
+        splits: int = 2,
     ) -> list[tuple[int, Finding]]:
-        from .llm import verification_generation_options
+        from .llm import ModelOutputTruncated, verification_generation_options
 
         user = self._prompt(group)
         expected_indices = {index for index, _ in group}
@@ -520,6 +521,17 @@ class SemanticEvidenceVerifier:
         except Exception as exc:
             from .execution_policy import resource_busy
 
+            if isinstance(exc, ModelOutputTruncated) and len(group) > 1 and splits > 0:
+                # 一批核验的思考与输出超过渠道上限：对半拆开重试，而不是整批判为不确定
+                half = len(group) // 2
+                return [
+                    *await self._judge(
+                        group[:half], llm, system, raise_errors=raise_errors, splits=splits - 1
+                    ),
+                    *await self._judge(
+                        group[half:], llm, system, raise_errors=raise_errors, splits=splits - 1
+                    ),
+                ]
             if raise_errors or resource_busy(exc) is not None:
                 raise
             reason = f"semantic_verifier_failed:{type(exc).__name__}"

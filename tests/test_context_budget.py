@@ -162,3 +162,20 @@ async def test_insufficient_fixed_prompt_space_is_distinct_from_output_truncatio
 
 def test_empty_partition_metadata_preserves_legacy_audit_serialization():
     assert "context_batches" not in ExtractionAudit(question="q").model_dump()
+
+
+async def test_truncated_multi_source_extraction_is_split_by_source_and_retried(settings):
+    # 线上：推理模型即使设为低强度，单批思考仍会占满 20000 输出上限
+    sources = [
+        Source(url=f"https://example.org/short-{index}", title=f"短文 {index}",
+               content=f"第{index}种方法在仿真数据上取得了更高的重建质量。")
+        for index in range(3)
+    ]
+    llm = Extractor(fail_at=1)
+    result = await Researcher(llm, Sources(sources), Tracer(), settings).run("方法效果如何？")
+    audit = result.extraction_audit
+    assert audit is not None and len(llm.prompts) == 3
+    assert [batch["status"] for batch in audit.context_batches] == ["checked", "checked"]
+    assert all(batch["split"] == "output_limit" for batch in audit.context_batches)
+    assert {finding.source_url for finding in result.findings} == {s.url for s in sources}
+    assert "extraction_call_failed:ModelOutputTruncated" not in audit.issues

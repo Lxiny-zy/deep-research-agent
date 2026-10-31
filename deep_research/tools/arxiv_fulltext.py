@@ -6,6 +6,7 @@ which preserves tables and numeric values for downstream evidence extraction.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import re
 import tarfile
@@ -24,6 +25,18 @@ from ..security import provider_http_client
 # e-prints between these hosts, so hops are followed manually and only here.
 _ARXIV_HOSTS = frozenset({"export.arxiv.org", "arxiv.org"})
 _MAX_REDIRECTS = 3
+# arXiv throttles with 429 and long e-prints (tens of MB) are sometimes cut off
+# midway; a few bounded retries resume from the bytes already received.
+_FETCH_ATTEMPTS = 3
+_MAX_RETRY_WAIT = 20.0
+_RETRY_STATUSES = frozenset({429, 502, 503, 504})
+_CONTENT_RANGE = re.compile(r"bytes\s+(\d+)-\d+/(?:\d+|\*)")
+
+
+class _RetryableFetch(Exception):
+    def __init__(self, reason: str, wait: float | None = None) -> None:
+        super().__init__(reason)
+        self.wait = wait
 
 
 class ArxivFulltextError(ValueError):
@@ -496,12 +509,14 @@ class ArxivEprintFetcher:
         max_bytes: int = 32 * 1024 * 1024,
         limits: ParseLimits | None = None,
         client: httpx.AsyncClient | None = None,
+        retry_delay: float = 2.0,
     ) -> None:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         if max_bytes < 1:
             raise ValueError("max_bytes must be positive")
         self._limits = limits or ParseLimits(max_input_bytes=max_bytes)
+        self._retry_delay = retry_delay
         # provider_http_client pins every connection to a public address, so a
         # DNS answer for arxiv.org cannot rebind the download onto a private host.
         self._client = client or provider_http_client(timeout=timeout)
@@ -509,30 +524,58 @@ class ArxivEprintFetcher:
 
     async def fetch(self, work_id: str, version: str = "") -> bytes:
         url = arxiv_eprint_url(work_id, version)
+        received = bytearray()
+        for attempt in range(_FETCH_ATTEMPTS):
+            try:
+                return await self._download(url, received)
+            except _RetryableFetch as retry:
+                if attempt == _FETCH_ATTEMPTS - 1:
+                    raise ArxivFulltextFetchError(
+                        f"arXiv e-print request failed after {_FETCH_ATTEMPTS} attempts: {retry}"
+                    ) from retry
+                wait = retry.wait if retry.wait is not None else self._retry_delay * (attempt + 1)
+                await asyncio.sleep(min(wait, _MAX_RETRY_WAIT))
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def _download(self, url: str, received: bytearray) -> bytes:
         try:
             for _ in range(_MAX_REDIRECTS + 1):
-                async with self._client.stream("GET", url) as response:
+                headers = {"Range": f"bytes={len(received)}-"} if received else None
+                async with self._client.stream("GET", url, headers=headers) as response:
                     if response.is_redirect:
                         url = _arxiv_redirect_target(url, response.headers.get("location", ""))
                         continue
+                    if response.status_code in _RETRY_STATUSES:
+                        raise _RetryableFetch(
+                            f"HTTP {response.status_code}", _retry_after(response)
+                        )
                     response.raise_for_status()
-                    return await self._read_bounded(response)
+                    if received:
+                        resumed = _CONTENT_RANGE.match(response.headers.get("content-range", ""))
+                        if response.status_code != 206 or resumed is None or int(
+                            resumed[1]
+                        ) != len(received):
+                            # The server ignored or misplaced the range: start over.
+                            received.clear()
+                            if response.status_code == 206:
+                                raise _RetryableFetch("unexpected content range")
+                    await self._read_bounded(response, received)
+                    return bytes(received)
+        except httpx.TransportError as exc:
+            raise _RetryableFetch(str(exc)) from exc
         except (httpx.HTTPError, OSError) as exc:
             raise ArxivFulltextFetchError(f"arXiv e-print request failed: {exc}") from exc
         raise ArxivFulltextFetchError("arXiv e-print redirected too many times")
 
-    async def _read_bounded(self, response: httpx.Response) -> bytes:
+    async def _read_bounded(self, response: httpx.Response, received: bytearray) -> None:
         content_length = response.headers.get("content-length", "").strip()
-        if content_length.isdigit() and int(content_length) > self._limits.max_input_bytes:
+        limit = self._limits.max_input_bytes
+        if content_length.isdigit() and len(received) + int(content_length) > limit:
             raise ArxivFulltextFetchError("arXiv e-print exceeds input size limit")
-        chunks: list[bytes] = []
-        total = 0
         async for chunk in response.aiter_bytes():
-            total += len(chunk)
-            if total > self._limits.max_input_bytes:
+            received.extend(chunk)
+            if len(received) > limit:
                 raise ArxivFulltextFetchError("arXiv e-print exceeds input size limit")
-            chunks.append(chunk)
-        return b"".join(chunks)
 
     async def sections(
         self,
@@ -623,6 +666,11 @@ def _arxiv_redirect_target(current: str, location: str) -> str:
     if parts.scheme != "https" or (parts.hostname or "").lower() not in _ARXIV_HOSTS:
         raise ArxivFulltextFetchError("arXiv e-print redirected off arXiv")
     return target
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    value = response.headers.get("retry-after", "").strip()
+    return float(value) if value.isdigit() else None
 
 
 def _section_source(source: Source, section: LatexSection) -> Source:

@@ -141,7 +141,8 @@ async def check_methods(
             raise
         except Exception as exc:
             entry.update(
-                status="fail", missing_topics=[f"章节覆盖核对未完成：{type(exc).__name__}"],
+                status="fail",
+                missing_topics=[f"章节覆盖核对未完成：{type(exc).__name__}: {exc}"[:300]],
             )
             return None
         sufficient = bool(findings and plan.sufficient and plan.findings)

@@ -403,3 +403,114 @@ async def test_arxiv_search_expands_sources_with_an_injected_fetcher() -> None:
     finally:
         await tool.aclose()
     assert sources and sources[0].url.endswith("?dr_section=0")
+
+
+class _CutOff(httpx.AsyncByteStream):
+    """线上实测：17 MB 的 e-print 读到 2 MB 时对端断开。"""
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+    async def __aiter__(self):
+        yield self.data
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete body")
+
+
+@pytest.mark.asyncio
+async def test_fetcher_waits_out_throttling_and_resumes_a_cut_off_download() -> None:
+    raw = bytes(range(256)) * 20  # fetch 只搬运字节；解析另有测试
+    ranges: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        ranges.append(request.headers.get("range"))
+        if len(ranges) == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        if len(ranges) == 2:
+            return httpx.Response(200, stream=_CutOff(raw[:1000]))
+        total = len(raw)
+        return httpx.Response(
+            206, headers={"Content-Range": f"bytes 1000-{total - 1}/{total}"}, content=raw[1000:]
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        fetched = await ArxivEprintFetcher(client=client, retry_delay=0).fetch("arxiv:2205.10102")
+    finally:
+        await client.aclose()
+    assert fetched == raw
+    assert ranges == [None, None, "bytes=1000-"]
+
+
+@pytest.mark.asyncio
+async def test_fetcher_starts_over_when_the_server_ignores_the_range() -> None:
+    raw = bytes(range(256)) * 20
+    ranges: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        ranges.append(request.headers.get("range"))
+        if len(ranges) == 1:
+            return httpx.Response(200, stream=_CutOff(raw[:1000]))
+        return httpx.Response(200, content=raw)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        assert await ArxivEprintFetcher(client=client, retry_delay=0).fetch("arxiv:1") == raw
+    finally:
+        await client.aclose()
+    assert ranges == [None, "bytes=1000-"]
+
+
+@pytest.mark.asyncio
+async def test_fetcher_retries_are_bounded_and_keep_the_size_limit() -> None:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(503)))
+    try:
+        with pytest.raises(ArxivFulltextFetchError, match="after 3 attempts"):
+            await ArxivEprintFetcher(client=client, retry_delay=0).fetch("arxiv:2205.10102")
+    finally:
+        await client.aclose()
+
+    def resumed(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("range") is None:
+            return httpx.Response(200, stream=_CutOff(b"12345"))
+        return httpx.Response(206, headers={"Content-Range": "bytes 5-9/10"}, content=b"67890")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(resumed))
+    try:
+        with pytest.raises(ArxivFulltextFetchError, match="exceeds input size limit"):
+            await ArxivEprintFetcher(client=client, max_bytes=8, retry_delay=0).fetch("arxiv:1")
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_lookup_marks_the_abstract_when_the_full_text_cannot_be_fetched() -> None:
+    from deep_research.workbench.paper_abstract import abstract_span
+
+    feed = """<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2205.10102v3</id>
+    <title>DAUHST</title><summary>We model the degradation of CASSI.</summary>
+    <published>2022-05-20T00:00:00Z</published>
+    <author><name>Author</name></author>
+  </entry>
+</feed>"""
+
+    class Unavailable:
+        async def sections(self, source, query, *, max_chars=12_000, required=()):
+            raise ArxivFulltextFetchError("arXiv e-print request failed after 3 attempts: HTTP 429")
+
+        async def aclose(self):
+            return None
+
+    tool = ArxivSearch(eprint_fetcher=Unavailable())
+    tool._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text=feed))
+    )
+    try:
+        sources = await tool.lookup("2205.10102")
+    finally:
+        await tool.aclose()
+    assert len(sources) == 1 and sources[0].scholarly.section == "abstract"
+    # 只有摘要时也要能按摘要核验译文，而不是报「缺少完整摘要原文」
+    assert abstract_span(sources[0]) == (0, len("We model the degradation of CASSI."))

@@ -243,6 +243,21 @@ _DELIVERY_RUNTIME_KEYS = frozenset(
 )
 
 
+def content_failure(title: str, markdown: str, validation: Any, prose: Any) -> str:
+    """说清交付稿实际保留了什么：整篇换成素材摘要，与只删去或标记个别段落，是两回事。"""
+    if "## 已验证素材摘要" in markdown:
+        outcome = "目前仅保留证据摘录"
+    elif any(
+        isinstance(record, dict) and record.get("partial") is True for record in (validation, prose)
+    ):
+        outcome = "有段落未通过引用或数值复核，交付稿只保留了通过的段落"
+    elif "本段结论待进一步核验" in markdown:
+        outcome = "有段落未通过引用或数值复核，已标为待核验"
+    else:
+        outcome = "未通过引用或数值复核"
+    return f"{title}正文{outcome}，修订通过前不生成正式文件"
+
+
 def delivery_fingerprint(detail: RunDetail) -> str:
     """Every persisted input consumed by build_bundle, not just report Markdown."""
     from .mindmap_contract import MINDMAP_POLICY_VERSION
@@ -678,7 +693,7 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             GateResult(
                 "task_content",
                 "fail",
-                [f"{template.title}正文未通过检查，目前仅保留证据摘录，尚未完成所要求的交付"],
+                [content_failure(template.title, markdown, validation, prose)],
             )
         )
     if provided_material(contract):

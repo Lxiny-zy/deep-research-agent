@@ -234,6 +234,16 @@ class PaperIntake:
                     continue
                 if not sources:
                     failures.append({"url": paper.url, "error": "未取得任何可用正文"})
+                if paper.kind == "arxiv" and sources and all(
+                    source.scholarly is not None and source.scholarly.section == "abstract"
+                    for source in sources
+                ):
+                    # 只取得作者摘要：照常使用，但不能当作已完整读过这篇论文
+                    document["truncated"] = True
+                    failures.append({
+                        "url": paper.url,
+                        "error": "未取得 arXiv 全文，仅有作者摘要；方法与实验等章节无法核查",
+                    })
                 collected.extend(sources)
                 document["source_urls"] = [source.url for source in sources]
         elif attachments := attachments_from_scratch(bb.scratch):
