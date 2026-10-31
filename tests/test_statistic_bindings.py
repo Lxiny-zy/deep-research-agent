@@ -75,6 +75,102 @@ def test_method_plan_naming_a_confidence_level_is_not_an_unbound_statistic():
     assert statistic_scope_issues("报告统计量、p 值与 3.7 的差值。", LEDGER)
 
 
+PAIRED = {
+    "rows": 12,
+    "describe": [
+        {"variable": "baseline_psnr", "n": 12, "mean": 34.1933, "std": 1.008},
+        {"variable": "proposed_psnr", "n": 12, "mean": 34.9583, "std": 0.9727},
+    ],
+    "composition": [{"column": "scene", "n": 12, "missing": 0, "distinct": 12, "levels": []}],
+    "tests": [
+        {
+            "paired": True,
+            "left": "baseline_psnr",
+            "right": "proposed_psnr",
+            "variable": "proposed_psnr − baseline_psnr",
+            "group": "同一行配对",
+            "method": "配对 t 检验",
+            "statistic": 17.4981,
+            "p_value": 2.2300848e-09,
+            "n_pairs": 12,
+            "excluded_pairs": 0,
+            "mean_difference": 0.765,
+            "difference_std": 0.1514,
+            "df": 11,
+            "ci_low": 0.6688,
+            "ci_high": 0.8612,
+            "assumptions": [
+                {
+                    "kind": "normality",
+                    "n": 12,
+                    "variable": "proposed_psnr − baseline_psnr",
+                    "group_column": "同一行配对",
+                    "method": "Shapiro-Wilk",
+                    "statistic": 0.9234,
+                    "p_value": 0.31516107,
+                    "status": "not_rejected",
+                }
+            ],
+        }
+    ],
+    "correlations": [
+        {
+            "a": "baseline_psnr",
+            "b": "proposed_psnr",
+            "r": 0.9889,
+            "p_value": 1.2801014e-09,
+            "n": 12,
+            "method": "Pearson",
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # 线上数据分析 53629b7c 的原句：数字全对，曾被判为无法绑定
+        "scene 是观测对象标识列，仅作样本背景，其计数为有效 n=12、缺失=0、不同取值数=12；"
+        "测量列 baseline_psnr 与 proposed_psnr 各自的有效样本量均为 n=12。",
+        "配对检验的完整配对数=12，排除不完整配对=0，配对差值方向为 proposed_psnr − baseline_psnr。",
+        "这里的平均差与差值标准差描述的是 12 个配对差的中心位置与离散程度。",
+        "平均差与差值标准差见表 2。",
+        "baseline_psnr 与 proposed_psnr 的均值分别为 34.1933 与 34.9583。",
+        "proposed_psnr 与 baseline_psnr 的均值分别为 34.9583 与 34.1933。",
+        "baseline_psnr 与 proposed_psnr 的均值分别为 34.1933 和 34.9583。"
+        "相关性 r=0.9889（p=1.2801014e-09，n=12）表明两列在同一场景上取值高度同向。",
+        "相关性 r=0.9889（p=1.2801014e-09，n=12）。",
+        "局限：配对差值的 Shapiro-Wilk 检验（统计量=0.9234，p=0.31516107，n=12）未拒绝分布前提。",
+        "配对 t 检验 p=2.2300848e-09，相关性 r=0.9889，p=1.2801014e-09。",
+    ],
+)
+def test_correct_paired_report_sentences_bind_to_their_records(body):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert statistic_scope_issues(body, PAIRED) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "baseline_psnr 与 proposed_psnr 的均值分别为 34.9583 与 34.1933。",
+        "proposed_psnr 与 baseline_psnr 的均值分别为 34.1933 与 34.9583。",
+        "baseline_psnr 与 proposed_psnr 的均值分别为 34.1933 与 34.9。",
+        "scene 是观测对象标识列，其计数为有效 n=13。",
+        "配对检验的完整配对数=13。",
+        "配对差值的 Shapiro-Wilk 检验（统计量=0.95）。",
+        "相关性 r=0.9。",
+        "配对 t 检验 p=2.2300848e-09，相关性 r=0.9889，p=2.2300848e-09。",
+        "有效样本量共 13 个。",
+        "height 的相关系数 r=0.9889。",
+    ],
+)
+def test_wrong_values_stay_rejected_when_the_scope_is_inferred(body):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert statistic_scope_issues(body, PAIRED)
+
+
 async def test_model_approval_and_cached_pass_cannot_hide_swapped_group_means():
     from deep_research.workbench.prose_review import reviewer_for_report
     from tests.fakes import FakeLLM

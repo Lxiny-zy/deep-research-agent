@@ -351,6 +351,131 @@ async def test_analysis_table_uses_exact_ledger_records_and_invalidates_changes(
 
 
 @pytest.mark.asyncio
+async def test_ledger_table_reads_as_a_report_and_old_records_keep_their_format():
+    from deep_research.workbench.analysis import analyse
+    from deep_research.workbench.prose_review import reviewer_for_report
+    from deep_research.workbench.support import SupportDecision
+    from deep_research.workbench.tables import render_specs, review_tables, table_issues
+    from tests.test_analysis_pairing import paired_scope
+
+    result = analyse(
+        "before_mm,after_mm\n10,12\n20,21\n30,34\n40,47", scope=paired_scope().model_dump()
+    )
+    ledger = result.snapshot()
+    raw = (
+        '```evidence-table\n{"id":"t1","title":"表 1 配对检验","ledger_path":["tests"]}\n```\n\n'
+        '```evidence-table\n{"id":"t2","title":"表 2 相关","ledger_path":["correlations"]}\n```'
+    )
+    body, record = render_specs(raw, [], {}, ledger=ledger, ledger_columns=True)
+    header = next(line for line in body.splitlines() if "完整配对数" in line)
+    # 内部字段、嵌套 JSON、与行名重复的字段和空列都不进表
+    assert "assumptions" not in body and '"kind"' not in body and "paired" not in body
+    assert "| 变量 |" not in header and "说明" not in header and "| 分组依据 |" in header
+    assert "p 值" in header and "p_value" not in body and "| 否 |" in body
+    assert "| after_mm − before_mm |" in body and "| before_mm 与 after_mm |" in body
+    assert "| Pearson | 4 |" in body and "| 未校正 |" in body
+    assert "tests" not in body and "（显著性检验）" in body and "（相关性）" in body
+    assert record["ledger_columns_version"] == 1
+    assert not await review_tables(body, record, [], {}, TableJudge(), 50000, ledger=ledger)
+    # 表里每个数字都能在冻结台账里找到，逐行依据检查不会把内部字段判成无依据
+    checker = reviewer_for_report(
+        TableJudge(),
+        "比较",
+        [],
+        [],
+        {"workbench": {"template": "dataAnalysis"}, "analysis": ledger},
+        50000,
+    )
+    units, _ = checker.units(body)
+    rows = [unit for unit in units if unit.text.startswith("| ")]
+    assert len(rows) == 4
+    for unit in rows:
+        decision = SupportDecision(
+            unit_id=unit.id,
+            verdict="supported",
+            evidence_ids=[checker.evidence[0]["id"]],
+            reason="ok",
+        )
+        assert checker.reviewer.alignment_issue(unit, decision) is None
+
+    legacy, old = render_specs(raw, [], {}, ledger=ledger)
+    assert "p_value" in legacy and "ledger_columns_version" not in old
+    assert not table_issues(legacy, [], {}, old, ledger=ledger, require_review=False)
+    assert table_issues(body, [], {}, old, ledger=ledger, require_review=False)
+    record["ledger_columns_version"] = 2
+    assert table_issues(body, [], {}, record, ledger=ledger, require_review=False)
+
+
+def test_ledger_table_covers_grouped_tests_and_pairwise_comparisons():
+    from deep_research.workbench.tables import render_specs
+
+    ledger = {
+        "tests": [
+            {
+                "variable": "mass",
+                "group": "species",
+                "method": "Welch ANOVA",
+                "statistic": "NA",
+                "p_value": "NA",
+                "significant": None,
+                "groups": 3,
+                "reason": "样本无有效变异",
+                "assumptions": [],
+                "posthoc": [
+                    {
+                        "left_group": "A",
+                        "right_group": "B",
+                        "method": "Games-Howell",
+                        "n_left": 3,
+                        "n_right": 4,
+                        "mean_difference": 1.5,
+                        "p_value": 0.03,
+                        "significant": True,
+                        "ci_low": 0.2,
+                        "ci_high": 2.8,
+                        "confidence_level": 0.95,
+                        "adjustment": "familywise",
+                        "direction": "right-left",
+                    }
+                ],
+                "group_summaries": [{"label": "A", "n": 3, "mean": 1.0}],
+            }
+        ],
+        "correlations": [
+            {
+                "a": "x",
+                "b": "y",
+                "r": 0.5,
+                "p_value": 0.1,
+                "n": 9,
+                "method": "Pearson",
+                "group_column": "species",
+                "group": "A",
+            }
+        ],
+    }
+    spec = '```evidence-table\n{"id":"t%d","title":"表 %d","ledger_path":%s}\n```\n\n'
+    raw = "".join(
+        spec % (index, index, path)
+        for index, path in enumerate(
+            [
+                '["tests"]',
+                '["tests",0,"posthoc"]',
+                '["tests",0,"group_summaries"]',
+                '["correlations"]',
+            ],
+            1,
+        )
+    )
+    body, record = render_specs(raw, [], {}, ledger=ledger, ledger_columns=True)
+    assert record["errors"] == []
+    assert "| 样本无有效变异 |" in body and "NA" not in body and "groups" not in body
+    assert "| A 与 B | A | B | Games-Howell | 3 | 4 | 0.03 | 是 | 1.5 | 0.2 | 2.8 |" in body
+    assert "族错误率校正" in body and "（事后比较）" in body and "（分组统计）" in body
+    assert "| x 与 y（species=A） |" in body and "| 分组依据 | 方法 | 样本量 |" not in body
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("revisions", [0, 1])
 async def test_writer_rebuilds_raw_table_and_delivery_blocks_unfixed_table(settings, revisions):
     from dataclasses import replace

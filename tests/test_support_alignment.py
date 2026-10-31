@@ -201,6 +201,33 @@ async def _judged(text, evidence, ids, *, kind="claim"):
     return (await reviewer.review([unit]))[0]
 
 
+async def test_excerpt_extracted_for_an_entity_anchors_that_name():
+    # 线上课题调研：论文原文写 "The network ..."，发现的实体才是 DAUNet
+    quote = "The network introduces an adaptive parameter estimation strategy."
+    own = {**item("a", quote), "entity": "DAUNet"}
+    other = {**item("a", quote), "entity": "FlowNet"}
+    text = "DAUNet 引入自适应参数估计策略 [1]。"
+    assert (await _judged(text, [own], ["a"])).verdict == "supported"
+    assert (await _judged(text, [other], ["a"])).verdict == "unsupported"
+    assert (await _judged(text, [item("a", quote)], ["a"])).verdict == "unsupported"
+    # 实体只锚定专名：摘录没有的数值仍被拦下
+    assert (await _judged("DAUNet 提升 3 dB [1]。", [own], ["a"])).verdict == "unsupported"
+    # 摘录点名别的方法时，实体一致的发现才算数
+    named = {**item("a", "Beta introduces parameter estimation."), "entity": "Beta"}
+    assert (await _judged(text, [named], ["a"])).verdict == "unsupported"
+
+
+async def test_table_cell_row_label_and_value_are_one_statement():
+    from deep_research.workbench.tables import RenderedTable, TableBlock, _unit
+
+    rendered = RenderedTable(TableBlock(id="t1", title="表 1"))
+    _unit(rendered, "Ours", "PSNR", "37.92 dB", ["a"], [1])
+    unit = rendered.units[0]
+    quote = "The proposed network achieves 37.92 dB PSNR."
+    reviewer = SupportReviewer(SelectedJudge(["a"]), [item("a", quote)], 50000)
+    assert (await reviewer.review([unit]))[0].verdict == "supported"
+
+
 async def test_excerpt_for_an_unnamed_sentence_need_not_carry_a_sibling_sentences_name():
     # 线上结论段：同一来源的两条摘录各支持一句，不应要求两条都含第一句的专名
     evidence = [

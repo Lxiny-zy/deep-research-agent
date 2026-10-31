@@ -74,6 +74,10 @@ _INTERVAL = re.compile(
 _CONFIDENCE_LEVEL = re.compile(
     r"\s*%\s*(?:的\s*)?(?:均值差|平均差|差值|均值)?\s*(?:置信|CI\b|confidence)", re.I
 )
+# 指标词后面的「12 个配对差」「表 2」不是该指标的取值；计数类指标除外，那里的数字就是取值
+_COUNT_NOUN = re.compile(r"\s*(?:个|对|组|行|列|项|次|名|例|条|份)")
+_COUNT_METRICS = {"n", "n_total", "n_pairs", "excluded_pairs", "df", "df_between", "df_within"}
+_NUMBERED_LABEL = re.compile(r"(?:表|图|第|Table|Figure|Fig\.?)\s*$", re.I)
 _NONASSERTIVE = re.compile(
     r"是否|假设|如果|不是|并非|不等于|不能|不得|[？?]|\bif\b",
     re.I,
@@ -243,18 +247,27 @@ def _contains(text: str, value: str) -> bool:
     )
 
 
+def _position(text: str, value: str) -> int | None:
+    if not value:
+        return None
+    found = re.search(rf"(?<![A-Za-z0-9_]){re.escape(value)}(?![A-Za-z0-9_])", text, re.I)
+    return found.start() if found else None
+
+
 def _variables(text: str, names: list[str]) -> list[str]:
-    exact = [name for name in names if _contains(text, name)]
-    if exact:
-        return exact
-    matched = []
-    for name in names:
-        leaf = name.rsplit(".", 1)[-1]
-        stem = re.sub(r"_(?:mm|cm|kg|g|mg|s|ms)$", "", leaf, flags=re.I)
-        aliases = [leaf, stem, stem.replace("_", " "), *_VARIABLE_ALIASES.get(stem.casefold(), [])]
-        if any(_contains(text, alias) for alias in aliases):
-            matched.append(name)
-    return matched
+    """按文中提及顺序返回，「A 与 B 分别为 x、y」靠这个顺序逐一对应。"""
+    located = [(at, name) for name in names if (at := _position(text, name)) is not None]
+    if not located:
+        for name in names:
+            leaf = name.rsplit(".", 1)[-1]
+            stem = re.sub(r"_(?:mm|cm|kg|g|mg|s|ms)$", "", leaf, flags=re.I)
+            aliases = [
+                leaf, stem, stem.replace("_", " "), *_VARIABLE_ALIASES.get(stem.casefold(), [])
+            ]
+            hits = [at for alias in aliases if (at := _position(text, alias)) is not None]
+            if hits:
+                located.append((min(hits), name))
+    return [name for _, name in sorted(located, key=lambda item: item[0])]
 
 
 def _group_mentions(text: str, labels: list[str]) -> list[str]:
@@ -286,7 +299,9 @@ def _can_inherit_variable(
         )
     remainder = _METRIC_PATTERN.sub(" ", remainder)
     remainder = re.sub(
-        r"分组|各组|每组|组|总体|整体|有效|样本效应量|稳健性复核|差值方向|方差分析|的|在|与|和|"
+        r"分组|各组|每组|组|总体|整体|有效|样本效应量|稳健性复核|差值方向|方差分析|"
+        r"配对差值|配对差异|配对检验|配对|相关性|相关|显著性|检验|的|在|与|和|"
+        r"局限|小结|结论|结果|前提检查|前提|描述统计|描述性统计|说明|备注|"
         r"\b(?:for|in|the|of|group|each|all|overall|total|pooled|combined)\b",
         " ",
         remainder,
@@ -366,6 +381,14 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
     group_columns = list(
         dict.fromkeys(row["group_column"] for row in facts if "group_column" in row)
     )
+    composition_columns = [row["column"] for row in ledger.get("composition", [])]
+    paired_tests = [
+        [test["left"], test["right"]] for test in ledger.get("tests", []) if test.get("paired")
+    ]
+    correlations = ledger.get("correlations", [])
+    only_correlation = (
+        [correlations[0]["a"], correlations[0]["b"]] if len(correlations) == 1 else []
+    )
     claims: list[dict[str, Any]] = []
     issues: list[str] = []
     current_variables: list[str] = []
@@ -424,8 +447,7 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
             current_group_column, section = heading["group_column"], heading["section"]
             continue
         if section == "composition":
-            columns = [row["column"] for row in ledger.get("composition", [])]
-            named = [column for column in columns if _contains(line, column)]
+            named = [column for column in composition_columns if _contains(line, column)]
             if named:
                 composition_column = named[0]
                 current_groups = []
@@ -436,6 +458,11 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
             line_variables = _variables(line, variables)
             if line_variables:
                 current_variables = line_variables
+            elif "配对" in line and len(paired_tests) == 1:
+                current_variables = list(paired_tests[0])
+        # 背景列不是测量变量：只在这一行讲它的时候，n 取它自己的构成计数
+        background_column = ""
+        following_correlation = False
         for clause in _clauses(line):
             if _NONASSERTIVE.search(clause):
                 continue
@@ -445,10 +472,18 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
             explicit_group_columns = [
                 column for column in group_columns if _contains(clause, column)
             ]
+            named_background = [
+                column for column in composition_columns if _contains(clause, column)
+            ]
+            if named_background and not explicit_variables:
+                background_column = named_background[0]
             if explicit_variables:
+                background_column = ""
                 current_variables = explicit_variables
                 if not group_names:
                     current_groups = []
+            if explicit_methods:
+                following_correlation = False
             if explicit_group_columns:
                 current_group_column = explicit_group_columns[-1]
             if group_names:
@@ -506,11 +541,15 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                     current_groups = local_groups
                 claim_each = each and not local_groups
                 selected_variables = current_variables
-                if not local_variables and not _can_inherit_variable(
+                inheritable = bool(local_variables) or _can_inherit_variable(
                     prefix, labels, group_columns, methods
-                ):
+                )
+                if not inheritable:
                     selected_variables = []
                     current_variables = []
+                elif metric == "r" and not selected_variables:
+                    # 全表只有一条相关记录时，「相关性 r=…」不会指向别的变量对
+                    selected_variables = current_variables = list(only_correlation)
                 if not metric.startswith("ci_"):
                     previous_end = match.end()
                 scope = "variable"
@@ -537,11 +576,17 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 if metric == "r" or (
                     len(selected_variables) == 2
                     and metric in {"n", "p_value"}
-                    and (not current_method or current_method == "Pearson")
+                    and (
+                        following_correlation or not current_method or current_method == "Pearson"
+                    )
                 ):
                     scope = "correlation"
                 elif scope == "variable" and (current_groups or claim_each):
                     scope = "group"
+                # 「r=0.98（p=…，n=12）」括号里的 p 与 n 仍属于这条相关，直到换了方法或指标
+                following_correlation = metric == "r" or (
+                    following_correlation and metric in {"n", "p_value"}
+                )
                 if (
                     not local_groups
                     and not claim_each
@@ -553,6 +598,9 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 if section == "composition" and metric == "n" and composition_column:
                     scope = "composition_group" if current_groups else "composition"
                     selected_variables = [composition_column]
+                elif metric == "n" and background_column:
+                    scope = "composition_group" if current_groups else "composition"
+                    selected_variables = [background_column]
                 if metric == "n" and re.match(r"\s*行", clause[match.end() :]):
                     scope, selected_variables = "dataset", [""]
                 candidates = by_statistic.get((scope, metric), [])
@@ -637,15 +685,24 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                     if not metric.startswith("ci_")
                     else False
                 )
-                if "分别" in clause and len(current_groups) > 1:
-                    tail = re.match(r"(?:\s*[、,]\s*" + _NUMBER + ")+", clause[match.end() :])
+                each_group = len(current_groups) > 1
+                each_variable = not each_group and len(selected_variables) > 1
+                if "分别" in clause and (each_group or each_variable):
+                    tail = re.match(
+                        r"(?:\s*(?:[、,与和及]|以及)\s*" + _NUMBER + ")+", clause[match.end() :]
+                    )
                     if tail:
                         values.extend(re.findall(_NUMBER, tail[0]))
-                groups = current_groups if len(values) > 1 else [None]
                 for index, value in enumerate(values):
                     chosen = candidates
-                    if len(values) > 1 and index < len(groups):
-                        chosen = [row for row in chosen if row.get("group") == groups[index]]
+                    if len(values) > 1 and each_group and index < len(current_groups):
+                        chosen = [
+                            row for row in chosen if row.get("group") == current_groups[index]
+                        ]
+                    elif len(values) > 1 and each_variable and index < len(selected_variables):
+                        chosen = [
+                            row for row in chosen if row["variable"] == selected_variables[index]
+                        ]
                     claim = {
                         "line": line_number,
                         "statistic": metric,
@@ -686,6 +743,10 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                         item
                         for item in re.finditer(_NUMBER, rest)
                         if not _CONFIDENCE_LEVEL.match(rest, item.end())
+                        and not _NUMBERED_LABEL.search(rest[: item.start()])
+                        and not (
+                            metric not in _COUNT_METRICS and _COUNT_NOUN.match(rest, item.end())
+                        )
                     ),
                     None,
                 )

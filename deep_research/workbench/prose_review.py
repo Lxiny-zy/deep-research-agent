@@ -304,6 +304,11 @@ class ProseReviewer:
             fulltext_corpus=fulltext_corpus,
             check_fulltext=statistics is None,
             check_formulas=statistics is None,
+            open_evidence=(
+                self.contract is not None
+                and self.contract.template in {"autoResearch", "litReview", "slides"}
+                and self.contract.strategy != "none"
+            ),
         )
         self.records: dict[str, dict[str, Any]] = {}
         self.peer = None
@@ -456,11 +461,8 @@ class ProseReviewer:
 
     def signature(self, markdown: str) -> str:
         from .analysis_review import STATISTICS_POLICY_VERSION
-        from .fulltext_review import requires_fulltext
 
-        uses_fulltext = self.reviewer.check_fulltext and any(
-            requires_fulltext(unit) for unit in self.units(markdown)[0]
-        )
+        uses_fulltext = any(self.reviewer.needs_fulltext(unit) for unit in self.units(markdown)[0])
 
         return digest(
             {

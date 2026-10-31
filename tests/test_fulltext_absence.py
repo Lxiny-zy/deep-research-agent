@@ -415,3 +415,66 @@ async def test_two_versions_of_the_same_source_cannot_be_mixed_to_refute_a_claim
     assert not can_revise([
         SupportDecision(unit_id="u", verdict="uncertain", reason="全文核查未完成：TimeoutError")
     ])
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 线上课题调研的原句：说的是本次证据的范围，不是某篇文献缺了什么
+        "所核验证据未提供深度展开网络与端到端网络在训练样本效率上的直接对比，"
+        "也未提供两类方法训练与推理计算量、显存开销的可比数值。",
+        "所引条目未给出该 PSNR 数值对应的数据集，跨论文引用该数值前需核查原文实验设置。",
+        "现有证据给出的图景是分散的：端到端方法报告了较好结果 [20]，缺乏可比的统一评价。",
+        "表 1 中空单元格表示本次已核验发现中未收录该条目，不代表原论文未报告相应设计。",
+    ],
+)
+def test_open_synthesis_gap_statements_describe_the_evidence_not_a_paper(text):
+    from deep_research.workbench.fulltext_review import requires_fulltext
+
+    unit = SupportUnit("u", text, kind="prose", citations=[1])
+    assert requires_fulltext(unit, open_evidence=True) is False
+    # 精读、评审和指定材料的综述仍要回查：那里的“证据”就是被评价的论文
+    assert requires_fulltext(unit) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "该文未报告真实数据结果。",
+        "DAUNet 未给出训练时长 [5]。",
+        "现有证据未给出 DAUNet 的训练时长 [5]。",
+        "所引文献未提供显存开销。",
+        "经核验后发现该文未报告显存开销。",
+    ],
+)
+def test_claims_about_a_specific_paper_stay_under_fulltext_review(text):
+    from deep_research.workbench.fulltext_review import requires_fulltext
+
+    unit = SupportUnit("u", text, kind="prose", citations=[5])
+    assert requires_fulltext(unit, open_evidence=True) is True
+
+
+def test_critique_section_is_reviewed_by_its_citations_in_open_synthesis():
+    from deep_research.workbench.fulltext_review import requires_fulltext
+
+    unit = SupportUnit("u", "该方法在真实数据上退化 [3]。", kind="prose", context="现有方法的不足")
+    assert requires_fulltext(unit) is True
+    assert requires_fulltext(unit, open_evidence=True) is False
+
+
+def test_open_evidence_follows_the_task_contract():
+    from deep_research.workbench.contract import build_contract
+    from deep_research.workbench.prose_review import ProseReviewer
+    from deep_research.workbench.templates import get_template
+
+    def reviewer(template, strategy):
+        contract = build_contract(get_template(template), "比较两类方法", strategy=strategy)
+        return ProseReviewer(
+            None, [], 20000, source_version="v", contract=contract
+        ).reviewer.open_evidence
+
+    assert reviewer("autoResearch", "deep") is True
+    assert reviewer("litReview", "deep") is True
+    assert reviewer("litReview", "none") is False
+    assert reviewer("paperRead", "none") is False
+    assert reviewer("peerReview", "none") is False

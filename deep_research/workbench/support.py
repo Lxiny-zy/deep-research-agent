@@ -111,6 +111,9 @@ _SYSTEM = (
     "summary 单元按版式可以省略印刷引用，其 citations 是后台允许的证据范围，不是事实免检。"
     "本报告自身的编排说明（如表中列出哪些项目、空栏如何表示）可依据给定的报告表格或结构判断，"
     "不要求原论文为这份报告的编排提供证据，可判 non_factual；"
+    "明确限定在本次证据范围内的缺口说明（如‘所核验证据未提供……’‘现有证据不足以确认……’）"
+    "是报告对材料范围的交代，可判 non_factual，同句其他事实仍须核对，"
+    "且不能把它扩大成文献没有报告或领域不存在；"
     "但夹带的实验结果、指标定义、优劣、来源缺失断言或因果解释仍必须由原始证据支持。"
     "表题、表注和比较边界不能整体免检：‘输入相同/不同’、‘结果可比/不可比’、"
     "‘全部方法都……’以及缩写/指标的实质定义，都是须核对的来源事实；"
@@ -220,6 +223,7 @@ class SupportReviewer:
         check_fulltext: bool = True,
         check_formulas: bool = True,
         evidence_scopes: Mapping[str, Collection[str]] | None = None,
+        open_evidence: bool = False,
     ) -> None:
         self.llm, self.evidence = llm, evidence
         self.capacity = getattr(llm, "input_capacity_chars", capacity)
@@ -241,11 +245,17 @@ class SupportReviewer:
             )
         self.fulltext_corpus = fulltext_corpus or FullTextCorpus([], {})
         self.check_fulltext = check_fulltext
+        self.open_evidence = open_evidence
         self.fulltext_records: dict[str, dict[str, Any]] = {}
         self.check_formulas = check_formulas
         self.formula_records: dict[str, dict[str, Any]] = {}
         self.on_progress: Callable[[str], None] | None = None
         self.request_count = 0
+
+    def needs_fulltext(self, unit: SupportUnit) -> bool:
+        from .fulltext_review import requires_fulltext
+
+        return self.check_fulltext and requires_fulltext(unit, open_evidence=self.open_evidence)
 
     def evidence_for(self, unit: SupportUnit) -> list[dict[str, Any]]:
         allowed = (
@@ -374,9 +384,9 @@ class SupportReviewer:
         return None
 
     def fulltext_issue(self, unit: SupportUnit, decision: SupportDecision) -> str | None:
-        from .fulltext_review import fulltext_supports, requires_fulltext, validate_fulltext_record
+        from .fulltext_review import fulltext_supports, validate_fulltext_record
 
-        if not self.check_fulltext or not requires_fulltext(unit):
+        if not self.needs_fulltext(unit):
             return None
         issue = validate_fulltext_record(unit, decision.fulltext_review, self.fulltext_corpus)
         if issue:
@@ -399,11 +409,11 @@ class SupportReviewer:
     async def _check_fulltext(
         self, unit: SupportUnit, key: str, checker: Any = None
     ) -> SupportDecision | None:
-        from .fulltext_review import FullTextReviewer, fulltext_supports, requires_fulltext
+        from .fulltext_review import FullTextReviewer, fulltext_supports
 
         if unit.kind != "translation" and (issue := field_absence_issue(unit.text)):
             return SupportDecision(unit_id=unit.id, verdict="unsupported", reason=issue)
-        if not self.check_fulltext or not requires_fulltext(unit):
+        if not self.needs_fulltext(unit):
             return None
         record = self.fulltext_records.get(unit.id)
         if record is None and key in self.cache:
@@ -448,7 +458,7 @@ class SupportReviewer:
         }
 
     async def review(self, units: list[SupportUnit]) -> list[SupportDecision]:
-        from .fulltext_review import FullTextReviewer, requires_fulltext
+        from .fulltext_review import FullTextReviewer
 
         results: dict[str, SupportDecision] = {}
         pending: list[SupportUnit] = []
@@ -462,7 +472,7 @@ class SupportReviewer:
             for unit in units:
                 if (
                     not set(unit.citations).issubset(known_citations)
-                    or not requires_fulltext(unit)
+                    or not self.needs_fulltext(unit)
                     or (unit.kind != "translation" and field_absence_issue(unit.text))
                 ):
                     continue

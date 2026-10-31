@@ -34,6 +34,59 @@ TABLES_VERSION = 1
 COMPARISON_CONTEXT_VERSION = 1
 # 一格多条定性陈述时逐条带出处。旧记录没有这个键，仍按格末统一角标重算，不会失配。
 STATEMENT_CITATIONS_VERSION = 1
+# 统计表用中文表头、隐藏内部字段。旧记录没有这个键，仍按原始字段名重算，不会失配。
+LEDGER_COLUMNS_VERSION = 1
+_LEDGER_LABELS = {
+    "variable": "变量",
+    "group": "分组依据",
+    "label": "组别",
+    "left_group": "组 1",
+    "right_group": "组 2",
+    "method": "方法",
+    "n": "样本量",
+    "n_left": "组 1 样本量",
+    "n_right": "组 2 样本量",
+    "n_total": "有效总样本量",
+    "n_pairs": "完整配对数",
+    "excluded_pairs": "排除不完整配对",
+    "missing": "缺失",
+    "distinct": "不同取值数",
+    "mean": "均值",
+    "std": "标准差",
+    "median": "中位数",
+    "min": "最小",
+    "max": "最大",
+    "r": "相关系数 r",
+    "statistic": "统计量",
+    "p_value": "p 值",
+    "significant": "显著",
+    "df": "自由度",
+    "df_between": "组间自由度",
+    "df_within": "组内自由度",
+    "mean_difference": "平均差",
+    "difference_std": "差值标准差",
+    "ci_low": "置信区间下限",
+    "ci_high": "置信区间上限",
+    "eta_squared": "η²",
+    "robust_method": "稳健性复核方法",
+    "robust_p": "稳健性复核 p 值",
+    "adjustment": "多重比较校正",
+    "reason": "说明",
+    "posthoc_error": "事后比较说明",
+}
+_LEDGER_HIDDEN = {
+    "paired", "left", "right", "a", "b", "groups", "column", "group_column",
+    "direction", "confidence_level", "levels_status", "scope", "alpha", "warnings",
+}
+_LEDGER_PATHS = {
+    "describe": "描述统计",
+    "tests": "显著性检验",
+    "group_summaries": "分组统计",
+    "posthoc": "事后比较",
+    "correlations": "相关性",
+    "composition": "样本构成",
+}
+_ADJUSTMENTS = {"none": "未校正", "familywise": "族错误率校正"}
 TABLE_RULES = (
     "逐格核对表格。每个单元格只允许使用指定的发现，不得借其他格的证据。"
     "同时检查表题、行名、列名、单位与口径。训练块尺寸不能放在仿真输入尺寸列，"
@@ -182,7 +235,7 @@ def _unit(
     rendered.units.append(
         SupportUnit(
             uid,
-            f"{row}；{column}：{value}",
+            f"{row}｜{column}：{value}",
             context=rendered.block.title,
             citations=citations,
         )
@@ -209,6 +262,72 @@ def _statement_cell(findings: list[Finding], mapping: dict[str, int]) -> TableCe
     )
 
 
+def _fill_raw_ledger_table(block: TableBlock, spec: TableSpec, rows: list[dict[str, Any]]) -> None:
+    keys = list(dict.fromkeys(key for row in rows for key in row))
+    block.columns = [TableColumn(key=key, label=key) for key in keys]
+    for row in rows:
+        cells = {
+            key: TableCell(
+                value=json.dumps(row[key], ensure_ascii=False)
+                if isinstance(row.get(key), (dict, list))
+                else str(row[key])
+                if row.get(key) is not None
+                else ""
+            )
+            for key in keys
+        }
+        label = str(row.get("variable") or row.get("label") or row.get("method") or "记录")
+        block.rows.append(TableRow(label=label, cells=cells))
+    block.caption = (
+        "表注：统计范围："
+        + "/".join(map(str, spec.ledger_path))
+        + "；未报告表示该统计台账字段没有结果。"
+    )
+
+
+def _ledger_label(row: dict[str, Any]) -> str:
+    if row.get("a") and row.get("b"):
+        pair = f"{row['a']} 与 {row['b']}"
+        return f"{pair}（{row['group_column']}={row['group']}）" if row.get("group") else pair
+    if row.get("left_group") and row.get("right_group"):
+        return f"{row['left_group']} 与 {row['right_group']}"
+    return str(
+        row.get("variable") or row.get("label") or row.get("column") or row.get("method") or "记录"
+    )
+
+
+def _ledger_value(key: str, value: Any) -> str:
+    if value is None or value == "NA":
+        return ""
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    return _ADJUSTMENTS.get(str(value), str(value)) if key == "adjustment" else str(value)
+
+
+def _fill_ledger_table(block: TableBlock, spec: TableSpec, rows: list[dict[str, Any]]) -> None:
+    """行名已说明的字段、内部字段和没有结果的列都不进表，嵌套记录有各自的表。"""
+    labels = [_ledger_label(row) for row in rows]
+    # 相关记录的 group 是组名，已写进行名
+    hidden = _LEDGER_HIDDEN | ({"group"} if any("group_column" in row for row in rows) else set())
+    keys = [
+        key
+        for key in dict.fromkeys([*_LEDGER_LABELS, *(key for row in rows for key in row)])
+        if key not in hidden
+        and any(_ledger_value(key, row.get(key)) for row in rows)
+        and not any(isinstance(row.get(key), (dict, list)) for row in rows)
+        and any(str(row.get(key)) != label for row, label in zip(rows, labels, strict=True))
+    ]
+    block.columns = [TableColumn(key=key, label=_LEDGER_LABELS.get(key, key)) for key in keys]
+    for row, label in zip(rows, labels, strict=True):
+        cells = {key: TableCell(value=_ledger_value(key, row.get(key))) for key in keys}
+        block.rows.append(TableRow(label=label, cells=cells))
+    names = [_LEDGER_PATHS[part] for part in spec.ledger_path if part in _LEDGER_PATHS]
+    block.caption = (
+        f"表注：数值取自本次统计台账（{names[-1] if names else '统计记录'}）；"
+        "未报告表示台账中该项没有结果。"
+    )
+
+
 def render_table(
     spec: TableSpec,
     results: list[ResearchResult],
@@ -218,6 +337,7 @@ def render_table(
     ledger: dict[str, Any] | None = None,
     comparison_context: bool = False,
     statement_citations: bool = False,
+    ledger_columns: bool = False,
 ) -> RenderedTable:
     findings = admitted_findings(results, mapping, corroboration)
     rendered = RenderedTable(TableBlock(id=spec.id, title=spec.title))
@@ -237,26 +357,7 @@ def render_table(
             or not all(isinstance(row, dict) for row in value)
         ):
             raise ValueError("统计表路径必须指向非空记录数组")
-        keys = list(dict.fromkeys(key for row in value for key in row))
-        block.columns = [TableColumn(key=key, label=key) for key in keys]
-        for row in value:
-            cells = {
-                key: TableCell(
-                    value=json.dumps(row[key], ensure_ascii=False)
-                    if isinstance(row.get(key), (dict, list))
-                    else str(row[key])
-                    if row.get(key) is not None
-                    else ""
-                )
-                for key in keys
-            }
-            label = str(row.get("variable") or row.get("label") or row.get("method") or "记录")
-            block.rows.append(TableRow(label=label, cells=cells))
-        block.caption = (
-            "表注：统计范围："
-            + "/".join(map(str, spec.ledger_path))
-            + "；未报告表示该统计台账字段没有结果。"
-        )
+        (_fill_ledger_table if ledger_columns else _fill_raw_ledger_table)(block, spec, value)
     elif spec.source_finding_id:
         finding = findings.get(spec.source_finding_id)
         if finding is None:
@@ -267,22 +368,22 @@ def render_table(
         rows = tables[spec.source_table_index]
         block.columns = [TableColumn(key=str(i), label=name) for i, name in enumerate(rows[0][1:])]
         citation = mapping[finding.source_url]
-        for row in rows[1:]:
+        for source_row in rows[1:]:
             cells = {}
-            for source_column, raw in zip(block.columns, row[1:], strict=True):
+            for source_column, raw in zip(block.columns, source_row[1:], strict=True):
                 value = (
                     "" if raw.strip() in {"", "-", "--", "—", "–", "N/A", "NA", "未报告"} else raw
                 )
                 cells[source_column.key] = TableCell(value=value, citations=[citation])
                 _unit(
                     rendered,
-                    row[0],
+                    source_row[0],
                     source_column.label,
                     value or "未报告",
                     [spec.source_finding_id],
                     [citation],
                 )
-            block.rows.append(TableRow(label=row[0], citation=citation, cells=cells))
+            block.rows.append(TableRow(label=source_row[0], citation=citation, cells=cells))
         block.caption = "表注：按所引原始表格的行列呈现；未报告表示原表该格为空或使用缺失标记。"
     else:
         block.columns = [
@@ -467,6 +568,7 @@ def render_specs(
     ledger: dict[str, Any] | None = None,
     comparison_context: bool = False,
     statement_citations: bool = False,
+    ledger_columns: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     lines = markdown.splitlines(keepends=True)
     tokens = [
@@ -489,6 +591,7 @@ def render_specs(
             {"statement_citations_version": STATEMENT_CITATIONS_VERSION}
             if statement_citations else {}
         ),
+        **({"ledger_columns_version": LEDGER_COLUMNS_VERSION} if ledger_columns else {}),
     }
     replacements: list[tuple[int, int, str]] = []
     for token in tokens:
@@ -498,6 +601,7 @@ def render_specs(
             table = render_table(
                 spec, results, mapping, corroboration=corroboration, ledger=ledger,
                 comparison_context=comparison_context, statement_citations=statement_citations,
+                ledger_columns=ledger_columns,
             )
             record["specs"].append(spec.model_dump(mode="json"))
             replacements.append((token.map[0], token.map[1], table.markdown + "\n"))
@@ -519,6 +623,8 @@ def _compiled(
         raise ValueError("比较条件展示版本不受支持")
     if record.get("statement_citations_version") not in {None, STATEMENT_CITATIONS_VERSION}:
         raise ValueError("表格陈述出处展示版本不受支持")
+    if record.get("ledger_columns_version") not in {None, LEDGER_COLUMNS_VERSION}:
+        raise ValueError("统计表字段展示版本不受支持")
     specs = [TableSpec.model_validate(spec) for spec in record["specs"]]
     if len({spec.id for spec in specs}) != len(specs):
         raise ValueError("表格规格编号重复")
@@ -531,6 +637,7 @@ def _compiled(
             statement_citations=(
                 record.get("statement_citations_version") == STATEMENT_CITATIONS_VERSION
             ),
+            ledger_columns=record.get("ledger_columns_version") == LEDGER_COLUMNS_VERSION,
         )
         for spec in specs
     ]

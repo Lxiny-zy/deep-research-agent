@@ -221,7 +221,11 @@ def alignment_issue(
             ).casefold()
             key = record["id"]
             requires_anchor.add(key)
-            name_match = any(_contains(quote, name) for name in matches)
+            # 论文常写 "the proposed network"：发现的实体已随陈述一起对照摘录核验过，
+            # 摘录不必再逐字写出方法名
+            name_match = str(record.get("entity") or "").casefold() in names or any(
+                _contains(quote, name) for name in matches
+            )
             # Coincidentally equal values must not hide an explicit subject
             # mismatch. Unnamed excerpts still rely on semantic review.
             if names and _names(raw_quote, evidence) and not name_match:

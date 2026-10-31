@@ -1176,9 +1176,9 @@ class DataAnalyst:
         system += (
             "表格只能用 evidence-table 代码块写 JSON 规格："
             '{"id":"t1","title":"表 1 描述统计","ledger_path":["describe"]}。'
-            "ledger_path 指向统计台账中的记录数组，代码保留其原始字段名并取值；"
+            "ledger_path 指向统计台账中的记录数组，代码按记录取值并写中文表头；"
             "不直接写 Markdown、HTML 或 LaTeX 表格。可用路径包括 describe、tests、correlations，"
-            "以及 tests 下的数字序号、group_summaries。"
+            "以及 tests 下的数字序号、group_summaries、posthoc。"
         )
         table_records: dict[str, dict[str, Any]] = {}
         from .gates import structure_gate
@@ -1274,6 +1274,7 @@ class DataAnalyst:
                 {},
                 ledger=result.snapshot(),
                 previous=bb.scratch.get(TABLES_KEY),
+                ledger_columns=True,
             )
             from .analysis_lineage import attach_design
 

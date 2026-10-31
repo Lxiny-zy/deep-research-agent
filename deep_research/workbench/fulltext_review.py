@@ -21,6 +21,10 @@ _ABSENCE = re.compile(
     re.I,
 )
 _CRITIQUE = re.compile(r"不足|缺点|缺陷|弱点|weakness|shortcoming|limitation", re.I)
+_EVIDENCE_SCOPE = re.compile(
+    r"(?:核验|核查|纳入|检索)(?:的|过的|到的)?(?:证据|发现|摘录|材料|条目|资料|来源|结果)|"
+    r"(?:所引|所列|所给|现有|当前|本次|目前)[^。；;\n]{0,8}?(?:证据|摘录|材料|条目|资料|来源)"
+)
 _UNRESOLVED = re.compile(r"[【\[]\s*(?:待研究|待确认|待核查|待澄清)\s*[】\]]")
 _FULLTEXT_WORDING = re.compile(
     r"全文(?:文本)?(?:中)?(?:未见|未发现|未报告)|full.text[^.]*not (?:found|reported)|"
@@ -45,14 +49,41 @@ def explicit_absence(text: str) -> bool:
     return bool(_ABSENCE.search(normalized) or _UNRESOLVED.search(normalized))
 
 
-def requires_fulltext(unit: Any) -> bool:
+def _without_evidence_gaps(text: str) -> str:
+    """去掉说明本次证据范围的分句；带引用的分句在讲具体文献，仍要回查。"""
+    kept = []
+    for sentence in re.findall(r"[^。；;！？\n]+[。；;！？\n]?", text):
+        scope = _EVIDENCE_SCOPE.search(sentence)
+        if scope is None:
+            kept.append(sentence)
+            continue
+        offset = 0
+        for clause in re.findall(r"[^，,]+[，,]?", sentence):
+            absence = _ABSENCE.search(clause)
+            if (
+                absence is None
+                or offset + absence.start() < scope.end()
+                or re.search(r"\[\d", clause)
+            ):
+                kept.append(clause)
+            offset += len(clause)
+    return "".join(kept)
+
+
+def requires_fulltext(unit: Any, *, open_evidence: bool = False) -> bool:
+    """``open_evidence``：开放检索的综合报告，来源多为检索片段，无从逐篇回查全文。
+
+    「所核验证据未提供……」说的是本次证据的范围，不是某篇文献缺了什么；批评类章节的
+    每条事实仍由引用的摘录核对。针对具体文献的缺失断言不受影响。
+    """
     if unit.kind == "translation":
         return False
-    if explicit_absence(unit.text):
+    text = _without_evidence_gaps(unit.text) if open_evidence else unit.text
+    if explicit_absence(text):
         return True
     if unit.kind == "question" and unit.citations:
         return True
-    if unit.text.lstrip().startswith("#"):
+    if open_evidence or unit.text.lstrip().startswith("#"):
         return False
     return bool(_CRITIQUE.search(unit.context.split("\n", 1)[0]))
 
