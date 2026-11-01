@@ -634,6 +634,46 @@ def test_cell_with_several_statements_cites_each_statement_in_place():
     assert table_issues(body, results, mapping, legacy, require_review=False)
 
 
+def test_bare_tex_in_statements_is_marked_as_math_only_for_new_tables():
+    from deep_research.workbench.gates import markdown_gate
+    from deep_research.workbench.tables import (
+        STATEMENT_CITATIONS_VERSION,
+        render_specs,
+        table_issues,
+    )
+
+    # 2026-11-01 线上精读：发现原句带 z_{k+1}，表格逐字展示后整篇过不了公式标记门禁
+    a = admitted("A 的 z_{k+1} 子问题以噪声水平 √(τ_{k+1}/μ_{k+1}) 去噪。", entity="A")
+    b = admitted(r"A 的初始学习率为 4\times10^{-4}。", entity="A").model_copy(
+        update={"source_url": "https://example.org/other"}
+    )
+    results = [ResearchResult(sub_question="比较", findings=[a, b])]
+    mapping = {"https://example.org/paper": 1, "https://example.org/other": 2}
+    spec = {
+        "id": "t1",
+        "title": "表 1 方法要点",
+        "columns": [{"key": "s", "label": "要点", "field": "statement"}],
+        "rows": [
+            {"label": "A", "cells": {"s": [evidence_id(a), evidence_id(b)]}},
+            {"label": "A 去噪", "cells": {"s": [evidence_id(a)]}},
+        ],
+    }
+    raw = "```evidence-table\n" + json.dumps(spec, ensure_ascii=False) + "\n```\n"
+    body, record = render_specs(
+        raw, results, mapping, statement_citations=STATEMENT_CITATIONS_VERSION
+    )
+    assert "$z_{k+1}$ 子问题以噪声水平 √($τ_{k+1}$/$μ_{k+1}$)" in body
+    assert r"$4\times10^{-4}$" in body
+    assert markdown_gate(body).status == "pass"
+    assert record["statement_citations_version"] == STATEMENT_CITATIONS_VERSION
+    assert not table_issues(body, results, mapping, record, require_review=False)
+    # 之前审核过的表格（版本 1）仍按原句重算，不会与已审核的正文失配
+    old_body, old = render_specs(raw, results, mapping, statement_citations=1)
+    assert "z_{k+1}" in old_body and "$z_{k+1}$" not in old_body
+    assert old["statement_citations_version"] == 1
+    assert not table_issues(old_body, results, mapping, old, require_review=False)
+
+
 def _flops_spec(cell_id):
     return {
         "id": "t1",

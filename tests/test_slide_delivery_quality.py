@@ -354,3 +354,58 @@ def test_a_deck_with_a_statement_table_matches_the_body_the_writer_reviewed():
     assert expected == body
     _, legacy = compile_deck(deck.model_dump(), results, mapping)
     assert legacy != body
+
+
+def test_a_statement_cell_with_a_formula_is_checked_by_text_and_formula():
+    from deep_research.workbench.delivery.pptx import _MATH_NS
+    from deep_research.workbench.slide_content import Slide, SlideVisual
+    from deep_research.workbench.tables import STATEMENT_CITATIONS_VERSION, TableSpec
+    from tests.test_workbench_tables import admitted
+
+    a = admitted("A 的 z_{k+1} 子问题以噪声水平去噪。", entity="A")
+    spec = TableSpec.model_validate({
+        "id": "t1",
+        "title": "表 1 要点",
+        "columns": [{"key": "s", "label": "要点", "field": "statement"}],
+        "rows": [{"label": "A", "cells": {"s": [evidence_id(a)]}}],
+    })
+    deck = SlideDeck(title="演示", slides=[Slide(
+        title="方法", bullets=["A 的去噪子问题 [1]。"], notes="说明去噪子问题 [1]。",
+        citations=[1], visual=SlideVisual(kind="table", table=spec),
+    )])
+    compiled, markdown = compile_deck(
+        deck.model_dump(), [ResearchResult(sub_question="比较", findings=[a])],
+        {"https://example.org/paper": 1}, statement_citations=STATEMENT_CITATIONS_VERSION,
+    )
+    assert "$z_{k+1}$" in compiled["slides"][0]["visual_data"]["rows"][0][1]
+    data = render_pptx(compiled)
+    # PPTX 里公式是 Office Math，cell.text 只有文字部分；不能因此判为与冻结数据不一致
+    assert visual_consistency(data, compiled, markdown) == []
+    pres = Presentation(io.BytesIO(data))
+    shape = next(s for slide in pres.slides for s in slide.shapes if s.name.startswith("DR-"))
+    next(shape.table.cell(1, 1)._tc.iter(f"{{{_MATH_NS}}}t")).text = "w"
+    altered = io.BytesIO()
+    pres.save(altered)
+    assert visual_consistency(altered.getvalue(), compiled, markdown)
+
+
+def test_cover_subtitle_stays_off_the_reviewed_body_and_old_bodies_still_match():
+    from deep_research.workbench.slide_content import Slide, apply_brief
+
+    deck = SlideDeck(title="演示", subtitle="课题组组会汇报 · 约 10 分钟 [1][2]", slides=[Slide(
+        title="方法", bullets=["A 展开迭代优化 [1]。", "两种方法都依赖编码孔径。"],
+        notes="说明 [1]。", citations=[1, 2],
+    )])
+    # 线上汇报第 3 行：副标题挂了全部角标，「约 10 分钟」被当作有引用的数值事实
+    brief = apply_brief(deck, None, "深度展开方法，课题组组会汇报，约 10 分钟")
+    assert brief.subtitle == "课题组组会汇报 · 约 10 分钟"
+    assert "组会汇报" not in deck_to_markdown(brief)
+    claim = deck.model_copy(update={"subtitle": "PSNR 提升 2 dB · 约 10 分钟"})
+    assert apply_brief(claim, None, "约 10 分钟").subtitle == ""
+    # 此前审核过的正文仍按当时的写法核对，交付时不丢弃幻灯片结构
+    old = deck.model_copy(update={"subtitle": "课题组组会汇报 · 约 10 分钟"})
+    legacy = deck_to_markdown(old, legacy=True)
+    assert "课题组组会汇报 · 约 10 分钟 [1][2]" in legacy
+    assert "- A 展开迭代优化 [1]。 [1][2]" in legacy
+    _, projected = compile_deck(old.model_dump(), [], {}, legacy=True)
+    assert projected == legacy and projected != deck_to_markdown(old)

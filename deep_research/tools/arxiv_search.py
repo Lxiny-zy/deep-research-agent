@@ -29,7 +29,12 @@ import httpx
 from ..models import ScholarlyMetadata, Source
 from .arxiv_fulltext import ArxivEprintFetcher, ArxivFulltextError
 from .base import SearchTool, reading_question, required_sections
-from .fanout import SEARCH_FULLTEXT_CHARS, SEARCH_FULLTEXT_PAPERS, expand_leading
+from .fanout import (
+    SEARCH_FULLTEXT_CHARS,
+    SEARCH_FULLTEXT_PAPERS,
+    cap_fulltext,
+    expand_leading,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -192,13 +197,9 @@ class ArxivSearch(SearchTool):
         fetcher = self._eprint_fetcher
         if fetcher is None:
             return [source]
-        sections = await fetcher.sections(
-            source,
-            query,
-            max_chars=min(self._fulltext_max_chars, SEARCH_FULLTEXT_CHARS),
-            required=required,
-        )
-        return sections
+        budget = min(self._fulltext_max_chars, SEARCH_FULLTEXT_CHARS)
+        sections = await fetcher.sections(source, query, max_chars=budget, required=required)
+        return cap_fulltext(sections, query, budget)
 
 
 def _parse_feed(raw: bytes) -> list[ElementTree.Element]:

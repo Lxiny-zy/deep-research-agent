@@ -519,6 +519,26 @@ def test_critique_section_is_reviewed_by_its_citations_in_open_synthesis():
     assert requires_fulltext(unit, open_evidence=True) is False
 
 
+@pytest.mark.parametrize(
+    "caption",
+    [
+        "*表注：未报告表示本次已核验发现中未列出该字段，不代表原文全文没有报告；适用条件见口径脚注。*",
+        "*表注：按所引原始表格的行列呈现；未报告表示原表该格为空或使用缺失标记。*",
+        "*表注：统计范围：tests/0/group_summaries；未报告表示该统计台账字段没有结果。*",
+    ],
+)
+def test_the_renderers_table_caption_is_not_a_critique_of_a_paper(caption):
+    from deep_research.workbench.fulltext_review import requires_fulltext
+
+    # 线上派生幻灯片：表格放在「不足」页，固定表注被当作缺陷判断回查全文
+    unit = SupportUnit("u", caption, kind="prose", context="两类方法的不足")
+    assert requires_fulltext(unit) is False
+    written = SupportUnit(
+        "w", "*表注：DAUHST 未报告真实数据的参数量。*", kind="prose", context="两类方法的不足"
+    )
+    assert requires_fulltext(written) is True
+
+
 def test_open_evidence_follows_the_task_contract():
     from deep_research.workbench.contract import build_contract
     from deep_research.workbench.prose_review import ProseReviewer

@@ -32,6 +32,14 @@ _FULLTEXT_WORDING = re.compile(
     r"not (?:found|reported)[^.]*full.text",
     re.I,
 )
+# 表格渲染器生成的固定表注（见 tables.py），说明“未报告”的含义，不评价哪篇文献。线上派生
+# 幻灯片把表格放在「局限」页，表注被当作缺陷判断回查全文，写作者又改不了它。
+_TABLE_CAPTION = re.compile(
+    r"表注：(?:未报告表示本次已核验发现中未列出该字段，不代表原文全文没有报告；适用条件见口径脚注。"
+    r"|按所引原始表格的行列呈现；未报告表示原表该格为空或使用缺失标记。"
+    r"|统计范围：[^；\n]*；未报告表示该统计台账字段没有结果。"
+    r"|数值取自本次统计台账（[^）\n]*）；未报告表示台账中该项没有结果。)"
+)
 
 
 def explicit_absence(text: str) -> bool:
@@ -78,6 +86,8 @@ def requires_fulltext(unit: Any, *, open_evidence: bool = False) -> bool:
     每条事实仍由引用的摘录核对。针对具体文献的缺失断言不受影响。
     """
     if unit.kind == "translation":
+        return False
+    if _TABLE_CAPTION.fullmatch(re.sub(r"[*_\s]", "", unit.text)):
         return False
     text = _without_evidence_gaps(unit.text) if open_evidence else unit.text
     if explicit_absence(text):

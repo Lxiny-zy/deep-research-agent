@@ -58,8 +58,9 @@ def _names(text: str, evidence: list[dict[str, Any]]) -> set[str]:
 
 
 def _contains(text: str, name: str) -> bool:
+    # 原文常写复数（the HSIs、CASSIs），正文写单数「HSI」仍是同一专名
     return any(
-        re.search(r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])", text) is not None
+        re.search(r"(?<![a-z0-9])" + re.escape(alias) + r"s?(?![a-z0-9])", text) is not None
         for alias in (name, *_NAME_ALIASES.get(name, ()))
     )
 

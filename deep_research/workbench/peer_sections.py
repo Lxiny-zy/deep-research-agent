@@ -30,6 +30,13 @@ def _method(title: str, kind: str | None) -> bool:
     )) and not re.search(r"\b(?:related|prior|existing)\b|相关工作|已有方法", title, re.I)
 
 
+# 章节正文中不构成内容的排版命令与 LaTeX 注释
+_LAYOUT_ONLY = re.compile(
+    r"\\(?:label|vspace|hspace|vskip|hskip|noindent|newpage|clearpage|centering|par"
+    r"|smallskip|medskip|bigskip)\*?(?:\{[^{}]*\})?|%[^\n]*|\s+"
+)
+
+
 @dataclass(frozen=True)
 class SectionPart:
     source: Source
@@ -50,6 +57,17 @@ class MethodUnit:
     id: str
     title: str
     parts: list[SectionPart] = field(default_factory=list)
+
+    def substantive(self) -> bool:
+        """正文除标题外只有 \\label、\\vspace 之类排版命令的父章节，内容都在子章节里。
+
+        线上评审要求 48 字的「Proposed Method\\n\\label{sec:method}\\n\\vspace{-2mm}」
+        写出核心方法，整篇评审因此无法起草。这类章节不需要单独的覆盖核对。
+        """
+        return any(
+            _LAYOUT_ONLY.sub("", part.source.content[part.body_start:part.end])
+            for part in self.parts
+        )
 
     def sources(self) -> list[Source]:
         unique = {(part.source.url, part.binding()[1]): part.source for part in self.parts}

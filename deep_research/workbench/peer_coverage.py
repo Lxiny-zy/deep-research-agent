@@ -76,6 +76,8 @@ def coverage_issues(scratch: dict[str, Any], results: list[ResearchResult]) -> l
             issues.append("方法覆盖记录遗漏、重复或变更了章节范围")
             continue
         for unit in units:
+            if not unit.substantive():
+                continue
             entry = entries[unit.id]
             checks = entry.get("checks") or []
             if not isinstance(checks, list):
@@ -174,6 +176,9 @@ async def check_methods(
             entry: dict[str, Any] = {"id": unit.id, "title": unit.title, "checks": [], "reads": [],
                                      "status": "fail"}
             doc["sections"].append(entry)
+            if not unit.substantive():
+                entry.update(status="not_applicable", reason="只有标题与排版命令，内容在子章节中")
+                continue
             pending.append((unit, entry))
             read: set[str] = reads.setdefault(unit.id, set())
             researcher.source_context = unit.context

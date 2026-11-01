@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from fractions import Fraction
 from functools import lru_cache
 from typing import Any
@@ -314,13 +315,94 @@ def _differences(left: Any, right: Any) -> list[str]:
     return [issue for a, b in zip(left[1:], right[1:], strict=True) for issue in _differences(a, b)]
 
 
+# 只差空白、间距命令、范数竖线、算子名、定义等号或句末标点的两式是同一个公式。
+# 解析器不认这些写法（a = b, 末尾的逗号、|| x || 等）时，原样转写也会被判为待解释的改写。
+# 只用于判定相等，不改变解析树，也就不改变“原文已有可解析参考公式”的判断。
+_ARGUMENT = r"\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}"
+_TYPOGRAPHY: tuple[tuple[re.Pattern[str], str | Callable[[re.Match[str]], str]], ...] = (
+    (re.compile(r"\\(?:label|tag)\*?\{[^{}]*\}|\\h?space\*?\{[^{}]*\}"), " "),
+    (
+        re.compile(
+            r"\\(?:quad|qquad|enspace|thinspace|medspace|thickspace|nonumber|notag|displaystyle"
+            r"|textstyle|limits|nolimits|left|right|[bB]igg?[lrm]?)(?![A-Za-z])|\\[,;:! ]|~"
+        ),
+        " ",
+    ),
+    (re.compile(r"\\(?:stackrel|overset)\s*" + _ARGUMENT + r"\s*\{\s*=\s*\}"), "="),
+    (re.compile(r"\\(?:triangleq|coloneqq|coloneq|eqdef)(?![A-Za-z])|:="), "="),
+    (
+        re.compile(
+            r"\\(?:operatorname\*?|mathrm|textrm|text|mathop)\s*\{\s*(arg)?\s*(min|max)\s*\}"
+        ),
+        lambda match: (r"\arg " if match[1] else "") + "\\" + match[2],
+    ),
+    (
+        re.compile(
+            r"\\(?:operatorname\*?|mathrm|textrm|text|mathop)\s*"
+            r"\{\s*(arg|min|max|log|exp|sin|cos|tan|lim|sup|inf|det|tr|diag)\s*\}"
+        ),
+        r"\\\1",
+    ),
+    (re.compile(r"\\underset\s*" + _ARGUMENT + r"\s*" + _ARGUMENT), r"\2_{\1}"),
+    (re.compile(r"\\arg(min|max)(?![A-Za-z])"), r"\\arg\\\1"),
+    (re.compile(r"\\[lr]?Vert(?![A-Za-z])|\\\|"), "‖"),
+    (re.compile(r"\\[lr]?vert(?![A-Za-z])"), "|"),
+    (re.compile(r"\|\s*\|"), "‖"),
+    (re.compile(r"\\(?:boldsymbol|bm|pmb)(?![A-Za-z])"), r"\\mathbf"),
+    (
+        re.compile(
+            r"\\mathbf\s*\{\s*\\(hat|tilde|bar|vec|dot|ddot|check|breve|widehat|widetilde)"
+            r"\s*(?:\{([^{}]*)\}|([A-Za-z]))\s*\}"
+        ),
+        r"\\\1{\\mathbf{\2\3}}",
+    ),
+    (re.compile(r"\\[dt]frac(?![A-Za-z])"), r"\\frac"),
+    (re.compile(r"\\(?:ldots|cdots|dots[cb]?)(?![A-Za-z])|\.\.\.|…"), "…"),
+)
+
+
+def _typographic(tex: str) -> tuple[str, ...]:
+    for pattern, replacement in _TYPOGRAPHY:
+        tex = pattern.sub(replacement, tex)
+    tokens = []
+    for match in _TOKENS.finditer(tex):
+        raw = match[0]
+        token = _COMMANDS.get(raw, raw)
+        if token.startswith("\\") and token[1:] in _GREEK:
+            token = _GREEK[token[1:]]
+        tokens.append(token)
+    # 单个字符或命令的上下标括号可省：x_{k} 与 x_k 是同一写法；x^{12} 与 x^12 不是
+    index = 0
+    while index + 3 < len(tokens):
+        inner = tokens[index + 2]
+        if (
+            tokens[index] in {"_", "^"}
+            and tokens[index + 1] == "{"
+            and tokens[index + 3] == "}"
+            and (len(inner) == 1 or inner.startswith("\\"))
+        ):
+            del tokens[index + 3], tokens[index + 1]
+        index += 1
+    while tokens and tokens[-1] in {",", ".", ";"}:
+        tokens.pop()
+    return tuple(tokens)
+
+
+def symbols_within(reported: str, reference: str) -> bool:
+    """所报公式的每个字母符号都出现在参考式中；用于确认摘取的子式没有引入原文没有的量。"""
+    symbols = {token for token in _typographic(reported) if len(token) == 1 and token.isalpha()}
+    return bool(symbols) and symbols <= set(_typographic(reference))
+
+
 def compare_formulas(reported: str, reference: str) -> tuple[str, str]:
     """Prove literal/numeric equivalence or a single clear transcription change."""
     left, right = formula_tree(reported), formula_tree(reference)
+    if left is not None and left == right:
+        return "equal", "公式结构一致"
+    if _typographic(reported) == _typographic(reference):
+        return "equal", "公式写法一致（只差空白、间距或记号写法）"
     if left is None or right is None:
         return "unresolved", "公式语法需要专门核对"
-    if left == right:
-        return "equal", "公式结构一致"
     stack = [left, right]
     while stack:
         node = stack.pop()

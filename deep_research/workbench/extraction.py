@@ -26,8 +26,19 @@ from ..prompting import PrefixPrompt, structured_system_prompt
 from .quality import policy_from
 from .quote_repair import quote_options, resolve_quote
 
-# 输出被截断时按来源对半拆批的最多次数（每次多一次模型调用）
-_OUTPUT_SPLITS = 3
+# 输出被截断时对半拆批的最多次数（每次多一次模型调用）
+_OUTPUT_SPLITS = 6
+# 一次抽取的输出（含思考）有上限，来源越长发现越多。线上开放检索补读论文全文后，一个子问题
+# 一批送进 20 万字，输出反复截断，对半重试 3 次仍补不回来，整份交付只剩证据摘录。
+# 每批来源正文另设上限，与输入容量无关。
+_BATCH_SOURCE_CHARS = 32_000
+# 单个来源按字符区间对半拆的下限
+_MIN_SPLIT_CHARS = 2_000
+# 不能再拆时最后重试一次：限制条数，而不是放弃这一批来源
+_OUTPUT_CAP = (
+    "\n【输出上限】上一次回答超过了模型的输出上限。本次最多返回 20 条与子问题最直接相关的发现，"
+    "每条引文只保留支撑该发现的最短连续原文；表格只取与子问题直接相关的行。"
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +65,7 @@ class SourceWindow:
 class ExtractionContext:
     windows: list[SourceWindow]
     prompt: str
+    capped: bool = False
 
     @property
     def sources(self) -> list[Source]:
@@ -84,6 +96,23 @@ def _window_prompt(windows: list[SourceWindow], dynamic: str) -> PrefixPrompt:
     )
 
 
+def _halves(context: ExtractionContext) -> list[list[SourceWindow]] | None:
+    """输出截断时把一批对半拆开：多个来源按来源拆，单个长来源按字符区间拆。"""
+    windows = context.windows
+    if len(windows) >= 2:
+        half = len(windows) // 2
+        return [windows[:half], windows[half:]]
+    if len(windows) == 1 and windows[0].end - windows[0].start >= 2 * _MIN_SPLIT_CHARS:
+        window = windows[0]
+        middle = (window.start + window.end) // 2
+        # 与分段规划一样保留跨越边界的短引文
+        return [
+            [SourceWindow(window.source, window.start, middle, window.source_hash)],
+            [SourceWindow(window.source, middle - 600, window.end, window.source_hash)],
+        ]
+    return None
+
+
 def plan_extraction_contexts(
     sources: list[Source],
     system: str,
@@ -104,22 +133,29 @@ def plan_extraction_contexts(
         )
         for source in sources
     ]
-    if budget.fits(effective, original_prompt, reserve_tokens=reserve):
+
+    def fits(group: list[SourceWindow]) -> bool:
+        return sum(w.end - w.start for w in group) <= _BATCH_SOURCE_CHARS and budget.fits(
+            effective, _window_prompt(group, dynamic), reserve_tokens=reserve
+        )
+
+    if sum(len(source.content) for source in sources) <= _BATCH_SOURCE_CHARS and budget.fits(
+        effective, original_prompt, reserve_tokens=reserve
+    ):
         return [ExtractionContext(windows, original_prompt)]
     pieces: list[SourceWindow] = []
     for window in windows:
-        if budget.fits(effective, _window_prompt([window], dynamic), reserve_tokens=reserve):
+        if fits([window]):
             pieces.append(window)
             continue
         start, length = 0, len(window.source.content)
         if not length:
             raise InputCapacityError("来源元数据与当前问题超过输入预算，无法分段")
         while start < length:
-            low, high = start, length
+            low, high = start, min(length, start + _BATCH_SOURCE_CHARS)
             while low < high:
                 end = (low + high + 1) // 2
-                trial = SourceWindow(window.source, start, end, window.source_hash)
-                if budget.fits(effective, _window_prompt([trial], dynamic), reserve_tokens=reserve):
+                if fits([SourceWindow(window.source, start, end, window.source_hash)]):
                     low = end
                 else:
                     high = end - 1
@@ -135,10 +171,7 @@ def plan_extraction_contexts(
     groups: list[ExtractionContext] = []
     group: list[SourceWindow] = []
     for piece in pieces:
-        group_trial = [*group, piece]
-        if group and not budget.fits(
-            effective, _window_prompt(group_trial, dynamic), reserve_tokens=reserve
-        ):
+        if group and not fits([*group, piece]):
             groups.append(ExtractionContext(group, _window_prompt(group, dynamic)))
             group = []
         group.append(piece)
@@ -240,12 +273,22 @@ async def extract_with_context_budget(
                     **generation_options(researcher.llm, "extraction"),
                 )
             except ModelOutputTruncated:
-                if not allow_partition or len(context.windows) < 2 or splits >= _OUTPUT_SPLITS:
-                    raise
-                # 思考与输出超过渠道上限，与输入容量无关：按来源对半拆开重试
+                parts = _halves(context) if allow_partition and splits < _OUTPUT_SPLITS else None
+                if parts is None:
+                    if context.capped:
+                        raise
+                    contexts[index] = ExtractionContext(
+                        context.windows, context.prompt + _OUTPUT_CAP, capped=True
+                    )
+                    researcher.tracer.emit(
+                        "RESEARCHER",
+                        "info",
+                        "抽取输出超过模型输出上限，已限制条数重试",
+                        data={"category": "extraction_context", "capped": True},
+                    )
+                    continue
+                # 思考与输出超过渠道上限，与输入容量无关：对半拆开重试
                 splits += 1
-                half = len(context.windows) // 2
-                parts = [context.windows[:half], context.windows[half:]]
                 contexts[index : index + 1] = [
                     ExtractionContext(part, _window_prompt(part, dynamic)) for part in parts
                 ]
@@ -266,7 +309,7 @@ async def extract_with_context_budget(
                 researcher.tracer.emit(
                     "RESEARCHER",
                     "info",
-                    "抽取输出超过模型输出上限，已按来源拆成两批重试",
+                    "抽取输出超过模型输出上限，已对半拆成两批重试",
                     data={"category": "extraction_context", "splits": splits},
                 )
                 continue

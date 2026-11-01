@@ -471,3 +471,31 @@ async def test_a_gap_kept_before_reading_the_section_reads_it_instead_of_failing
     # 评审要求只决定抽取重点，不是每一节都要覆盖的清单
     question = reader.questions[0]
     assert question.index("当前仅检查章节") < question.index("评审任务（只用于确定本章节")
+
+
+async def test_a_parent_heading_with_only_layout_commands_needs_no_coverage(settings):
+    from deep_research.models import ScholarlyMetadata, Source
+    from deep_research.workbench.reader import PAPER_SOURCES_KEY
+
+    # 线上评审：「Proposed Method」正文只有 \label 与 \vspace，却被要求写出核心方法
+    layout = r"\label{sec:method}" + "\n" + r"\vspace{-2mm}"
+    bb, _ = material()
+    sources = [Source(
+        title="Paper", url=f"https://arxiv.org/abs/2201.00001?dr_section={i}",
+        content=title + "\n" + text, scholarly=ScholarlyMetadata(section=kind),
+    ) for i, (title, text, kind) in enumerate([
+        ("Introduction", INTRO, "introduction"), ("Proposed Method", layout, "method"),
+        ("Spectral-wise Attention", FORMULATION, "other"), ("Network", NETWORK, "other"),
+        ("Experiment", "Benchmark results.", "experiment"),
+    ])]
+    bb.scratch.pop("attachments")
+    bb.scratch[PAPER_SOURCES_KEY] = [s.model_dump(mode="json") for s in sources]
+    bb.results[0].findings = [evidence(sources[0], INTRO), evidence(sources[3], NETWORK)]
+    reader = Reader(sources)
+    await ReviewEvidenceCoverage().step(bb, context(reader, settings))
+    assert reader.reads == [FORMULATION]
+    sections = bb.scratch["review_coverage"]["documents"][0]["sections"]
+    titles = [s["title"] for s in sections]
+    assert titles == ["Proposed Method", "Spectral-wise Attention", "Network"]
+    assert sections[0]["status"] == "not_applicable"
+    assert not coverage_issues(bb.scratch, bb.results)

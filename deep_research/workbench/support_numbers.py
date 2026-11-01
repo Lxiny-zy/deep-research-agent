@@ -30,6 +30,22 @@ def _keep_tex(match: re.Match[str]) -> str:
     return match["tex"] if negative == (match["tex_sign"] in {"−", "-"}) else match[0]
 
 
+# LaTeX 源码常把科学计数法拆进几段行内公式：4$\times$10$^{-4}$。只有拆开处确有 $，
+# 且这一段的 $ 成对（不跨入别的公式）时，才合并成一段再按科学计数法读。
+_SPLIT_SCIENTIFIC = re.compile(
+    r"(?<![A-Za-z0-9_.\\])\$?\s*(?P<mantissa>[0-9]+(?:\.[0-9]+)?)(?P<inner>\s*\$?\s*"
+    r"(?:\\times|\\cdot)\s*\$?\s*10\s*\$?\s*)\^\s*"
+    r"(?P<exponent>\{\s*[+−-]?[0-9]+\s*\}|[+−-]?[0-9]+)\s*\$?"
+)
+
+
+def _join_split(match: re.Match[str]) -> str:
+    if "$" not in match["inner"] or match[0].count("$") % 2:
+        return match[0]
+    exponent = match["exponent"].strip("{} ")
+    return f"{match['mantissa']}\\times10^{{{exponent}}}"
+
+
 def normalize_scientific_numbers(text: str) -> str:
     """Return Decimal-compatible literals, preserving units and surrounding text.
 
@@ -39,6 +55,7 @@ def normalize_scientific_numbers(text: str) -> str:
     flattened rendering is dropped only when its own TeX source follows it.
     """
     text = _RENDERED_THEN_TEX.sub(_keep_tex, text)
+    text = _SPLIT_SCIENTIFIC.sub(_join_split, text)
 
     def replace(match: re.Match[str]) -> str:
         mantissa = match["mantissa"] or "1"

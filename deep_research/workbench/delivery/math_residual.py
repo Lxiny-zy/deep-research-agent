@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import re
+from functools import lru_cache
 from html.parser import HTMLParser
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
@@ -29,6 +30,64 @@ _MONO = re.compile(r"consolas|courier|mono", re.I)
 
 def raw_tex_fragments(text: str) -> list[str]:
     return list(dict.fromkeys(match.group() for match in _TEX.finditer(text)))
+
+
+# 一段不含空白与中文的式子；管道符留在外面，表格会把它转义成列分隔。乘号算在式内，
+# 1×10^-4 拆成两段时数值会被读成 1 与 10^-4
+_RUN = re.compile(r"(?:\\[A-Za-z]+|[A-Za-z0-9α-ωΑ-Ω_^{}+\-−*/=().,×·])+")
+# 带上下标的单个记号：z_{k+1}、τ_{k+1}、10^{-4}、\mathbf{x}_k
+_ATOM = re.compile(
+    r"(?:\\[A-Za-z]+|[A-Za-zα-ωΑ-Ω]|\d+(?:\.\d+)?)(?:\{[^{}]*\})?"
+    r"(?:[_^](?:\{[^{}]*\}|[-+−]?\d+|[A-Za-zα-ωΑ-Ω]))+"
+)
+
+
+def mark_bare_math(text: str) -> str:
+    """给引用文字中的裸 TeX 补上行内公式标记，字符本身不变。
+
+    发现原句常写 z_{k+1}、10^-4 而不加 $；表格逐字展示这些原句时，交付文件里就是裸 TeX，
+    写作者也无从修改。已含 $ 的文字不动，以免与原有公式交错；渲染器不认的片段保持原样。
+    带运算符的式子会被当作要逐式核对的公式，这时只标记其中带上下标的记号。
+    """
+    if "$" in text or not raw_tex_fragments(text):
+        return text
+    return _RUN.sub(_mark_run, text)
+
+
+def _mark_run(match: re.Match[str]) -> str:
+    from ..formula_review import _qualifies
+
+    run = match[0]
+    core = run.rstrip(".,")
+    head, tail = "", run[len(core) :]
+    while core.endswith(")") and core.count(")") > core.count("("):
+        core, tail = core[:-1], ")" + tail
+    while core.startswith("(") and core.count("(") > core.count(")"):
+        head, core = head + "(", core[1:]
+    if core.count("{") != core.count("}") or not raw_tex_fragments(core):
+        return run
+    if core.count("(") == core.count(")") and not _qualifies(core) and _renders(_braced(core)):
+        return f"{head}${_braced(core)}${tail}"
+    marked = _ATOM.sub(
+        lambda atom: f"${_braced(atom[0])}$" if _renders(_braced(atom[0])) else atom[0], core
+    )
+    return head + marked + tail
+
+
+def _braced(tex: str) -> str:
+    # 纯文本里的 10^-4 指 10 的 -4 次方；TeX 只把紧跟的一个字符作上标
+    return re.sub(r"\^(?!\{)([-+−]?\d+)", r"^{\1}", tex)
+
+
+@lru_cache(maxsize=512)
+def _renders(tex: str) -> bool:
+    from .math import checked_mathml
+
+    try:
+        checked_mathml(tex)
+    except Exception:  # noqa: BLE001 - 渲染器不认的片段保持原样，交给公式标记门禁
+        return False
+    return True
 
 
 def tex_issue_messages(

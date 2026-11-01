@@ -375,10 +375,25 @@ class SupportReviewer:
         if record["status"] != "pass":
             mismatch = any(row["verdict"] == "mismatch" for row in record["decisions"])
             mismatch = mismatch or record["reason"].startswith("公式结构不一致")
+            # 只有核对调用本身失败才算核验未完成（整篇随之停修）；核对者不能确认、
+            # 写法对不上原文属于正文问题，照常进入修订
+            incomplete = record["reason"] == "公式核验记录不完整或格式无效" or any(
+                str(row.get("reason", "")).startswith("公式专门核验未完成")
+                for row in record["decisions"]
+            )
+            if mismatch:
+                reason = record["reason"]
+            elif incomplete:
+                reason = "公式专门核验未完成：" + record["reason"]
+            else:
+                reason = (
+                    "公式未能与所引原文对上：" + record["reason"]
+                    + "；按所引原文的写法给出公式，确为改写时写明等价关系与成立条件，否则删去该公式"
+                )
             return SupportDecision(
                 unit_id=unit.id,
                 verdict="unsupported" if mismatch else "uncertain",
-                reason=record["reason"] if mismatch else "公式专门核验未完成：" + record["reason"],
+                reason=reason,
                 formula_review=record,
             )
         return None

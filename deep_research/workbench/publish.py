@@ -390,23 +390,32 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         from ..report.service import requires_corroboration
         from .gates import _body_without_references
         from .slide_content import compile_deck
-        from .tables import STATEMENT_CITATIONS_VERSION, TABLES_KEY
+        from .tables import TABLES_KEY
 
         tables = scratch.get(TABLES_KEY)
-        try:
-            compiled_deck, projected = compile_deck(
-                extras["deck"],
-                detail.results,
-                {url: i for i, url in enumerate(citations, 1)},
-                corroboration=requires_corroboration(detail),
-                image_sources=extras.get("slide_image_sources"),
-                statement_citations=isinstance(tables, dict)
-                and tables.get("statement_citations_version") == STATEMENT_CITATIONS_VERSION,
-            )
-            extras = {**extras, "deck": compiled_deck}
-        except ValueError:
-            projected = ""
-        if projected.strip() != _body_without_references(markdown).strip():
+        reviewed = _body_without_references(markdown).strip()
+        matched = None
+        # 2026-11-01 之前审核过的正文按当时的写法核对（副标题与要点的角标写法不同）
+        for legacy in (False, True):
+            try:
+                compiled_deck, projected = compile_deck(
+                    extras["deck"],
+                    detail.results,
+                    {url: i for i, url in enumerate(citations, 1)},
+                    corroboration=requires_corroboration(detail),
+                    image_sources=extras.get("slide_image_sources"),
+                    statement_citations=int(tables.get("statement_citations_version") or 0)
+                    if isinstance(tables, dict) else 0,
+                    legacy=legacy,
+                )
+            except ValueError:
+                break
+            if projected.strip() == reviewed:
+                matched = compiled_deck
+                break
+        if matched is not None:
+            extras = {**extras, "deck": matched}
+        else:
             extras = {**extras}
             extras.pop("deck", None)
             extras["structured_output_issue"] = (

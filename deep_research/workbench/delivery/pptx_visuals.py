@@ -146,6 +146,38 @@ def draw_visual(slide: Any, data: dict[str, Any], images: dict[str, bytes], *, t
         _text(box.text_frame, caption, size=12, color=_MUTED)
 
 
+def _expected_cell(value: str) -> tuple[str, tuple[str, ...]]:
+    """单元格按渲染时的拆分：普通文字与各个公式（公式比较 Office Math 中的字符）。"""
+    from lxml import etree
+
+    from .markdown import _inlines, _parser
+    from .math import office_math
+    from .pptx import _MATH_NS
+
+    items = _inlines(_parser().parseInline(value)[0])
+    formulas = tuple(
+        "".join(
+            etree.fromstring(
+                f'<m:oMathPara xmlns:m="{_MATH_NS}">{office_math(item.text, item.display)}'
+                "</m:oMathPara>"
+            ).itertext()
+        )
+        for item in items
+        if item.math
+    )
+    return "".join(item.text for item in items if not item.math), formulas
+
+
+def _actual_cell(cell: Any) -> tuple[str, tuple[str, ...]]:
+    from .pptx import _DRAWING_2010_NS, _MATH_NS
+
+    formulas = tuple(
+        "".join(node.text or "" for node in element.iter(f"{{{_MATH_NS}}}t")).replace("​", "")
+        for element in cell._tc.iter(f"{{{_DRAWING_2010_NS}}}m")
+    )
+    return cell.text, formulas
+
+
 def visual_consistency(pptx: bytes, deck: dict[str, Any], markdown: str | None = None) -> list[str]:
     """Check actual objects and embedded values, not just a self-reported schema."""
     from .markdown import parse_blocks
@@ -170,8 +202,12 @@ def visual_consistency(pptx: bytes, deck: dict[str, Any], markdown: str | None =
         kind = data["kind"]
         try:
             if kind == "table":
-                rows = [[cell.text for cell in row.cells] for row in shape.table.rows]
-                if rows != [data["headers"], *data["rows"]]:
+                # 含公式的格子在 PPTX 里是文字加 Office Math，cell.text 只含文字部分
+                rows = [[_actual_cell(cell) for cell in row.cells] for row in shape.table.rows]
+                if rows != [
+                    [_expected_cell(str(value)) for value in row]
+                    for row in [data["headers"], *data["rows"]]
+                ]:
                     issues.append(f"PPTX 表格 {label} 的单元格与冻结数据不一致")
             elif kind in {"bar", "line"}:
                 chart = shape.chart

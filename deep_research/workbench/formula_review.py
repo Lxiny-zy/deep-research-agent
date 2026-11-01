@@ -15,7 +15,7 @@ from ..document_corpus import FullTextCorpus, content_hash
 from ..guardrails import _normalized_span
 from ..persistence.repository import LeaseLostError
 from ..prompting import structured_system_prompt
-from .formula_structure import compare_formulas, formula_tree
+from .formula_structure import compare_formulas, formula_tree, symbols_within
 from .support_numbers import normalize_scientific_numbers
 
 
@@ -339,7 +339,16 @@ def validate_formula_record(
                 status, reason = compare_formulas(formula["tex"], chosen_reference["tex"])
                 if status == "different" and not _conditional_equivalence(unit, row):
                     return "公式结构不一致：" + reason
-                if status == "unresolved" and not row.equivalence_explanation.strip():
+                # 解析器认不出的同一公式或原式中的子式：核对者判为 same 且未引入参考式以外的
+                # 符号时不再另要等价说明；改写（equivalent）仍须解释
+                if (
+                    status == "unresolved"
+                    and not row.equivalence_explanation.strip()
+                    and not (
+                        row.relation == "same"
+                        and symbols_within(formula["tex"], chosen_reference["tex"])
+                    )
+                ):
                     return "公式写法不同，缺少等价关系与适用条件说明"
         return None
     except (TypeError, KeyError, ValueError):

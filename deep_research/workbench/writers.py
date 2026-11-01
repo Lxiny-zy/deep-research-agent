@@ -36,7 +36,14 @@ from .quality import QualityPolicy, completion_feedback, writer_policy
 from .revision import Assessment, RevisionLog, assess_draft, write_with_revisions
 from .scholarly import abstract_sections, writing_rules
 from .support import SupportReviewer, evidence_records
-from .tables import TABLE_INSTRUCTIONS, TABLES_KEY, render_specs, review_tables, table_preview
+from .tables import (
+    STATEMENT_CITATIONS_VERSION,
+    TABLE_INSTRUCTIONS,
+    TABLES_KEY,
+    render_specs,
+    review_tables,
+    table_preview,
+)
 from .templates import TaskTemplate, get_template
 from .writing_progress import (
     WritingProgress,
@@ -430,7 +437,7 @@ class TemplateWriter:
                 corroboration=require_corroboration,
                 previous=bb.scratch.get(TABLES_KEY),
                 comparison_context=template.key in {"autoResearch", "litReview"},
-                statement_citations=True,
+                statement_citations=STATEMENT_CITATIONS_VERSION,
             )
             bb.scratch[TABLES_KEY] = table_record
             table_records[body] = table_record
@@ -472,7 +479,7 @@ class TemplateWriter:
                         compiled, _ = compile_deck(
                             candidate, bb.results, url_to_idx, corroboration=require_corroboration,
                             image_sources=bb.scratch.get("_slide_image_sources"),
-                            statement_citations=True,
+                            statement_citations=STATEMENT_CITATIONS_VERSION,
                         )
                         slide_issues, _ = slide_quality_issues(compiled)
                         assessment.hard.extend(issue.message for issue in slide_issues)
@@ -1215,7 +1222,7 @@ class SlideWriter(TemplateWriter):
                     deck, bb.results, {url: i for i, url in enumerate(report.citations, 1)},
                     corroboration=bool(bb.scratch.get("require_corroboration", False)),
                     image_sources=bb.scratch.get("_slide_image_sources"),
-                    statement_citations=True,
+                    statement_citations=STATEMENT_CITATIONS_VERSION,
                 )
             except ValueError as exc:
                 return {"structured_output_issue": "幻灯片图表不能从证据重建：" + str(exc)}

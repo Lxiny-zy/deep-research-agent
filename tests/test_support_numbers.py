@@ -17,6 +17,9 @@ from deep_research.workbench.support_numbers import normalize_scientific_numbers
         (".5 · 10 ^ { -2 }", ".5e-2"),
         ("10^0 and 10^10000", "1e0 and 1e10000"),
         ("The error is 10^-3.", "The error is 1e-3."),
+        # LaTeX 源码拆成几段行内公式的写法（线上精读的学习率）
+        (r"rate is 4$\times$10$^{-4}$.", "rate is 4e-4."),
+        (r"lr 5 $\times 10^{-5}$", "lr 5e-5"),
     ],
 )
 def test_explicit_scientific_numbers_have_equivalent_decimal_spelling(rendered, normalized):
@@ -30,6 +33,7 @@ def test_explicit_scientific_numbers_have_equivalent_decimal_spelling(rendered, 
         "x10^k", "x10^-3", "O(n^2)", "10^{k}", "10^2.5", "95%", "0.95", "1e-3",
         "2 × 103", "2 × 10 -3", "10^10001", "10^" + "9" * 1000,
         "1" * 129 + " × 10^-3", "1e2 × 10^-3",
+        r"$x = 4\times$10$^{-4}$", r"a 2$\times$ speedup with 10$^{-4}$",
     ],
 )
 def test_symbolic_ambiguous_and_unbounded_forms_are_not_rewritten(text):

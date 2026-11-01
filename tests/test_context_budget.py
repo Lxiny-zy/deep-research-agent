@@ -73,10 +73,10 @@ class Extractor:
     input_capacity_chars = 100000
     parameter_mode = "temperature"
 
-    def __init__(self, fail_at=None):
+    def __init__(self, fail_at=None, fail_from=None):
         self.settings = SimpleNamespace(llm_max_output_tokens=1024)
         self.prompts = []
-        self.fail_at = fail_at
+        self.fail_at, self.fail_from = fail_at, fail_from
 
     async def parse(self, system, user, schema, **kwargs):
         budget = ContextBudget.from_model(self)
@@ -89,7 +89,9 @@ class Extractor:
             ])
         assert schema is ExtractedFindingList
         self.prompts.append(user)
-        if self.fail_at == len(self.prompts):
+        if self.fail_at == len(self.prompts) or (
+            self.fail_from is not None and len(self.prompts) >= self.fail_from
+        ):
             raise ModelOutputTruncated(1024)
         records = re.findall(r"URL: ([^\n]+)\n内容: ([\s\S]*?)\n<<<来源 \d+ 结束>>>", user)
         return schema(findings=[
@@ -139,15 +141,66 @@ async def test_large_web_sources_are_partitioned_with_original_hash_and_complete
 async def test_batch_output_failure_retains_prior_work_and_does_not_retry_remaining_sources(
     settings,
 ):
-    llm, sources = Extractor(fail_at=2), large_sources()
+    # 拆分与限条重试都用完仍截断：保留已完成的批次，不再继续剩余来源
+    llm, sources = Extractor(fail_from=2), large_sources()
     result = await Researcher(llm, Sources(sources), Tracer(), settings).run("方法记录了什么？")
     audit = result.extraction_audit
-    assert audit is not None and result.findings and len(llm.prompts) == 2
-    assert audit.context_batches[0]["status"] == "checked"
-    assert audit.context_batches[1]["status"] == "error"
-    assert all(batch["status"] == "not_attempted" for batch in audit.context_batches[2:])
+    assert audit is not None and result.findings
+    statuses = [batch["status"] for batch in audit.context_batches]
+    assert statuses[0] == "checked" and statuses.count("error") == 1
+    assert all(status == "not_attempted" for status in statuses[statuses.index("error") + 1 :])
     assert "extraction_call_failed:ModelOutputTruncated" in audit.issues
     assert len(audit.sources) == len(sources)
+    assert sum("【输出上限】" in prompt for prompt in llm.prompts) == 1
+
+
+async def test_sources_beyond_one_batch_of_output_are_split_even_when_input_fits(settings):
+    # 线上开放检索：一个子问题 31 万字放得进输入容量，输出却必然截断
+    llm = Extractor()
+    llm.context_window_tokens, llm.input_capacity_chars = 2_000_000, 4_000_000
+    sources = [Source(
+        url=f"https://example.org/full-{index}", title=f"全文 {index}",
+        content=f"第{index}篇论文报告了重建结果。" * 1500,
+    ) for index in range(3)]
+    result = await Researcher(llm, Sources(sources), Tracer(), settings).run("结果如何？")
+    audit = result.extraction_audit
+    assert audit is not None and len(llm.prompts) == len(audit.context_batches) > 2
+    assert all(batch["status"] == "checked" for batch in audit.context_batches)
+    assert all(
+        sum(window["end"] - window["start"] for window in batch["sources"]) <= 32_000
+        for batch in audit.context_batches
+    )
+
+
+async def test_a_truncated_single_long_source_is_split_by_character_range(settings):
+    llm = Extractor(fail_at=1)
+    llm.context_window_tokens, llm.input_capacity_chars = 2_000_000, 4_000_000
+    source = Source(
+        url="https://example.org/one", title="一篇", content="方法在真实数据上稳定重建。" * 800,
+    )
+    result = await Researcher(llm, Sources([source]), Tracer(), settings).run("结果如何？")
+    audit = result.extraction_audit
+    assert audit is not None and len(llm.prompts) == 3
+    batches = audit.context_batches
+    assert [batch["status"] for batch in batches] == ["checked", "checked"]
+    first, second = (batch["sources"][0] for batch in batches)
+    assert first["start"] == 0 and second["end"] == len(source.content)
+    assert second["start"] < first["end"]
+    assert "extraction_call_failed:ModelOutputTruncated" not in audit.issues
+
+
+async def test_paper_scoped_extraction_retries_once_with_an_output_cap(settings):
+    from deep_research.agents.researcher import source_context
+
+    llm = Extractor(fail_at=1)
+    llm.context_window_tokens, llm.input_capacity_chars = 2_000_000, 4_000_000
+    researcher = Researcher(llm, Sources(large_sources()[:1]), Tracer(), settings)
+    researcher.source_context = source_context
+    result = await researcher.run("方法记录了什么？")
+    audit = result.extraction_audit
+    assert audit is not None and result.findings and len(llm.prompts) == 2
+    assert "【输出上限】" in llm.prompts[1] and "【输出上限】" not in llm.prompts[0]
+    assert "extraction_call_failed:ModelOutputTruncated" not in audit.issues
 
 
 async def test_insufficient_fixed_prompt_space_is_distinct_from_output_truncation(settings):

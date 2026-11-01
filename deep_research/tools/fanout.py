@@ -14,6 +14,9 @@ import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TypeVar
 
+from ..models import Source
+from .base import required_sections
+
 T = TypeVar("T")
 R = TypeVar("R")
 
@@ -22,6 +25,31 @@ R = TypeVar("R")
 # 后端，不设限时单次任务要读上百篇；其余相关文献保留摘要，仍可作为证据。
 SEARCH_FULLTEXT_PAPERS = 3
 SEARCH_FULLTEXT_CHARS = 20_000
+
+
+def cap_fulltext(sections: list[Source], query: str, max_chars: int) -> list[Source]:
+    """开放检索展开的一篇论文按总字数截取，放不下的整节跳过，不截断章节。
+
+    选章器整节保留必需章节，问题点名方法、实验或结果时几乎整篇都是必需的（线上一篇 4–5 万字，
+    一个子问题读入 30 万字，抽取输出反复截断）。这里摘要优先，其次是问题点名的章节类型，
+    同类中短的先放，一节长推导不会挤掉结果表与结论；精读与评审按编号取论文，不经过这里。
+    """
+    if sum(len(source.content) for source in sections) <= max_chars:
+        return sections
+    wanted = required_sections(query)
+
+    def rank(item: tuple[int, Source]) -> tuple[bool, bool, int, int]:
+        index, source = item
+        kind = source.scholarly.section if source.scholarly else ""
+        return kind != "abstract", kind not in wanted, len(source.content), index
+
+    chosen: set[int] = set()
+    used = 0
+    for index, source in sorted(enumerate(sections), key=rank):
+        if not chosen or used + len(source.content) <= max_chars:
+            chosen.add(index)
+            used += len(source.content)
+    return [source for index, source in enumerate(sections) if index in chosen]
 
 
 async def expand_leading(

@@ -112,6 +112,17 @@ async def test_optimistic_verdict_cannot_bind_unrelated_evidence(text, evidence,
     ),
     ("Alpha 的光谱维共 28 个波段 [1]。", "Alpha keeps twenty-eight spectral bands."),
     ("Alpha 共采集 5 个场景 [1]。", "Alpha 共采集五个场景。"),
+    # 线上精读的原句：LaTeX 源码把科学计数法拆进三段行内公式
+    (
+        "Alpha 的初始学习率为 $4\\times10^{-4}$ [1]。",
+        "The initial learning rate is 4$\\times$10$^{-4}$.",
+    ),
+    # 线上派生幻灯片：原文写复数 HSIs，正文写 HSI
+    (
+        "端到端方法直接学习压缩图像到 HSI 的映射 [1]。",
+        "Deep learning based methods learning the mappings between the compressive images"
+        " and the HSIs directly achieved much better results.",
+    ),
 ])
 async def test_alignment_preserves_supported_values_arithmetic_and_translated_prose(text, quote):
     reviewer = SupportReviewer(SelectedJudge(["a"]), [item("a", quote)], 50000)

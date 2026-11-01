@@ -85,12 +85,112 @@ async def test_sc60_reciprocal_error_cannot_pass_an_optimistic_general_review():
         (r"y=R(z)", r"y=Rz", "unresolved"),
         (r"\sqrt10", r"\sqrt{10}", "unresolved"),
         (r"x^12", r"x^{12}", "unresolved"),
+        # DAUHST 原文的写法：只差空白、逗号、范数竖线、算子名或定义等号（2026-11-01 线上精读）
+        (
+            r"\mathbf{y} = \mathbf{\Phi}\mathbf{x} + \mathbf{n},",
+            r"\mathbf{y} = \mathbf{\Phi} \mathbf{x} + \mathbf{n},",
+            "equal",
+        ),
+        (
+            r"\hat{\mathbf{x}} = \arg\min_{\mathbf{x}} \frac{1}{2}\|\mathbf{y} - "
+            r"\mathbf{\Phi}\mathbf{x}\|^2 + \tau R(\mathbf{x})",
+            r"\mathbf{\hat{x}} = \text{arg}~\underset{\mathbf{x}}{\text{min}}~~\frac{1}{2} || "
+            r"\mathbf{y} - \mathbf{\Phi} \mathbf{x} ||^2 + \tau R(\mathbf{x}),",
+            "equal",
+        ),
+        (r"k = 0,1,\ldots,K-1", r"k = 0, 1,~...~, K-1", "equal"),
+        (r"\alpha_k = \mu_k", r"\alpha_k \stackrel{\rm def}{=} \mu_k", "equal"),
+        (
+            r"(\boldsymbol{\alpha},\beta) = E,\qquad x_{k}",
+            r"(\bm{\alpha}, \beta) = E,~~~~x_k",
+            "equal",
+        ),
+        (r"\mathbf{y} = \mathbf{\Phi}\mathbf{x}", r"\mathbf{y} = \Phi\mathbf{x}", "unresolved"),
+        (r"k = 0,1,\ldots,K-1", r"k = 1,\ldots,K", "unresolved"),
+        (r"\|x\|^2", r"|x|^2", "unresolved"),
+        (r"\alpha_k = \mu_k", r"\alpha_{k+1} \stackrel{\rm def}{=} \mu_k", "unresolved"),
     ],
 )
 def test_structural_comparison_is_conservative(reported, reference, expected):
     from deep_research.workbench.formula_structure import compare_formulas
 
     assert compare_formulas(reported, reference)[0] == expected
+
+
+class Binding(Optimistic):
+    """核对者把每条公式绑定到第一条参考式，判为 same，不写等价说明（线上实际的回答形态）。"""
+
+    FORMULA_ASPECTS = ("symbols", "coefficients", "subscripts", "superscripts", "bounds")
+
+    async def parse(self, system, user, schema, **kwargs):
+        from deep_research.workbench.formula_review import FormulaDecisions
+
+        if schema is not FormulaDecisions:
+            return await super().parse(system, user, schema, **kwargs)
+        data = json.loads(user)
+        ref = data["reference_formulas"][0]
+        return FormulaDecisions(
+            decisions=[
+                dict(
+                    formula_id=formula["id"],
+                    verdict="matched",
+                    source_id=ref["source_id"],
+                    reference_id=ref["id"],
+                    source_quote=ref["tex"],
+                    checks={key: "same" for key in self.FORMULA_ASPECTS},
+                    reason="待核公式与来源中局部分支的通道维度一致",
+                )
+                for formula in data["formulas"]
+            ]
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reported, passes", [("C/2", True), ("D/2", False)])
+async def test_a_quoted_subexpression_needs_no_rewrite_explanation_unless_it_adds_symbols(
+    reported, passes
+):
+    from deep_research.workbench.prose_review import can_revise
+
+    quote = (
+        r"where $\mathbf{Q}_l, \mathbf{K}_l, \mathbf{V}_l\in \mathbb{R}^{H\times \hat{W}"
+        r"\times \frac{C}{2}}$ are fed into the local branch"
+    )
+    source = "https://example.org/hst"
+    reviewer = SupportReviewer(
+        Binding(), [dict(id="hsa", citation=1, quote=quote, source=source)], 50000
+    )
+    unit = SupportUnit(
+        "split", f"HS-MSA 将 Q、K、V 沿通道均分，一半（维度 ${reported}$）进入局部分支 [1]。",
+        kind="prose", citations=[1],
+    )
+    decision = (await reviewer.review([unit]))[0]
+    assert (decision.formula_review["status"] == "pass") is passes
+    if not passes:
+        # 写法对不上是正文问题：照常修订，不当作核验未完成而整篇停修
+        assert decision.reason.startswith("公式未能与所引原文对上：公式写法不同")
+        assert can_revise([decision])
+
+
+@pytest.mark.asyncio
+async def test_a_failed_formula_call_still_stops_revision():
+    from deep_research.workbench.prose_review import can_revise
+
+    class Broken(Optimistic):
+        async def parse(self, system, user, schema, **kwargs):
+            from deep_research.workbench.formula_review import FormulaDecisions
+
+            if schema is FormulaDecisions:
+                raise RuntimeError("channel down")
+            return await super().parse(system, user, schema, **kwargs)
+
+    reviewer = SupportReviewer(
+        Broken(), [dict(id="s", citation=1, quote=RAW_PDF, source="https://example.org/d")], 50000
+    )
+    unit = SupportUnit("eq11", f"论文式(11)： $${CORRECT}$$ [1]。", kind="prose", citations=[1])
+    decision = (await reviewer.review([unit]))[0]
+    assert decision.reason.startswith("公式专门核验未完成")
+    assert not can_revise([decision])
 
 
 class Specialist(Optimistic):

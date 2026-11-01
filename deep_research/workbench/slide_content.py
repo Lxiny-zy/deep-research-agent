@@ -115,13 +115,30 @@ def apply_brief(deck: SlideDeck, contract: Any, query: str) -> SlideDeck:
             if len(pages) == 1 and not ambiguous and 1 <= next(iter(pages)) <= 100
             else None,
             "speaking_rate": rate,
+            "subtitle": _cover_subtitle(deck.subtitle, text),
         }
     )
 
 
-def deck_to_markdown(deck: SlideDeck) -> str:
+def _cover_subtitle(subtitle: str, brief: str) -> str:
+    """封面副标题不经证据核验：去掉角标，其中的数字必须出自用户的要求，否则不上封面。"""
+    text = re.sub(r"\s*\[\d+(?:\s*[,，]\s*\d+)*\]", "", subtitle).strip()
+    allowed = set(re.findall(r"\d+(?:\.\d+)?", brief))
+    if any(number not in allowed for number in re.findall(r"\d+(?:\.\d+)?", text)):
+        return ""
+    return text
+
+
+def deck_to_markdown(deck: SlideDeck, *, legacy: bool = False) -> str:
+    """幻灯片的审核正文。
+
+    副标题与标题一样是封面信息（场合、听众、时长），由 ``apply_brief`` 限定后只上封面，
+    不进审核正文：给它挂上全部角标后，「约 10 分钟」会被当作有引用的数值事实。
+    ``legacy`` 重现 2026-11-01 之前的写法（副标题挂全部角标、每条要点都挂整页角标），
+    只用于核对此前审核过的正文。
+    """
     lines = [f"# {deck.title}", ""]
-    if deck.subtitle:
+    if deck.subtitle and legacy:
         cite = "".join(f"[{i}]" for i in sorted({i for s in deck.slides for i in s.citations}))
         lines += [f"{deck.subtitle} {cite}".strip(), ""]
     for number, slide in enumerate(deck.slides, 1):
@@ -129,7 +146,9 @@ def deck_to_markdown(deck: SlideDeck) -> str:
         lines.append(f"## {number}. {slide.title}")
         # 要点自带角标时不再附整页引用，否则这一条要为整页文献逐一负责
         lines += [
-            f"- {bullet}" if _INLINE_CITATION.search(bullet) else f"- {bullet} {cite}".rstrip()
+            f"- {bullet}"
+            if _INLINE_CITATION.search(bullet) and not legacy
+            else f"- {bullet} {cite}".rstrip()
             for bullet in slide.bullets
         ]
         if slide.visual:
@@ -165,7 +184,8 @@ def compile_deck(
     *,
     corroboration: bool = False,
     image_sources: dict[str, Any] | None = None,
-    statement_citations: bool = False,
+    statement_citations: int = 0,
+    legacy: bool = False,
 ) -> tuple[dict[str, Any], str]:
     """Rebuild visible data from admitted findings; model-supplied data is ignored.
 
@@ -274,7 +294,7 @@ def compile_deck(
             )
         target["visual_data"] = data
     markdown, record = render_specs(
-        deck_to_markdown(deck), results, mapping, corroboration=corroboration,
+        deck_to_markdown(deck, legacy=legacy), results, mapping, corroboration=corroboration,
         statement_citations=statement_citations,
     )
     if record.get("errors"):

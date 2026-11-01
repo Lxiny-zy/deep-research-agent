@@ -32,7 +32,12 @@ import httpx
 
 from ..models import ScholarlyMetadata, Source
 from .base import SearchTool, reading_question, required_sections
-from .fanout import SEARCH_FULLTEXT_CHARS, SEARCH_FULLTEXT_PAPERS, expand_leading
+from .fanout import (
+    SEARCH_FULLTEXT_CHARS,
+    SEARCH_FULLTEXT_PAPERS,
+    cap_fulltext,
+    expand_leading,
+)
 from .oa_pdf_fulltext import OaPdfFetcher, OaPdfFulltextError
 
 logger = logging.getLogger(__name__)
@@ -152,12 +157,9 @@ class OpenAlexSearch(SearchTool):
             return [source]
         query = reading_question(query)
         required = required_sections(query)
-        return await fetcher.sections(
-            source,
-            query,
-            max_chars=min(self._fulltext_max_chars, SEARCH_FULLTEXT_CHARS),
-            required=required,
-        )
+        budget = min(self._fulltext_max_chars, SEARCH_FULLTEXT_CHARS)
+        sections = await fetcher.sections(source, query, max_chars=budget, required=required)
+        return cap_fulltext(sections, query, budget)
 
 
 def _to_source(item: dict[str, Any]) -> Source | None:

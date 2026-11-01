@@ -747,3 +747,25 @@ async def test_open_search_reads_a_bounded_amount_of_full_text() -> None:
         "Abstract 2401.00004",
     ]
     assert budgets == [SEARCH_FULLTEXT_CHARS] * SEARCH_FULLTEXT_PAPERS
+
+
+def test_one_paper_from_open_search_stays_within_its_character_budget() -> None:
+    from deep_research.models import ScholarlyMetadata
+    from deep_research.tools.fanout import cap_fulltext
+
+    # 线上：问题点名方法与结果时选章器整节保留必需章节，一篇读入 4–5 万字
+    def section(kind: str, size: int) -> Source:
+        meta = ScholarlyMetadata(work_id="2205.10102", section=kind)
+        return Source(url=f"https://arxiv.org/abs/2205.10102?dr_section={kind}{size}",
+                      title="DAUHST", content="x" * size, scholarly=meta)
+
+    sections = [
+        section("abstract", 1_300), section("introduction", 6_000), section("method", 18_000),
+        section("method", 8_500), section("results", 1_900), section("conclusion", 1_200),
+    ]
+    kept = cap_fulltext(sections, "各方法的 PSNR 结果如何？", 20_000)
+    assert [s.scholarly.section for s in kept] == ["abstract", "introduction", "method", "results",
+                                                     "conclusion"]
+    assert sum(len(s.content) for s in kept) <= 20_000
+    assert [len(s.content) for s in kept if s.scholarly.section == "method"] == [8_500]
+    assert cap_fulltext(sections[:2], "结果", 20_000) == sections[:2]
