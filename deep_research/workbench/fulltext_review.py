@@ -42,6 +42,12 @@ _TABLE_CAPTION = re.compile(
 )
 
 
+# 每批回查的分段数上限：每段都要返回判断与理由，按输入容量装满时输出会超过渠道上限
+_MAX_CHECK_PARTS = 12
+# 输出仍被截断时对半拆批的最多层数
+_MAX_CHECK_SPLITS = 3
+
+
 def explicit_absence(text: str) -> bool:
     # Scope notes disclose the limits of the saved evidence; they do not assert
     # that the source itself omitted the information.
@@ -265,8 +271,19 @@ def fulltext_supports(unit: Any, record: Any, corpus: FullTextCorpus) -> bool:
         isinstance(record, dict)
         and record.get("status") in {"absence_confirmed", "critique_supported"}
         and validate_fulltext_record(unit, record, corpus) is None
-        and (record["status"] != "absence_confirmed" or bool(_FULLTEXT_WORDING.search(unit.text)))
+        and (
+            record["status"] != "absence_confirmed"
+            or bool(_FULLTEXT_WORDING.search(unit.text) or _SCOPED_ABSENCE.search(unit.text))
+        )
     )
+
+
+# 全文回查已确认缺失时，限定在本次证据范围内的写法同样成立（措辞要求，不是事实门）：
+# 第五轮线上精读写「现有证据未给出多次运行的方差」，被要求逐字改成「全文文本中未见」
+_SCOPED_ABSENCE = re.compile(
+    r"(?:现有|本次|已核验|所引|已取得)(?:的)?(?:全文|证据|材料|发现|摘录|原文)(?:文本)?(?:中)?(?:均|也)?"
+    r"(?:未|没有|并未|不足以|无法)(?:给出|见|报告|提供|列出|说明|确认|核实)"
+)
 
 
 def located_passages(unit: Any, record: Any, corpus: FullTextCorpus) -> list[dict[str, Any]]:
@@ -489,7 +506,7 @@ class FullTextReviewer:
             for part in parts:
                 group = [*(batches[-1] if batches else []), part]
                 size = overhead + len(json.dumps({**base, "parts": group}, ensure_ascii=False))
-                if batches and size <= self.capacity:
+                if batches and size <= self.capacity and len(batches[-1]) < _MAX_CHECK_PARTS:
                     batches[-1].append(part)
                 else:
                     if (
@@ -535,27 +552,40 @@ class FullTextReviewer:
         return record
 
     async def _check_batch(
-        self, base: dict[str, Any], batch: list[dict[str, Any]]
+        self, base: dict[str, Any], batch: list[dict[str, Any]], *, depth: int = 0
     ) -> list[dict[str, Any]]:
         """逐段取得判断。漏回、重复矛盾或引文无法定位的分段只补发一次，仍不成立的记为不确定。
 
         线上精读时模型偶尔漏回几个 part_id，或引文的空白与抽取文本不同。原先整条
         断言因此记为「核查未完成」，连带整篇停止修订；不确定的分段仍不能支持缺失判断。
+        一批按输入容量装满时，逐段判断的输出可能超过渠道上限（第四轮精读与幻灯片），
+        这时把这一批对半拆开分别核查，而不是整条断言记为未完成。
         """
-        from ..llm import verification_generation_options
+        from ..llm import ModelOutputTruncated, verification_generation_options
 
         done: dict[str, dict[str, Any]] = {}
         pending = batch
         for attempt in range(2):
             if attempt and self.on_progress is not None:
                 self.on_progress(f"补发 {len(pending)} 个未得到可用判断的分段…")
-            response = await self.llm.parse(
-                _CHECK_SYSTEM,
-                json.dumps({**base, "parts": pending}, ensure_ascii=False),
-                FullTextChecks,
-                temperature=0.0,
-                **verification_generation_options(self.llm),
-            )
+            try:
+                response = await self.llm.parse(
+                    _CHECK_SYSTEM,
+                    json.dumps({**base, "parts": pending}, ensure_ascii=False),
+                    FullTextChecks,
+                    temperature=0.0,
+                    **verification_generation_options(self.llm),
+                )
+            except ModelOutputTruncated:
+                if len(pending) < 2 or depth >= _MAX_CHECK_SPLITS:
+                    raise
+                if self.on_progress is not None:
+                    self.on_progress("核查输出超过模型上限，拆成两批回查…")
+                half = len(pending) // 2
+                for group in (pending[:half], pending[half:]):
+                    for checked in await self._check_batch(base, group, depth=depth + 1):
+                        done[checked["id"]] = checked
+                return [done[part["id"]] for part in batch]
             expected = {part["id"]: part for part in pending}
             answers: dict[str, list[FullTextPartDecision]] = {}
             for item in response.checks:

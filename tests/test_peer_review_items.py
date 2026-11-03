@@ -432,3 +432,36 @@ async def test_real_paragraph_editor_accepts_a_structural_score_problem():
     )
     assert repaired == body.replace("7/10", "5/10")
     assert (await reviewer.review(repaired))["peer_review"]["status"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_structure_check_is_split_and_retried():
+    # 第五轮线上同行评审（0e9fcdfd）：两两比较的输出超过上限，整份评审被判为不可修订
+    from deep_research.llm import ModelOutputTruncated
+    from deep_research.workbench.peer_review_items import (
+        PeerReviewChecker,
+        PeerReviewComparisons,
+    )
+
+    class Truncating:
+        input_capacity_chars = 1_000_000
+        sizes: list[int] = []
+
+        async def parse(self, system, user, schema, **kwargs):
+            pairs = json.loads(user)["pairs"]
+            self.sizes.append(len(pairs))
+            if len(pairs) > 3:
+                raise ModelOutputTruncated(1024)
+            return schema(pairs=[
+                {"pair_id": p["id"], "verdict": "consistent", "reason": "same scope"}
+                for p in pairs
+            ])
+
+    llm = Truncating()
+    checker = PeerReviewChecker(llm, [], 1_000_000, query="q")
+    entries = [{"id": f"p{n}"} for n in range(40)]
+    values = await checker._batches(
+        entries, "system", PeerReviewComparisons, lambda batch: {"pairs": batch}, "pairs", "pair_id"
+    )
+    assert [v.pair_id for v in values] == [e["id"] for e in entries]
+    assert max(llm.sizes) <= 16 and min(llm.sizes) >= 2

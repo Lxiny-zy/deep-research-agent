@@ -1179,6 +1179,7 @@ class DataAnalyst:
             '{"id":"t1","title":"表 1 描述统计","ledger_path":["describe"]}。'
             "ledger_path 指向统计台账中的记录，代码按记录取值并写中文表头；"
             "不直接写 Markdown、HTML 或 LaTeX 表格。"
+            "正文与表题只写读者能看懂的统计含义，不提 ledger_path、evidence-table 等规格字段。"
             "ledger_path 只能从当前台账的可用路径中逐字选择："
             + "、".join(
                 json.dumps(path, ensure_ascii=False) for path in ledger_paths(result.snapshot())

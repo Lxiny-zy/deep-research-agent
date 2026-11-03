@@ -14,6 +14,8 @@ from ..prompting import structured_system_prompt
 from .support import SupportDecision, SupportUnit, digest
 
 PEER_REVIEW_POLICY_VERSION = 2
+# 每批结构核对的条目数上限：按输入容量装满时，两两比较的输出会超过渠道上限
+_MAX_BATCH_ENTRIES = 16
 CRITICAL_SCORE_CEILING = 6
 PEER_REVIEW_RULES = (
     "评审条目须区分优点、已证实的不足、待澄清问题与建议；每条事实性评价有原文依据。"
@@ -297,7 +299,7 @@ class PeerReviewChecker:
             size = len(structured_system_prompt(system, schema)) + len(
                 json.dumps(payload(candidate), ensure_ascii=False)
             )
-            if size > capacity:
+            if size > capacity or len(candidate) > _MAX_BATCH_ENTRIES:
                 if not current:
                     raise ValueError("评审结构检查输入超过模型容量")
                 batches.append(current)
@@ -314,16 +316,40 @@ class PeerReviewChecker:
             batches.append(current)
         result = []
         for batch in batches:
+            result.extend(await self._ask(batch, system, schema, payload, field, id_field))
+        return result
+
+    async def _ask(
+        self,
+        batch: list[dict[str, Any]],
+        system: str,
+        schema: Any,
+        payload: Any,
+        field: str,
+        id_field: str,
+        depth: int = 0,
+    ) -> list[Any]:
+        """输出超过渠道上限时对半拆开重试（第五轮线上同行评审整份评审因此不可修订）。"""
+        from ..llm import ModelOutputTruncated
+
+        try:
             response = await self.llm.parse(
                 system, json.dumps(payload(batch), ensure_ascii=False), schema
             )
-            values = getattr(response, field)
-            if len(values) != len(batch) or {getattr(v, id_field) for v in values} != {
-                v["id"] for v in batch
-            }:
-                raise ValueError("评审结构检查遗漏、重复或引用了未知条目")
-            result.extend(values)
-        return result
+        except ModelOutputTruncated:
+            if len(batch) < 2 or depth >= 3:
+                raise
+            half = len(batch) // 2
+            return [
+                *await self._ask(batch[:half], system, schema, payload, field, id_field, depth + 1),
+                *await self._ask(batch[half:], system, schema, payload, field, id_field, depth + 1),
+            ]
+        values = getattr(response, field)
+        if len(values) != len(batch) or {getattr(v, id_field) for v in values} != {
+            v["id"] for v in batch
+        }:
+            raise ValueError("评审结构检查遗漏、重复或引用了未知条目")
+        return list(values)
 
     def _derive(
         self,

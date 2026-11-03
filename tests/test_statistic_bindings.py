@@ -538,3 +538,17 @@ def test_wrong_values_in_those_forms_are_still_rejected(body, wrong, replacement
 
     assert wrong in body
     assert statistic_scope_issues(body.replace(wrong, replacement), PAIRED)
+
+
+# 第五轮线上数据分析（9b48377e）第 56 行：分号后的口径说明沿用前一分句点名的两列
+SCOPE_NOTE = (
+    "表 3 用于展示 baseline_psnr 与 proposed_psnr 的 Pearson 相关；"
+    "口径为两两成对删除缺失值后的有效样本量 n={n}；单位台账未提供。"
+)
+
+
+def test_a_scope_note_keeps_the_correlation_named_before_it():
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert not statistic_scope_issues(SCOPE_NOTE.format(n=12), PAIRED)
+    assert statistic_scope_issues(SCOPE_NOTE.format(n=13), PAIRED)

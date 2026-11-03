@@ -482,13 +482,24 @@ class FormulaReviewer:
                     )
                     continue
             pending.append(formula)
+        if pending and not packets and any(
+            not _not_source_claim(unit, formula) for formula in pending
+        ):
+            # 公式标了引用，但所引来源里没有可对照的原文：这是正文问题（引错来源或公式无出处），
+            # 可以修订；原先记为「公式专门核验未完成」，第五轮线上同行评审因此整份停修
+            for formula in pending:
+                complete[formula["id"]] = FormulaDecision(
+                    formula_id=formula["id"],
+                    verdict="uncertain",
+                    checks=unknown_checks,
+                    reason="所引来源中没有给出该公式的原文，请改引实际给出该式的来源或删去该式",
+                )
+            pending = []
         if pending:
             payload, width = _payload(unit, pending, packets, refs, self.capacity)
             if width is not None:
                 record["source_window"] = width
             try:
-                if not packets and any(not _not_source_claim(unit, formula) for formula in pending):
-                    raise ValueError("缺少对应公式原文")
                 if payload is None:
                     raise ValueError("公式与原文超过核验容量，未截断内容")
                 response = await self.llm.parse(_SYSTEM, payload, FormulaDecisions, temperature=0.0)

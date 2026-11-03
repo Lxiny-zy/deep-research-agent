@@ -195,6 +195,17 @@ async def test_absence_requires_every_original_part_and_explicit_fulltext_wordin
 
 
 @pytest.mark.asyncio
+async def test_an_evidence_scoped_absence_is_accepted_once_the_full_text_confirms_it():
+    # 第五轮线上精读（5d5dc4c7）：「现有证据未给出…」被要求逐字改写为「全文文本中未见」
+    _, corpus = make_corpus(complete=True)
+    reviewer = SupportReviewer(FullTextJudge(), [], 20000, fulltext_corpus=corpus)
+    scoped = SupportUnit("s", "现有证据未给出 dropout 设置的多次运行方差。", kind="prose")
+    assert (await reviewer.review([scoped]))[0].verdict == "supported"
+    vague = SupportUnit("v", "作者没有给出 dropout 设置。", kind="prose")
+    assert (await reviewer.review([vague]))[0].verdict == "unsupported"
+
+
+@pytest.mark.asyncio
 async def test_a_partial_document_cannot_prove_absence_and_other_papers_cannot_refute_it():
     sources, _ = make_corpus(complete=True)
     other = Source(url="https://example.org/beta.pdf", content=DGSMP_PAGE8)
@@ -236,6 +247,28 @@ async def test_a_part_the_model_skipped_is_asked_again_and_the_check_completes()
     assert validate_fulltext_record(unit, record, corpus) is None
     # Target, the batch, then only the skipped part.
     assert llm.calls == 3 and len(llm.parts) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_check_is_split_instead_of_left_unfinished():
+    # 第四轮线上精读与幻灯片：一批分段的逐段判断超过输出上限，整条断言记为「全文核查未完成」
+    from deep_research.llm import ModelOutputTruncated
+
+    class TruncatesLargeBatches(FullTextJudge):
+        async def parse(self, system, user, schema, **kwargs):
+            if schema is FullTextChecks and len(json.loads(user)["parts"]) > 1:
+                self.calls += 1
+                raise ModelOutputTruncated(1024)
+            return await super().parse(system, user, schema, **kwargs)
+
+    source = mark_complete_sources(
+        [Source(url="https://example.org/long.pdf", content="Ordinary text. " * 1200)]
+    )[0]
+    corpus = FullTextCorpus([source], {})
+    unit = SupportUnit("u", "全文未见 dropout 设置。", kind="prose")
+    record = await FullTextReviewer(TruncatesLargeBatches(), corpus, 20000).review(unit)
+    assert record["status"] == "absence_confirmed", record.get("reason")
+    assert validate_fulltext_record(unit, record, corpus) is None
 
 
 @pytest.mark.asyncio

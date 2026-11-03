@@ -612,3 +612,20 @@ def test_a_paper_beyond_the_full_text_budget_is_windowed_even_when_capacity_allo
     assert width == 12_000
     assert CORRECT in json.loads(payload)["sources"][0]["context"]
     assert len(payload) < 2 * 12_000 + 5_000
+
+
+@pytest.mark.asyncio
+async def test_a_formula_whose_cited_source_has_no_text_is_revisable():
+    # 第五轮线上同行评审（0e9fcdfd）：公式标的引用下没有原文，记为「核验未完成」后整份停修
+    from deep_research.document_corpus import FullTextCorpus
+    from deep_research.workbench.formula_review import FormulaReviewer
+
+    llm = Specialist()
+    unit = SupportUnit("eq", f"论文式(11)： $${CORRECT}$$ [1]。", kind="prose", citations=[1])
+    record = await FormulaReviewer(llm, [], FullTextCorpus([], {}), 50000).review(unit)
+    assert record["status"] == "fail" and not llm.inspections
+    assert "改引实际给出该式的来源" in record["reason"]
+    # support 只把「公式专门核验未完成」开头的决定当作核验失败（整篇停修）
+    assert not any(
+        str(row["reason"]).startswith("公式专门核验未完成") for row in record["decisions"]
+    )
