@@ -79,7 +79,7 @@ async def seed(sessionmaker):
         session.add(orm.RenderJobRow(
             run_id="alice-run", key="render-key", pool="local", kind="pdf", payload={},
             payload_hash="render-hash", status="pending", created_at=time.time(),
-            queued_at=time.time() - 30, available_at=time.time(), attempts=1, stalls=0,
+            queued_at=time.time() - 60, available_at=time.time(), attempts=1, stalls=0,
         ))
         await session.commit()
     return now

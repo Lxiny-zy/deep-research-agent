@@ -351,3 +351,149 @@ def test_unknown_variable_or_group_cannot_fall_back_to_a_known_scope(body):
     from deep_research.workbench.analysis_review import statistic_scope_issues
 
     assert statistic_scope_issues(body, LEDGER)
+
+
+PAIRED_WITH_MEDIANS = {
+    **PAIRED,
+    "describe": [
+        {"variable": "baseline_psnr", "n": 12, "mean": 34.1933, "std": 1.008, "median": 34.07},
+        {"variable": "proposed_psnr", "n": 12, "mean": 34.9583, "std": 0.9727, "median": 34.99},
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "baseline_psnr 的 n=12，proposed_psnr 的 n=12。"
+        "同一行配对检验的完整配对数=12，排除不完整配对=0。",
+        "baseline_psnr 标准差=1.008、proposed_psnr 标准差=0.9727 分别是两个测量列的离散；"
+        "配对差值标准差=0.1514 是配对差值的离散。",
+        "baseline_psnr 与 proposed_psnr 的描述统计分别为均值 34.1933、34.9583，"
+        "中位数 34.07、34.99。",
+    ],
+)
+def test_paired_statistics_follow_the_test_when_one_column_is_carried_over(body):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert not statistic_scope_issues(body, PAIRED_WITH_MEDIANS)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "baseline_psnr 的 n=12，proposed_psnr 的 n=12。同一行配对检验的完整配对数=13。",
+        "baseline_psnr 标准差=1.008、proposed_psnr 标准差=0.9727 分别是两个测量列的离散；"
+        "配对差值标准差=0.25 是配对差值的离散。",
+        "baseline_psnr 与 proposed_psnr 的描述统计分别为均值 34.1933、34.9583，"
+        "中位数 34.99、34.07。",
+    ],
+)
+def test_wrong_paired_values_are_still_rejected_after_the_carry_over(body):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert statistic_scope_issues(body, PAIRED_WITH_MEDIANS)
+
+
+THREE_GROUPS = {
+    "rows": 15,
+    "describe": [{"variable": "ssim", "n": 15, "mean": 0.93, "std": 0.016}],
+    "composition": [
+        {
+            "column": "method",
+            "n": 15,
+            "missing": 0,
+            "distinct": 3,
+            "levels_status": "complete",
+            "levels": [{"label": "A", "n": 5}, {"label": "B", "n": 5}, {"label": "C", "n": 5}],
+        },
+        {"column": "scene", "n": 15, "missing": 0, "distinct": 15, "levels": []},
+    ],
+    "tests": [
+        {
+            "variable": "ssim",
+            "group": "method",
+            "method": "单因素方差分析",
+            "statistic": 32.3489,
+            "p_value": 1.4668693e-05,
+            "n_total": 15,
+            "group_summaries": [
+                {"label": "A", "n": 5, "mean": 0.9102},
+                {"label": "B", "n": 5, "mean": 0.9318},
+                {"label": "C", "n": 5, "mean": 0.9478},
+            ],
+            "robust_method": "Kruskal–Wallis",
+            "robust_p": 0.0024540882,
+            "posthoc": [
+                {
+                    "left_group": "A",
+                    "right_group": "B",
+                    "method": "Tukey HSD",
+                    "mean_difference": 0.0216,
+                    "p_value": 0.0016238187,
+                },
+                {
+                    "left_group": "B",
+                    "right_group": "C",
+                    "method": "Tukey HSD",
+                    "mean_difference": 0.016,
+                    "p_value": 0.013274368,
+                },
+            ],
+        }
+    ],
+    "correlations": [],
+}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "method 列有效 n=15，构成为 method=A 组 n=5、method=B 组 n=5、method=C 组 n=5；"
+        "scene 列有效 n=15。",
+        "按 method 每组 n=5 与 scene 不同取值数=15，可推出每个 method 组对应 5 个不同 scene 标签。",
+        "稳健性复核：ssim 按 method 的 Kruskal–Wallis 检验 p=0.0024540882。"
+        "样本效应量描述样本关联，有效总样本量=15（变量 ssim，比较分组 method）。",
+        "三对比较的 ssim 平均差方向与 ssim 按 method 的样本均值顺序 C > B > A 一致，"
+        "全部 p 值均小于 0.05。",
+        "ssim 按 method 的样本均值顺序为 C (0.9478) > B (0.9318) > A (0.9102)，"
+        "每组有效样本量 n=5。",
+    ],
+)
+def test_report_sentences_about_groups_and_composition_bind_to_their_records(body):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert not statistic_scope_issues(body, THREE_GROUPS)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "method=C 组 n=5；scene 列有效 n=12。",
+        "按 method 每组 n=4 与 scene 不同取值数=15。",
+        "ssim 按 method 的 Kruskal–Wallis 检验有效总样本量=15。",
+        "三对比较的 ssim 平均差方向与 ssim 按 method 的样本均值顺序 C > B > A 一致，"
+        "全部 p 值均小于 0.01。",
+        "ssim 按 method 的样本均值顺序为 C (0.9318) > B (0.9478) > A (0.9102)。",
+    ],
+)
+def test_wrong_group_and_composition_values_stay_rejected(body):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert statistic_scope_issues(body, THREE_GROUPS)
+
+
+@pytest.mark.parametrize(
+    ("body", "bound"),
+    [
+        ("mass 的 p 值小于 0.05。", True),
+        ("mass 的 p 值低于 0.05。", True),
+        ("mass 的 p 值不超过 0.02。", True),
+        ("mass 的 p 值小于 0.01。", False),
+        ("mass 的 p 值大于 0.05。", False),
+    ],
+)
+def test_threshold_words_compare_against_the_recorded_value(body, bound):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert bool(statistic_scope_issues(body, LEDGER)) is not bound

@@ -234,9 +234,44 @@ _SYSTEM = (
 )
 
 
+_REQUOTE = (
+    "\n【位置复核】上一次有 location.quote 不是所指区域 text 的连续原文。"
+    "重新判定时，quote 只复制区域 text 中的一段连续原文，不改写、不省略、不拼接。"
+)
+
+
 def _normal(text: str) -> str:
     text = re.sub(r"【(?:概念|事实|待研究)】|（(?:包含|依赖|支持|导致|比较|未明|缺口)）", "", text)
     return re.sub(r"\s+|[*_`#]", "", unicodedata.normalize("NFKC", text)).casefold()
+
+
+def _verbatim(quote: str, text: str) -> str | None:
+    if not quote or quote in text:
+        return quote or None
+    # 模型抄录时常改动空白、全半角或强调记号；对齐后取回正文原样
+    folded = [
+        (index, letter)
+        for index, character in enumerate(text)
+        for letter in unicodedata.normalize("NFKC", character).casefold()
+        if not letter.isspace() and letter not in "*_`#"
+    ]
+    wanted = re.sub(r"\s+|[*_`#]", "", unicodedata.normalize("NFKC", quote)).casefold()
+    at = "".join(letter for _, letter in folded).find(wanted) if wanted else -1
+    if at < 0:
+        return None
+    return text[folded[at][0] : folded[at + len(wanted) - 1][0] + 1]
+
+
+def _place(location: CoverageLocation, parts: list[dict[str, Any]]) -> bool:
+    """把位置落到本次提供的正文上；区域编号写错但原文确实在别的区域时改指那里。"""
+    named = [part for part in parts if part["id"] == location.region_id]
+    for part in [*named, *(part for part in parts if part["id"] != location.region_id)]:
+        quote = _verbatim(location.quote, part["text"])
+        if quote:
+            location.quote = quote
+            location.region_id = part.get("parent_id", part["id"])
+            return True
+    return False
 
 
 def _substantive(text: str, item: RequestedItem) -> bool:
@@ -483,18 +518,35 @@ class CoverageReviewer:
             prompt = payload(items, parts, merge=merge)
             if overhead + len(prompt) > self.capacity:
                 raise ValueError("要求与覆盖候选超过核验容量，未截断要求")
-            response = await self.llm.parse(_SYSTEM, prompt, CoverageDecisions, temperature=0.0)
-            ids = [decision.requirement_id for decision in response.decisions]
-            if len(ids) != len(items) or set(ids) != {item.id for item in items}:
-                raise ValueError("覆盖核验遗漏、重复或添加了要求编号")
-            allowed = {part["id"]: part for part in parts}
-            for decision in response.decisions:
-                for location in decision.locations:
-                    part = allowed.get(location.region_id)
-                    if part is None or not location.quote or location.quote not in part["text"]:
-                        raise ValueError("覆盖核验位置超出本次提供的正文")
-                    location.region_id = part.get("parent_id", part["id"])
-            return response.decisions
+
+            async def ask(text: str) -> list[CoverageDecision]:
+                response = await self.llm.parse(_SYSTEM, text, CoverageDecisions, temperature=0.0)
+                ids = [decision.requirement_id for decision in response.decisions]
+                if len(ids) != len(items) or set(ids) != {item.id for item in items}:
+                    raise ValueError("覆盖核验遗漏、重复或添加了要求编号")
+                return response.decisions
+
+            def unplaced(rows: list[CoverageDecision]) -> list[CoverageLocation]:
+                return [
+                    location
+                    for row in rows
+                    for location in row.locations
+                    if not _place(location, parts)
+                ]
+
+            decisions = await ask(prompt)
+            missed = unplaced(decisions)
+            if missed and overhead + len(prompt + _REQUOTE) <= self.capacity:
+                decisions = await ask(prompt + _REQUOTE)
+                missed = unplaced(decisions)
+            for decision in decisions:
+                located = [row for row in decision.locations if row not in missed]
+                # 对不上的位置不算作覆盖：这是可修订的问题，不是核验失败
+                if decision.locations and not located and decision.status != "missing":
+                    decision.status = "partial"
+                    decision.reason = "给出的位置在本次正文中对不上：" + decision.reason
+                decision.locations = located
+            return decisions
 
         try:
             if overhead + len(payload(contract.requested_items, available)) <= self.capacity:

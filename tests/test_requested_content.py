@@ -413,3 +413,73 @@ async def test_api_freezes_requested_items_before_queue_execution(service):
     assert (await repo.get_run(detail.id)).orchestration.checkpoint["scratch"]["task_contract"][
         "requested_input_hash"
     ] == before
+
+
+class QuotingJudge:
+    """Answers one covered decision per call with the quotes it is given."""
+
+    def __init__(self, *quotes, region="p0"):
+        self.quotes = list(quotes)
+        self.region = region
+        self.prompts = []
+
+    async def parse(self, system, user, schema, **kwargs):
+        import json
+
+        self.prompts.append(user)
+        data = json.loads(user[: user.rindex("}") + 1])
+        quote = self.quotes.pop(0) if len(self.quotes) > 1 else self.quotes[0]
+        return schema(
+            decisions=[
+                dict(
+                    requirement_id=item["id"],
+                    status="covered",
+                    locations=[dict(region_id=self.region, quote=quote)],
+                    reason="controlled",
+                )
+                for item in data["requirements"]
+            ]
+        )
+
+
+COVERED_BODY = "可借鉴的设计 是 模块化地分离**数据**与先验。"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("quote", "region"),
+    [
+        ("可借鉴的设计是模块化地分离数据与先验。", "p0"),  # 模型去掉了空白和强调
+        ("可借鉴的设计 是 模块化地分离数据与先验", "p9"),  # 区域编号写错
+    ],
+)
+async def test_coverage_quote_with_only_copying_differences_is_restored(quote, region):
+    from deep_research.workbench.coverage_review import CoverageReviewer, coverage_issues
+
+    contract = build_contract(get_template("paperRead"), "请说明可借鉴的设计。")
+    judge = QuotingJudge(quote, region=region)
+    record = await CoverageReviewer(judge, contract, 50000).review(COVERED_BODY, [])
+    assert record["status"] == "pass" and len(judge.prompts) == 1
+    assert not coverage_issues(contract, COVERED_BODY, record, [])
+
+
+@pytest.mark.asyncio
+async def test_coverage_quote_outside_the_body_is_asked_again_once():
+    from deep_research.workbench.coverage_review import CoverageReviewer
+
+    contract = build_contract(get_template("paperRead"), "请说明可借鉴的设计。")
+    judge = QuotingJudge("正文里没有这句话", "模块化地分离")
+    record = await CoverageReviewer(judge, contract, 50000).review(COVERED_BODY, [])
+    assert record["status"] == "pass" and len(judge.prompts) == 2
+    assert "连续原文" in judge.prompts[1] and "连续原文" not in judge.prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_coverage_quote_that_stays_unplaced_is_a_revisable_gap_not_a_failed_review():
+    from deep_research.workbench.coverage_review import CoverageReviewer
+
+    contract = build_contract(get_template("paperRead"), "请说明可借鉴的设计。")
+    judge = QuotingJudge("正文里没有这句话")
+    record = await CoverageReviewer(judge, contract, 50000).review(COVERED_BODY, [])
+    assert record["status"] == "fail" and record["can_revise"] and "error" not in record
+    assert "对不上" in " ".join(record["issues"]) and len(judge.prompts) == 2

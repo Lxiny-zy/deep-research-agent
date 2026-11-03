@@ -19,7 +19,7 @@ _METRICS = {
         r"有效总样本量|有效样本量|样本量|样本数|\bsample size\b|"
         r"(?<![A-Za-z0-9_])n(?![A-Za-z0-9_])"
     ),
-    "p_value": r"p值|(?<![A-Za-z0-9_])p(?:[-_ ]?value)?(?![A-Za-z0-9_])",
+    "p_value": r"(?<![A-Za-z0-9_])p\s*值|(?<![A-Za-z0-9_])p(?:[-_ ]?value)?(?![A-Za-z0-9_])",
     "r": r"相关系数|(?<![A-Za-z0-9_])r(?![A-Za-z0-9_])",
     "statistic": r"统计量|\bstatistic\b",
     "mean_difference": r"平均差|均值差",
@@ -65,7 +65,8 @@ _METRIC_PATTERN = re.compile(
 _NUMBER = r"[-+−]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?"
 _VALUE = re.compile(
     r"\s*(?:\([^)]*\))?\s*(?:分别|均|都|约|大约|为|是|is|was|are|were|of|approximately|about)*"
-    r"\s*(?P<op>[=:：<>≤≥]?=?)\s*(?P<value>" + _NUMBER + r")(?![0-9_.])",
+    r"\s*(?P<op>[=:：<>≤≥]?=?|小于等于|大于等于|不超过|不高于|不低于|不小于|小于|低于|大于|高于)"
+    r"\s*(?P<value>" + _NUMBER + r")(?![0-9_.])",
     re.I,
 )
 _INTERVAL = re.compile(
@@ -74,6 +75,20 @@ _INTERVAL = re.compile(
 _CONFIDENCE_LEVEL = re.compile(
     r"\s*%\s*(?:的\s*)?(?:均值差|平均差|差值|均值)?\s*(?:置信|CI\b|confidence)", re.I
 )
+# 「全部 p 值均小于 0.05」是与阈值比较，不是写出某个 p 值
+_OPERATOR_WORDS = {
+    "小于": "<",
+    "低于": "<",
+    "大于": ">",
+    "高于": ">",
+    "小于等于": "≤",
+    "不超过": "≤",
+    "不高于": "≤",
+    "大于等于": "≥",
+    "不低于": "≥",
+    "不小于": "≥",
+}
+_EVERY_VALUE = re.compile(r"全部|所有")
 # 指标词后面的「12 个配对差」「表 2」不是该指标的取值；计数类指标除外，那里的数字就是取值
 _COUNT_NOUN = re.compile(r"\s*(?:个|对|组|行|列|项|次|名|例|条|份)")
 _COUNT_METRICS = {"n", "n_total", "n_pairs", "excluded_pairs", "df", "df_between", "df_within"}
@@ -287,6 +302,21 @@ def _group_mentions(text: str, labels: list[str]) -> list[str]:
     return [label for _, label in sorted(located)]
 
 
+def _labeled_values(clause: str, start: int, end: int, labels: list[str]) -> list[tuple[int, Any]]:
+    """「均值顺序为 C (0.9478) > B (0.9318)」：数值跟在组名后面，逐组取出。"""
+    names = [label for label in labels if not re.fullmatch(_NUMBER, label)]
+    if not names:
+        return []
+    alternatives = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    pattern = rf"(?<![A-Za-z0-9_])(?:{alternatives})(?![A-Za-z0-9_])\s*\(\s*(?={_NUMBER}\s*%?\s*\))"
+    found = []
+    for item in re.compile(pattern, re.I).finditer(clause, start, end):
+        value_match = _VALUE.match(clause, item.end())
+        if value_match:
+            found.append((clause.index("(", item.start()), value_match))
+    return found
+
+
 def _can_inherit_variable(
     prefix: str, labels: list[str], columns: list[str], methods: list[str]
 ) -> bool:
@@ -300,7 +330,7 @@ def _can_inherit_variable(
         )
     remainder = _METRIC_PATTERN.sub(" ", remainder)
     remainder = re.sub(
-        r"分组|各组|每组|组|总体|整体|有效|样本效应量|稳健性复核|差值方向|方差分析|"
+        r"分组|各组|每组|组|总体|整体|全部|所有|两两|比较|有效|样本效应量|稳健性复核|差值方向|方差分析|"
         r"配对差值|配对差异|配对检验|配对|相关性|相关|显著性|检验|的|在|与|和|"
         r"局限|小结|结论|结果|前提检查|前提|描述统计|描述性统计|说明|备注|"
         r"\b(?:for|in|the|of|group|each|all|overall|total|pooled|combined)\b",
@@ -314,6 +344,7 @@ def _can_inherit_variable(
 def _matches(
     value: str, expected: Any, operator: str, metric: str, *, percent: bool = False
 ) -> bool:
+    operator = _OPERATOR_WORDS.get(operator, operator)
     try:
         actual = Decimal(value.replace(",", "").replace("−", "-"))
         target = Decimal(str(expected))
@@ -464,7 +495,14 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
         # 背景列不是测量变量：只在这一行讲它的时候，n 取它自己的构成计数
         background_column = ""
         following_correlation = False
+        respective = False
+        cursor = 0
         for clause in _clauses(line):
+            end = cursor + len(clause)
+            separator, cursor = line[end : end + 1], end + 1
+            # 「A 与 B 分别为均值 x、y，中位数 u、v」：同一句里后面的成对数值仍按 A、B 顺序对应
+            respective_clause = respective or "分别" in clause
+            respective = respective_clause and separator not in {"。", "；", ";", ""}
             if _NONASSERTIVE.search(clause):
                 continue
             explicit_variables = _variables(clause, variables)
@@ -478,6 +516,9 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
             ]
             if named_background and not explicit_variables:
                 background_column = named_background[0]
+                if not group_names:
+                    # 「method=C 组 n=5；scene 列有效 n=15」：换到另一列时不再沿用上一列的组
+                    current_groups = []
             if explicit_variables:
                 background_column = ""
                 current_variables = explicit_variables
@@ -497,7 +538,8 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
             each = bool(_EACH.search(clause)) and not total
             matches = []
             unresolved = []
-            for match in _METRIC_PATTERN.finditer(clause):
+            metric_matches = list(_METRIC_PATTERN.finditer(clause))
+            for position, match in enumerate(metric_matches):
                 if match.lastgroup == "ci":
                     interval = _INTERVAL.match(clause, match.end())
                     if interval:
@@ -516,6 +558,15 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 value_match = _VALUE.match(clause, match.end())
                 if value_match:
                     matches.append((match.lastgroup or "", match.start(), value_match))
+                    continue
+                following = metric_matches[position + 1 :]
+                labeled = _labeled_values(
+                    clause, match.end(), following[0].start() if following else len(clause), labels
+                )
+                if labeled:
+                    matches.extend(
+                        (match.lastgroup or "", offset, item) for offset, item in labeled
+                    )
                 else:
                     unresolved.append((match.start(), match.end(), match.lastgroup or "statistic"))
             if "自由度" in clause:
@@ -607,10 +658,10 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 ):
                     scope = "unresolved_group"
                 if section == "composition" and metric == "n" and composition_column:
-                    scope = "composition_group" if current_groups else "composition"
+                    scope = "composition_group" if current_groups or claim_each else "composition"
                     selected_variables = [composition_column]
                 elif metric == "n" and background_column:
-                    scope = "composition_group" if current_groups else "composition"
+                    scope = "composition_group" if current_groups or claim_each else "composition"
                     selected_variables = [background_column]
                 if metric == "n" and re.match(r"\s*行", clause[match.end() :]):
                     scope, selected_variables = "dataset", [""]
@@ -636,11 +687,14 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                             if {row["variable"], row["other_variable"]} == set(selected_variables)
                         ]
                     elif scope == "comparison":
-                        candidates = [
-                            row
+                        wanted = set(selected_variables)
+                        columns = [
+                            (row, set(row.get("variables", [row["variable"]])))
                             for row in candidates
-                            if set(row.get("variables", [row["variable"]]))
-                            == set(selected_variables)
+                        ]
+                        # 配对检验涉及两列；沿用上一分句的一列时仍指这项检验
+                        candidates = [row for row, named in columns if named == wanted] or [
+                            row for row, named in columns if wanted <= named
                         ]
                     else:
                         candidates = [
@@ -650,7 +704,7 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                     candidates = [row for row in candidates if row.get("group") in current_groups]
                 if (
                     current_group_column
-                    and scope in {"group", "comparison", "composition_group", "correlation"}
+                    and scope in {"group", "comparison", "correlation"}
                     and (scope != "correlation" or current_groups)
                 ):
                     candidates = [
@@ -669,14 +723,19 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                     if explicit_group_columns and not current_groups and not total:
                         candidates = []
                 if scope == "comparison":
-                    if current_groups and metric in {
-                        "p_value",
-                        "statistic",
-                        "mean_difference",
-                        "ci_low",
-                        "ci_high",
-                        "ci_level",
-                    }:
+                    if (
+                        current_groups
+                        and not _EVERY_VALUE.search(prefix)
+                        and metric
+                        in {
+                            "p_value",
+                            "statistic",
+                            "mean_difference",
+                            "ci_low",
+                            "ci_high",
+                            "ci_level",
+                        }
+                    ):
                         candidates = [
                             row
                             for row in candidates
@@ -685,9 +744,20 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                     if current_method and (
                         line_methods or metric in {"p_value", "statistic", "n", "n_pairs", "df"}
                     ):
-                        candidates = [
+                        by_method = [
                             row for row in candidates if row.get("method") == current_method
                         ]
+                        # 上一分句点名的稳健性复核只记录了 p 值；本分句没点名方法时，
+                        # 「有效总样本量」等仍指主检验。点名了方法却没有这项统计则照常拦截
+                        candidates = (
+                            by_method
+                            if by_method or explicit_methods
+                            else [
+                                row
+                                for row in candidates
+                                if not row.get("robust") and not row.get("diagnostic")
+                            ]
+                        )
                     else:
                         candidates = [
                             row
@@ -707,7 +777,7 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 )
                 each_group = len(current_groups) > 1
                 each_variable = not each_group and len(selected_variables) > 1
-                if "分别" in clause and (each_group or each_variable):
+                if respective_clause and (each_group or each_variable):
                     tail = re.match(
                         r"(?:\s*(?:[、,与和及]|以及)\s*" + _NUMBER + ")+", clause[match.end() :]
                     )
