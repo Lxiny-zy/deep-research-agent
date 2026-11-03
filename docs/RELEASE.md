@@ -1,6 +1,17 @@
 # 最新上线记录
 
-最新发布：**2026-11-01，`88ff116cfa8cf9cbc2f2961e90d718ca449ebfae`**（第二轮线上真测的修复，见 [主计划](IMPROVEMENT_PLAN.md) S32–S40，含未单独发布的 `8b850d3`）。
+最新发布：**2026-11-03，`4bdc511a45219f3b3d255df916f05651172738f2`**（第三轮线上真测的修复，见 [主计划](IMPROVEMENT_PLAN.md) S41–S49，含 `11e2127` 与 `9b1c0b3`）。
+
+- 发布方式：同前，服务器 `git merge --ff-only origin/main`，按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-4bdc511a4521`，仅替换 api 容器；准备与切换前均确认无进行中的任务（已完成 16、待复核 30）。
+- 镜像：`sha256:22385b05c6f72d9264f22ba7c8bf3b3fc7cba7766b88646e8ce2e08019586f50`；回滚标签 `deep-research-agent:rollback-88ff116cfa8c-20261103t115350z`。
+- 备份：`20261103T115350Z-online-round3-fixes-4bdc511a4521`（数据库导出 40 MB，`gzip -t` 通过）；回执 `/www/wwwroot/deep-research-agent-deploy/online-round3-fixes-4bdc511a4521-20261103T115350Z/deployed.json`。
+- 数据库仍为 **0045**，无迁移、无依赖变化、无前端变化。
+- 验证：容器 healthy，本地与公网 `/readyz` 均 200，切换后日志无错误。发布前本地全量回归 4073 通过、2 跳过（排除 PostgreSQL 用例），ruff、mypy 通过。线上真实模型场景测试的结果记入主计划 S25。
+- 运维备注：当天本机直连服务器 22 端口在密钥协商阶段被重置，经本机 HTTP 代理（`ProxyCommand connect -H`）连接正常。
+
+## 历史记录：2026-11-01
+
+2026-11-01 发布 **`88ff116cfa8cf9cbc2f2961e90d718ca449ebfae`**（第二轮线上真测的修复，见 [主计划](IMPROVEMENT_PLAN.md) S32–S40，含未单独发布的 `8b850d3`）。
 当天先发布 `923d062344309dc09bcb6a633073a2f032106244`（第一轮线上真测的修复 S26–S31）。
 
 - 发布方式：同前，服务器 `git merge --ff-only origin/main`，按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-<sha12>`，仅替换 api 容器；两次切换前均确认无进行中的任务。
