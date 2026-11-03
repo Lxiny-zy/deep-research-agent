@@ -1,0 +1,7 @@
+........................................................................ [ 70%]
+..............................                                           [100%]
+- generated xml file: D:\Cursor-edit\Project_test\deep-research-agent\docs\validation\n0-backend-20261006.xml -
+102 passed in 7.74s
+
+
+exit_code=0

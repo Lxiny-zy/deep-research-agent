@@ -1,0 +1,10 @@
+["python","-m","pytest","tests/test_math_delivery.py","tests/test_pdf_tables.py","tests/test_pdf_references.py","tests/test_pdf_figure_layout.py","-q","--tb=short","--junitxml=docs/validation/n2-layout-backend-20261006.xml"]
+...................................................                      [100%]
+============================== warnings summary ===============================
+tests/test_math_delivery.py::test_math_is_converted_to_real_structures_without_losing_source[\\frac{a}{b}+x_i^2]
+  C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\ziamath\zmath.py:651: DeprecationWarning: path is deprecated. Use files() instead. Refer to https://importlib-resources.readthedocs.io/en/latest/using.html#migrating-from-legacy for migration advice.
+    with pkg_resources.path('ziamath.fonts', 'STIXTwoMath-Regular.ttf') as p:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: D:\Cursor-edit\Project_test\deep-research-agent\docs\validation\n2-layout-backend-20261006.xml -
+51 passed, 1 warning in 13.87s

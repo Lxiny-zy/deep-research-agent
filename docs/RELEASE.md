@@ -1,6 +1,17 @@
 # 最新上线记录
 
-最新发布：**2026-11-03，`4bdc511a45219f3b3d255df916f05651172738f2`**（第三轮线上真测的修复，见 [主计划](IMPROVEMENT_PLAN.md) S41–S49，含 `11e2127` 与 `9b1c0b3`）。
+最新发布：**2026-11-04，`a0decc7e48baa22e0de1e30568d2d911d7d3f131`**（第四轮线上真测的修复，见 [主计划](IMPROVEMENT_PLAN.md) S50–S57，含 `1eb136a`）。
+
+- 发布方式：同前，仅替换 api 容器；准备与切换前均确认无进行中的任务（已完成 16、待复核 34）。
+- 镜像：`sha256:b80fb2ef19da905af1efb527308722323690131dae1851526aa2b801993d6436`；回滚标签 `deep-research-agent:rollback-4bdc511a4521-20261103t160724z`。
+- 备份：`20261103T160724Z-online-round4-fixes-a0decc7e48ba`（数据库导出 50 MB，`gzip -t` 通过）；回执 `/www/wwwroot/deep-research-agent-deploy/online-round4-fixes-a0decc7e48ba-20261103T160724Z/deployed.json`。
+- 数据库仍为 **0045**，无迁移、无依赖变化、无前端变化。
+- 验证：容器 healthy，本地与公网 `/readyz` 均 200，切换后日志无错误。发布前本地全量回归 4098 通过、2 跳过（排除 PostgreSQL 用例；S56 的改动在该轮开跑后写入，另由相关 280 项测试覆盖），ruff、mypy 通过。
+- 运维备注：这次本机经代理连接服务器被关闭，直连正常，与 11-03 情况相反；两种方式都要备用。
+
+## 历史记录：2026-11-03
+
+2026-11-03 发布 **`4bdc511a45219f3b3d255df916f05651172738f2`**（第三轮线上真测的修复，见 [主计划](IMPROVEMENT_PLAN.md) S41–S49，含 `11e2127` 与 `9b1c0b3`）。
 
 - 发布方式：同前，服务器 `git merge --ff-only origin/main`，按 `docker-compose.yml` + 发布覆盖文件构建 `deep-research-agent:release-4bdc511a4521`，仅替换 api 容器；准备与切换前均确认无进行中的任务（已完成 16、待复核 30）。
 - 镜像：`sha256:22385b05c6f72d9264f22ba7c8bf3b3fc7cba7766b88646e8ce2e08019586f50`；回滚标签 `deep-research-agent:rollback-88ff116cfa8c-20261103t115350z`。

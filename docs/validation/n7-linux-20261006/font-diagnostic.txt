@@ -1,0 +1,6 @@
+RENDER_BEGIN
+FONT_SUBSET_BEGIN
+MuPDF error: format error: Reserved charstring byte c=0x0
+
+FONT_SUBSET_END
+RENDER_DONE 19990077

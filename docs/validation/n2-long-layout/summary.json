@@ -1,0 +1,204 @@
+{
+  "fixture": "synthetic_only",
+  "model_calls": 0,
+  "scientific_review": "not_performed",
+  "input_markdown_sha256": "ece200748d6fca695ce6303e93e47dff8bcafa8bee28e3de2e0f0e3925884981",
+  "rows": 36,
+  "comparison_columns": 5,
+  "word_tables": 2,
+  "word_equations": 144,
+  "word_repeat_headers": 2,
+  "pdf_pages": 22,
+  "pdf_table_header_pages": [
+    1,
+    2,
+    3
+  ],
+  "pdf_reference_pages": [
+    20,
+    21,
+    22
+  ],
+  "pdf_out_of_page_text": [],
+  "numeric_occurrences_match_markdown_word_pdf": true,
+  "pdf_math_note": "Vector math uses source TeX as accessibility ActualText; screenshots verify visible typesetting.",
+  "assets": [
+    {
+      "name": "review.md",
+      "bytes": 59659,
+      "sha256": "ece200748d6fca695ce6303e93e47dff8bcafa8bee28e3de2e0f0e3925884981"
+    },
+    {
+      "name": "review.html",
+      "bytes": 967224,
+      "sha256": "77fd100b4393fb3ed6cbdaf7689c602171b64e3eb76427557865ecc0b912409c"
+    },
+    {
+      "name": "review.docx",
+      "bytes": 46598,
+      "sha256": "95d46bed84a075c6bcd601291aeef73973c8a2a08b72b5f1096d1c1e226d3c50"
+    },
+    {
+      "name": "review.pdf",
+      "bytes": 720790,
+      "sha256": "87ac5edf0d6f73cc72a20fa3eded06f2fd7cb598e07b91816773a8640d9450c4"
+    }
+  ],
+  "pages": [
+    {
+      "page": 1,
+      "characters": 1477,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 2,
+      "characters": 1897,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 3,
+      "characters": 1567,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 4,
+      "characters": 1122,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 5,
+      "characters": 1127,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 6,
+      "characters": 1155,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 7,
+      "characters": 1155,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 8,
+      "characters": 1155,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 9,
+      "characters": 1156,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 10,
+      "characters": 1172,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 11,
+      "characters": 1172,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 12,
+      "characters": 1042,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 13,
+      "characters": 1333,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 14,
+      "characters": 1548,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 15,
+      "characters": 1745,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 16,
+      "characters": 1728,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 17,
+      "characters": 1949,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 18,
+      "characters": 2181,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 19,
+      "characters": 2205,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 20,
+      "characters": 1898,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 21,
+      "characters": 2832,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    },
+    {
+      "page": 22,
+      "characters": 2138,
+      "width": 595.0,
+      "height": 842.0,
+      "images": 0
+    }
+  ],
+  "elapsed_seconds": 11.25
+}

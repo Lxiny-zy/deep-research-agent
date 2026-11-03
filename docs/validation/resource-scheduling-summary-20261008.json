@@ -1,0 +1,34 @@
+{
+  "collected_non_pg": 3750,
+  "validated_current": 3750,
+  "missing": [],
+  "nonpassing": {},
+  "coverage_percent": 82.43,
+  "runs": [
+    {
+      "file": "resource-scheduling-regression-20261008.xml",
+      "tests": 2455,
+      "failures": 1
+    },
+    {
+      "file": "resource-scheduling-integration-20261008.xml",
+      "tests": 51,
+      "failures": 0
+    },
+    {
+      "file": "resource-scheduling-final-20261008.xml",
+      "tests": 2252,
+      "failures": 1
+    },
+    {
+      "file": "resource-scheduling-compatibility-20261008.xml",
+      "tests": 95,
+      "failures": 0
+    }
+  ],
+  "resolution": "Current non-PostgreSQL pytest collection matched against the latest executed result for each test ID. Both earlier failures passed in later runs.",
+  "superseded_failures": [
+    "tests/test_quote_limits.py::test_failed_workflow_resume_repairs_completed_research_without_reexecuting_it[True]",
+    "tests/test_search_profiles.py::test_key_pool_failover_cancellation_and_cleanup"
+  ]
+}

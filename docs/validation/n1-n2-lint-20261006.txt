@@ -1,0 +1,2 @@
+["python","-m","ruff","check","deep_research/workbench/evidence_context.py","deep_research/workbench/research_presentation.py","deep_research/workbench/research_scope.py","deep_research/workbench/fulltext_review.py","deep_research/workbench/support.py","deep_research/workbench/prose_edit.py","deep_research/workbench/tables.py","deep_research/report/validation.py","tests/test_research_context.py"]
+All checks passed!

@@ -1,0 +1,479 @@
+{
+  "schema_version": 1,
+  "mindmap_version": "fc9cab24b3a22e8bf290f18e444d7143131bb5c5e0e9115847b0e9b6800fb015",
+  "root": "思维导图工程验收 · 合成样例",
+  "overview_scope": "top_level_branches_only",
+  "complete_content": "完整节点说明保存在大纲与分支页；总览不代替完整内容。",
+  "nodes": [
+    {
+      "path": "0",
+      "branch": "0",
+      "label": "方法结构",
+      "details": "受控显示样例，只用于工程排版检查，不代表论文结论。",
+      "kind": "concept",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "0.0",
+      "branch": "0",
+      "label": "观察 1.1",
+      "details": "这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。 公式样例 $x=\\frac{1}{2}y$ 保留系数。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [
+        1
+      ],
+      "display_citations": [
+        1
+      ],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "0.1",
+      "branch": "0",
+      "label": "观察 1.2",
+      "details": "这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "0.2",
+      "branch": "0",
+      "label": "观察 1.3",
+      "details": "这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "0.3",
+      "branch": "0",
+      "label": "观察 1.4",
+      "details": "这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "0.4",
+      "branch": "0",
+      "label": "观察 1.5",
+      "details": "这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "0.5",
+      "branch": "0",
+      "label": "观察 1.6",
+      "details": "这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 1 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "1",
+      "branch": "1",
+      "label": "实验条件",
+      "details": "受控显示样例，只用于工程排版检查，不代表论文结论。",
+      "kind": "concept",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "1.0",
+      "branch": "1",
+      "label": "观察 2.1",
+      "details": "这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。 公式样例 $x=\\frac{1}{2}y$ 保留系数。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "1.1",
+      "branch": "1",
+      "label": "观察 2.2",
+      "details": "这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "1.2",
+      "branch": "1",
+      "label": "观察 2.3",
+      "details": "这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "1.3",
+      "branch": "1",
+      "label": "观察 2.4",
+      "details": "这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "1.4",
+      "branch": "1",
+      "label": "观察 2.5",
+      "details": "这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "1.5",
+      "branch": "1",
+      "label": "观察 2.6",
+      "details": "这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 2 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "2",
+      "branch": "2",
+      "label": "比较关系",
+      "details": "受控显示样例，只用于工程排版检查，不代表论文结论。",
+      "kind": "concept",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "2.0",
+      "branch": "2",
+      "label": "观察 3.1",
+      "details": "这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。 公式样例 $x=\\frac{1}{2}y$ 保留系数。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "2.1",
+      "branch": "2",
+      "label": "观察 3.2",
+      "details": "这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "2.2",
+      "branch": "2",
+      "label": "观察 3.3",
+      "details": "这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "2.3",
+      "branch": "2",
+      "label": "观察 3.4",
+      "details": "这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "2.4",
+      "branch": "2",
+      "label": "观察 3.5",
+      "details": "这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "2.5",
+      "branch": "2",
+      "label": "观察 3.6",
+      "details": "这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 3 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "3",
+      "branch": "3",
+      "label": "后续问题",
+      "details": "受控显示样例，只用于工程排版检查，不代表论文结论。",
+      "kind": "concept",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "3.0",
+      "branch": "3",
+      "label": "观察 4.1",
+      "details": "这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。 公式样例 $x=\\frac{1}{2}y$ 保留系数。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "3.1",
+      "branch": "3",
+      "label": "观察 4.2",
+      "details": "这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "3.2",
+      "branch": "3",
+      "label": "观察 4.3",
+      "details": "这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "3.3",
+      "branch": "3",
+      "label": "观察 4.4",
+      "details": "这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "3.4",
+      "branch": "3",
+      "label": "观察 4.5",
+      "details": "这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    },
+    {
+      "path": "3.5",
+      "branch": "3",
+      "label": "观察 4.6",
+      "details": "这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。这是分支 4 的合成说明。保留输入条件、适用范围和不确定性，不把显示样例作为研究发现。",
+      "kind": "question",
+      "relation": "包含",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    }
+  ],
+  "branches": [
+    {
+      "path": "0",
+      "title": "方法结构",
+      "node_paths": [
+        "0",
+        "0.0",
+        "0.1",
+        "0.2",
+        "0.3",
+        "0.4",
+        "0.5"
+      ],
+      "png_suffix_pattern": "-mindmap-b001-p*.png",
+      "diagram_groups": [
+        {
+          "parent": "0",
+          "children": [
+            "0.0",
+            "0.1",
+            "0.2",
+            "0.3",
+            "0.4",
+            "0.5"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "1",
+      "title": "实验条件",
+      "node_paths": [
+        "1",
+        "1.0",
+        "1.1",
+        "1.2",
+        "1.3",
+        "1.4",
+        "1.5"
+      ],
+      "png_suffix_pattern": "-mindmap-b002-p*.png",
+      "diagram_groups": [
+        {
+          "parent": "1",
+          "children": [
+            "1.0",
+            "1.1",
+            "1.2",
+            "1.3",
+            "1.4",
+            "1.5"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "2",
+      "title": "比较关系",
+      "node_paths": [
+        "2",
+        "2.0",
+        "2.1",
+        "2.2",
+        "2.3",
+        "2.4",
+        "2.5"
+      ],
+      "png_suffix_pattern": "-mindmap-b003-p*.png",
+      "diagram_groups": [
+        {
+          "parent": "2",
+          "children": [
+            "2.0",
+            "2.1",
+            "2.2",
+            "2.3",
+            "2.4",
+            "2.5"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "3",
+      "title": "后续问题",
+      "node_paths": [
+        "3",
+        "3.0",
+        "3.1",
+        "3.2",
+        "3.3",
+        "3.4",
+        "3.5"
+      ],
+      "png_suffix_pattern": "-mindmap-b004-p*.png",
+      "diagram_groups": [
+        {
+          "parent": "3",
+          "children": [
+            "3.0",
+            "3.1",
+            "3.2",
+            "3.3",
+            "3.4",
+            "3.5"
+          ]
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "id": "L1",
+      "source": "0.0",
+      "target": "2.0",
+      "relation": "对比",
+      "citations": [],
+      "display_citations": [],
+      "review_status": "not_checked",
+      "evidence_ids": []
+    }
+  ],
+  "duplicate_candidates": [],
+  "node_count": 28,
+  "review_status": "not_checked",
+  "review_input_hash": null,
+  "render_limits": {
+    "max_png_pages": 80,
+    "dpi": 120
+  }
+}
