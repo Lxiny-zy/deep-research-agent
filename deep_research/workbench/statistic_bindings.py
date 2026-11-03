@@ -64,13 +64,20 @@ _METRIC_PATTERN = re.compile(
 )
 _NUMBER = r"[-+−]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?"
 _VALUE = re.compile(
-    r"\s*(?:\([^)]*\))?\s*(?:分别|均|都|约|大约|为|是|is|was|are|were|of|approximately|about)*"
+    # 「标准差（`baseline_psnr` 为 1.008，…）」：行在绑定前已 NFKC 归一化并去掉反引号
+    r"\s*(?:\(\s*[A-Za-z_][\w.]*(?=\s*(?:为|是|=|:))|\([^)]*\))?\s*"
+    r"(?:分别|均|都|约|大约|为|是|is|was|are|were|of|approximately|about)*"
     r"\s*(?P<op>[=:：<>≤≥]?=?|小于等于|大于等于|不超过|不高于|不低于|不小于|小于|低于|大于|高于)"
     r"\s*(?P<value>" + _NUMBER + r")(?![0-9_.])",
     re.I,
 )
+# 「配对平均差 `proposed_psnr` − `baseline_psnr` 为 0.765」：统计量与数值之间写出差值方向
+_DIFFERENCE = re.compile(
+    r"\s*`?(?P<right>[A-Za-z_][\w.]*)`?\s*[−-]\s*`?(?P<left>[A-Za-z_][\w.]*)`?\s*(?:的\s*)?"
+)
 _INTERVAL = re.compile(
-    r"\s*(?:为|是|=|:)?\s*\[\s*(?P<low>" + _NUMBER + r")\s*[,，]\s*(?P<high>" + _NUMBER + r")\s*\]"
+    r"\s*\}?\s*(?:为|是|=|:)?\s*\[\s*(?P<low>" + _NUMBER + r")\s*[,，]\s*(?:\\[ ,;:!]\s*)?"
+    r"(?P<high>" + _NUMBER + r")\s*\]"
 )
 _CONFIDENCE_LEVEL = re.compile(
     r"\s*%\s*(?:的\s*)?(?:均值差|平均差|差值|均值)?\s*(?:置信|CI\b|confidence)", re.I
@@ -92,6 +99,7 @@ _EVERY_VALUE = re.compile(r"全部|所有")
 # 指标词后面的「12 个配对差」「表 2」不是该指标的取值；计数类指标除外，那里的数字就是取值
 _COUNT_NOUN = re.compile(r"\s*(?:个|对|组|行|列|项|次|名|例|条|份)")
 _COUNT_METRICS = {"n", "n_total", "n_pairs", "excluded_pairs", "df", "df_between", "df_within"}
+_DIFFERENCE_METRICS = {"mean_difference", "difference_std", "std"}
 _NUMBERED_LABEL = re.compile(r"(?:表|图|第|Table|Figure|Fig\.?)\s*$", re.I)
 _PAIR_REFERENCE = re.compile(r"两列|两个?变量|两项测量|二者|两者")
 _NONASSERTIVE = re.compile(
@@ -338,6 +346,8 @@ def _can_inherit_variable(
         remainder,
         flags=re.I,
     )
+    # 公式块里的排版命令（quad、text 等）不是变量名
+    remainder = re.sub(r"\\(?:q?quad|text|mathrm|operatorname)(?![A-Za-z])|[{}$\\]", " ", remainder)
     return not re.search(r"[A-Za-z\u4e00-\u9fff]", remainder)
 
 
@@ -423,6 +433,11 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
     )
     claims: list[dict[str, Any]] = []
     issues: list[str] = []
+    paired_directions = {
+        (str(test["right"]), str(test["left"]))
+        for test in ledger.get("tests", [])
+        if test.get("paired") and test.get("left") and test.get("right")
+    }
     current_variables: list[str] = []
     current_groups: list[str] = []
     current_method = ""
@@ -559,6 +574,18 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 if value_match:
                     matches.append((match.lastgroup or "", match.start(), value_match))
                     continue
+                difference = _DIFFERENCE.match(clause, match.end())
+                if difference and match.lastgroup in _DIFFERENCE_METRICS:
+                    pair = (difference["right"], difference["left"])
+                    if pair[::-1] in paired_directions and pair not in paired_directions:
+                        issues.append(
+                            f"第 {line_number} 行：差值方向 {pair[0]} − {pair[1]} 与台账"
+                            f"（{pair[1]} − {pair[0]}）相反"
+                        )
+                    value_match = _VALUE.match(clause, difference.end())
+                    if value_match and not _CONFIDENCE_LEVEL.match(clause, value_match.end()):
+                        matches.append((match.lastgroup or "", match.start(), value_match))
+                        continue
                 following = metric_matches[position + 1 :]
                 labeled = _labeled_values(
                     clause, match.end(), following[0].start() if following else len(clause), labels
@@ -586,12 +613,20 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 previous_metric = metric
                 prefix = clause[previous_end:offset]
                 local_variables = _variables(prefix, variables)
+                # 统计量与数值之间点名的变量（「标准差（baseline_psnr 为 1.008」）就是这条陈述的变量
+                inner_variables = (
+                    _variables(clause[offset : match.start("value")], variables)
+                    if match.string is clause and offset < match.start("value")
+                    else []
+                )
+                if inner_variables:
+                    local_variables = inner_variables
                 local_groups = _group_mentions(prefix, labels)
                 if local_variables:
                     current_variables = local_variables
                 if local_groups:
                     current_groups = local_groups
-                claim_each = each and not local_groups
+                claim_each = each and not local_groups and not inner_variables
                 selected_variables = current_variables
                 inheritable = bool(local_variables) or _can_inherit_variable(
                     prefix, labels, group_columns, methods
@@ -665,14 +700,17 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                     selected_variables = [background_column]
                 if metric == "n" and re.match(r"\s*行", clause[match.end() :]):
                     scope, selected_variables = "dataset", [""]
-                if scope == "comparison" and not selected_variables and current_method:
+                if scope == "comparison" and not selected_variables and (
+                    current_method or inheritable
+                ):
                     owners = {
                         tuple(sorted(row.get("variables", [row["variable"]])))
                         for row in by_statistic.get((scope, metric), [])
-                        if row.get("method") == current_method
+                        if not current_method or row.get("method") == current_method
                     }
                     if len(owners) == 1:
-                        # 台账里这种方法只有一项检验：「配对 t 检验记录中排除配对为 0」只能指它
+                        # 台账里这种方法只有一项检验：「配对 t 检验记录中排除配对为 0」只能指它；
+                        # 全表只有一项检验有该统计量时，未点名变量的公式「均值差置信区间=[…]」同理
                         selected_variables = list(next(iter(owners)))
                 candidates = by_statistic.get((scope, metric), [])
                 if not selected_variables and scope != "dataset":

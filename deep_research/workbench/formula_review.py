@@ -359,6 +359,23 @@ def validate_formula_record(
 # 必然超过核验容量。放不下时依次缩小到所引摘录前后的原文窗口。窗口是原文的连续
 # 片段，source_quote 与参考式编号仍按整篇核对；记录绑定的仍是完整原文。
 _SOURCE_WINDOWS = (12_000, 6_000, 3_000, 1_500)
+# 容量很大时整篇也放得下，但精读一个单元常引用同一篇的多条摘录，每次公式核验都发整篇
+# （第四轮线上精读 22 次公式核验共 184 万 token，单次输入 16 万）。整篇只在不超过这个
+# 字数时直接给出，超过就用摘录窗口；相同原文在同一次请求里只给一份。
+_FULL_SOURCE_CHARS = 60_000
+
+
+def _deduplicated(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    first: dict[str, str] = {}
+    result = []
+    for packet in sources:
+        owner = first.setdefault(packet["context"], packet["id"])
+        if owner == packet["id"]:
+            result.append(packet)
+        else:
+            shared = {key: value for key, value in packet.items() if key != "context"}
+            result.append({**shared, "context_same_as": owner})
+    return result
 
 
 def _payload(
@@ -375,19 +392,26 @@ def _payload(
             sources = [_windowed(packet, width) for packet in packets]
             contexts = {packet["id"]: packet["context"] for packet in sources}
             kept = [ref for ref in refs if ref["tex"] in contexts[ref["source_id"]]]
+        shared = _deduplicated(sources)
         body: dict[str, Any] = {
             "unit": asdict(unit),
             "formulas": pending,
-            "sources": sources,
+            "sources": shared,
             "reference_formulas": kept,
         }
+        if any("context_same_as" in packet for packet in shared):
+            body["source_sharing"] = (
+                "带 context_same_as 的来源与所指编号来源的 context 完全相同；"
+                "选它作 source_id 时，source_quote 从那份 context 中逐字摘取。"
+            )
         if width is not None:
             body["source_scope"] = (
                 f"原文较长，每条来源只给出所引摘录前后各约 {width} 字的连续原文；"
                 "窗口外的公式无法确认时用 uncertain。"
             )
         payload = json.dumps(body, ensure_ascii=False)
-        if overhead + len(payload) <= capacity:
+        limit = capacity if width is not None else min(capacity, overhead + _FULL_SOURCE_CHARS)
+        if overhead + len(payload) <= limit:
             return payload, width
     return None, None
 

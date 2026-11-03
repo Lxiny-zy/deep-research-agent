@@ -65,6 +65,12 @@ def _contains(text: str, name: str) -> bool:
     )
 
 
+_INDEX_RANGE = re.compile(
+    r"(?<![A-Za-z0-9_])[a-zA-Z]\s*=\s*(?P<start>[01](?:\s*,\s*[1-3])*)\s*,\s*"
+    r"(?=(?:\\[lc]?dots|\\ldots|…|\.\.\.)\s*,)"
+)
+
+
 def _numeric_text(text: str) -> str:
     from ..report.validation import _citation_text
 
@@ -74,7 +80,12 @@ def _numeric_text(text: str) -> str:
     labels = r"\b(?:paragraph|section|chapter|slide|page)\s+\d+(?:\.\d+)*\b|第\s*\d+\s*页"
     for match in reversed(list(re.finditer(labels, _citation_text(text), re.I))):
         text = text[: match.start()] + " " * len(match[0]) + text[match.end() :]
-    return text
+    # 「i = 1,\dots,12」「k=1,2,…,K」：下标的起点与列举是记号，只有上界仍需依据
+    for match in reversed(list(_INDEX_RANGE.finditer(text))):
+        text = text[: match.start("start")] + " " * len(match["start"]) + text[match.end("start") :]
+    # 遮盖公式或标签留下的行首空白会让 Markdown 把整句当作缩进代码块，其中的 [4] 不再被认作
+    # 引用而被当成数值；正文段落的行首缩进没有含义，取数前去掉
+    return re.sub(r"(?m)^[ \t]+", "", text)
 
 
 def _segments(text: str) -> list[str]:

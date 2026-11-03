@@ -201,6 +201,20 @@ async def test_paper_scoped_extraction_retries_once_with_an_output_cap(settings)
     assert audit is not None and result.findings and len(llm.prompts) == 2
     assert "【输出上限】" in llm.prompts[1] and "【输出上限】" not in llm.prompts[0]
     assert "extraction_call_failed:ModelOutputTruncated" not in audit.issues
+    # 论文范围抽取读的是整篇，不加开放检索每批的条数上限
+    assert not any("【本批条数】" in prompt for prompt in llm.prompts)
+
+
+async def test_every_open_search_batch_asks_for_a_bounded_number_of_findings(settings):
+    # 第四轮线上幻灯片：一个子问题抽出 277 条发现，11 次撞上输出上限，抽取耗时 60 分钟
+    llm = Extractor()
+    llm.context_window_tokens, llm.input_capacity_chars = 2_000_000, 4_000_000
+    await Researcher(llm, Sources(large_sources()), Tracer(), settings).run("方法记录了什么？")
+    assert llm.prompts and all("【本批条数】本批最多返回 20 条" in p for p in llm.prompts)
+    small = Extractor()
+    one = [Source(url="https://example.org/short", title="短", content="方法稳定。" * 20)]
+    await Researcher(small, Sources(one), Tracer(), settings).run("方法如何？")
+    assert len(small.prompts) == 1 and "【本批条数】" in small.prompts[0]
 
 
 async def test_insufficient_fixed_prompt_space_is_distinct_from_output_truncation(settings):

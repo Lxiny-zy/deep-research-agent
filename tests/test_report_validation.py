@@ -197,3 +197,29 @@ def test_captions_and_bold_headings_need_no_printed_cite_but_keep_numeric_checks
             body.replace("指标对照", "准确率99%"), evidence, {finding.source_url: 1}, fallback=False
         ).issues
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "| Baseline-3 | 36.49 dB [8]（存疑） |",  # 第四轮线上精读（7a04dc52）表格单元格
+        "PSNR 为 36.49 dB [8]（见消融表）",
+    ],
+)
+def test_citation_before_full_width_parenthesis_is_not_a_number(text):
+    from decimal import Decimal
+
+    from deep_research.report.validation import _computed_numbers, _numbers
+
+    assert Decimal(8) not in _numbers(text)
+    missing, invalid = _computed_numbers(text, {Decimal("36.49")})
+    assert not invalid and Decimal(8) not in missing
+
+
+def test_value_next_to_full_width_parenthesis_still_needs_support():
+    from decimal import Decimal
+
+    from deep_research.report.validation import _computed_numbers
+
+    missing, _ = _computed_numbers("PSNR 为 36.49 dB [8]（提升 0.9 dB）", {Decimal("36.49")})
+    assert missing == {Decimal("0.9")}

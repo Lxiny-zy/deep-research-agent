@@ -71,6 +71,8 @@ def _excerpt(text: str) -> str:
 
 
 def _numbers(text: str) -> set[Decimal]:
+    # 先去引用再归一化：「[8]（存疑）」归一化后成了链接写法 [8](存疑)，角标不再被认作引用
+    text = replace_citations(text, lambda _: "")
     text = unicodedata.normalize("NFKC", text).replace("−", "-")
     text = replace_citations(text, lambda _: "")
     text = re.sub(r"(?m)^\s*(?:\*\*|__)?\d+[.)、]\s+", "", text)
@@ -123,7 +125,9 @@ def _computed_numbers(text: str, support: set[Decimal]) -> tuple[set[Decimal], l
     justify an unrelated claim containing the same number. Method, metric,
     units and condition comparability still require final prose review.
     """
-    normalized = unicodedata.normalize("NFKC", text).replace("−", "-")
+    normalized = unicodedata.normalize(
+        "NFKC", replace_citations(text, lambda _: " ")
+    ).replace("−", "-")
     for latex, symbol in ((r"\times", "×"), (r"\cdot", "*"), (r"\div", "÷"), (r"\approx", "≈")):
         normalized = normalized.replace(latex, symbol)
     invalid = []

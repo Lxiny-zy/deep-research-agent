@@ -176,6 +176,32 @@ def digest(value: Any) -> str:
     ).hexdigest()
 
 
+_HEADING_LINE = re.compile(r"\s*#{1,6}\s+(?:\d+(?:\.\d+)*[.、]?\s+)?(?P<body>.*)")
+_LABEL_LINE = re.compile(r"\s*\*\*(?P<body>[^*\n]+)\*\*\s*[:：]?\s*")
+
+
+def layout_only(text: str) -> bool:
+    """标题、加粗标签与渲染器固定表注：除章节编号外不含数字，不是事实断言。
+
+    第四轮线上幻灯片有 527 条发现，未标引用的标题默认对照全部证据，超过核验容量后
+    整份正文被判为不可修订。带数字的标题（「表 1 … 3 个阶段」）仍按事实核验。
+    """
+    from .fulltext_review import _TABLE_CAPTION
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    for line in lines:
+        match = _HEADING_LINE.fullmatch(line) or _LABEL_LINE.fullmatch(line)
+        if match is not None:
+            if re.search(r"\d", match["body"]):
+                return False
+            continue
+        if not _TABLE_CAPTION.fullmatch(re.sub(r"^\s*[*_]+|[*_]+\s*$", "", line)):
+            return False
+    return True
+
+
 def compact_evidence(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Losslessly reference repeated quotes within one source and citation.
 
@@ -564,11 +590,26 @@ class SupportReviewer:
                 self.enforced_capacity is not None
                 and system_size + len(self._prompt([unit])) > self.enforced_capacity
             ):
-                results[unit.id] = SupportDecision(
-                    unit_id=unit.id,
-                    verdict="uncertain",
-                    reason="完整证据超过核验模型输入容量，未截断核验",
-                )
+                if unit.kind == "summary" and layout_only(unit.text):
+                    results[unit.id] = SupportDecision(
+                        unit_id=unit.id,
+                        verdict="non_factual",
+                        reason="标题或版式标签不含事实断言，不随整份证据送审",
+                    )
+                elif unit.kind == "summary":
+                    # 未标引用的行默认对照全部证据；补上具体角标即可缩小范围，是可修订问题
+                    results[unit.id] = SupportDecision(
+                        unit_id=unit.id,
+                        verdict="uncertain",
+                        reason="未标引用的内容需对照全部证据，超过核验容量："
+                        "请为其中的事实补上具体引用角标，或改写为不含事实的标题",
+                    )
+                else:
+                    results[unit.id] = SupportDecision(
+                        unit_id=unit.id,
+                        verdict="uncertain",
+                        reason="完整证据超过核验模型输入容量，未截断核验",
+                    )
             else:
                 fitting.append(unit)
         batches = self._batches(fitting, system_size)

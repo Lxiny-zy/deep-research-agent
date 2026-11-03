@@ -571,3 +571,44 @@ def test_approximation_and_inequality_rewrites_require_semantic_review():
 
     assert compare_formulas(r"y\approx0.33", r"y\approx0.333")[0] == "unresolved"
     assert compare_formulas("x<2", "x<1")[0] == "unresolved"
+
+
+def _packets(content, quotes):
+    return [
+        {"id": f"e{n}", "citation": 1, "source": "u", "quote": quote, "context": content,
+         "locator": ""}
+        for n, quote in enumerate(quotes)
+    ]
+
+
+def test_excerpts_of_the_same_paper_send_its_text_once():
+    # 第四轮线上精读（7a04dc52）：一个单元引用同一篇的多条摘录，整篇随每条摘录重复发送
+    from deep_research.workbench.formula_review import _payload
+
+    unit = SupportUnit("u1", f"式(11)： $${CORRECT}$$ [1]。", kind="prose", citations=[1])
+    content = "Background. " * 1000 + "First excerpt." + f"${CORRECT}$" + "Second excerpt."
+    packets = _packets(content, ["First excerpt.", "Second excerpt.", "First excerpt."])
+    payload, width = _payload(unit, [{"id": "f1", "tex": CORRECT}], packets, [], 10_000_000)
+    body = json.loads(payload)
+    assert width is None and payload.count("Background.") == 1000
+    shared = [(("context" in source), source.get("context_same_as")) for source in body["sources"]]
+    assert shared == [(True, None), (False, "e0"), (False, "e0")]
+    assert "source_sharing" in body
+
+
+def test_a_paper_beyond_the_full_text_budget_is_windowed_even_when_capacity_allows():
+    from deep_research.workbench.formula_review import _FULL_SOURCE_CHARS, _payload
+
+    unit = SupportUnit("u1", f"式(11)： $${CORRECT}$$ [1]。", kind="prose", citations=[1])
+    filler = "Coded aperture background. " * (_FULL_SOURCE_CHARS // 20)
+    content = filler + "The prior step." + f"${CORRECT}$" + filler
+    payload, width = _payload(
+        unit,
+        [{"id": "f1", "tex": CORRECT}],
+        _packets(content, ["The prior step."]),
+        [],
+        10_000_000,
+    )
+    assert width == 12_000
+    assert CORRECT in json.loads(payload)["sources"][0]["context"]
+    assert len(payload) < 2 * 12_000 + 5_000

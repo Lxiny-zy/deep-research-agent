@@ -514,3 +514,21 @@ async def test_lookup_marks_the_abstract_when_the_full_text_cannot_be_fetched() 
     assert len(sources) == 1 and sources[0].scholarly.section == "abstract"
     # 只有摘要时也要能按摘要核验译文，而不是报「缺少完整摘要原文」
     assert abstract_span(sources[0]) == (0, len("We model the degradation of CASSI."))
+
+
+@pytest.mark.parametrize(
+    ("title", "kind"),
+    [
+        # 第四轮线上同行评审（21d2f6e1）：该节的定量结果全被数值门按方法章节拒绝
+        ("Quantitative Comparisons with State-of-the-Art Methods", "results"),
+        ("Qualitative Comparisons with State-of-the-Art Methods", "results"),
+        ("Ablation Study", "results"),
+        ("Proposed Method", "method"),
+        ("Methods", "method"),
+        ("Related Work", "introduction"),
+    ],
+)
+def test_result_sections_naming_compared_methods_are_not_method_sections(title, kind):
+    from deep_research.tools.arxiv_fulltext import _canonical
+
+    assert _canonical(title) == kind

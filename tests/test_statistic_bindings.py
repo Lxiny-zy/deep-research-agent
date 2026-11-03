@@ -497,3 +497,44 @@ def test_threshold_words_compare_against_the_recorded_value(body, bound):
     from deep_research.workbench.analysis_review import statistic_scope_issues
 
     assert bool(statistic_scope_issues(body, LEDGER)) is not bound
+
+
+# 第四轮线上数据分析（a429f6bb）原句：差值表达式夹在统计量与数值之间、
+# 全角括号内按变量给值、公式块内的置信区间
+ROUND_FOUR_LINES = [
+    "配对检验结果见表 3。以同一行配对、差值方向 `proposed_psnr` − `baseline_psnr` 做配对 t 检验，"
+    "统计量=17.4981，p=2.2300848e-09，在 α=0.05 下显著；完整配对数=12，排除不完整配对=0。"
+    "配对平均差 `proposed_psnr` − `baseline_psnr` 为 0.765，配对差值 `proposed_psnr` − "
+    "`baseline_psnr` 的标准差为 0.1514，自由度=11，配对平均差 `proposed_psnr` − `baseline_psnr` "
+    "的 95% 均值差置信区间=[0.6688, 0.8612]。0.765 是配对平均差，0.1514 是配对差值的标准差，"
+    "二者与表 2 中各方法各自的标准差（`baseline_psnr` 为 1.008，`proposed_psnr` 为 0.9727）"
+    "含义不同，不能合并为同一类离散指标。",
+    r"$$\bar d = 0.765,\quad s_d = 0.1514,\quad t(11) = 17.4981,\quad "
+    r"\text{95\% 均值差置信区间} = [0.6688,\ 0.8612]$$",
+    "在 12 个场景的同一行配对数据上，配对平均差 `proposed_psnr` − `baseline_psnr` 为 0.765，"
+    "配对平均差 `proposed_psnr` − `baseline_psnr` 的 95% 均值差置信区间=[0.6688, 0.8612]，"
+    "配对 t 检验统计量=17.4981、p=2.2300848e-09，在 α=0.05 下差异显著。",
+]
+
+
+@pytest.mark.parametrize("body", ROUND_FOUR_LINES)
+def test_difference_expression_and_formula_statistics_bind(body):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert not statistic_scope_issues(body, PAIRED)
+
+
+@pytest.mark.parametrize(
+    ("body", "wrong", "replacement"),
+    [
+        (ROUND_FOUR_LINES[0], "为 0.765", "为 0.865"),
+        (ROUND_FOUR_LINES[0], "`baseline_psnr` 为 1.008", "`baseline_psnr` 为 0.9727"),
+        (ROUND_FOUR_LINES[1], r"[0.6688,\ 0.8612]", r"[0.6688,\ 0.9612]"),
+        (ROUND_FOUR_LINES[2], "为 0.765", "为 0.665"),
+    ],
+)
+def test_wrong_values_in_those_forms_are_still_rejected(body, wrong, replacement):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert wrong in body
+    assert statistic_scope_issues(body.replace(wrong, replacement), PAIRED)

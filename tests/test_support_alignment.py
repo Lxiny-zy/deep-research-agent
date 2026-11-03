@@ -295,3 +295,79 @@ def test_single_letter_entity_is_not_found_inside_ordinary_words():
     evidence = [dict(item("a", "A coverage 0.908"), entity="A")]
     assert _names("coverage：0.908", evidence) == set()
     assert _names("A；coverage：0.908", evidence) == {"a"}
+
+
+_LEDGER_EVIDENCE = [
+    {"id": "ledger", "citation": 0, "quote": '{"n_pairs": 12, "mean_difference": 0.765}'}
+]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 第四轮线上数据分析（a429f6bb）第 48 行原句
+        r"$$d_i = \text{proposed\_psnr}_i - \text{baseline\_psnr}_i,\quad i = 1,\dots,12$$",
+        r"$$d_i = x_i - y_i,\quad i = 1, \ldots, 12$$",
+        r"对 $i=1,2,\dots,12$ 求和",
+    ],
+)
+def test_index_range_start_is_notation_not_a_value(text):
+    from deep_research.workbench.support_alignment import alignment_issue
+
+    assert alignment_issue(text, [0], ["ledger"], _LEDGER_EVIDENCE) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "missing"),
+    [
+        (r"共 13 个配对 $i = 1,\dots,13$", "13"),
+        ("第 1 个场景的差值为 0.9", "0.9"),
+    ],
+)
+def test_index_range_upper_bound_and_plain_values_still_need_support(text, missing):
+    from deep_research.workbench.support_alignment import alignment_issue
+
+    issue = alignment_issue(text, [0], ["ledger"], _LEDGER_EVIDENCE)
+    assert issue is not None and missing in issue
+
+
+def test_masked_formula_at_sentence_start_keeps_citations():
+    # 第四轮线上精读（7a04dc52）：公式核验遮盖整段公式后，句首留下长串空白，
+    # Markdown 把整句当作缩进代码块，[4] 被当成数值
+    from deep_research.workbench.support_alignment import alignment_issue
+
+    evidence = [{"id": "e", "citation": 4, "quote": "HST uses 3 stages"}]
+    padded = " " * 40 + "进入分支，建模非局部依赖 [4]。"
+    assert alignment_issue(padded, [4], ["e"], evidence) is None
+    issue = alignment_issue(" " * 40 + "进入 7 个分支 [4]。", [4], ["e"], evidence)
+    assert issue is not None and "7" in issue
+
+
+async def test_uncited_layout_lines_do_not_block_revision_when_evidence_overflows():
+    # 第四轮线上幻灯片（af771ca4）：527 条发现，未标引用的标题默认对照全部证据，
+    # 超过核验容量后整份正文被判为不可修订
+    from deep_research.workbench.prose_review import can_revise
+
+    class Small:
+        input_capacity_chars = 3000
+        enforced_input_capacity_chars = 3000
+
+        async def parse(self, *args, **kwargs):
+            raise AssertionError("overflowing units must not be sent")
+
+    evidence = [
+        {"id": f"e{n}", "citation": 1, "quote": "Unfolding networks " * 20, "source": "u"}
+        for n in range(20)
+    ]
+    reviewer = SupportReviewer(Small(), evidence, 3000)
+    units = [
+        SupportUnit("h", "## 6. 关键结果（一）：精度与开销的权衡", kind="summary", citations=[1]),
+        SupportUnit("t", "### 表 1 消融（3 个展开阶段）", kind="summary", citations=[1]),
+        SupportUnit("c", "展开网络更快 [1]。", kind="prose", citations=[1]),
+    ]
+    decisions = {d.unit_id: d for d in await reviewer.review(units)}
+    assert decisions["h"].verdict == "non_factual"
+    assert decisions["t"].verdict == "uncertain" and "补上具体引用角标" in decisions["t"].reason
+    assert decisions["c"].reason.startswith("完整证据超过核验模型输入容量")
+    assert can_revise([decisions["h"], decisions["t"]])
+    assert not can_revise([decisions["c"]])

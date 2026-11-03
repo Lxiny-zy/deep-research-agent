@@ -404,10 +404,29 @@ def _canonical(value: str) -> str:
     if value in _ALIASES:
         return _ALIASES[value]
     tokens = value.split()
+    # 「Quantitative Comparisons with State-of-the-Art Methods」是实验结果，不是方法章节；
+    # 被归为方法后其中的数值会被数值门拒绝（第四轮线上同行评审整节证据作废）
+    if _RESULT_CUES.intersection(tokens):
+        return "results"
     for token in tokens:
         if token in _ALIASES:
             return _ALIASES[token]
     return value
+
+
+_RESULT_CUES = frozenset(
+    {
+        "comparison",
+        "comparisons",
+        "quantitative",
+        "qualitative",
+        "ablation",
+        "ablations",
+        "benchmark",
+        "benchmarks",
+        "performance",
+    }
+)
 
 
 def select_sections(
