@@ -1,4 +1,0 @@
-["python","-m","mypy","deep_research/workbench/evidence_context.py","deep_research/workbench/research_presentation.py","deep_research/workbench/research_scope.py","deep_research/workbench/fulltext_review.py","deep_research/workbench/support.py","deep_research/workbench/prose_edit.py","deep_research/workbench/tables.py","deep_research/report/validation.py"]
-deep_research\orchestrator.py:1034: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
-deep_research\orchestrator.py:1065: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
-Success: no issues found in 8 source files
