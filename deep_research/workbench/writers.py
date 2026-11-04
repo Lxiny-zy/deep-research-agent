@@ -194,7 +194,24 @@ class TemplateWriter:
     def brief(self, template: TaskTemplate, contract: TaskContract | None) -> str:
         return template.writer_brief
 
+    def task_rules(self, template: TaskTemplate, contract: TaskContract | None) -> str:
+        """该写作者特有的任务要求（v2 提示放进「任务」一节）。"""
+        return self.system
+
     def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
+        from .writing_prompt import compose_writer_prompt, prompt_variant
+
+        if prompt_variant() == "v2":
+            from .scholarly import writing_rules
+            from .tables import TABLE_INSTRUCTIONS as table_rules
+
+            return compose_writer_prompt(
+                template,
+                brief=self.brief(template, contract),
+                task_rules=self.task_rules(template, contract),
+                style_rules=writing_rules(template.key),
+                table_instructions=table_rules,
+            )
         parts = [_BASE_SYSTEM, _skeleton(template), self.brief(template, contract), self.system]
         if template.key in {"autoResearch", "litReview"}:
             parts.append(
@@ -1087,9 +1104,21 @@ class PeerReviewer(TemplateWriter):
             return bb
         return await super().step(bb, ctx)
 
-    def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
+    def task_rules(self, template: TaskTemplate, contract: TaskContract | None) -> str:
         from .peer_review_items import PEER_REVIEW_RULES
 
+        return (
+            "总体评分单独写成‘评分：N/10’一行，不在这一行混入论文事实或评分理由。"
+            + PEER_REVIEW_RULES
+            + "\n建议写明行动对象、具体动作，以及作者完成后应报告或检查什么。" + _PAPER_TRIAGE
+        )
+
+    def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
+        from .peer_review_items import PEER_REVIEW_RULES
+        from .writing_prompt import prompt_variant
+
+        if prompt_variant() == "v2":
+            return super().system_prompt(template, contract)
         return super().system_prompt(template, contract) + (
             "\n总体评分单独写成‘评分：N/10’一行，不在这一行混入论文事实或评分理由；"
             "评分是审稿人的主观结论，不能代替有出处的事实评价。" + PEER_REVIEW_RULES
@@ -1130,7 +1159,19 @@ class PeerReviewer(TemplateWriter):
 class PaperReader(TemplateWriter):
     template_key = "paperRead"
 
+    def task_rules(self, template: TaskTemplate, contract: TaskContract | None) -> str:
+        return (
+            "正文第一行给出简短、准确的报告标题（# 一级标题），概括研究对象；"
+            "用户明确要求标题时遵从其要求。"
+            "\n摘要翻译章节依据单独提供的【摘要翻译专用资料】全文忠实翻译；"
+            "其他章节只使用已核验素材。" + _PAPER_TRIAGE
+        )
+
     def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
+        from .writing_prompt import prompt_variant
+
+        if prompt_variant() == "v2":
+            return super().system_prompt(template, contract)
         return super().system_prompt(template, contract) + (
             "\n正文第一行给出简短、准确的报告标题（# 一级标题），概括研究对象，不复述任务指令；"
             "用户明确要求标题时遵从其要求。"
