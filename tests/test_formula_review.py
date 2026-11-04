@@ -169,6 +169,8 @@ async def test_a_quoted_subexpression_needs_no_rewrite_explanation_unless_it_add
     if not passes:
         # 写法对不上是正文问题：照常修订，不当作核验未完成而整篇停修
         assert decision.reason.startswith("公式未能与所引原文对上：公式写法不同")
+        # 修订意见带上原文式子，写作者才能照原文改写（第六轮精读同一处连续三轮被打回）
+        assert "所引原文写作「" in decision.reason and "frac{C}{2}" in decision.reason
         assert can_revise([decision])
 
 

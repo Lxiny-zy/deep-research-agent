@@ -7,6 +7,7 @@ reuse their decision during one revision loop, bound to the exact evidence.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -26,6 +27,13 @@ from ..prompting import EVIDENCE_MODALITY_RULES, MEASUREMENT_SCOPE_RULES, struct
 from .evidence_context import measurement_context
 from .research_scope import field_absence_issue
 from .support_alignment import alignment_diagnostics, alignment_issue, numeric_fact
+
+_MAX_JUDGE_SPLITS = 3
+# 逐段的全文与公式回查互不依赖。模型执行名额（DR_PROVIDER_MAX_CONCURRENCY）仍在调用层统一限流，
+# 这里只决定同时排队的段落数
+_PREFETCH_CONCURRENCY = 4
+_FORMULA_QUOTE_CHARS = 240
+_TRUNCATED = "核验调用失败：ModelOutputTruncated"
 
 
 class SupportDecision(BaseModel):
@@ -384,6 +392,36 @@ class SupportReviewer:
             )
         return alignment_issue(unit.text, unit.citations, decision.evidence_ids, evidence)
 
+    async def _prefetch_checks(
+        self, units: list[SupportUnit], known_citations: set[int], checker: Any
+    ) -> None:
+        """并发完成逐段的全文与公式回查，结果写入按段落编号保存的记录。
+
+        第六轮线上同行评审（aa5b6adb）的核验调用逐段串行，模型累计耗时约等于墙钟时间。
+        下面的逐段循环再次调用同样的检查时，内容与文献未变就直接复用这里的记录，
+        判定逻辑与调用次数都不变，只是不再一段等一段。
+        """
+        gate = asyncio.Semaphore(_PREFETCH_CONCURRENCY)
+
+        async def one(unit: SupportUnit) -> None:
+            if not set(unit.citations).issubset(known_citations):
+                return
+            key = digest([asdict(unit), self.evidence_for(unit)])
+            async with gate:
+                # 与逐段循环一致：全文回查未通过的段落不再做公式回查
+                if await self._check_fulltext(unit, key, checker) is None:
+                    await self._check_formula(unit, key)
+
+        if len(units) < 2:
+            return
+        try:
+            async with asyncio.TaskGroup() as group:
+                for unit in units:
+                    group.create_task(one(unit))
+        except BaseExceptionGroup as grouped:
+            # 上层按类型识别租约丢失、限流等异常，不能让它们裹在异常组里
+            raise grouped.exceptions[0] from None
+
     async def _check_formula(self, unit: SupportUnit, key: str) -> SupportDecision | None:
         from .formula_review import FormulaReviewer
 
@@ -407,14 +445,27 @@ class SupportReviewer:
                 str(row.get("reason", "")).startswith("公式专门核验未完成")
                 for row in record["decisions"]
             )
+            # 第六轮线上精读（b855158a）同一处公式连续三轮被打回：修订意见只说「按原文写法」，
+            # 写作者看不到原文是怎么写的。把核对者定位到的原文式子一并给出
+            quoted = [row for row in record["decisions"] if row.get("source_quote")]
+            # 程序的结构检查也会推翻核对者的 matched，此时退回所有给出原文的条目
+            flagged = [row for row in quoted if row.get("verdict") in {"mismatch", "uncertain"}]
+            quotes = list(
+                dict.fromkeys(
+                    " ".join(str(row["source_quote"]).split())[:_FORMULA_QUOTE_CHARS]
+                    for row in flagged or quoted
+                )
+            )[:2]
+            source = "".join(f"；所引原文写作「{quote}」" for quote in quotes)
             if mismatch:
-                reason = record["reason"]
+                reason = record["reason"] + source
             elif incomplete:
                 reason = "公式专门核验未完成：" + record["reason"]
             else:
                 reason = (
                     "公式未能与所引原文对上：" + record["reason"]
                     + "；按所引原文的写法给出公式，确为改写时写明等价关系与成立条件，否则删去该公式"
+                    + source
                 )
             return SupportDecision(
                 unit_id=unit.id,
@@ -528,6 +579,7 @@ class SupportReviewer:
                 ):
                     fulltext_pending.append(unit)
             await checker.prepare(fulltext_pending)
+        await self._prefetch_checks(units, known_citations, checker)
         for index, unit in enumerate(units, 1):
             if self.on_progress is not None:
                 self.on_progress(f"正在核对回答依据（第 {index}/{len(units)} 段）…")
@@ -743,8 +795,22 @@ class SupportReviewer:
             ensure_ascii=False,
         )
 
-    async def _judge(self, units: list[SupportUnit]) -> dict[str, SupportDecision]:
+    async def _judge(
+        self, units: list[SupportUnit], depth: int = 0
+    ) -> dict[str, SupportDecision]:
         output = await self._judge_once(units)
+        # 第六轮线上同行评审（aa5b6adb）：16 段一批的判断输出超过渠道上限，整批记为
+        # 「核验调用失败」，整篇因此不可修订，26 分钟的核验之后修订 0 轮。截断时对半拆批重试
+        if (
+            len(units) > 1
+            and depth < _MAX_JUDGE_SPLITS
+            and all(output[unit.id].reason == _TRUNCATED for unit in units)
+        ):
+            half = len(units) // 2
+            return {
+                **await self._judge(units[:half], depth + 1),
+                **await self._judge(units[half:], depth + 1),
+            }
         failed = [
             unit
             for unit in units
