@@ -552,3 +552,41 @@ def test_a_scope_note_keeps_the_correlation_named_before_it():
 
     assert not statistic_scope_issues(SCOPE_NOTE.format(n=12), PAIRED)
     assert statistic_scope_issues(SCOPE_NOTE.format(n=13), PAIRED)
+
+
+# 第六轮线上数据分析（dc3627d4）原句：冒号后的「总行数」、「以…为准」、检验的原假设表述
+ROUND_SIX_LINES = [
+    "样本量按不同口径分别陈述：总行数 12；baseline_psnr n=12；proposed_psnr n=12；"
+    "两列同一行配对完整数 12，排除不完整配对 0；scene 按该列自身计数 n=12、缺失 0、"
+    "不同取值数 12，构成未展示。比较分组无，因此不存在按比较分组的分组样本量。"
+    "Pearson 相关的有效样本量 n=12。scene 的计数只用于背景，配对检验的有效样本量"
+    "以完整配对数 12、排除 0 为准。",
+    "在 12 个场景的合成示例中，配对 t 检验结果支持在 α=0.05 下 proposed_psnr − "
+    "baseline_psnr 的均值差不为 0：统计量=17.4981，p=2.2300848e-09，平均差=0.765，"
+    "差值标准差=0.1514，95% 均值差置信区间=[0.6688, 0.8612]，完整配对数=12，"
+    "排除不完整配对=0。",
+]
+
+
+@pytest.mark.parametrize("body", ROUND_SIX_LINES)
+def test_row_totals_scope_phrases_and_null_hypotheses_bind(body):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert not statistic_scope_issues(body, PAIRED)
+
+
+@pytest.mark.parametrize(
+    ("body", "wrong", "replacement"),
+    [
+        (ROUND_SIX_LINES[0], "总行数 12", "总行数 13"),
+        (ROUND_SIX_LINES[0], "以完整配对数 12", "以完整配对数 11"),
+        (ROUND_SIX_LINES[0], "Pearson 相关的有效样本量 n=12", "Pearson 相关的有效样本量 n=11"),
+        (ROUND_SIX_LINES[1], "平均差=0.765", "平均差=0.865"),
+        (ROUND_SIX_LINES[1], "均值差不为 0：", "均值差为 0.5："),
+    ],
+)
+def test_wrong_values_after_those_phrases_are_still_rejected(body, wrong, replacement):
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    assert wrong in body
+    assert statistic_scope_issues(body.replace(wrong, replacement), PAIRED)

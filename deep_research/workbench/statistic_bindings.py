@@ -25,6 +25,8 @@ _METRICS = {
     "mean_difference": r"平均差|均值差",
     "difference_std": r"差值标准差",
     "n_pairs": r"完整配对数|配对数",
+    # 「样本量按不同口径分别陈述：总行数 12」：数据总行数对应台账的 rows
+    "n_rows": r"数据总行数|总行数|数据行数",
     "excluded_pairs": r"排除不完整配对",
     "df": r"自由度|\bdf\b",
     "n_total": r"有效总样本量|\bn_total\b",
@@ -46,6 +48,7 @@ _METRIC_PATTERN = re.compile(
             "mean_difference",
             "difference_std",
             "n_pairs",
+            "n_rows",
             "excluded_pairs",
             "eta_squared",
             "statistic",
@@ -98,8 +101,12 @@ _OPERATOR_WORDS = {
 _EVERY_VALUE = re.compile(r"全部|所有")
 # 指标词后面的「12 个配对差」「表 2」不是该指标的取值；计数类指标除外，那里的数字就是取值
 _COUNT_NOUN = re.compile(r"\s*(?:个|对|组|行|列|项|次|名|例|条|份)")
-_COUNT_METRICS = {"n", "n_total", "n_pairs", "excluded_pairs", "df", "df_between", "df_within"}
+_COUNT_METRICS = {
+    "n", "n_total", "n_pairs", "n_rows", "excluded_pairs", "df", "df_between", "df_within"
+}
 _DIFFERENCE_METRICS = {"mean_difference", "difference_std", "std"}
+# 「均值差不为 0」是检验的原假设表述，0 不是该统计量的取值
+_NULL_HYPOTHESIS = re.compile(r"\s*(?:显著)?(?:不为|不等于|不同于|≠|!=)\s*0(?![.\d])")
 _NUMBERED_LABEL = re.compile(r"(?:表|图|第|Table|Figure|Fig\.?)\s*$", re.I)
 _PAIR_REFERENCE = re.compile(r"两列|两个?变量|两项测量|二者|两者")
 _NONASSERTIVE = re.compile(
@@ -342,7 +349,8 @@ def _can_inherit_variable(
         r"配对差值|配对差异|配对检验|配对|相关性|相关|显著性|检验|的|在|与|和|"
         r"局限|小结|结论|结果|前提检查|前提|描述统计|描述性统计|说明|备注|"
         # 「口径为两两成对删除缺失值后的有效样本量 n=12」：口径说明不点名别的变量
-        r"口径|成对删除|删除|缺失值|缺失|之后|后|为|是|"
+        # 「配对检验的有效样本量以完整配对数 12 为准」同理
+        r"口径|成对删除|删除|缺失值|缺失|之后|后|以|为准|为|是|"
         r"\b(?:for|in|the|of|group|each|all|overall|total|pooled|combined)\b",
         " ",
         remainder,
@@ -365,7 +373,7 @@ def _matches(
         exponent = actual.as_tuple().exponent
         if not isinstance(exponent, int):
             return False
-        if percent and metric in {"n", "n_total", "n_pairs", "excluded_pairs", "df"}:
+        if percent and metric in _COUNT_METRICS:
             return False
         if percent and metric in {"p_value", "r"}:
             actual /= 100
@@ -426,10 +434,29 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
         dict.fromkeys(row["group_column"] for row in facts if "group_column" in row)
     )
     composition_columns = [row["column"] for row in ledger.get("composition", [])]
+    # 构成计数也带 group_column（如 scene）；只在背景计数里出现的列不是检验或分组统计的分组列，
+    # 「scene 的计数只用于背景，配对检验的有效样本量以完整配对数 12 为准」不应换掉检验的分组口径
+    statistic_group_columns = list(
+        dict.fromkeys(
+            row["group_column"]
+            for row in facts
+            if "group_column" in row and not str(row["scope"]).startswith("composition")
+        )
+    )
     paired_tests = [
         [test["left"], test["right"]] for test in ledger.get("tests", []) if test.get("paired")
     ]
     correlations = ledger.get("correlations", [])
+    correlation_methods = {
+        str(row["method"]) for row in facts if row["scope"] == "correlation" and row.get("method")
+    }
+    paired_methods = list(
+        dict.fromkeys(
+            str(test["method"])
+            for test in ledger.get("tests", [])
+            if test.get("paired") and test.get("method")
+        )
+    )
     only_correlation = (
         [correlations[0]["a"], correlations[0]["b"]] if len(correlations) == 1 else []
     )
@@ -514,7 +541,11 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
         following_correlation = False
         respective = False
         cursor = 0
+        separator = ""
         for clause in _clauses(line):
+            if separator == "。":
+                # 背景列只管它所在的那一句：下一句「Pearson 相关的有效样本量 n=12」不是 scene 的计数
+                background_column = ""
             end = cursor + len(clause)
             separator, cursor = line[end : end + 1], end + 1
             # 「A 与 B 分别为均值 x、y，中位数 u、v」：同一句里后面的成对数值仍按 A、B 顺序对应
@@ -526,7 +557,7 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
             group_names = _group_mentions(clause, labels)
             explicit_methods = [method for method in methods if _contains(clause, method)]
             explicit_group_columns = [
-                column for column in group_columns if _contains(clause, column)
+                column for column in statistic_group_columns if _contains(clause, column)
             ]
             named_background = [
                 column for column in composition_columns if _contains(clause, column)
@@ -549,6 +580,9 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 current_groups = group_names
             if explicit_methods:
                 current_method = explicit_methods[-1]
+            elif "配对" in clause and len(paired_methods) == 1:
+                # 「配对检验的有效样本量…」：台账只有一项配对检验时，不再沿用上一句的 Pearson
+                current_method = paired_methods[0]
             total = bool(_TOTAL.search(clause))
             if total:
                 current_groups = []
@@ -588,6 +622,13 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                     if value_match and not _CONFIDENCE_LEVEL.match(clause, value_match.end()):
                         matches.append((match.lastgroup or "", match.start(), value_match))
                         continue
+                after = (
+                    difference.end()
+                    if difference and match.lastgroup in _DIFFERENCE_METRICS
+                    else match.end()
+                )
+                if _NULL_HYPOTHESIS.match(clause, after):
+                    continue
                 following = metric_matches[position + 1 :]
                 labeled = _labeled_values(
                     clause, match.end(), following[0].start() if following else len(clause), labels
@@ -612,6 +653,9 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                         matches.append((previous_metric, implicit.start(), value_match))
             previous_end = 0
             for metric, offset, match in matches:
+                dataset_rows = metric == "n_rows"
+                if dataset_rows:
+                    metric = "n"
                 previous_metric = metric
                 prefix = clause[previous_end:offset]
                 local_variables = _variables(prefix, variables)
@@ -637,7 +681,14 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                     selected_variables = []
                     current_variables = []
                 if (
-                    metric == "r"
+                    (
+                        metric == "r"
+                        or (
+                            metric in {"n", "p_value"}
+                            and explicit_methods
+                            and current_method in correlation_methods
+                        )
+                    )
                     and not selected_variables
                     and only_correlation
                     and (inheritable or _PAIR_REFERENCE.search(prefix))
@@ -700,7 +751,7 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 elif metric == "n" and background_column:
                     scope = "composition_group" if current_groups or claim_each else "composition"
                     selected_variables = [background_column]
-                if metric == "n" and re.match(r"\s*行", clause[match.end() :]):
+                if metric == "n" and (dataset_rows or re.match(r"\s*行", clause[match.end() :])):
                     scope, selected_variables = "dataset", [""]
                 if scope == "comparison" and not selected_variables and (
                     current_method or inheritable
