@@ -1878,3 +1878,17 @@ async def test_survey_delivers_concept_figure_in_every_format(settings) -> None:
     assert any(f.name == "figures/fig_concept.png" for f in bundle.files)
     consistency = next(g for g in bundle.gates if g.name == "consistency")
     assert consistency.status == "pass" and consistency.metrics["docx_images"] == 1
+
+
+def test_revision_feedback_points_at_paragraph_text_not_line_numbers() -> None:
+    # 写作者看不到行号（同行评审的核验正文还删去了评分行）；用问题里附带的段落摘录定位
+    from deep_research.workbench.revision import Assessment, revision_prompt
+
+    issue = (
+        "第 22 行：公式未能与所引原文对上：公式写法不同；按所引原文的写法给出公式"
+        "（CASSI 使用编码孔径与色散器对不同波长处的 HSI 信号进行调制）"
+    )
+    prompt = revision_prompt("上一版", Assessment(hard=[issue, "缺少章节：结论"]))
+    assert "第 22 行" not in prompt
+    assert "以「CASSI 使用编码孔径与色散器对不同波长处的 HSI 信号进行调制」开头的段落：" in prompt
+    assert "- 缺少章节：结论" in prompt  # 没有段落摘录的问题原样保留

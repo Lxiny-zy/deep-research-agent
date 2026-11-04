@@ -472,7 +472,7 @@ class LLM:
                             system,
                             user,
                             temperature=temperature,
-                            reasoning_effort=reasoning_effort,
+                            **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
                             operation=operation,
                         )
                     ) as stream,

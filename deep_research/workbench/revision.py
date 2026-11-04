@@ -229,9 +229,27 @@ def assess_draft(
     return assessment
 
 
+_LINE_ISSUE = re.compile(
+    r"^第\s*\d+\s*行[：:]\s*(?P<message>.*?)(?:（(?P<excerpt>[^（）]+)）)?\s*$", re.S
+)
+
+
+def _locate(issue: str) -> str:
+    """把「第 N 行：问题（段落摘录）」改写成按段落原文定位。
+
+    写作者拿到的上一版全文没有行号，同行评审的核验正文还删去了评分行，行号对不上；
+    问题末尾括号里的摘录来自被核验段落的原文，能直接在上一版全文里找到。
+    """
+    match = _LINE_ISSUE.match(issue.strip())
+    if match is None or not match["excerpt"]:
+        return issue
+    excerpt = " ".join(match["excerpt"].split())[:60]
+    return f"以「{excerpt}」开头的段落：{match['message'].rstrip('；;，, ')}"
+
+
 def revision_prompt(previous: str, assessment: Assessment) -> str:
     """附在用户提示词末尾的返工材料：上一版全文 + 逐条问题。"""
-    items = "\n".join(f"- {line}" for line in assessment.hard[:20])
+    items = "\n".join(f"- {_locate(line)}" for line in assessment.hard[:20])
     advice = "\n".join(f"- （建议）{line}" for line in assessment.soft[:5])
     return (
         "\n\n## 返工要求\n"
