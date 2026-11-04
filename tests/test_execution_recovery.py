@@ -117,7 +117,9 @@ def test_resource_wait_preserves_failure_budget_and_obeys_retry_after(monkeypatc
         saved = execution.checkpoint["scratch"]
         assert saved["_recovery"] == scratch["_recovery"]
         assert saved["_resource_wait"]["count"] == count
-        assert saved["_resource_wait"]["not_before"] == 1011
+        # 网关给的 retry_after 是下限；连续限流按 5、10、20… 秒退避，最长 5 分钟
+        expected = max(11, min(300, 5 * 2 ** (count - 1)))
+        assert saved["_resource_wait"]["not_before"] == 1000 + expected
         assert saved["_task_deadline_at"] == 2000
     monkeypatch.setattr("deep_research.execution_policy.time.time", lambda: 2000)
     assert resource_wait_checkpoint(execution, settings, retry_after=10, elapsed=20) == (
@@ -256,3 +258,26 @@ async def test_executor_recovers_checkpoint_without_rereading_and_preserves_term
     assert completed.total_tokens == 10
     key = "_resource_wait" if failure == "busy" else "_recovery"
     assert completed.orchestration.checkpoint["scratch"][key]["count"] == 1
+
+
+def test_provider_busy_backoff_resets_after_a_quiet_period(monkeypatch):
+    # 第五轮线上幻灯片（dfebb136）：网关限流给「1 秒后重试」，任务反复恢复 31 次
+    now = [1000.0]
+    monkeypatch.setattr("deep_research.execution_policy.time.time", lambda: now[0])
+    settings = Settings()
+    execution = create_initial_execution("Q", "quick", settings)
+    execution.checkpoint["scratch"]["_task_deadline_at"] = 100000
+    waits = []
+    for _ in range(3):
+        execution, _ = resource_wait_checkpoint(execution, settings, retry_after=1, elapsed=0)
+        waits.append(execution.checkpoint["scratch"]["_resource_wait"]["not_before"] - now[0])
+        now[0] += 60
+    assert waits == [5, 10, 20]
+    now[0] += 3600
+    execution, _ = resource_wait_checkpoint(execution, settings, retry_after=1, elapsed=0)
+    assert execution.checkpoint["scratch"]["_resource_wait"]["not_before"] - now[0] == 5
+    # 阶段让出不是限流，不退避
+    execution, _ = resource_wait_checkpoint(
+        execution, settings, retry_after=1, elapsed=0, reason="stage_yield"
+    )
+    assert execution.checkpoint["scratch"]["_resource_wait"]["not_before"] - now[0] == 1

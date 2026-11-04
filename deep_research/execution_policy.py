@@ -175,6 +175,11 @@ def resource_busy(error: BaseException) -> ProviderBusyError | None:
     return None
 
 
+_BUSY_STREAK_WINDOW = 900.0
+_BUSY_BACKOFF_BASE = 5.0
+_BUSY_BACKOFF_CAP = 300.0
+
+
 def resource_wait_checkpoint(
     execution: WorkflowRun, settings: Settings, *, retry_after: float, elapsed: float,
     reason: str = "provider_busy",
@@ -187,13 +192,26 @@ def resource_wait_checkpoint(
     if now >= deadline:
         return None, "task_deadline_exceeded"
     previous = scratch.get("_resource_wait", {})
+    # 网关限流时常给「1 秒后重试」。第五轮线上幻灯片在夜间限流中按 1 秒反复恢复 31 次，
+    # 每次重跑数分钟又撞上限流。15 分钟内连续的限流按 5、10、20… 秒退避，最长 5 分钟。
+    streak = 1
+    if (
+        reason == "provider_busy"
+        and previous.get("reason") == "provider_busy"
+        and now - float(previous.get("scheduled_at", 0) or 0) < _BUSY_STREAK_WINDOW
+    ):
+        streak = int(previous.get("streak", 1)) + 1
+    wait = max(1, retry_after)
+    if reason == "provider_busy":
+        wait = max(wait, min(_BUSY_BACKOFF_CAP, _BUSY_BACKOFF_BASE * 2 ** (streak - 1)))
     scratch["_resource_wait"] = {
         "count": int(previous.get("count", 0)) + 1,
         "reason": reason,
         "scheduled_at": now,
         # Wake at the final deadline to settle the task without another request.
-        "not_before": min(deadline, now + max(1, retry_after)),
+        "not_before": min(deadline, now + wait),
         "retry_after": retry_after,
+        "streak": streak,
     }
     scratch["_attempt_elapsed_origin"] = elapsed
     scratch.setdefault("_runtime_metrics", {})["elapsed"] = elapsed
