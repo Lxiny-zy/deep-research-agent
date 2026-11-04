@@ -28,10 +28,10 @@ def test_v2_table_spec_only_for_table_templates() -> None:
         )
 
 
-def test_v2_is_opt_in(monkeypatch) -> None:
+def test_v2_is_default_and_legacy_is_opt_out(monkeypatch) -> None:
     template = _template("paperRead")
     monkeypatch.delenv("DR_PROMPT_VARIANT", raising=False)
-    legacy = writers.PaperReader().system_prompt(template, None)
-    monkeypatch.setenv("DR_PROMPT_VARIANT", "v2")
     v2 = writers.PaperReader().system_prompt(template, None)
+    monkeypatch.setenv("DR_PROMPT_VARIANT", "legacy")
+    legacy = writers.PaperReader().system_prompt(template, None)
     assert "# 硬性规则" in v2 and "# 硬性规则" not in legacy

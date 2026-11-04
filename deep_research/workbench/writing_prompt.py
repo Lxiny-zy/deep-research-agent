@@ -10,7 +10,7 @@
 4. 文体：可读性要求，违反只降为建议，不阻断交付；
 5. 输出格式：章节骨架；表格规格只在该任务需要表格时附上。
 
-``DR_PROMPT_VARIANT=v2`` 时启用；默认仍是旧提示，待离线重放与线上小样本验证后再切换。
+默认启用；``DR_PROMPT_VARIANT=legacy`` 回退到旧提示（离线重放 8 份首稿确定性问题约 16→5）。
 """
 
 from __future__ import annotations
@@ -23,7 +23,9 @@ from .templates import TaskTemplate
 
 
 def prompt_variant() -> str:
-    return os.environ.get("DR_PROMPT_VARIANT", "").strip().lower()
+    """默认 v2；``DR_PROMPT_VARIANT=legacy`` 回退到旧提示。"""
+    value = os.environ.get("DR_PROMPT_VARIANT", "").strip().lower()
+    return "legacy" if value == "legacy" else "v2"
 
 
 @dataclass(frozen=True)

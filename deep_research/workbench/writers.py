@@ -1073,6 +1073,11 @@ _PAPER_TRIAGE = (
 )
 
 
+def _card_rules(system: str) -> str:
+    """角色卡片写入 ``self.system`` 的领域要求与行为契约，v2 下随任务要求一并给出。"""
+    return "\n" + system if system else ""
+
+
 @register("peer_reviewer")
 class PeerReviewer(TemplateWriter):
     """评审写作者。
@@ -1124,6 +1129,7 @@ class PeerReviewer(TemplateWriter):
             "总体评分单独写成‘评分：N/10’一行，不在这一行混入论文事实或评分理由。"
             + PEER_REVIEW_RULES
             + "\n建议写明行动对象、具体动作，以及作者完成后应报告或检查什么。" + _PAPER_TRIAGE
+            + _card_rules(self.system)
         )
 
     def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
@@ -1177,7 +1183,7 @@ class PaperReader(TemplateWriter):
             "正文第一行给出简短、准确的报告标题（# 一级标题），概括研究对象；"
             "用户明确要求标题时遵从其要求。"
             "\n摘要翻译章节依据单独提供的【摘要翻译专用资料】全文忠实翻译；"
-            "其他章节只使用已核验素材。" + _PAPER_TRIAGE
+            "其他章节只使用已核验素材。" + _PAPER_TRIAGE + _card_rules(self.system)
         )
 
     def system_prompt(self, template: TaskTemplate, contract: TaskContract | None) -> str:
