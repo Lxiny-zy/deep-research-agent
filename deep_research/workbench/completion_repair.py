@@ -41,6 +41,25 @@ def content_rank(detail: RunDetail) -> tuple[int, int, int]:
     return int(replaced or not text.strip()), len(issues), -len(text)
 
 
+def _revision_budget(detail: RunDetail, settings: Settings) -> tuple[int, int, dict[str, Any]]:
+    """（已用修订次数, 额度上限, 修订记录）；交付前修复与写作者返工共用同一额度。"""
+    from .contract import contract_from_scratch
+
+    scratch = _scratch(detail)
+    contract = contract_from_scratch(scratch)
+    policy = coerce_policy(contract.quality if contract is not None else settings.quality)
+    revision = scratch.get("workbench", {}).get("extras", {}).get("revision", {})
+    limit = min(policy.max_revisions, revision.get("budget_limit", policy.max_revisions))
+    used = revision.get("revisions_used", max(0, revision.get("attempts", 1) - 1))
+    return used, limit, revision
+
+
+def _worth_revising_flagged(detail: RunDetail, settings: Settings) -> bool:
+    """只有待核（可修订）问题时，额度未用尽且上一轮确有改善才再修一轮。"""
+    used, limit, revision = _revision_budget(detail, settings)
+    return used < limit and revision.get("stop_reason") not in {"no_progress", "revision_failed"}
+
+
 async def repair_completion(
     detail: RunDetail,
     settings: Settings,
@@ -61,7 +80,10 @@ async def repair_completion(
             raise WritingProgressError("自动修复记录无法识别")
         if state.get("status") == "complete":
             return working, completion
-    elif completion["status"] == "done":
+    elif completion["status"] == "done" and not (
+        completion.get("flagged") and _worth_revising_flagged(working, settings)
+    ):
+        # 只有建议、或待核问题已无修订额度时，不为它们单独启动修复轮。
         return working, completion
     else:
         state = {
@@ -89,20 +111,13 @@ async def repair_completion(
     await run_rendering(assess_completion, working, bundle, render_root=settings.artifact_root)
     content = state["content"]
     if content["status"] in {"pending", "running"}:
-        from .contract import contract_from_scratch
-
-        scratch = _scratch(working)
-        contract = contract_from_scratch(scratch)
-        policy = coerce_policy(contract.quality if contract is not None else settings.quality)
-        revision = scratch.get("workbench", {}).get("extras", {}).get("revision", {})
-        limit = min(policy.max_revisions, revision.get("budget_limit", policy.max_revisions))
-        used = revision.get("revisions_used", max(0, revision.get("attempts", 1) - 1))
+        used, limit, revision = _revision_budget(working, settings)
         content.setdefault("budget_limit", limit)
         content.setdefault("baseline_revisions", used)
         # Use the existing eligibility rules without changing the actual run's status.
         offered = revision_offer(
             replace(working, status="needs_review"),
-            [gate for gate in bundle.gates if gate.blocking_issues and not (
+            [gate for gate in bundle.gates if (gate.blocking_issues or gate.flagged) and not (
                 gate.name == "citation" and gate.metrics.get("retrieval_shortfall", 0) > 0
                 and gate.metrics.get("used", 0) >= gate.metrics.get("available", 0)
             )],
@@ -124,11 +139,15 @@ async def repair_completion(
                     issue
                     for gate in bundle.gates
                     if gate.name in _CONTENT_GATES
-                    for issue in gate.blocking_issues or []
+                    for issue in [*(gate.blocking_issues or []), *gate.flagged]
                 ],
             )
             await save()
-            emit("交付仍有阻断内容，自动尝试一轮定向修订…")
+            emit(
+                "交付仍有阻断内容，自动尝试一轮定向修订…"
+                if any(gate.blocking_issues for gate in bundle.gates)
+                else "交付仍有待核段落，自动尝试一轮定向修订…"
+            )
             try:
                 candidate = await revise(deepcopy(working))
             except (LeaseLostError, WritingProgressError):

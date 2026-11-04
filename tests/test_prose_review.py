@@ -405,7 +405,7 @@ async def test_peer_review_score_survives_terminal_checks(settings, monkeypatch)
     assert next(g for g in bundle.gates if g.name == "prose_evidence").status == "pass"
 
 
-async def test_failed_statistical_interpretation_keeps_data_but_blocks_formal_report(settings):
+async def test_unsupported_statistical_interpretation_is_flagged_in_formal_report(settings):
     from deep_research.orchestrator import create_initial_execution
     from deep_research.persistence.repository import RunDetail
     from deep_research.workbench.analysis import DataAnalyst
@@ -437,9 +437,15 @@ async def test_failed_statistical_interpretation_keeps_data_but_blocks_formal_re
         id="stats-review", query=bb.query, status="done", report=bb.report, orchestration=execution
     )
     bundle = build_bundle(detail)
-    assert next(g for g in bundle.gates if g.name == "prose_evidence").status == "fail"
+    prose = next(g for g in bundle.gates if g.name == "prose_evidence")
+    assert prose.status == "fail"
     assert any(f.format == "xlsx" for f in bundle.files)
-    assert not any(f.format in {"pdf", "docx", "html"} for f in bundle.files)
+    # 逐段支持判定「不支持」是可修订问题：正式文件照常生成，段落原文保留并标注待核；
+    # 统计数值绑定或统计口径问题仍是硬门（见 test_issue_tiers）。
+    assert prose.flagged and not prose.blocking_issues
+    assert {"pdf", "docx", "html"} <= {f.format for f in bundle.files}
+    source = next(f for f in bundle.files if f.format == "md").data.decode()
+    assert "变量已经证明因果关系。〔待核：" in source
 
 
 @pytest.mark.parametrize("supported", [True, False])

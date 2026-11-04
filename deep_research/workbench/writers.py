@@ -715,6 +715,9 @@ class TemplateWriter:
                 section_support=abstract_section_support(bb.scratch)
                 if template.key == "paperRead"
                 else None,
+                # 修订用尽后只剩可修订问题的段落原文保留，交付时标注待核；
+                # 引用越界、无依据数值与错误算式仍删去或替换。
+                keep_revisable=template.key not in {"slides", "mindmap"},
             )
             body_replaced = bool(check.issues)
             bb.scratch["_report_validation"] = {
@@ -722,6 +725,16 @@ class TemplateWriter:
                 "issues": list(check.issues),
                 "fallback": body_replaced,
                 "partial": check.partial,
+                **(
+                    {
+                        "flagged": [
+                            {"code": code, "paragraph": paragraph, "message": message}
+                            for code, paragraph, message in check.flagged
+                        ]
+                    }
+                    if check.flagged
+                    else {}
+                ),
             }
             ctx.tracer.emit(
                 "SYNTHESIZER",

@@ -35,6 +35,8 @@ class GateResult:
     metrics: dict[str, Any] = field(default_factory=dict)
     blocking_issues: list[str] | None = None
     advisories: list[str] = field(default_factory=list)
+    # 修订轮次用尽后仍残留、但不属于硬门的问题：任务照常完成，条目附在完成记录中待核。
+    flagged: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,7 +45,11 @@ class GateResult:
             "issues": self.issues,
             "metrics": self.metrics,
             **(
-                {"blocking_issues": self.blocking_issues, "advisories": self.advisories}
+                {
+                    "blocking_issues": self.blocking_issues,
+                    "advisories": self.advisories,
+                    **({"flagged": self.flagged} if self.flagged else {}),
+                }
                 if self.blocking_issues is not None
                 else {}
             ),

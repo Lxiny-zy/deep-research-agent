@@ -597,82 +597,131 @@ class ProseReviewer:
         return record
 
     def check(self, markdown: str, record: Any) -> tuple[bool, list[str]]:
+        bound, findings = self.check_findings(markdown, record)
+        return bound, [finding["message"] for finding in findings]
+
+    def check_findings(self, markdown: str, record: Any) -> tuple[bool, list[dict[str, Any]]]:
+        """同 ``check``，但每条问题带检查代码与所在正文单元，供交付分级与待核标注。
+
+        代码含义与分级见 ``issue_tiers.REVISABLE_PROSE_CODES``；``unit`` 为 None
+        表示问题不落在某一段（如统计绑定、缺少章节）。
+        """
+
+        def finding(code: str, message: str, unit: str | None = None) -> dict[str, Any]:
+            return {"code": code, "message": message, "unit": unit}
+
         if not isinstance(record, dict) or record.get("input_hash") != self.signature(markdown):
-            return False, ["正文、证据或核验规则已变更，原终稿核验记录不再适用"]
+            return False, [
+                finding("record_stale", "正文、证据或核验规则已变更，原终稿核验记录不再适用")
+            ]
         if record.get("model_review_skipped"):
-            return True, ["诊断摘录未进行成品核验，不能作为正式报告交付"]
+            return True, [
+                finding("diagnostic_only", "诊断摘录未进行成品核验，不能作为正式报告交付")
+            ]
         units, locations = self.units(markdown)
         try:
             decisions = [SupportDecision.model_validate(d) for d in record.get("decisions", [])]
         except ValueError:
-            return False, ["终稿核验记录无法解析"]
+            return False, [finding("record_unparseable", "终稿核验记录无法解析")]
         expected = {u.id: u for u in units}
         deferred = record.get("deferred_units", [])
         if not isinstance(deferred, list) or any(
             not isinstance(uid, str) or uid not in expected for uid in deferred
         ):
-            return False, ["机械问题定位与正文不一致"]
+            return False, [finding("deferred_mismatch", "机械问题定位与正文不一致")]
         if (
             not units
             or len(decisions) != len(expected)
             or {d.unit_id for d in decisions} != set(expected)
         ):
-            return False, ["终稿核验未覆盖全部正文单元"]
+            return False, [finding("coverage_incomplete", "终稿核验未覆盖全部正文单元")]
         if record.get("units") != locations:
-            return False, ["终稿核验定位与正文不一致"]
+            return False, [finding("location_mismatch", "终稿核验定位与正文不一致")]
         from .analysis_review import statistic_scope_issues
 
-        problems = (
-            statistic_scope_issues(markdown, self.statistics) if self.statistics is not None else []
-        )
+        problems = [
+            finding("statistic_scope", issue)
+            for issue in (
+                statistic_scope_issues(markdown, self.statistics)
+                if self.statistics is not None
+                else []
+            )
+        ]
         if self.statistics is not None:
             from .statistic_bindings import bind_statistics
 
             if record.get("statistics_bindings") != bind_statistics(markdown, self.statistics):
-                problems.append("统计数值绑定记录缺失或与当前正文/台账不一致")
+                problems.append(
+                    finding("statistic_binding", "统计数值绑定记录缺失或与当前正文/台账不一致")
+                )
         if self.translation_citations is not None and not any(
             u.kind == "translation" for u in units
         ):
-            problems.append("缺少摘要翻译章节")
+            problems.append(finding("missing_translation", "缺少摘要翻译章节"))
         if self.translation_citations == []:
-            problems.append("缺少完整摘要原文，不能核验摘要翻译")
+            problems.append(
+                finding("missing_abstract_source", "缺少完整摘要原文，不能核验摘要翻译")
+            )
         positions = {location["id"]: location["start_line"] for location in locations}
         for d in decisions:
             unit = expected[d.unit_id]
-            if d.unit_id in deferred and d.verdict in {"supported", "non_factual"}:
-                problems.append(f"第 {positions[d.unit_id]} 行：此单元仍待机械修订后的断言核验")
+            line = f"第 {positions[d.unit_id]} 行："
+            if d.unit_id in deferred:
+                # 机械修订（引用或数值）尚未完成的单元，无论模型如何判断都不能放行。
+                if d.verdict in {"supported", "non_factual"}:
+                    problems.append(
+                        finding("deferred", line + "此单元仍待机械修订后的断言核验", d.unit_id)
+                    )
+                else:
+                    problems.append(finding("deferred", line + d.reason, d.unit_id))
                 continue
             fulltext_only = not d.evidence_ids and self.reviewer.fulltext_supports(unit, d)
             allowed = {
                 e["id"] for e in self.evidence if e["citation"] in expected[d.unit_id].citations
             }
             if d.verdict not in {"supported", "non_factual"}:
-                problems.append(f"第 {positions[d.unit_id]} 行：{d.reason}")
+                problems.append(finding("unsupported", line + d.reason, d.unit_id))
             elif d.verdict == "non_factual" and expected[d.unit_id].kind == "translation":
-                problems.append(f"第 {positions[d.unit_id]} 行：译文未完成忠实性与完整性核对")
+                problems.append(
+                    finding(
+                        "translation_unchecked", line + "译文未完成忠实性与完整性核对", d.unit_id
+                    )
+                )
             elif d.verdict == "non_factual" and asserted_comparison(expected[d.unit_id].text):
-                problems.append(f"第 {positions[d.unit_id]} 行：事实性比较被错误归类为纯编排说明")
+                problems.append(
+                    finding(
+                        "misclassified_comparison",
+                        line + "事实性比较被错误归类为纯编排说明",
+                        d.unit_id,
+                    )
+                )
             elif d.verdict == "non_factual" and numeric_fact(expected[d.unit_id].text):
-                problems.append(f"第 {positions[d.unit_id]} 行：数值事实被错误归类为纯编排说明")
+                problems.append(
+                    finding(
+                        "misclassified_number", line + "数值事实被错误归类为纯编排说明", d.unit_id
+                    )
+                )
             elif d.verdict == "supported" and (
                 (not d.evidence_ids and not fulltext_only)
                 or not set(d.evidence_ids).issubset(allowed)
             ):
-                problems.append(f"第 {positions[d.unit_id]} 行：终稿证据映射超出该单元引用范围")
+                problems.append(
+                    finding("evidence_scope", line + "终稿证据映射超出该单元引用范围", d.unit_id)
+                )
             elif d.verdict == "supported" and not fulltext_only:
                 issue = self.reviewer.alignment_issue(unit, d)
                 if issue:
-                    problems.append(f"第 {positions[d.unit_id]} 行：{issue}")
+                    problems.append(finding("alignment", line + issue, d.unit_id))
             if d.verdict in {"supported", "non_factual"}:
                 if issue := self.reviewer.record_issue(unit, d):
-                    problems.append(f"第 {positions[d.unit_id]} 行：{issue}")
+                    problems.append(finding("record_issue", line + issue, d.unit_id))
         if self.peer is not None:
             bound, peer_issues = self.peer.bound_check(
                 markdown, units, locations, decisions, record.get("peer_review"),
             )
             if not bound:
-                return False, peer_issues
-            problems.extend(peer_issues)
+                return False, [finding("peer_record", issue) for issue in peer_issues]
+            problems.extend(finding("peer_review", issue) for issue in peer_issues)
         return True, problems
 
 

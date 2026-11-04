@@ -265,7 +265,7 @@ def delivery_fingerprint(detail: RunDetail) -> str:
     from .support import SUPPORT_POLICY_VERSION
 
     payload = {
-        "format_version": 68,
+        "format_version": 69,
         "support_policy": SUPPORT_POLICY_VERSION,
         "mindmap_policy": MINDMAP_POLICY_VERSION,
         "query": detail.query,
@@ -339,6 +339,10 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         [f for result in detail.results for f in result.findings],
         [*detail.sources, *paper_sources(detail)],
     )
+    # 终稿逐段核验只算一次：同一结果既用于验收门，也用于在展示稿上标注待核段落。
+    prose_check: tuple[bool, list[dict[str, Any]]] | None = None
+    flag_targets: list[tuple[str, str]] = []
+    flagged_nodes: dict[str, str] = {}
     if report is not None:
         from ..report.service import requires_corroboration
         from .citation_binding import bind_review
@@ -355,7 +359,36 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             sources=detail.sources,
         )
         bind_review(catalog, citation_reviewer, report.markdown, stored_review(scratch))
-    display_markdown = present_markdown(markdown, catalog) if citations else markdown
+        prose_record = stored_review(scratch)
+        if template.key != "mindmap" and citation_reviewer is not None and prose_record is not None:
+            prose_check = citation_reviewer.check_findings(report.markdown, prose_record)
+            if prose_check[0]:
+                from .flag_markers import prose_targets
+
+                flag_targets = prose_targets(citation_reviewer, report.markdown, prose_check[1])
+    report_validation = scratch.get("_report_validation")
+    validation_flagged = (
+        [
+            item
+            for item in report_validation.get("flagged") or []
+            if isinstance(item, dict)
+            and isinstance(item.get("paragraph"), str)
+            and isinstance(item.get("message"), str)
+        ]
+        if isinstance(report_validation, dict) and report_validation.get("fallback") is not True
+        else []
+    )
+    known_targets = {needle.strip() for needle, _ in flag_targets}
+    for item in validation_flagged:
+        needle = normalize_territory(item["paragraph"]).strip()
+        if needle and not any(needle in known or known in needle for known in known_targets):
+            flag_targets.append((needle, item["message"]))
+            known_targets.add(needle)
+    from .flag_markers import mark_paragraphs
+
+    # 展示稿保留写作者原文，只在待核段落末尾追加标注；验收门仍检查未加标注的定稿。
+    shown_markdown = mark_paragraphs(markdown, flag_targets)
+    display_markdown = present_markdown(shown_markdown, catalog) if citations else shown_markdown
     document_keys = work_keys(catalog)
     if template.key == "peerReview":
         from .titles import paper_report_title
@@ -728,16 +761,23 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         from .peer_coverage import coverage_issues as peer_coverage_issues
 
         coverage = peer_coverage_issues(scratch, detail.results)
-        gates.append(GateResult("review_coverage", "fail" if coverage else "pass", coverage))
+        gates.append(
+            GateResult(
+                "review_coverage",
+                "fail" if coverage else "pass",
+                coverage,
+                {"scope": "peer_review"},
+            )
+        )
     if template.key == "mindmap" and extras.get("mindmap"):
         from ..document_corpus import corpus_from_inputs
         from .gates import mindmap_composition_gate
-        from .mindmap_contract import Mindmap, checked_review
+        from .mindmap_contract import Mindmap, checked_review_findings
 
         raw = extras["mindmap"]
         gates.append(mindmap_composition_gate(Mindmap.model_validate(raw)))
         review = extras.get("node_review")
-        _bound, issues = checked_review(
+        node_bound, node_findings = checked_review_findings(
             raw,
             citations,
             detail.results,
@@ -752,10 +792,22 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
             query=detail.query,
             open_evidence=open_evidence(contract),
         )
+        issues = [item["message"] for item in node_findings]
         status: Status = "fail" if issues else "pass"
         if review is None and issues and issues[0].startswith("历史导图"):
             status = "warn"
-        gates.append(GateResult("node_evidence", status, issues))
+        gates.append(
+            GateResult(
+                "node_evidence",
+                status,
+                issues,
+                {"review_bound": node_bound, "findings": node_findings},
+            )
+        )
+        if node_bound:
+            from .flag_markers import node_targets
+
+            flagged_nodes = node_targets(node_findings)
     if template.key != "mindmap" and report is not None:
         from ..report.service import requires_corroboration
         from .prose_review import reviewer_for_report, stored_review
@@ -777,7 +829,12 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                     GateResult("prose_evidence", "warn", ["该历史正文没有终稿支持关系核验记录"])
                 )
             else:
-                bound, issues = prose.check(report.markdown, record)
+                bound, findings = (
+                    prose_check
+                    if prose_check is not None
+                    else prose.check_findings(report.markdown, record)
+                )
+                issues = [item["message"] for item in findings]
                 gates.append(
                     GateResult(
                         "prose_evidence",
@@ -789,6 +846,8 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
                             "method": "not_reviewed"
                             if record.get("model_review_skipped")
                             else "model_assessment",
+                            # 每条问题的检查代码与所在单元：交付分级据此区分硬门与待核。
+                            "findings": findings,
                         },
                     )
                 )
@@ -856,6 +915,22 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         gates.append(revision)
     if template.key == "peerReview":
         gates.append(review_gate(extras))
+    if validation_flagged:
+        from ..report.validation import _excerpt
+
+        gates.append(
+            GateResult(
+                "uncited_paragraphs",
+                "warn",
+                list(
+                    dict.fromkeys(
+                        f"{item['message']}：「{_excerpt(item['paragraph'])}」"
+                        for item in validation_flagged
+                    )
+                ),
+                {"paragraphs": len(validation_flagged)},
+            )
+        )
     quality_failed = any(
         g.name
         in {
@@ -896,12 +971,27 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
     canonical_markdown = markdown
     if citations:
         bibliography = catalog
-        markdown = display_markdown
+    # 交付展示稿：带引用投影（有引用时）与待核标注；canonical_markdown 保持定稿原文。
+    markdown = display_markdown
 
     from ..reading_limits import append_reading_limits, collect_reading_limits
 
     reading_limits = collect_reading_limits(detail.sources, detail.results)
     markdown = append_reading_limits(markdown, reading_limits)
+    from .flag_markers import flagged_appendix, slide_targets
+    from .gate_classification import classify_gates, flagged_items
+
+    # 待核清单与完成记录同源：用同一分级规则在副本上计算，不改动登记的门记录。
+    preview = [GateResult(**gate.to_dict()) for gate in gates]
+    classify_gates(preview, minimum_length=template.min_length, strict=policy.fail_on_quality)
+    flagged = flagged_items(preview)
+    if flagged:
+        markdown = markdown.rstrip() + "\n\n" + flagged_appendix(flagged)
+    flagged_slides = (
+        slide_targets(extras["deck"], flag_targets)
+        if template.key == "slides" and isinstance(extras.get("deck"), dict)
+        else {}
+    )
 
     context = {
         "markdown": markdown,
@@ -933,6 +1023,8 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         "hard_blocked": hard_failed,
         "fail_on_quality": policy.fail_on_quality,
         "generated_at": (created_at or datetime.now(UTC)).astimezone(UTC).isoformat(),
+        **({"flagged_nodes": flagged_nodes} if flagged_nodes else {}),
+        **({"flagged_slides": flagged_slides} if flagged_slides else {}),
     }
     return render_bundle(context, files)
 

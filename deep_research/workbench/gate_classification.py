@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from .gates import GateResult
+from .issue_tiers import hard_issues, split_blocked, split_revision
 from .scholarly import ADVISORY_CODES
 
-COMPLETION_POLICY_VERSION = 2
+# 3：剩余问题分为硬门 / 可修订 / 建议，可修订问题不再阻断完成。
+COMPLETION_POLICY_VERSION = 3
 ADVISORY_LENGTH_RATIO = 0.6
 STYLE_CODES = frozenset(
     {
@@ -22,14 +24,22 @@ STYLE_CODES = frozenset(
 
 
 def blocks_formal_export(gate: GateResult, template: str) -> bool:
-    """Evidence failures keep diagnostic source/data but cannot publish formal files."""
-    return gate.status == "fail" and (
-        gate.name in {
-            "citation", "source_processing", "node_evidence", "provided_corpus", "review_coverage",
-            "evidence_quote_length", "user_requirements", "task_content",
-            "table_evidence", "table_scope",
-        }
-        or (template == "dataAnalysis" and gate.name == "prose_evidence")
+    """Evidence failures keep diagnostic source/data but cannot publish formal files.
+
+    只有硬门问题拒绝正式导出；同一道门里只剩可修订问题时（如导图节点支持关系存疑、
+    评审覆盖不足、数据分析正文的逐段支持判定），正式文件照常生成并标注待核。
+    """
+    return (
+        gate.status == "fail"
+        and (
+            gate.name in {
+                "citation", "source_processing", "node_evidence", "provided_corpus",
+                "review_coverage", "evidence_quote_length", "user_requirements", "task_content",
+                "table_evidence", "table_scope",
+            }
+            or (template == "dataAnalysis" and gate.name == "prose_evidence")
+        )
+        and bool(hard_issues(gate))
     )
 
 
@@ -39,8 +49,21 @@ def _messages(value: object) -> list[str] | None:
     )
 
 
-def classify_gates(gates: list[GateResult], *, minimum_length: int = 0) -> None:
-    """Recompute classifications even when a registry already contains labels."""
+def classify_gates(
+    gates: list[GateResult], *, minimum_length: int = 0, strict: bool = False
+) -> None:
+    """Recompute classifications even when a registry already contains labels.
+
+    ``blocking_issues`` 只放硬门问题，``flagged`` 放可修订问题，``advisories`` 放建议。
+    严格模式（任务契约 ``fail_on_quality``）沿用旧的失败即阻断：可修订问题并入阻断。
+    """
+
+    def settle(gate: GateResult, hard: list[str], soft: list[str]) -> None:
+        if strict:
+            hard, soft = [*hard, *soft], []
+        gate.blocking_issues = list(dict.fromkeys(hard))
+        gate.flagged = [m for m in dict.fromkeys(soft) if m not in gate.blocking_issues]
+
     known_advisories: set[str] = set()
     for gate in gates:
         if gate.name == "revision":
@@ -88,7 +111,8 @@ def classify_gates(gates: list[GateResult], *, minimum_length: int = 0) -> None:
             advice.extend(gate.issues)
         else:
             blocked.extend(fallback)
-        gate.blocking_issues = list(dict.fromkeys(blocked))
+        hard, soft = split_blocked(gate, list(dict.fromkeys(blocked)))
+        settle(gate, hard, soft)
         gate.advisories = list(dict.fromkeys(advice))
         known_advisories.update(advice)
     for gate in gates:
@@ -101,7 +125,7 @@ def classify_gates(gates: list[GateResult], *, minimum_length: int = 0) -> None:
         soft_record = _messages(gate.metrics.get("advisory_issues"))
         malformed = malformed or ("advisory_issues" in gate.metrics and soft_record is None)
         soft = soft_record or []
-        gate.blocking_issues = [message for message in remaining if message not in known_advisories]
+        open_items = [message for message in remaining if message not in known_advisories]
         gate.advisories = list(
             dict.fromkeys(
                 [*soft, *(message for message in remaining if message in known_advisories)]
@@ -109,15 +133,38 @@ def classify_gates(gates: list[GateResult], *, minimum_length: int = 0) -> None:
         )
         if gate.status == "pass" and not remaining:
             gate.advisories = list(dict.fromkeys([*gate.advisories, *gate.issues]))
-        if gate.status != "pass" and not remaining:
-            gate.blocking_issues = ["修订检查未通过且缺少可分类的问题记录"]
-        if gate.status == "fail" and not gate.blocking_issues:
-            gate.blocking_issues = gate.issues or ["修订检查失败"]
         declared = gate.metrics.get("remaining")
+        # 旧记录没有 remaining_issues 结构、或声明条数多于实际条目，都无法确认剩余问题的性质。
+        unclassified = (
+            malformed
+            or not isinstance(gate.metrics.get("remaining_issues"), list)
+            or (isinstance(declared, int) and declared > len(remaining))
+        )
+        hard, revisable = split_revision(open_items, unclassified)
+        if gate.status != "pass" and not remaining:
+            hard = ["修订检查未通过且缺少可分类的问题记录"]
+        if gate.status == "fail" and not hard and not revisable:
+            hard = gate.issues or ["修订检查失败"]
         if malformed or (isinstance(declared, int) and declared > len(remaining)):
-            gate.blocking_issues.append("修订问题记录缺失或无法完整分类")
+            hard.append("修订问题记录缺失或无法完整分类")
+        settle(gate, hard, revisable)
 
 
 def blocking_status(gates: list[GateResult]) -> str:
     blockers = [gate for gate in gates if gate.blocking_issues]
-    return "fail" if any(g.status == "fail" for g in blockers) else "warn" if blockers else "pass"
+    if any(g.status == "fail" for g in blockers):
+        return "fail"
+    return "warn" if blockers or any(gate.flagged for gate in gates) else "pass"
+
+
+def flagged_items(gates: list[GateResult]) -> list[dict[str, str]]:
+    """完成记录附带的待核清单：每条注明来自哪道门。"""
+    seen: set[str] = set()
+    items: list[dict[str, str]] = []
+    for gate in gates:
+        for message in gate.flagged:
+            if message in seen:
+                continue
+            seen.add(message)
+            items.append({"gate": gate.name, "issue": message})
+    return items
