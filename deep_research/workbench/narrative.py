@@ -144,13 +144,27 @@ def build_narrative(events: list[Event], *, run_status: str = "running") -> dict
         "error": "error",
         "cancelled": "error",
     }.get(run_status)
+    # 可修订问题不阻断完成：完成记录里的待核条目数随终态事件一起展示。
+    flagged = next(
+        (
+            len(event.data["completion"].get("flagged") or [])
+            for event in reversed(events)
+            if event.stage == "ORCHESTRATOR"
+            and event.type == "done"
+            and isinstance(event.data, dict)
+            and isinstance(event.data.get("completion"), dict)
+        ),
+        0,
+    )
     if terminal:
         finish.status = terminal
         if run_status == "needs_review":
             finish.title = "待复核"
         finish.lines.append(
             {
-                "done": "研究完成，交付物已生成",
+                "done": f"研究完成，交付物已生成（附 {flagged} 项待核）"
+                if flagged
+                else "研究完成，交付物已生成",
                 "needs_review": "运行已结束，报告或必需交付待复核",
                 "error": "运行未能完成",
                 "cancelled": "运行已取消",
@@ -180,6 +194,8 @@ def build_narrative(events: list[Event], *, run_status: str = "running") -> dict
         if analysed
         else _headline(counters, run_status)
     )
+    if run_status == "done" and flagged:
+        headline += f"（附 {flagged} 项待核）"
     return {
         "headline": headline,
         "sections": [s.to_dict() for s in ordered if s.status != "pending" or s.key == "finish"],

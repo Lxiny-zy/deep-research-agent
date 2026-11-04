@@ -67,13 +67,17 @@ async def test_failed_revision_uses_a_slot_without_discarding_the_saved_draft(tm
 
 
 async def test_zero_automatic_revisions_also_disables_completion_repair(settings):
-    from tests.test_completion_auto_repair import run_fixture
+    from tests.test_completion_auto_repair import BAD, run_fixture
 
     repo, run_id, model, _ = await run_fixture(settings, max_revisions=0)
     detail = await repo.get_run(run_id)
-    content = detail.orchestration.checkpoint["scratch"]["_completion_repair"]["content"]
-    assert model.stream_calls == 1 and detail.status == "needs_review"
-    assert content["attempts"] == 0 and content["status"] == "skipped"
+    # 剩下的只有可修订问题（逐段支持判定不支持）：任务完成并附待核条目；
+    # 修订额度为 0，交付前修复轮不会启动，也不会多调用一次写作模型。
+    assert model.stream_calls == 1 and detail.status == "done"
+    completion = detail.orchestration.checkpoint["scratch"]["_completion"]
+    assert completion["flagged"] and not completion["issues"]
+    assert "_completion_repair" not in detail.orchestration.checkpoint["scratch"]
+    assert BAD.rstrip("。") in detail.report.markdown
 
 
 async def test_six_pure_suggestions_use_two_calls_then_reuse_the_same_records():

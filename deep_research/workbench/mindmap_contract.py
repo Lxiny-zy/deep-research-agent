@@ -164,11 +164,18 @@ def units(mindmap: Mindmap) -> list[SupportUnit]:
 
 
 def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
+    return list(dict.fromkeys(message for _code, message in structural_findings(
+        mindmap, citation_count
+    )))
+
+
+def structural_findings(mindmap: Mindmap, citation_count: int) -> list[tuple[str, str]]:
+    """结构问题（代码, 说明）：越界引用编号是硬门，其余是可修订的结构问题。"""
     from .mindmap_duplicates import duplicate_nodes
 
-    issues = []
+    issues: list[tuple[str, str]] = []
     if not mindmap.branches:
-        issues.append("导图没有内容分支，请围绕主题组织必要内容")
+        issues.append(("structure", "导图没有内容分支，请围绕主题组织必要内容"))
 
     def walk(nodes: list[MindmapNode], parent: str) -> None:
         labels = [
@@ -176,26 +183,32 @@ def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
             for node in nodes
         ]
         if len(set(labels)) != len(labels):
-            issues.append(f"「{parent}」下存在重复节点，请合并重复内容")
+            issues.append(("structure", f"「{parent}」下存在重复节点，请合并重复内容"))
         for node in nodes:
             if not node.label.strip():
-                issues.append("节点标题不能为空白")
+                issues.append(("structure", "节点标题不能为空白"))
             if not node.relation.strip():
-                issues.append(f"「{node.label}」缺少与上级的关系")
+                issues.append(("structure", f"「{node.label}」缺少与上级的关系"))
             elif node.relation not in RELATIONS:
-                issues.append(f"「{node.label}」关系不在固定关系词表中：{node.relation}")
+                issues.append(
+                    ("structure", f"「{node.label}」关系不在固定关系词表中：{node.relation}")
+                )
             if node.relation in FACTUAL_RELATIONS and not node.citations:
-                issues.append(f"「{node.label}」的{node.relation}关系需要绑定支持该关系的引用")
+                issues.append((
+                    "structure", f"「{node.label}」的{node.relation}关系需要绑定支持该关系的引用"
+                ))
             if any(index > citation_count for index in node.citations):
-                issues.append(f"「{node.label}」使用了不存在的引用编号")
+                issues.append(("invalid_citation", f"「{node.label}」使用了不存在的引用编号"))
             if node.kind == "claim" and not node.citations:
-                issues.append(f"事实节点「{node.label}」需要绑定素材引用")
+                issues.append(("structure", f"事实节点「{node.label}」需要绑定素材引用"))
             walk(node.children, node.label)
 
     walk(mindmap.branches, mindmap.root)
     nodes = node_index(mindmap)
     if len(mindmap.links) > MAX_CROSS_LINKS:
-        issues.append(f"跨分支关联超过 {MAX_CROSS_LINKS} 条，请只保留理解主题必需的关联")
+        issues.append(
+            ("structure", f"跨分支关联超过 {MAX_CROSS_LINKS} 条，请只保留理解主题必需的关联")
+        )
     seen = set()
     for i, link in enumerate(mindmap.links):
         prefix = f"跨分支关联 {i + 1}"
@@ -203,11 +216,11 @@ def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
             not re.fullmatch(r"\d+(?:\.\d+)*", key) or key not in nodes
             for key in (link.source, link.target)
         ):
-            issues.append(prefix + "引用了不存在的节点路径")
+            issues.append(("structure", prefix + "引用了不存在的节点路径"))
         if link.source.split(".")[0] == link.target.split(".")[0]:
-            issues.append(prefix + "必须连接不同分支，不能连接自身或重复父子层级")
+            issues.append(("structure", prefix + "必须连接不同分支，不能连接自身或重复父子层级"))
         if link.relation not in RELATIONS:
-            issues.append(prefix + "不在固定关系词表中")
+            issues.append(("structure", prefix + "不在固定关系词表中"))
         key = (
             tuple(sorted((link.source, link.target)))
             if link.relation == "对比"
@@ -217,19 +230,20 @@ def structural_issues(mindmap: Mindmap, citation_count: int) -> list[str]:
             )
         )
         if (key, link.relation) in seen:
-            issues.append(prefix + "重复，保留一条并合并其引用")
+            issues.append(("structure", prefix + "重复，保留一条并合并其引用"))
         seen.add((key, link.relation))
         if link.relation in FACTUAL_RELATIONS and not link.citations:
-            issues.append(prefix + "的事实关系缺少引用")
+            issues.append(("structure", prefix + "的事实关系缺少引用"))
         if any(c > citation_count for c in link.citations):
-            issues.append(prefix + "使用了不存在的引用编号")
+            issues.append(("invalid_citation", prefix + "使用了不存在的引用编号"))
     for duplicate in duplicate_nodes(mindmap):
         qualifier = "" if duplicate["exact"] else "疑似"
-        issues.append(
+        issues.append((
+            "structure",
             f"跨分支{qualifier}重复节点 {duplicate['left']} / {duplicate['right']}："
             f"「{duplicate['labels'][0]}」与「{duplicate['labels'][1]}」；"
             "核对后合并重复内容或明确各自条件，保留原有事实、限定与引用"
-        )
+        ))
     return list(dict.fromkeys(issues))
 
 
@@ -271,26 +285,56 @@ def checked_review(
     open_evidence: bool = False,
 ) -> tuple[bool, list[str]]:
     """Check coverage and binding; bool indicates a current review, not a pass."""
+    bound, findings = checked_review_findings(
+        raw, citations, results, record, body,
+        corpus=corpus, query=query, open_evidence=open_evidence,
+    )
+    return bound, [item["message"] for item in findings]
+
+
+def checked_review_findings(
+    raw: dict,
+    citations: list[str],
+    results: list[ResearchResult],
+    record: Any,
+    body: str,
+    *,
+    corpus: FullTextCorpus | None = None,
+    query: str = "",
+    open_evidence: bool = False,
+) -> tuple[bool, list[dict[str, Any]]]:
+    """同 ``checked_review``，每条问题带代码与节点编号（``unit``），供分级与待核标注。"""
     from .gates import _body_without_references
     from .writers import mindmap_to_markdown
 
+    def finding(code: str, message: str, unit: str | None = None) -> dict[str, Any]:
+        return {"code": code, "message": message, "unit": unit}
+
     model = Mindmap.model_validate(raw)
     if _body_without_references(body).strip() != mindmap_to_markdown(model).strip():
-        return False, ["导图结构与审核后的大纲不一致，未导出旧结构"]
-    structural = structural_issues(model, len(citations))
+        return False, [finding("record_stale", "导图结构与审核后的大纲不一致，未导出旧结构")]
+    structural = [
+        finding(code, message)
+        for code, message in dict.fromkeys(structural_findings(model, len(citations)))
+    ]
     if not isinstance(record, dict):
-        return False, [*structural, "历史导图没有节点证据核对记录，不能确认事实与关系均有支持"]
+        return False, [
+            *structural,
+            finding(
+                "record_missing", "历史导图没有节点证据核对记录，不能确认事实与关系均有支持"
+            ),
+        ]
     if record.get("input_hash") != input_hash(raw, citations, results):
-        return False, ["导图或证据已变更，原核对记录不再适用"]
+        return False, [finding("record_stale", "导图或证据已变更，原核对记录不再适用")]
     try:
         decisions = [SupportDecision.model_validate(d) for d in record.get("decisions", [])]
     except ValueError:
-        return False, ["导图节点核对记录无法解析"]
+        return False, [finding("record_unparseable", "导图节点核对记录无法解析")]
     from .mindmap_edit import review_units
 
     expected = {u.id: u for u in (review_units(model, query) if query else units(model))}
     if {d.unit_id for d in decisions} != set(expected) or len(decisions) != len(expected):
-        return False, ["导图的节点核对记录不完整或重复"]
+        return False, [finding("coverage_incomplete", "导图的节点核对记录不完整或重复")]
     evidence = evidence_records(results, {url: i for i, url in enumerate(citations, 1)})
     checker = SupportReviewer(
         None,
@@ -308,18 +352,23 @@ def checked_review(
         unit = expected[decision.unit_id]
         allowed = {e["id"] for e in evidence if e["citation"] in unit.citations}
         fulltext_only = not decision.evidence_ids and checker.fulltext_supports(unit, decision)
+        prefix = f"节点 {unit.id}："
         if decision.verdict in {"unsupported", "uncertain"}:
-            problems.append(f"节点 {unit.id}：{decision.reason}")
+            problems.append(finding("node_unsupported", prefix + decision.reason, unit.id))
         elif decision.verdict == "supported" and (
             (not decision.evidence_ids and not fulltext_only)
             or not set(decision.evidence_ids).issubset(allowed)
         ):
-            problems.append(f"节点 {unit.id}：证据映射不属于该节点")
+            problems.append(
+                finding("node_evidence_scope", prefix + "证据映射不属于该节点", unit.id)
+            )
         elif decision.verdict == "non_factual" and (
             unit.kind == "claim" or asserted_comparison(unit.text)
         ):
-            problems.append(f"节点 {unit.id}：事实节点不能免于证据核对")
+            problems.append(
+                finding("node_unverified_fact", prefix + "事实节点不能免于证据核对", unit.id)
+            )
         if decision.verdict in {"supported", "non_factual"}:
             if issue := checker.record_issue(unit, decision):
-                problems.append(f"节点 {unit.id}：{issue}")
+                problems.append(finding("node_record", prefix + issue, unit.id))
     return True, problems

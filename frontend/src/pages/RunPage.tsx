@@ -286,6 +286,21 @@ export default function RunPage() {
       ? [...new Set(completion.issues.filter((issue): issue is string => typeof issue === 'string' && !!issue.trim()))]
       : []
   }, [dbFinished, detail.data?.completion, stream.events])
+  // 可修订问题不阻断完成：任务以 done 结束，正式文件照常生成，待核条目单独列出
+  const flaggedItems = useMemo(() => {
+    const streamedCompletion = [...stream.events]
+      .reverse()
+      .find((event) => event.stage === 'ORCHESTRATOR' && event.type === 'done')
+      ?.data?.completion
+    const completion = (dbFinished ? detail.data?.completion : null) ?? streamedCompletion
+    if (!completion || typeof completion !== 'object' || !('flagged' in completion)) return []
+    const flagged: unknown = completion.flagged
+    if (!Array.isArray(flagged)) return []
+    return [...new Set(flagged.flatMap((item: unknown) => {
+      const issue = item && typeof item === 'object' && 'issue' in item ? item.issue : null
+      return typeof issue === 'string' && issue.trim() ? [issue] : []
+    }))]
+  }, [dbFinished, detail.data?.completion, stream.events])
   const createdAt = detail.data?.created_at
     ? new Date(detail.data.created_at).toLocaleString('zh-CN', { hour12: false })
     : ''
@@ -423,6 +438,28 @@ export default function RunPage() {
                   </details>
                 )}
               </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {status === 'done' && flaggedItems.length > 0 && (
+        <div className="run-validation-note is-warning" role="status">
+          <AppIcon name="alert" size={16} aria-hidden="true" />
+          <div>
+            <p>完成（附 {flaggedItems.length} 项待核）。正式文件已生成，相关段落在正文中以〔待核〕标出，结论请对照原始来源确认。</p>
+            <ul aria-label="待核事项">
+              {flaggedItems.slice(0, 3).map((issue) => (
+                <li key={issue}>{issue}</li>
+              ))}
+            </ul>
+            {flaggedItems.length > 3 && (
+              <details>
+                <summary>展开其余 {flaggedItems.length - 3} 项待核</summary>
+                <ul aria-label="其余待核事项">
+                  {flaggedItems.slice(3).map((issue) => <li key={issue}>{issue}</li>)}
+                </ul>
+              </details>
             )}
           </div>
         </div>

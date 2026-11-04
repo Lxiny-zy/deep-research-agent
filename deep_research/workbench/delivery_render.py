@@ -147,6 +147,10 @@ def render_bundle(
             extras.get("deck")
             or _deck_from_markdown(context.get("canonical_markdown", markdown), title)
         )
+        if context.get("flagged_slides"):
+            from .flag_markers import mark_slides
+
+            value = mark_slides(value, context["flagged_slides"])
         for spec in value.get("slides", []):
             visual = spec.get("visual_data")
             if visual and visual["kind"] == "source_image":
@@ -288,6 +292,10 @@ def render_bundle(
                 link["display_citations"] = list(dict.fromkeys(
                     document_by_location.get(i, i) for i in link.get("citations", [])
                 ))
+        if context.get("flagged_nodes"):
+            from .flag_markers import mark_mindmap
+
+            value = mark_mindmap(deepcopy(value), context["flagged_nodes"])
         return value
 
     def map_html() -> bytes:
@@ -411,7 +419,11 @@ def render_bundle(
     from .templates import get_template
 
     template = get_template(context["template"])
-    classify_gates(gates, minimum_length=template.min_length if template else 0)
+    classify_gates(
+        gates,
+        minimum_length=template.min_length if template else 0,
+        strict=bool(context["fail_on_quality"]),
+    )
     for gate in gates:
         if not gate.blocking_issues:
             continue

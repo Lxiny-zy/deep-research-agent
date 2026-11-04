@@ -647,12 +647,14 @@ class DeepResearchAgent:
                 if await self.repo.get_run_status(run_id) != terminal:
                     # Cancellation/another terminal decision won the race.
                     return report
+            flagged_count = len(completion.get("flagged") or []) if completion else 0
             self.tracer.emit(
                 "ORCHESTRATOR",
                 "needs_review" if terminal == "needs_review" else "done",
                 "报告与交付仍有未通过的检查，已保留结果供复核与修订"
                 if terminal == "needs_review"
-                else f"完成 ｜ 用时 {self.tracer.elapsed:.1f}s ｜ token {self.tracer.total_tokens}",
+                else (f"完成（附 {flagged_count} 项待核）" if flagged_count else "完成")
+                + f" ｜ 用时 {self.tracer.elapsed:.1f}s ｜ token {self.tracer.total_tokens}",
                 data={
                     "elapsed": round(self.tracer.elapsed, 1),
                     "total_tokens": self.tracer.total_tokens,
@@ -1434,6 +1436,9 @@ class DeepResearchAgent:
                     if partial_fallback:
                         audit["partial"] = True
                 bb.scratch[PROSE_REVIEW_KEY] = audit
+                # 写作者终态复核中原文保留、待核标注的段落；只在正文未被再次改写时沿用。
+                prior = bb.scratch.get("_report_validation")
+                kept = prior.get("flagged") if reviewed_prose and isinstance(prior, dict) else None
                 validation = {
                     "scope": "citation_and_numbers"
                     if audit.get("model_review_skipped")
@@ -1443,6 +1448,7 @@ class DeepResearchAgent:
                     "semantic_verification": not bool(audit.get("model_review_skipped")),
                     "support_status": audit["status"],
                     **({"partial": True} if audit.get("partial") else {}),
+                    **({"flagged": kept} if kept else {}),
                 }
                 bb.scratch["_report_validation"] = validation
                 self.tracer.emit(
@@ -1614,6 +1620,8 @@ class DeepResearchAgent:
                 )
                 if checker is None or not checker.check(candidate.report.markdown, record)[0]:
                     raise ValueError("自动修订后的核验记录未绑定正文")
+                prior = candidate.scratch.get("_report_validation")
+                kept = prior.get("flagged") if isinstance(prior, dict) else None
                 candidate.scratch["_report_validation"] = {
                     "scope": record.get("scope", "model_assessed_final_prose_support"),
                     "issues": record["issues"],
@@ -1621,6 +1629,7 @@ class DeepResearchAgent:
                     "semantic_verification": not bool(record.get("model_review_skipped")),
                     "support_status": record["status"],
                     **({"partial": True} if record.get("partial") else {}),
+                    **({"flagged": kept} if kept else {}),
                 }
             working.report, working.results = candidate.report, candidate.results
             working.orchestration.checkpoint = candidate.model_dump(mode="json")

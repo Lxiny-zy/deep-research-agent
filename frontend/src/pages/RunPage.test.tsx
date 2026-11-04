@@ -626,6 +626,33 @@ describe('RunPage database synchronization', () => {
     },
   )
 
+  it('shows a done run with flagged items as complete with a pending-check list', () => {
+    useResearchStreamMock.mockReturnValue(makeStream('idle'))
+    useRunDetailMock.mockReturnValue({
+      data: {
+        ...makeDetail('done', '带待核标注的报告'),
+        completion: {
+          status: 'done',
+          issues: [],
+          flagged: [
+            { gate: 'prose_evidence', issue: '第 3 行：所选摘录缺少对应句中的数值或专名' },
+            { gate: 'structure', issue: '缺少章节：局限' },
+          ],
+        },
+      },
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useRunDetail>)
+
+    renderRunPage()
+
+    expect(screen.getByTestId('status')).toHaveTextContent('done')
+    expect(screen.getByText(/完成（附 2 项待核）/)).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: '待核事项' })).toHaveTextContent('缺少章节：局限')
+    expect(screen.queryByRole('list', { name: '待复核问题' })).not.toBeInTheDocument()
+  })
+
   it('lets a persisted terminal status override a stale live stream', () => {
     useResearchStreamMock.mockReturnValue(makeStream('streaming', 'partial'))
     useRunDetailMock.mockReturnValue({

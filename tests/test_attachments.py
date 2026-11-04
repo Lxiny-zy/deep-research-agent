@@ -369,7 +369,9 @@ async def test_paper_read_with_only_an_uploaded_paper_reads_it_without_searching
     expected = "needs_review" if requires_review else "done"
     # Reading and verifying the supplied original succeeds; the fixture's short
     # generic draft still lacks the sections promised by a full paper-reading task.
-    assert {"length", "structure"} <= {gate["name"] for gate in nonpassing}
+    # 篇幅严重不足仍是阻断项；缺章节属于可修订问题，列入待核而非阻断。
+    assert "length" in {gate["name"] for gate in nonpassing}
+    assert "structure" in {gate["name"] for gate in record["gates"] if gate.get("flagged")}
     assert expected == "needs_review"
     assert detail.status == completion["status"] == expected
     assert completion["required_formats"] == sorted(required)

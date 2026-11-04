@@ -12,7 +12,7 @@ from ..config import Settings
 from ..persistence.repository import RUN_TERMINAL_STATUSES, ResearchRepository, RunDetail
 from .contract import contract_from_scratch
 from .delivery_store import current_version, load_version
-from .gate_classification import COMPLETION_POLICY_VERSION, classify_gates
+from .gate_classification import COMPLETION_POLICY_VERSION, classify_gates, flagged_items
 from .gates import GateResult
 from .publish import DeliveryBundle, delivery_fingerprint, resolve_template
 
@@ -116,7 +116,12 @@ def validate_bundle_files(bundle: DeliveryBundle) -> None:
     from .templates import get_template
 
     template = get_template(bundle.template)
-    classify_gates(bundle.gates, minimum_length=template.min_length if template else 0)
+    context = bundle.render_context if isinstance(bundle.render_context, dict) else {}
+    classify_gates(
+        bundle.gates,
+        minimum_length=template.min_length if template else 0,
+        strict=bool(context.get("fail_on_quality", False)),
+    )
 
 
 def promised_formats(detail: RunDetail) -> set[str] | None:
@@ -152,8 +157,11 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
         raise ValueError("task has no frozen delivery contract")
     issues = file_issues(bundle)
     template = resolve_template(detail)
-    classify_gates(bundle.gates, minimum_length=template.min_length)
+    strict = _strict_quality(detail)
+    classify_gates(bundle.gates, minimum_length=template.min_length, strict=strict)
     advisories = [message for gate in bundle.gates for message in gate.advisories]
+    # 可修订问题（非硬门）不阻断完成：任务以 done 结束，条目附在 flagged 中待核。
+    flagged = flagged_items(bundle.gates)
     required_gates = {"markdown", "structure", "length", "consistency", "file_readability"}
     required_gates.add("node_evidence" if template.key == "mindmap" else "prose_evidence")
     if template.key == "dataAnalysis":
@@ -186,16 +194,15 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
                 and not (
                     file.status == "warn"
                     and file.issues
-                    and (
-                        not _strict_quality(detail)
-                        or set(file.issues) <= set(advisories)
-                    )
+                    and (not strict or set(file.issues) <= set(advisories))
                 )
             )
             for file in files
         ):
             issues.append(f"{fmt.upper()} 交付文件尚未通过验收")
-    if not issues and (bundle.status == "fail" or (bundle.status != "pass" and not advisories)):
+    if not issues and (
+        bundle.status == "fail" or (bundle.status != "pass" and not advisories and not flagged)
+    ):
         issues.append("交付整体检查尚未通过")
     source = delivery_fingerprint(detail)
     if bundle.input_version != source:
@@ -232,6 +239,8 @@ def assess_completion(detail: RunDetail, bundle: DeliveryBundle) -> dict[str, An
         "required_formats": sorted(required),
         "required_gates": sorted(required_gates),
         "issues": list(dict.fromkeys(issues)),
+        # 有硬门问题时任务停在 needs_review，待核条目仍一并列出，便于一次修订。
+        "flagged": [item for item in flagged if item["issue"] not in issues],
         "advisories": list(dict.fromkeys(advisories)),
         "gates": [gate.to_dict() for gate in bundle.gates],
         "checked_at": checked_at,

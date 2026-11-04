@@ -76,7 +76,6 @@ def test_minor_shortfall_is_advisory_but_substantially_incomplete_body_blocks(se
         "user_requirements",
         "table_evidence",
         "table_scope",
-        "structure",
         "citation",
         "source_processing",
         "unrecognized_check",
@@ -86,6 +85,16 @@ def test_factual_scope_and_unknown_warnings_still_block(settings, name):
     detail, value = subject(settings, GateResult(name, "warn", ["尚未验证必要内容"]))
     value.status = "pass"
     assert assess_completion(detail, value)["status"] == "needs_review"
+
+
+def test_structure_warning_completes_with_a_flagged_item(settings):
+    # 章节缺失是可修订问题：任务完成，但条目进入待核清单，不会被当成建议吞掉。
+    detail, value = subject(settings, GateResult("structure", "warn", ["缺少章节：局限"]))
+    value.status = "pass"
+    record = assess_completion(detail, value)
+    assert record["status"] == "done" and record["issues"] == []
+    assert record["flagged"] == [{"gate": "structure", "issue": "缺少章节：局限"}]
+    assert "缺少章节：局限" not in record["advisories"]
 
 
 def test_mixed_scholarly_gate_never_hides_a_blocker_beyond_display_limit(settings):
@@ -98,9 +107,25 @@ def test_mixed_scholarly_gate_never_hides_a_blocker_beyond_display_limit(setting
         ),
     )
     record = assess_completion(detail, value)
-    assert record["status"] == "needs_review"
-    assert "用户点名的年份范围未覆盖" in record["issues"]
+    # 时效覆盖是可修订问题：不阻断完成，但必须进入待核清单，不能藏在显示上限之后。
+    assert record["status"] == "done"
+    assert {"gate": "scholarly", "issue": "用户点名的年份范围未覆盖"} in record["flagged"]
+    assert "用户点名的年份范围未覆盖" not in record["advisories"]
     assert "风格建议 0" in record["advisories"]
+
+
+def test_unknown_scholarly_code_beyond_display_limit_still_blocks(settings):
+    findings = [{"code": "colloquial", "message": f"风格建议 {i}"} for i in range(25)]
+    findings.append({"code": "future-check", "message": "未登记的学术检查问题"})
+    detail, value = subject(
+        settings,
+        GateResult(
+            "scholarly", "warn", [row["message"] for row in findings[:20]], {"findings": findings}
+        ),
+    )
+    record = assess_completion(detail, value)
+    assert record["status"] == "needs_review"
+    assert "未登记的学术检查问题" in record["issues"]
 
 
 def test_real_scholarly_gate_emits_classifiable_findings():
