@@ -1,6 +1,14 @@
 # 最新上线记录
 
-最新发布：**2026-11-04，`a0decc7e48baa22e0de1e30568d2d911d7d3f131`**（第四轮线上真测的修复，见 [主计划](IMPROVEMENT_PLAN.md) S50–S57，含 `1eb136a`）。
+最新发布：**2026-11-04，`d74c38ba1161ea0b1e92606d30d09d287cfe0daa`**（第五轮线上真测的修复，见 [主计划](IMPROVEMENT_PLAN.md) S58–S63，含 `5ea6e36` 与 `d310387`）。
+
+- 发布方式：同前，仅替换 api 容器；准备与切换前均确认无进行中的任务（已完成 16、出错 2、待复核 39）。
+- 镜像：`sha256:19b86bc6bedc88695a8a59eb0ec8d74eed6a69fb96f77d4a8383a6a616c498ea`；回滚标签 `deep-research-agent:rollback-a0decc7e48ba-20261104t010911z`。
+- 备份：`20261104T010911Z-online-round5-fixes-d74c38ba1161`（数据库导出 69 MB，`gzip -t` 通过）；回执 `/www/wwwroot/deep-research-agent-deploy/online-round5-fixes-d74c38ba1161-20261104T010911Z/deployed.json`。
+- 数据库仍为 **0045**，无迁移、无依赖变化、无前端变化。
+- 验证：容器 healthy，本地与公网 `/readyz` 均 200，切换后日志无错误。发布前本地全量回归 4105 通过、2 跳过（排除 PostgreSQL 用例），ruff、mypy 通过。
+
+2026-11-04 先发布 **`a0decc7e48baa22e0de1e30568d2d911d7d3f131`**（第四轮线上真测的修复，见 [主计划](IMPROVEMENT_PLAN.md) S50–S57，含 `1eb136a`）。
 
 - 发布方式：同前，仅替换 api 容器；准备与切换前均确认无进行中的任务（已完成 16、待复核 34）。
 - 镜像：`sha256:b80fb2ef19da905af1efb527308722323690131dae1851526aa2b801993d6436`；回滚标签 `deep-research-agent:rollback-4bdc511a4521-20261103t160724z`。
