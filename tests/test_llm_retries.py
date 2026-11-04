@@ -325,3 +325,26 @@ async def test_explicit_output_capacity_is_respected_without_hidden_expansion(ma
     with pytest.raises(ModelOutputTruncated):
         _ = [part async for part in llm.stream("s", "u")]
     assert [request["max_tokens"] for request in completions.requests] == [32768]
+
+
+async def test_truncated_reasoning_lowers_effort_before_giving_up(make_llm):
+    # 第七轮线上：导图修订调用的 20000 个输出全是思考，正文为 0，修订直接失败
+    llm, completions, tracer, _ = make_llm(
+        _truncated(), _truncated(), _response('{"value": 7}', 13)
+    )
+    llm.parameter_mode, llm.reasoning_effort = "reasoning", "high"
+    answer = await llm.parse("s", "u", _Answer)
+    assert answer.value == 7
+    assert [request.get("reasoning_effort") for request in completions.requests] == [
+        "high", "medium", "low"
+    ]
+    notes = [e for e in tracer.events if "降低思考强度" in (e.message or "")]
+    assert len(notes) == 2
+
+
+async def test_truncation_at_the_lowest_effort_still_raises(make_llm):
+    llm, completions, _, _ = make_llm(_truncated(), _truncated())
+    llm.parameter_mode, llm.reasoning_effort = "reasoning", "low"
+    with pytest.raises(ModelOutputTruncated):
+        await llm.parse("s", "u", _Answer)
+    assert len(completions.requests) == 1

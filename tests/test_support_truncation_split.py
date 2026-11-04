@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from deep_research.llm import ModelOutputTruncated
 from deep_research.workbench.prose_review import can_revise
 from deep_research.workbench.support import (
@@ -59,10 +61,19 @@ async def test_splitting_stops_after_three_levels_and_keeps_the_failure_visible(
     assert not can_revise(list(output.values()))
 
 
-async def test_per_unit_checks_run_concurrently_and_keep_their_results(monkeypatch):
+class _Slots:
+    def __init__(self, count: int) -> None:
+        self.provider_max_concurrency = count
+
+
+@pytest.mark.parametrize("slots, cap", [(2, 2), (8, 4), (1, 1)])
+async def test_per_unit_checks_never_queue_beyond_the_provider_slots(monkeypatch, slots, cap):
+    # 第八轮线上：名额为 2 时同时排 4 段，等名额超时被判为繁忙，整个任务反复退避空转
     import asyncio
 
-    reviewer = SupportReviewer(SplitOnlyVerifier(), [], 200000)
+    llm = SplitOnlyVerifier()
+    llm.settings = _Slots(slots)
+    reviewer = SupportReviewer(llm, [], 200000)
     active = peak = 0
     calls: list[str] = []
 
@@ -81,14 +92,42 @@ async def test_per_unit_checks_run_concurrently_and_keep_their_results(monkeypat
     monkeypatch.setattr(reviewer, "_check_fulltext", slow_check)
     monkeypatch.setattr(reviewer, "_check_formula", no_formula)
     await reviewer._prefetch_checks(_units(8), set(), None)
-    assert sorted(calls) == [f"u{index}" for index in range(8)]
-    assert 1 < peak <= 4
+    if cap == 1:
+        assert calls == []  # 只有一个名额时不预取，交给原有的逐段循环
+    else:
+        assert sorted(calls) == [f"u{index}" for index in range(8)]
+        assert peak == cap
+
+
+async def test_one_busy_unit_does_not_cancel_the_others(monkeypatch):
+    from deep_research.provider_limits import ProviderBusyError
+
+    llm = SplitOnlyVerifier()
+    llm.settings = _Slots(2)
+    reviewer = SupportReviewer(llm, [], 200000)
+    done: list[str] = []
+
+    async def check(unit, key, checker=None):
+        if unit.id == "u0":
+            raise ProviderBusyError(1)
+        done.append(unit.id)
+        return None
+
+    async def no_formula(unit, key):
+        return None
+
+    monkeypatch.setattr(reviewer, "_check_fulltext", check)
+    monkeypatch.setattr(reviewer, "_check_formula", no_formula)
+    await reviewer._prefetch_checks(_units(4), set(), None)
+    assert sorted(done) == ["u1", "u2", "u3"]
 
 
 async def test_prefetch_failures_keep_their_original_type(monkeypatch):
     from deep_research.persistence.repository import LeaseLostError
 
-    reviewer = SupportReviewer(SplitOnlyVerifier(), [], 200000)
+    llm = SplitOnlyVerifier()
+    llm.settings = _Slots(2)
+    reviewer = SupportReviewer(llm, [], 200000)
 
     async def lost(unit, key, checker=None):
         raise LeaseLostError("lease lost")

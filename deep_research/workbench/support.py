@@ -29,9 +29,10 @@ from .research_scope import field_absence_issue
 from .support_alignment import alignment_diagnostics, alignment_issue, numeric_fact
 
 _MAX_JUDGE_SPLITS = 3
-# 逐段的全文与公式回查互不依赖。模型执行名额（DR_PROVIDER_MAX_CONCURRENCY）仍在调用层统一限流，
-# 这里只决定同时排队的段落数
-_PREFETCH_CONCURRENCY = 4
+# 逐段的全文与公式回查互不依赖，可以并发；但不能超过模型执行名额（DR_PROVIDER_MAX_CONCURRENCY）。
+# 第八轮线上（bb5015d）名额为 2 时同时排 4 段，等名额超过 30 秒被判为供应商繁忙，
+# 已在进行的调用一并取消、整个任务退避让出，2 小时只完成约 50 分钟的工作
+_PREFETCH_CONCURRENCY_CAP = 4
 _FORMULA_QUOTE_CHARS = 240
 _TRUNCATED = "核验调用失败：ModelOutputTruncated"
 
@@ -401,25 +402,36 @@ class SupportReviewer:
         下面的逐段循环再次调用同样的检查时，内容与文献未变就直接复用这里的记录，
         判定逻辑与调用次数都不变，只是不再一段等一段。
         """
-        gate = asyncio.Semaphore(_PREFETCH_CONCURRENCY)
+        from ..token_budget import TokenBudgetExceeded
+
+        slots = getattr(getattr(self.llm, "settings", None), "provider_max_concurrency", 1)
+        width = max(1, min(_PREFETCH_CONCURRENCY_CAP, int(slots) if isinstance(slots, int) else 1))
+        if len(units) < 2 or width < 2:
+            return
+        gate = asyncio.Semaphore(width)
 
         async def one(unit: SupportUnit) -> None:
             if not set(unit.citations).issubset(known_citations):
                 return
             key = digest([asdict(unit), self.evidence_for(unit)])
             async with gate:
-                # 与逐段循环一致：全文回查未通过的段落不再做公式回查
-                if await self._check_fulltext(unit, key, checker) is None:
-                    await self._check_formula(unit, key)
+                try:
+                    # 与逐段循环一致：全文回查未通过的段落不再做公式回查
+                    if await self._check_fulltext(unit, key, checker) is None:
+                        await self._check_formula(unit, key)
+                except (LeaseLostError, TokenBudgetExceeded):
+                    raise
+                except Exception:
+                    # 预取只是提速：单段出错（含名额繁忙）不取消其他段，
+                    # 下面的逐段循环会重做这一段，并按原有方式处理或上抛该异常
+                    return
 
-        if len(units) < 2:
-            return
         try:
             async with asyncio.TaskGroup() as group:
                 for unit in units:
                     group.create_task(one(unit))
         except BaseExceptionGroup as grouped:
-            # 上层按类型识别租约丢失、限流等异常，不能让它们裹在异常组里
+            # 租约丢失、预算耗尽必须终止本步骤；上层按类型识别，不能裹在异常组里
             raise grouped.exceptions[0] from None
 
     async def _check_formula(self, unit: SupportUnit, key: str) -> SupportDecision | None:

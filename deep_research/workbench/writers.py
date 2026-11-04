@@ -275,24 +275,56 @@ class TemplateWriter:
         material: str,
         revision: str | None = None,
     ) -> str:
+        from ..llm import ModelOutputTruncated, lower_reasoning_effort
+
         system = ctx.content_prompt(self.system_prompt(template, contract))
         user = self.user_prompt(bb, template, contract, material) + (revision or "")
-        chunks: list[str] = []
-        first = True
-        async for delta in ctx.llm_for(self.name).stream(system, user, temperature=0.3):
-            chunks.append(delta)
-            raw = "".join(chunks)
-            has_specs = "evidence-table" in raw
-            ctx.tracer.emit(
-                "SYNTHESIZER",
-                "token",
-                data={
-                    "delta": table_preview(raw) if has_specs else delta,
-                    **({"replace": True} if has_specs or (first and revision) else {}),
-                },
-            )
-            first = False
-        return "".join(chunks)
+        llm = ctx.llm_for(self.name)
+        effort: str | None = None
+        retried = False
+        while True:
+            chunks: list[str] = []
+            first = True
+            try:
+                async for delta in llm.stream(
+                    system, user, temperature=0.3,
+                    **({"reasoning_effort": effort} if effort else {}),
+                ):
+                    chunks.append(delta)
+                    raw = "".join(chunks)
+                    has_specs = "evidence-table" in raw
+                    ctx.tracer.emit(
+                        "SYNTHESIZER",
+                        "token",
+                        data={
+                            "delta": table_preview(raw) if has_specs else delta,
+                            **(
+                                {"replace": True}
+                                if has_specs or (first and (revision or retried))
+                                else {}
+                            ),
+                        },
+                    )
+                    first = False
+                return "".join(chunks)
+            except ModelOutputTruncated:
+                # 第七轮线上：综述与课题调研写稿时思考占满输出上限，正文写到引言即被截断。
+                # 降一档思考强度重写整篇（已显示的半截正文随后被整体替换）；已是最低档则如实失败
+                current = effort or getattr(llm, "reasoning_effort", None)
+                lower = (
+                    lower_reasoning_effort(current)
+                    if getattr(llm, "parameter_mode", None) == "reasoning"
+                    else None
+                )
+                if lower is None:
+                    raise
+                ctx.tracer.emit(
+                    "SYNTHESIZER",
+                    "info",
+                    f"写作输出被截断，降低思考强度（{current} → {lower}）后重写",
+                    data={"truncation_retry": {"from": current, "to": lower}},
+                )
+                effort, retried = lower, True
 
     # 报告及幻灯片的文字投影都核对引用和数值；概念导图有独立的结构流程。
     check_citations: bool = True

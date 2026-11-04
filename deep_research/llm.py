@@ -53,6 +53,16 @@ class ModelOutputTruncated(RuntimeError):
         )
 
 
+# 第七轮线上：输出上限内思考占 79%–100%，导图修订调用 20000 个输出全是思考、正文为 0。
+# 截断时降一档思考强度重试，给正文留出预算；已是最低档则如实抛出截断
+_LOWER_EFFORT = {"high": "medium", "medium": "low"}
+
+
+def lower_reasoning_effort(effort: str | None) -> str | None:
+    """The next lower effort after a truncated reasoning call, or None at the floor."""
+    return _LOWER_EFFORT.get(effort or "")
+
+
 class ModelStreamInterrupted(RuntimeError):
     def __init__(self) -> None:
         super().__init__("模型已返回部分思考或正文，但连接中断；未自动重发同一请求。")
@@ -340,13 +350,35 @@ class LLM:
             ),
             reasoning_source=source,
         ) as operation:
-            for attempt in range(attempts):
+            attempt = 0
+            while attempt < attempts:
                 try:
                     raw = await self._complete_once(sys, user, temperature, **options)
+                except ModelOutputTruncated:
+                    current = options.get("reasoning_effort", self.reasoning_effort)
+                    lower = (
+                        lower_reasoning_effort(current)
+                        if self.parameter_mode == "reasoning"
+                        else None
+                    )
+                    if lower is None:
+                        raise
+                    # 降档重试不占用网络与格式重试的次数
+                    options = {**options, "reasoning_effort": lower}
+                    operation.reasoning_effort = lower
+                    operation.retry_reason = "truncation_lower_effort"
+                    self.tracer.emit(
+                        "LLM",
+                        "info",
+                        f"模型输出被截断，降低思考强度（{current} → {lower}）后重试",
+                        data={"truncation_retry": {"from": current, "to": lower}},
+                    )
+                    continue
                 except Exception as exc:
                     if _retryable(exc) and attempt < attempts - 1:
                         operation.retry_reason = "transport_retry"
                         await asyncio.sleep(min(2**attempt, 8))
+                        attempt += 1
                         continue
                     raise  # 重试预算耗尽：原样抛出网络层异常，便于上层区分
                 try:
@@ -355,6 +387,7 @@ class LLM:
                     err = e
                     operation.retry_reason = "schema_retry"
                     user = user + f"\n\n（上次输出无法解析：{e}；请只输出合法 JSON）"
+                    attempt += 1
         raise ValueError(f"结构化输出解析失败：{err}")
 
     async def parse_verification(
@@ -410,7 +443,12 @@ class LLM:
         return await self.tracer.verification_cache.get_or_compute(key, compute, on_hit, cache_if)
 
     async def stream(
-        self, system: str, user: str, *, temperature: float = 0.4
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float = 0.4,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[str]:
         # 建连阶段的瞬时故障（限流、网关超时）重试最多 3 次；一旦已经产出过增量就
         # 不再重试——重发会把半截正文重复拼进交付物，这时把异常交给调用方处理。
@@ -419,8 +457,10 @@ class LLM:
         operation = ModelOperation(
             kind="stream",
             role=self._call_role,
-            reasoning_effort=self.reasoning_effort if self.parameter_mode == "reasoning" else None,
-            reasoning_source="profile",
+            reasoning_effort=(reasoning_effort or self.reasoning_effort)
+            if self.parameter_mode == "reasoning"
+            else None,
+            reasoning_source="explicit" if reasoning_effort else "profile",
         )
         for attempt in range(3):
             emitted = False
@@ -432,6 +472,7 @@ class LLM:
                             system,
                             user,
                             temperature=temperature,
+                            reasoning_effort=reasoning_effort,
                             operation=operation,
                         )
                     ) as stream,

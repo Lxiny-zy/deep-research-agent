@@ -315,9 +315,15 @@ class _LazyOwnedLLM(LLM):
         )
 
     async def stream(
-        self, system: str, user: str, *, temperature: float = 0.4
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float = 0.4,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[str]:
-        async for chunk in self._get().stream(system, user, temperature=temperature):
+        options = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
+        async for chunk in self._get().stream(system, user, temperature=temperature, **options):
             yield chunk
 
     async def aclose(self) -> None:

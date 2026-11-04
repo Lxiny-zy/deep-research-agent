@@ -161,10 +161,18 @@ def build_demo_backends() -> tuple[Any, SearchTool]:
             )
 
         async def stream(
-            self, system: str, user: str, *, temperature: float = 0.4
+            self,
+            system: str,
+            user: str,
+            *,
+            temperature: float = 0.4,
+            reasoning_effort: str | None = None,
         ) -> AsyncIterator[str]:
             await self._pace()
-            async for piece in self._inner.stream(system, user, temperature=temperature):
+            options = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
+            async for piece in self._inner.stream(
+                system, user, temperature=temperature, **options
+            ):
                 yield piece
 
         async def aclose(self) -> None:
