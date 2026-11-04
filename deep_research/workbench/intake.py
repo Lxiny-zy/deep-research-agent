@@ -217,6 +217,7 @@ class PaperIntake:
         if papers:
             mode = "papers"
             collected: list[Source] = []
+            transient: list[Exception] = []
             for paper in papers:
                 document: dict[str, Any] = {
                     "input_url": paper.url,
@@ -227,6 +228,10 @@ class PaperIntake:
                 try:
                     sources = await fetch_paper(paper, ctx)
                 except Exception as exc:  # 单篇失败隔离：记录原因，继续下一篇
+                    from ..execution_policy import transient_failure
+
+                    if transient_failure(exc):
+                        transient.append(exc)
                     logger.info("paper intake failed for %s: %s", paper.url, exc)
                     failures.append(
                         {"url": paper.url, "error": f"{type(exc).__name__}: {exc}"[:300]}
@@ -246,6 +251,16 @@ class PaperIntake:
                     })
                 collected.extend(sources)
                 document["source_urls"] = [source.url for source in sources]
+            if not collected and len(transient) == len(papers):
+                # 每篇都是限流、超时这类临时故障：交给执行层按恢复策略稍后重跑本步骤，
+                # 不在 45 秒内交出一份没有读到论文的空结果
+                ctx.tracer.emit(
+                    "RESEARCHER",
+                    "info",
+                    "论文来源暂时无法访问（限流或超时），稍后自动重试导入",
+                    data={"category": "paper_intake", "failures": failures, "transient": True},
+                )
+                raise transient[-1]
         elif attachments := attachments_from_scratch(bb.scratch):
             # 上传的论文已由 attachment_reader 逐片段读过并核验；这里只登记评审对象，
             # 绝不退回开放检索——那会把用户给的论文换成相关度排序里的另一篇。

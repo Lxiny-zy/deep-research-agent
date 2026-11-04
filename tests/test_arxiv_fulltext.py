@@ -532,3 +532,55 @@ def test_result_sections_naming_compared_methods_are_not_method_sections(title, 
     from deep_research.tools.arxiv_fulltext import _canonical
 
     assert _canonical(title) == kind
+
+
+async def test_lookup_retries_rate_limited_metadata_requests() -> None:
+    # 第六轮线上：export.arxiv.org 限流时一次超时就放弃，评审与精读 45 秒交出空结果
+    feed = """<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2205.10102v3</id>
+    <title>DAUHST</title><summary>We model the degradation of CASSI.</summary>
+    <published>2022-05-20T00:00:00Z</published>
+    <author><name>Author</name></author>
+  </entry>
+</feed>"""
+    replies = iter([
+        httpx.ReadTimeout("slow"),
+        httpx.Response(429, headers={"Retry-After": "0"}),
+        httpx.Response(200, text=feed),
+    ])
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.params["id_list"])
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    tool = ArxivSearch(request_gap=0)
+    tool._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        sources = await tool.lookup("2205.10102")
+    finally:
+        await tool.aclose()
+    assert seen == ["2205.10102"] * 3
+    assert sources and sources[0].title == "DAUHST"
+
+
+async def test_lookup_gives_up_after_the_retry_budget() -> None:
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(503)
+
+    tool = ArxivSearch(request_gap=0)
+    tool._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await tool.lookup("2205.10102")
+    finally:
+        await tool.aclose()
+    assert len(calls) == 3

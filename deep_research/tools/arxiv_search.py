@@ -53,6 +53,11 @@ _QUERY_TERM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9+.-]*")
 _MAX_QUERY_TERMS = 8
 # arXiv API 要求连续请求至少间隔 3 秒。
 _REQUEST_GAP = 3.0
+# 第六轮线上（8ad53ed）：export.arxiv.org 限流（429、响应 15 秒以上）时，精读与评审的论文导入
+# 一次读超时就放弃，任务 45 秒后交出空结果。点名论文的元数据请求按退避重试，遵守 Retry-After
+_LOOKUP_ATTEMPTS = 3
+_LOOKUP_RETRY_CAP = 30.0
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _STOPWORDS = frozenset(
     "a an and are as at by for from in is of on or the to versus via vs with without".split()
 )
@@ -161,8 +166,7 @@ class ArxivSearch(SearchTool):
         ident = identifier.strip()
         if not re.fullmatch(r"\d{4}\.\d{4,5}(?:v\d+)?", ident):
             raise ArxivFeedError(f"不是有效的 arXiv 编号：{identifier!r}")
-        response = await self._client.get(_ENDPOINT, params={"id_list": ident, "max_results": 1})
-        response.raise_for_status()
+        response = await self._lookup_feed(ident)
         entries = _parse_feed(response.content)
         candidates = [source for source in map(_to_source, entries) if source is not None]
         if not candidates:
@@ -181,6 +185,28 @@ class ArxivSearch(SearchTool):
             abstract = fallback.scholarly.model_copy(update={"section": "abstract"})
             fallback = fallback.model_copy(update={"scholarly": abstract})
         return [fallback]
+
+    async def _lookup_feed(self, ident: str) -> httpx.Response:
+        for attempt in range(_LOOKUP_ATTEMPTS):
+            last = attempt == _LOOKUP_ATTEMPTS - 1
+            try:
+                response = await self._client.get(
+                    _ENDPOINT, params={"id_list": ident, "max_results": 1}
+                )
+            except httpx.TransportError:
+                if last:
+                    raise
+                await asyncio.sleep(self._request_gap * 2**attempt)
+                continue
+            if response.status_code not in _RETRYABLE_STATUS or last:
+                response.raise_for_status()
+                return response
+            wait = self._request_gap * 2**attempt
+            retry_after = response.headers.get("Retry-After", "")
+            if retry_after.strip().isdigit():
+                wait = max(wait, float(retry_after))
+            await asyncio.sleep(min(_LOOKUP_RETRY_CAP, wait))
+        raise AssertionError("unreachable")
 
     async def aclose(self) -> None:
         await self._client.aclose()

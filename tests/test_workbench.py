@@ -724,6 +724,35 @@ async def test_paper_intake_isolates_failures(settings, monkeypatch) -> None:
     assert bb.scratch["intake_sources"]["failures"][0]["error"].startswith("RuntimeError")
 
 
+
+@pytest.mark.asyncio
+async def test_paper_intake_hands_transient_outages_to_recovery(settings, monkeypatch) -> None:
+    # 第六轮线上：arXiv 限流时导入失败被当作普通失败，任务 45 秒后交出未读论文的空结果
+    import httpx
+
+    from deep_research.agents.base import RunContext
+    from deep_research.execution_policy import transient_failure
+    from deep_research.observability import Tracer
+    from deep_research.workbench import intake
+
+    async def rate_limited(paper, ctx):  # type: ignore[no-untyped-def]
+        raise httpx.ReadTimeout("export.arxiv.org is throttling")
+
+    monkeypatch.setattr(intake, "fetch_paper", rate_limited)
+    template = get_template("paperRead")
+    assert template is not None
+    bb = Blackboard(query="q")
+    bb.scratch[CONTRACT_SCRATCH_KEY] = build_contract(
+        template, "https://arxiv.org/abs/2205.10102"
+    ).model_dump(mode="json")
+    tracer = Tracer()
+    ctx = RunContext(llm=FakeLLM(), search_tool=FakeSearch(), tracer=tracer, settings=settings)
+    with pytest.raises(httpx.ReadTimeout) as raised:
+        await PaperIntake().step(bb, ctx)
+    assert transient_failure(raised.value)
+    assert "intake_sources" not in bb.scratch
+
+
 class _NoSearch(FakeSearch):
     async def search(self, query, *, max_results=5):  # type: ignore[no-untyped-def]
         raise AssertionError("paper tasks must never fall back to open search")
