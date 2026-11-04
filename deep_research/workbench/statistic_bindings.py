@@ -450,6 +450,12 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
     correlation_methods = {
         str(row["method"]) for row in facts if row["scope"] == "correlation" and row.get("method")
     }
+    # 检验记录里自带 n 的方法（如 Shapiro-Wilk 诊断）：点名该方法时 n 指这项检验的样本量
+    comparison_n_methods = {
+        str(row["method"])
+        for row in facts
+        if row["scope"] == "comparison" and row["statistic"] == "n" and row.get("method")
+    }
     paired_methods = list(
         dict.fromkeys(
             str(test["method"])
@@ -722,6 +728,14 @@ def bind_statistics(markdown: str, ledger: dict[str, Any]) -> dict[str, Any]:
                 paired = "配对" in current_method
                 # 只点名一个变量的 n 是该变量自己的有效样本量，即使同一行后面提到配对检验
                 if metric == "n" and paired and len(selected_variables) != 1:
+                    scope = "comparison"
+                # 「Shapiro-Wilk 检验对配对差值的统计量=0.9234，p=…，n=12」：n 属于该诊断记录
+                if (
+                    metric == "n"
+                    and current_method in line_methods
+                    and current_method in comparison_n_methods
+                    and len(selected_variables) != 1
+                ):
                     scope = "comparison"
                 if metric == "r" or (
                     len(selected_variables) == 2

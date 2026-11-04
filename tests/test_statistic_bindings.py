@@ -590,3 +590,33 @@ def test_wrong_values_after_those_phrases_are_still_rejected(body, wrong, replac
 
     assert wrong in body
     assert statistic_scope_issues(body.replace(wrong, replacement), PAIRED)
+
+
+# 第六轮新版本数据分析（4d5c47d2）第 76 行：诊断检验自带的样本量
+SHAPIRO_LINE = (
+    "Shapiro-Wilk 检验对配对差值的统计量=0.9234，p=0.31516107，n={n}，未拒绝分布前提。"
+)
+
+
+def test_a_diagnostic_test_sample_size_binds_to_that_test():
+    from deep_research.workbench.analysis_review import statistic_scope_issues
+
+    ledger = copy.deepcopy(PAIRED)
+    ledger["tests"][0]["assumptions"] = [
+        {
+            "kind": "normality",
+            "n": 12,
+            "variable": "proposed_psnr − baseline_psnr",
+            "group_column": "同一行配对",
+            "scope": "paired_difference",
+            "method": "Shapiro-Wilk",
+            "alpha": 0.05,
+            "statistic": 0.9234,
+            "p_value": 0.31516107,
+            "status": "not_rejected",
+            "reason": "未拒绝该分布前提，不等于证明前提成立",
+            "warnings": [],
+        }
+    ]
+    assert not statistic_scope_issues(SHAPIRO_LINE.format(n=12), ledger)
+    assert statistic_scope_issues(SHAPIRO_LINE.format(n=11), ledger)
