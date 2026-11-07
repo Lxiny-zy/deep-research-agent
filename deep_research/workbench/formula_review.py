@@ -362,7 +362,7 @@ _SOURCE_WINDOWS = (12_000, 6_000, 3_000, 1_500)
 # 容量很大时整篇也放得下，但精读一个单元常引用同一篇的多条摘录，每次公式核验都发整篇
 # （第四轮线上精读 22 次公式核验共 184 万 token，单次输入 16 万）。整篇只在不超过这个
 # 字数时直接给出，超过就用摘录窗口；相同原文在同一次请求里只给一份。
-_FULL_SOURCE_CHARS = 60_000
+_FULL_SOURCE_CHARS = 24_000  # 第十一轮：6 万字时 6 次核验仍输入 43 万 token
 
 
 def _deduplicated(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:

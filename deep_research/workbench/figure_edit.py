@@ -158,7 +158,13 @@ async def repair_figure(
         > capacity
     ):
         return None
-    response = await llm.parse(system, PrefixPrompt(fixed, dynamic), FigureEdits, temperature=0.2)
+    # 可选图示：第九轮线上一次修订 5.7 万输出全是思考、3.5 分钟，最后图仍未纳入交付。
+    # 局部改写只需对照指定单元与原文，低思考强度足够
+    low = getattr(llm, "parameter_mode", None) == "reasoning"
+    response = await llm.parse(
+        system, PrefixPrompt(fixed, dynamic), FigureEdits, temperature=0.2,
+        **({"reasoning_effort": "low"} if low else {}),
+    )
     if (
         len(response.nodes) + len(response.edges) + (response.caption is not None) != len(rejected)
         or (response.caption is not None) != ("figure-caption" in rejected)
