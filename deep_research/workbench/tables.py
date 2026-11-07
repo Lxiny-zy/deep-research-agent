@@ -881,3 +881,17 @@ async def review_tables(
     return table_issues(
         markdown, results, mapping, record, corroboration=corroboration, ledger=ledger
     )
+
+
+def drop_unrendered_tables(markdown: str) -> tuple[str, int]:
+    """删去仍是 JSON 规格原文的 evidence-table 代码块，原处留一句说明。"""
+    lines = markdown.splitlines(keepends=True)
+    tokens = [
+        token
+        for token in _parser().parse(markdown)
+        if token.type == "fence" and token.info.strip() == "evidence-table" and token.map
+    ]
+    for token in reversed(tokens):
+        assert token.map is not None
+        lines[token.map[0] : token.map[1]] = ["（此处表格未能由已核验发现生成，已省略。）\n\n"]
+    return "".join(lines), len(tokens)

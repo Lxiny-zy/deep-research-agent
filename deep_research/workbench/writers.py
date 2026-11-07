@@ -40,6 +40,7 @@ from .tables import (
     STATEMENT_CITATIONS_VERSION,
     TABLE_INSTRUCTIONS,
     TABLES_KEY,
+    drop_unrendered_tables,
     render_specs,
     review_tables,
     table_preview,
@@ -724,6 +725,14 @@ class TemplateWriter:
                 ctx.tracer.emit("SYNTHESIZER", "info", "预算不足，使用已核验素材摘要交付")
                 body = "预算不足，以下仅提供已核验素材摘要。"
         citations = [url for url, _ in sorted(url_to_idx.items(), key=lambda item: item[1])]
+        if template.key not in {"slides", "mindmap"}:
+            # 第十二轮线上综述：修订用尽后唯一的机械问题是一张表规格无法渲染，整篇被判部分回退、
+            # 不生成任何正式文件。表格是排版件，删去该表并在原处注明即可，不拦截整份交付。
+            body, dropped = drop_unrendered_tables(body)
+            if dropped:
+                ctx.tracer.emit(
+                    "SYNTHESIZER", "info", f"{dropped} 张表格规格无法渲染，已从交付稿中移除"
+                )
         report = Report(
             query=bb.query,
             markdown=peer_factual_body(body) if template.key == "peerReview" else body.strip(),

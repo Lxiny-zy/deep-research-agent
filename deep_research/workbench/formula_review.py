@@ -410,7 +410,14 @@ def _payload(
                 "窗口外的公式无法确认时用 uncertain。"
             )
         payload = json.dumps(body, ensure_ascii=False)
-        limit = capacity if width is not None else min(capacity, overhead + _FULL_SOURCE_CHARS)
+        # 多来源单元每条各开一个窗口，窗口模式也受同一预算约束（第十二轮同行评审单次输入 12 万
+        # token）；只有最小窗口仍放不下时才用到模型容量上限
+        budget = _FULL_SOURCE_CHARS if width is None else 2 * _FULL_SOURCE_CHARS
+        limit = (
+            capacity
+            if width == _SOURCE_WINDOWS[-1]
+            else min(capacity, overhead + budget)
+        )
         if overhead + len(payload) <= limit:
             return payload, width
     return None, None

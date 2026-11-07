@@ -60,6 +60,9 @@ _SCHEMA_TASKS: dict[str, GenerationTask] = {
     "FullTextTargets": "verification",
     "FullTextChecks": "verification",
     "FormulaDecisions": "formula_verification",
+    # 可选概念图：未通过核验时只是不纳入交付，不值得高思考强度（第十一轮一次修订 5.7 万思考）
+    "ConceptFigure": "formatting",
+    "FigureEdits": "formatting",
 }
 
 
