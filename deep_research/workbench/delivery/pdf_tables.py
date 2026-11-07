@@ -98,8 +98,11 @@ def table_from_html(html: str, width: float) -> PdfTable:
         for i in range(columns)
     ]
     available = max(1, width - columns * 10)
-    if sum(minimums) > available:
-        raise ValueError("表格不可换行内容总宽度超过版心，请缩短列标题或将长公式移到表格外")
+    # 第九轮线上数据分析：内容核验全部通过，只因统计表的长标识超宽，PDF 生成失败，整个任务停在
+    # 待复核。超宽时按比例压缩最小列宽并允许长词断行、字号略降，不再让排版拦下交付。
+    squeeze = sum(minimums) > available
+    if squeeze:
+        minimums = [value * available / sum(minimums) for value in minimums]
     widths = [weight / sum(weights) * available for weight in weights]
     pending = set(range(columns))
     remaining = available
@@ -131,6 +134,8 @@ def table_from_html(html: str, width: float) -> PdfTable:
                 ]
             )
             padding = f";padding-bottom:{4 + descent:.4f}pt" if descent else ""
+            if squeeze:
+                padding += ";word-break:break-all;overflow-wrap:anywhere;font-size:8pt"
             identity = f"dr-cell-{row_index}-{index}"
             index += 1
             return f'<{match[1]} id="{identity}" style="width:{cell_width:.4f}pt{padding}">'

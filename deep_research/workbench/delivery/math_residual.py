@@ -182,3 +182,26 @@ def residual_math_issues(fmt: str, data: bytes) -> list[str]:
         return []
     sample = "、".join(fragment[:60] for fragment in found[:3])
     return [f"{fmt.upper()} 正文存在未渲染的公式语法（{sample}），需修订公式标记或修复渲染"]
+
+
+# 紧贴数字的 $…$（1$\times$1、S1$\sim$S10、10$^{-4}$）不被解析为公式，交付时成了裸 TeX。
+# 第九轮线上精读因此整篇停在待复核；这是排版问题，确定性规整，不花模型修订轮次。
+_GLUED_SYMBOL = {
+    "times": "×", "sim": "～", "cdot": "·", "pm": "±", "approx": "≈",
+    "le": "≤", "leq": "≤", "ge": "≥", "geq": "≥", "mu": "μ",
+}
+_GLUED_OP = re.compile(r"\$\s*\\(" + "|".join(_GLUED_SYMBOL) + r")\s*\$")
+_GLUED_SCRIPT = re.compile(r"(\d+(?:\.\d+)?)\$\s*(\^\{[^{}$\n]+\}|\^[-+−]?\d+)\s*\$")
+
+
+def unglue_digit_math(text: str) -> str:
+    """把与数字相邻、解析器不认的单符号公式改成等价字符或合并进同一公式。"""
+    text = _GLUED_SCRIPT.sub(lambda m: f"${m[1]}{m[2]}$", text)
+
+    def symbol(match: re.Match[str]) -> str:
+        before = text[match.start() - 1 : match.start()]
+        after = text[match.end() : match.end() + 1]
+        glued = before.isalnum() or after.isalnum() or after == "$" or before == "$"
+        return _GLUED_SYMBOL[match[1]] if glued else match[0]
+
+    return _GLUED_OP.sub(symbol, text)

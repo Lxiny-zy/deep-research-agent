@@ -483,6 +483,9 @@ class TemplateWriter:
                 if score is not None:
                     bb.scratch["_review_score"] = score
                 body = peer_scored_body(body, bb.scratch.get("_review_score"))
+            from .delivery.math_residual import unglue_digit_math
+
+            body = unglue_digit_math(body)
             unrendered = body
             body, table_record = render_specs(
                 body,
