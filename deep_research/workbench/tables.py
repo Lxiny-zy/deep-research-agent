@@ -688,7 +688,12 @@ def render_specs(
                 ledger_columns=ledger_columns,
             )
             record["specs"].append(spec.model_dump(mode="json"))
-            replacements.append((token.map[0], token.map[1], table.markdown + "\n"))
+            from .delivery.math_residual import unglue_digit_math
+
+            # 条件字段照录原文（512$\times$512），渲染后的表格同样要规整，否则交付残留裸 TeX
+            replacements.append(
+                (token.map[0], token.map[1], unglue_digit_math(table.markdown) + "\n")
+            )
         except ValueError as exc:
             record["errors"].append(str(exc))
     for start, end, text in reversed(replacements):

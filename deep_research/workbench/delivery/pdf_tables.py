@@ -140,7 +140,18 @@ def table_from_html(html: str, width: float) -> PdfTable:
             index += 1
             return f'<{match[1]} id="{identity}" style="width:{cell_width:.4f}pt{padding}">'
 
-        return re.sub(r"<(th|td)>", cell, row)
+        row = re.sub(r"<(th|td)>", cell, row)
+        if squeeze and row_index > 0:
+            # 排版引擎不在拉丁长词内断行；超宽时在表体长词里每 10 字插零宽断点（只动标签外文字）
+            def split_word(word: re.Match[str]) -> str:
+                token = word[0]
+                return "​".join(token[i : i + 10] for i in range(0, len(token), 10))
+
+            def split_text(text: re.Match[str]) -> str:
+                return ">" + re.sub(r"[A-Za-z0-9_.+\-/]{14,}", split_word, text[1]) + "<"
+
+            row = re.sub(r">([^<]+)<", split_text, row)
+        return row
 
     return PdfTable(
         fixed_width(head[1], 0), [fixed_width(row, i + 1) for i, row in enumerate(rows)]
