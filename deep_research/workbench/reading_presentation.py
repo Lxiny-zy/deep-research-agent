@@ -175,4 +175,7 @@ def paper_notes(detail: Any) -> str:
         "- 原文文本位置与PDF版面位置分别标记；重复引句须查看周边上下文，"
         "多条依据不能合并成虚构的单一精确定位。"
     )
-    return "\n".join(lines)
+    from .delivery.math_residual import unglue_digit_math
+
+    # 抽取的条件字段照录原文写法（512$\times$512），附录同样需要规整，否则交付文件残留裸 TeX
+    return unglue_digit_math("\n".join(lines))
