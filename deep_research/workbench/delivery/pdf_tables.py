@@ -85,7 +85,7 @@ def table_from_html(html: str, width: float) -> PdfTable:
                 + 2
                 for row in cells
                 for word in re.findall(
-                    r"[-+−]?\d+(?:\.\d+)?[eE][-+−]?\d+|[A-Za-z0-9][A-Za-z0-9_.+]*",
+                    r"[-+−]?\d+(?:\.\d+)?[eE][-+−]?\d+|[A-Za-z0-9][A-Za-z0-9_.+-]*",
                     plain_html(row[i]),
                 )
             ]
@@ -148,7 +148,9 @@ def table_from_html(html: str, width: float) -> PdfTable:
                 return "​".join(token[i : i + 10] for i in range(0, len(token), 10))
 
             def split_text(text: re.Match[str]) -> str:
-                return ">" + re.sub(r"[A-Za-z0-9_.+\-/]{14,}", split_word, text[1]) + "<"
+                # 连字符后也给断点：Ours-9stg 这类短名称在压缩列宽下同样会顶出单元格
+                body = re.sub(r"(?<=[A-Za-z0-9])-(?=[A-Za-z0-9])", "-​", text[1])
+                return ">" + re.sub(r"[A-Za-z0-9_.+/]{14,}", split_word, body) + "<"
 
             row = re.sub(r">([^<]+)<", split_text, row)
         return row
