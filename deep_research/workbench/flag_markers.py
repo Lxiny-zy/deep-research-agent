@@ -28,6 +28,7 @@ GATE_LABELS = {
     "research_sufficiency": "检索充分性",
     "research_progress": "检索进度",
     "figure_evidence": "图示",
+    "slides": "幻灯片版式",
     "uncited_paragraphs": "引用角标",
 }
 

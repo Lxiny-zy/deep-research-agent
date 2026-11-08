@@ -393,3 +393,15 @@ def test_narrative_reports_done_with_flagged_count():
     assert narrative["headline"].startswith("已完成") and "（附 2 项待核）" in narrative["headline"]
     finish = next(section for section in narrative["sections"] if section["key"] == "finish")
     assert finish["status"] == "done" and "附 2 项待核" in finish["lines"][-1]
+
+
+def test_slide_layout_warnings_are_revisable_but_visual_mismatch_is_hard() -> None:
+    from deep_research.workbench.gates import GateResult
+    from deep_research.workbench.issue_tiers import split_blocked
+
+    layout = ["原始第 3 页约 10 行/5 条要点，须降低密度或明确拆页", "1 页缺少演讲备注"]
+    warn = GateResult("slides", "warn", layout, {})
+    assert split_blocked(warn, layout) == ([], layout)
+    mismatch = ["第 4 页图表与已核验数据不一致"]
+    fail = GateResult("slides", "fail", mismatch, {})
+    assert split_blocked(fail, mismatch) == (mismatch, [])

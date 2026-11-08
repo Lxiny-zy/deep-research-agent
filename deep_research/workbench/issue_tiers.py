@@ -129,6 +129,9 @@ def split_blocked(gate: GateResult, blocked: list[str]) -> tuple[list[str], list
     revisable_gate = (
         gate.name in REVISABLE_GATES
         or (gate.name == "figure_evidence" and gate.status == "warn")
+        # 幻灯片 warn 只含要点密度、讲稿与时长等版式问题（图表与数据不一致时为 fail，仍是硬门）。
+        # 第十四轮线上幻灯片正文与 PPTX 均已生成，仅因 3 页要点偏密、1 页缺备注停在待复核。
+        or (gate.name == "slides" and gate.status == "warn")
         or (gate.name == "review_coverage" and gate.metrics.get("scope") == "peer_review")
     )
     # 没有具体问题文本的失败（只剩兜底说明）无法定位，按硬门处理。
