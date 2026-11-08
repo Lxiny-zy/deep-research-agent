@@ -725,8 +725,27 @@ def build_bundle(detail: RunDetail) -> DeliveryBundle:
         corroboration=requires_corroboration(detail),
         ledger=scratch.get("analysis"),
     )
+    from .tables import cell_support_issue
+
     gates.append(
-        GateResult("table_evidence", "fail" if rendered_issues else "pass", rendered_issues)
+        GateResult(
+            "table_evidence",
+            "fail" if rendered_issues else "pass",
+            rendered_issues,
+            {
+                "findings": [
+                    {
+                        "code": "cell_unsupported"
+                        if cell_support_issue(issue)
+                        else "table_structure",
+                        "message": issue,
+                    }
+                    for issue in rendered_issues
+                ]
+            }
+            if rendered_issues
+            else {},
+        )
     )
     table_issues = table_scope_issues(canonical_body)
     gates.append(GateResult("table_scope", "fail" if table_issues else "pass", table_issues))

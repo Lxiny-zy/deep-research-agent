@@ -405,3 +405,20 @@ def test_slide_layout_warnings_are_revisable_but_visual_mismatch_is_hard() -> No
     mismatch = ["第 4 页图表与已核验数据不一致"]
     fail = GateResult("slides", "fail", mismatch, {})
     assert split_blocked(fail, mismatch) == (mismatch, [])
+
+
+def test_table_cell_support_is_revisable_but_structure_and_scope_are_hard() -> None:
+    from deep_research.workbench.gates import GateResult
+    from deep_research.workbench.issue_tiers import split_blocked
+
+    cell = "表格 t1-cell-6 未通过逐格依据检查：引文未提两阶段流程"
+    scope = "表格 t1-cell-2 的依据越出本格可用发现：引用了其他行的发现"
+    structure = "表格内容与代码按已核验发现渲染的结果不同"
+    findings = [
+        {"code": "cell_unsupported", "message": cell},
+        {"code": "table_structure", "message": scope},
+        {"code": "table_structure", "message": structure},
+    ]
+    gate = GateResult("table_evidence", "fail", [cell, scope, structure], {"findings": findings})
+    hard, revisable = split_blocked(gate, [cell, scope, structure])
+    assert revisable == [cell] and hard == [scope, structure]

@@ -29,6 +29,7 @@ GATE_LABELS = {
     "research_progress": "检索进度",
     "figure_evidence": "图示",
     "slides": "幻灯片版式",
+    "table_evidence": "表格逐格依据",
     "uncited_paragraphs": "引用角标",
 }
 

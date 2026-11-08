@@ -797,14 +797,24 @@ def table_issues(
         checker = SupportReviewer(
             None, table.evidence, 0, check_fulltext=False, check_formulas=False
         )
-        if (
+        if decision.evidence_ids and not set(decision.evidence_ids) <= set(table.allowed[unit.id]):
+            # 依据越出本格允许的发现，属于引用越界（硬门）
+            issues.append(f"表格 {unit.id} 的依据越出本格可用发现：{decision.reason}")
+        elif (
             decision.verdict != "supported"
             or not decision.evidence_ids
-            or not set(decision.evidence_ids) <= set(table.allowed[unit.id])
             or checker.alignment_issue(unit, decision)
         ):
             issues.append(f"表格 {unit.id} 未通过逐格依据检查：{decision.reason}")
     return issues
+
+
+def cell_support_issue(message: str) -> bool:
+    """模型对单元格支持关系的判定（不支持、存疑、摘录对不上）；与正文段落同级，可标注后交付。"""
+    return bool(_CELL_SUPPORT.match(message))
+
+
+_CELL_SUPPORT = re.compile(r"表格 \S+ 未通过逐格依据检查：")
 
 
 async def review_tables(

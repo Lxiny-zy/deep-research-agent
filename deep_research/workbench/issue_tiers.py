@@ -81,6 +81,8 @@ _FINDING_GATES = {
     "prose_evidence": REVISABLE_PROSE_CODES,
     "node_evidence": REVISABLE_NODE_CODES,
     "scholarly": REVISABLE_SCHOLARLY_CODES,
+    # 表格逐格支持判定与正文段落同级；表格未渲染、内容被改写、依据越界等结构问题仍是硬门
+    "table_evidence": frozenset({"cell_unsupported"}),
 }
 
 
