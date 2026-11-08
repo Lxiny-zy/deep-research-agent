@@ -73,6 +73,10 @@ async def repair_completion(
 ) -> tuple[RunDetail, dict[str, Any]]:
     if detail.orchestration is None:
         return detail, completion
+    if completion.get("content_version") is None and completion.get("status") == "needs_review":
+        # 交付文件生成中断（渲染进程被杀）时没有可修订的交付包；再渲染只会重复中断，
+        # 留给用户在交付面板重新生成。
+        return detail, completion
     working = deepcopy(detail)
     state = _scratch(working).get(REPAIR_KEY)
     if state is not None:

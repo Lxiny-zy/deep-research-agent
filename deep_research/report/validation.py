@@ -18,7 +18,11 @@ from ..workbench.delivery.math_markdown import (
 )
 
 _CITATION = re.compile(r"\[(\d+(?:\s*[,，]\s*\d+)*)\]")
-_NUMBER = re.compile(r"(?<![A-Za-z0-9_.])[-+]?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][-+]?\d+)?")
+# 紧跟公式结束符 $ 或 } 的减号是名称连字符（RDLUF-MixS$^2$-9stg），不是负号：
+# 第十三轮线上幻灯片据此报「数字 -9 在所引素材中找不到」，整份回退为证据摘录
+_NUMBER = re.compile(
+    r"(?<![A-Za-z0-9_.])(?:(?<![$}])[-+])?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][-+]?\d+)?"
+)
 _OPERAND = r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][-+]?\d+)?"
 _CALCULATION = re.compile(
     rf"(?<![A-Za-z0-9_.])(?P<left>{_OPERAND})\s*(?P<op>[+*/×÷-])\s*"

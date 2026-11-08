@@ -253,12 +253,45 @@ async def prepare_completion(
 ) -> dict[str, Any] | None:
     if promised_formats(detail) is None:
         return None
+    from ..render_queue import RenderFailed
     from ..render_service import service_for
 
-    bundle = await service_for(repo, settings).build(detail, automatic=True)
+    try:
+        bundle = await service_for(repo, settings).build(detail, automatic=True)
+    except RenderFailed as exc:
+        # 第十三轮线上课题调研：正文已写好（72 分钟），渲染子进程在内存紧张时被连续杀掉，
+        # 整个任务被记为出错、用量记为 0。文件生成失败不否定已完成的研究：停在待复核，
+        # 保留正文，交付面板可重新生成文件。
+        return render_failure_record(detail, str(exc))
     return await run_rendering(
         assess_completion, detail, bundle, render_root=settings.artifact_root
     )
+
+
+def render_failure_record(detail: RunDetail, reason: str) -> dict[str, Any]:
+    from .workflow_state import derive_workflow_state
+
+    required = promised_formats(detail) or set()
+    issue = f"交付文件生成中断（{reason}）：正文已保存，可在交付面板重新生成文件"
+    template = resolve_template(detail)
+    required_gates = {"markdown", "structure", "length", "consistency", "file_readability"}
+    required_gates.add("node_evidence" if template.key == "mindmap" else "prose_evidence")
+    return {
+        "policy_version": COMPLETION_POLICY_VERSION,
+        "status": "needs_review",
+        "workflow": derive_workflow_state(detail, None, [issue]),
+        "scope": "frozen_task_delivery",
+        "input_version": delivery_fingerprint(detail),
+        "content_version": None,
+        "required_formats": sorted(required),
+        "required_gates": sorted(required_gates),
+        "issues": [issue],
+        "flagged": [],
+        "advisories": [],
+        "gates": [],
+        "checked_at": datetime.now(UTC).isoformat(),
+        "first_result": None,
+    }
 
 
 async def synchronize_completion(repo: ResearchRepository, run_id: str, settings: Settings) -> bool:
