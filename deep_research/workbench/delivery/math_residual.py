@@ -204,4 +204,17 @@ def unglue_digit_math(text: str) -> str:
         glued = before.isalnum() or after.isalnum() or after == "$" or before == "$"
         return _GLUED_SYMBOL[match[1]] if glued else match[0]
 
-    return _GLUED_OP.sub(symbol, text)
+    text = _GLUED_OP.sub(symbol, text)
+    # 第十四轮线上课题调研：正文写 RDLUF-MixS^2-9stg、附录照录原文 \cite{GAP-Net, …}，
+    # 都是公式外的裸 TeX，整份交付因此停住。只改公式外的文字：名称内上标改为 Unicode 上标，
+    # 引用命令改为方括号文字（原文出处照留）。
+    parts = text.split("$")
+    for index in range(0, len(parts), 2):
+        part = _NAME_SUPERSCRIPT.sub(lambda m: m[1].translate(_SUPERSCRIPTS), parts[index])
+        parts[index] = _CITE_COMMAND.sub(lambda m: f"[{m[1].strip()}]", part)
+    return "$".join(parts)
+
+
+_SUPERSCRIPTS = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+_NAME_SUPERSCRIPT = re.compile(r"(?<=[A-Za-z])\^(\d)(?=[-A-Za-z0-9])")
+_CITE_COMMAND = re.compile(r"\\cite[pt]?\*?\{([^{}\n]+)\}")

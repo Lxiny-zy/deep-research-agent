@@ -308,4 +308,7 @@ def research_notes(detail: RunDetail) -> str:
                 f"字符 {passage['start']}–{passage['end']}；回查：{verdict}。",
                 "> " + _text(passage["quote"]),
             ]
-    return "\n".join(lines).strip() + "\n"
+    from .delivery.math_residual import unglue_digit_math
+
+    # 附录照录原文摘句（含 \cite{…}、512$\times$512），交付前同样规整为可渲染文字
+    return unglue_digit_math("\n".join(lines).strip() + "\n")

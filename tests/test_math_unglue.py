@@ -17,3 +17,11 @@ def test_digit_glued_math_becomes_renderable_without_model_revision() -> None:
 def test_real_formulas_untouched() -> None:
     text = r"退化模型 $\mathbf{y} = \mathbf{\Phi}\mathbf{x} + \mathbf{n}$ 成立，窗口 $M\times M$。"
     assert unglue_digit_math(text) == text
+
+
+def test_name_superscript_and_cite_outside_math() -> None:
+    text = r"PGDUDST 仅需 RDLUF-MixS^2-9stg 的 58%；见 \cite{GAP-Net, DAUHST}；公式 $x^2$ 不变。"
+    fixed = unglue_digit_math(text)
+    assert "RDLUF-MixS²-9stg" in fixed
+    assert "[GAP-Net, DAUHST]" in fixed and r"\cite" not in fixed
+    assert "$x^2$" in fixed

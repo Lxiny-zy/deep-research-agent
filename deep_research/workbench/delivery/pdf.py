@@ -82,6 +82,11 @@ def _archive_fonts(pymupdf):  # type: ignore[no-untyped-def]
     return archive, css
 
 
+# 省略号与引号在 PDF 文本抽取时可能变形（… → ...，引号换字形）；末段比对只看其余字符。
+# 第十四轮线上课题调研末段以「the full d…」结尾，PDF 被误判截断。
+_IGNORED_TAIL = r"[\s\[\]\d.,，。:：;；|*`#>\-…「」“”‘’'\"]+"
+
+
 def _tail_sentinel(markdown: str) -> str:
     """最后一个正文块的可检索片段（取自与 PDF 相同的块树，避免把图片语法当正文）。"""
     from .markdown import parse_blocks
@@ -98,14 +103,14 @@ def _tail_sentinel(markdown: str) -> str:
         # extraction order need not match their visual position in a sentence.
         # Formula completeness is checked independently during vector placement.
         prose = "".join(inline.text for inline in inlines if not inline.math)
-        text = re.sub(r"[\s\[\]\d.,，。:：;；|*`#>-]+", "", unicodedata.normalize("NFC", prose))
+        text = re.sub(_IGNORED_TAIL, "", unicodedata.normalize("NFC", prose))
         if len(text) >= 4:
             return text[-6:]
     return ""
 
 
 def _squash(text: str) -> str:
-    return re.sub(r"[\s\[\]\d.,，。:：;；|*`#>-]+", "", unicodedata.normalize("NFC", text))
+    return re.sub(_IGNORED_TAIL, "", unicodedata.normalize("NFC", text))
 
 
 # 子集化后的 CJK 字体通常不到 2 MB；仍超过这个大小，说明整套字体被原样嵌入
