@@ -41,8 +41,8 @@ export default function TierSelector({ tiers, value, onChange, usage, disabled }
       </div>
       {active && (
         <span className="hint">
-          {active.description} · 最多拆成 {active.max_sub_questions} 条思路，补 {active.max_rounds}{' '}
-          轮暗线
+          {active.description} · 最多拆解 {active.max_sub_questions} 个子问题，补充检索{' '}
+          {active.max_rounds} 轮
         </span>
       )}
       {quota && (

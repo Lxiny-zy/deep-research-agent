@@ -1,26 +1,28 @@
-/* 使用引导：毛玻璃卡片 + 虹彩光环图标 + 光谱进度 */
+/* 使用引导：实底对话卡 + 顶边一道主色→核验色细线 */
 
 .welcome-tour-backdrop {
-  -webkit-backdrop-filter: blur(12px) saturate(1.2);
-  backdrop-filter: blur(12px) saturate(1.2);
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  background: rgba(20, 26, 34, 0.42);
   z-index: 95;
 }
 
+:root[data-theme='dark'] .welcome-tour-backdrop {
+  background: rgba(5, 5, 8, 0.64);
+}
+
 .welcome-tour {
-  animation: tour-in 520ms var(--ease-out) both;
-  background: var(--surface);
+  animation: tour-in 360ms var(--ease-out) both;
+  background: var(--surface-solid);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   color: var(--text);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-4);
   max-width: 480px;
   outline: none;
   overflow: hidden;
-  padding: 28px 30px;
+  padding: 26px 28px 24px;
   position: relative;
   width: 100%;
 }
@@ -38,7 +40,7 @@
 @keyframes tour-in {
   from {
     opacity: 0;
-    transform: translateY(18px) scale(0.97);
+    transform: translateY(10px) scale(0.98);
   }
 }
 
@@ -50,32 +52,24 @@
 }
 
 .welcome-tour-step {
-  color: var(--text-3);
-  font-family: var(--font-display);
-  font-size: 11px;
-  letter-spacing: 0.3em;
+  color: var(--mark-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
 }
 
-/* 图标置于一枚旋转的虹彩细环中 */
 .welcome-tour-visual {
   align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
   color: var(--text);
   display: flex;
-  height: 72px;
+  height: 48px;
   justify-content: center;
   position: relative;
-  width: 72px;
-}
-
-.welcome-tour-visual::before {
-  animation: iris-spin 10s linear infinite;
-  background: var(--iris);
-  border-radius: 50%;
-  content: '';
-  inset: 0;
-  -webkit-mask: radial-gradient(farthest-side, transparent 88%, #000 92%, #000 97%, transparent);
-  mask: radial-gradient(farthest-side, transparent 88%, #000 92%, #000 97%, transparent);
-  position: absolute;
+  width: 48px;
 }
 
 .welcome-tour-copy {
@@ -86,14 +80,14 @@
 }
 
 .welcome-tour-copy h2 {
-  font-family: var(--font-serif);
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-family: var(--font-sans);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
 }
 
 .welcome-tour-copy p {
   color: var(--text-2);
-  line-height: 1.8;
+  line-height: 1.7;
   margin: 0;
 }

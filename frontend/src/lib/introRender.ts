@@ -1,188 +1,185 @@
-import {
-  DARK_LINES,
-  gaussian,
-  lineX,
-  rgbCss,
-  VISIBLE_MAX,
-  VISIBLE_MIN,
-  wavelengthToRgb,
-  type RGB,
-} from './spectralLines'
+/**
+ * 欢迎画面的扉页插图：一张文献引用网络。
+ *
+ * 节点是文献，连线是引用；节点按先后依次出现——实心是已核验的来源，
+ * 空心是尚待核验的线索。所有已核验的节点最后各引一条细线汇向「进入」，
+ * 像一篇论文把散落的证据收束成一个结论。宽屏时插图位于标题右侧，不压文字。
+ */
 
-/** 欢迎画面的几何：光谱带与汇聚点的高度（画布高度的比例），与 intro.css 的版式对齐。 */
-export const INTRO_BAND = 0.5
-export const INTRO_FOCUS = 0.8
-
-export interface IntroThread {
-  nm: number
-  strength: number
-  /** 显影延迟（毫秒） */
-  delay: number
-}
+/** 宽屏扉页左文右图的断点，与 intro.css 的 min-width: 980px 对齐。 */
+export const INTRO_WIDE = 980
 
 /**
- * 欢迎画面上的思路线：一个问题拆开后的千条思路，铺满可见光谱。
- * 用固定种子的伪随机数排布——每次打开都是同一幅谱，不对应任何元素。
+ * 「进入」按钮中心（CSS 像素），网络离场时向这里收拢，与 intro.css 对齐：
+ * 窄屏居中于 80% 高度；宽屏随文案左对齐，落在 62% 高度、左边距 max(6vw, 48px) 处
+ * （按钮最小宽 196px，中心再右移 98px）。
  */
-export function introThreads(count = 34): IntroThread[] {
-  let seed = 20261028
+export function introFocus(W: number, H: number): { x: number; y: number } {
+  if (W >= INTRO_WIDE) return { x: Math.max(W * 0.06, 48) + 98, y: H * 0.62 }
+  return { x: W / 2, y: H * 0.8 }
+}
+
+export interface IntroNode {
+  /** 归一化坐标（相对插图区域） */
+  x: number
+  y: number
+  /** 出现时刻（毫秒，相对画面出现） */
+  delay: number
+  verified: boolean
+  /** 节点半径（CSS 像素） */
+  r: number
+}
+
+export interface IntroGraph {
+  nodes: IntroNode[]
+  /** 引用边：[from, to] 节点下标 */
+  edges: [number, number][]
+}
+
+/** 确定性生成的引用网络，每次打开画面一致。 */
+export function introGraph(count = 34): IntroGraph {
+  let seed = 20261112
   const random = () => {
     seed = (seed * 16807) % 2147483647
     return (seed - 1) / 2147483646
   }
-  return Array.from({ length: count }, (_, index) => {
-    const slot = (index + 0.2 + random() * 0.6) / count
-    return {
-      nm: 400 + slot * 310,
-      strength: 0.3 + 0.7 * random(),
-      delay: 240 + ((index * 37) % 23) * 62,
+  const nodes: IntroNode[] = []
+  // 拒绝采样：节点之间保持最小间距，构图疏朗
+  let guard = 0
+  while (nodes.length < count && guard < 4000) {
+    guard += 1
+    const angle = random() * Math.PI * 2
+    const radius = Math.sqrt(random()) * 0.5
+    const x = 0.5 + Math.cos(angle) * radius
+    const y = 0.5 + Math.sin(angle) * radius * 0.86
+    if (nodes.some((n) => Math.hypot(n.x - x, n.y - y) < 0.085)) continue
+    const centrality = 1 - radius * 2
+    nodes.push({
+      x,
+      y,
+      delay: 200 + (1 - centrality) * 1400 + random() * 500,
+      verified: random() < 0.38 + centrality * 0.5,
+      r: 1.8 + centrality * 2.4 + random() * 0.8,
+    })
+  }
+  const edges: [number, number][] = []
+  nodes.forEach((a, i) => {
+    const near = nodes
+      .map((b, j) => ({ j, d: Math.hypot(a.x - b.x, a.y - b.y) }))
+      .filter(({ j }) => j !== i)
+      .sort((p, q) => p.d - q.d)
+      .slice(0, 2 + Math.floor(random() * 2))
+    for (const { j, d } of near) {
+      if (d > 0.26) continue
+      if (edges.some(([p, q]) => (p === i && q === j) || (p === j && q === i))) continue
+      edges.push([i, j])
     }
   })
+  return { nodes, edges }
 }
 
 export interface IntroFrame {
   width: number
   height: number
-  time: number
-  /** 画面出现后经过的毫秒数，用于谱线依次显影 */
   elapsed: number
-  /** 指针悬停「进入」时为 1 */
+  /** 指针悬停「进入」的程度 0..1：汇聚线加深 */
   energy: number
-  /** 离场时由 0 走到 1：谱线与光谱带一起收拢到汇聚点 */
+  /** 离场收拢进度 0..1 */
   gather: number
-  pointer: { x: number; y: number; s: number }
   dark: boolean
-  threads: IntroThread[]
+  graph: IntroGraph
 }
 
+type RGB = [number, number, number]
+
+const rgba = ([r, g, b]: RGB, a: number) =>
+  `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, a)).toFixed(3)})`
 const ease = (t: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3)
 
-const tone = (rgb: RGB, dark: boolean): RGB =>
-  dark ? rgb : ([rgb[0] * 0.7, rgb[1] * 0.64, rgb[2] * 0.76].map(Math.round) as RGB)
+/** 与 tokens.css 的 --text / --accent 一致：墨色是文献，期刊红是已核验。 */
+function palette(dark: boolean): { ink: RGB; accent: RGB } {
+  return dark
+    ? { ink: [226, 222, 212], accent: [224, 122, 102] }
+    : { ink: [28, 26, 23], accent: [158, 42, 30] }
+}
 
-/**
- * 画一帧欢迎画面：
- * 光谱带以上，谱线笔直垂下——位置由元素决定，像早已写定的命运；
- * 光谱带以下，所有谱线弯向同一个汇聚点——许多条思路，最终汇成一个回答。
- * 离场时整幅画面收拢进汇聚点，随后由 intro.css 从这一点打开通往主界面的圆孔。
- */
+/** 插图区域：宽屏时在右半边，窄屏时退到标题后方的淡底。 */
+function plate(W: number, H: number) {
+  if (W >= INTRO_WIDE) {
+    const size = Math.min(W * 0.36, H * 0.6)
+    return { cx: W * 0.74, cy: H * 0.43, size, faint: 1 }
+  }
+  const size = Math.min(W * 0.9, H * 0.5)
+  return { cx: W * 0.5, cy: H * 0.42, size, faint: 0.3 }
+}
+
 export function drawIntro(ctx: CanvasRenderingContext2D, f: IntroFrame) {
-  const { width: W, height: H, time, pointer, dark, energy, gather } = f
+  const { width: W, height: H, dark, energy, gather, graph } = f
   ctx.clearRect(0, 0, W, H)
   if (W <= 0 || H <= 0) return
-  const left = W * 0.08
-  const right = W * 0.92
-  const bandY = H * INTRO_BAND
-  const fx = W / 2
-  const fy = H * INTRO_FOCUS
-  const xOf = (nm: number) => left + lineX(nm) * (right - left)
-  const bandIn = ease(f.elapsed / 900) * (1 - gather)
 
-  ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
-
-  // 光谱带：自中心向两侧展开；离场时向中心收拢
-  const spectrum = (alpha: number) => {
-    const grad = ctx.createLinearGradient(left, 0, right, 0)
-    for (let i = 0; i <= 12; i++) {
-      const t = i / 12
-      const nm = VISIBLE_MIN + t * (VISIBLE_MAX - VISIBLE_MIN)
-      const fade = Math.min(1, t * 5, (1 - t) * 5)
-      grad.addColorStop(t, rgbCss(tone(wavelengthToRgb(nm), dark), alpha * fade))
-    }
-    return grad
-  }
-  const half = ((right - left) / 2) * bandIn
-  ctx.lineCap = 'round'
-  for (const [lineWidth, alpha] of [
-    [30, dark ? 0.06 : 0.05],
-    [8, dark ? 0.16 : 0.1],
-    [1.2, dark ? 0.75 : 0.55],
-  ] as const) {
-    ctx.strokeStyle = spectrum(alpha * (1 - gather))
-    ctx.lineWidth = lineWidth
-    ctx.beginPath()
-    ctx.moveTo(fx - half, bandY)
-    ctx.lineTo(fx + half, bandY)
-    ctx.stroke()
-  }
-
-  // 暗线：未解之问，在光谱带上留下暗缝
-  ctx.globalCompositeOperation = 'destination-out'
-  for (const line of DARK_LINES) {
-    ctx.fillStyle = `rgba(0, 0, 0, ${(0.8 * line.strength * bandIn).toFixed(3)})`
-    ctx.fillRect(xOf(line.nm) - 1.5, bandY - 16, 3, 32)
-  }
-  ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
-
-  // 汇聚点的光晕：悬停时变亮，离场时收成一颗明亮的光核
-  const focusAlpha = Math.min(
-    0.9,
-    (dark ? 0.12 : 0.08) + energy * 0.16 + gather * (dark ? 0.7 : 0.25),
-  )
-  const focusR = 70 + energy * 40 - gather * 20
-  const glow = (alpha: number) =>
-    dark ? `rgba(255, 246, 228, ${alpha.toFixed(3)})` : `rgba(120, 96, 60, ${alpha.toFixed(3)})`
-  const focus = ctx.createRadialGradient(fx, fy, 0, fx, fy, focusR)
-  focus.addColorStop(0, glow(focusAlpha))
-  focus.addColorStop(0.3, glow(focusAlpha * 0.3))
-  focus.addColorStop(1, glow(0))
-  ctx.fillStyle = focus
-  ctx.fillRect(fx - focusR, fy - focusR, focusR * 2, focusR * 2)
-
-  f.threads.forEach((thread, index) => {
-    const appear = ease((f.elapsed - thread.delay) / 1100)
-    if (appear <= 0) return
-    const x0 = xOf(thread.nm)
-    const rgb = tone(wavelengthToRgb(thread.nm), dark)
-    const near = pointer.s * gaussian(x0, pointer.x, 70) * gaussian(pointer.y, bandY * 0.6, H * 0.4)
-    const alpha = Math.min(
-      1,
-      ((dark ? 0.2 : 0.16) + (dark ? 0.5 : 0.42) * thread.strength) * appear + near * 0.45,
-    )
-
-    // 上段：从光谱带向上生长，越高越淡，轻微摆动；离场时缩回光谱带
-    const top = bandY - bandY * appear * (1 - gather)
-    const up = ctx.createLinearGradient(0, top, 0, bandY)
-    up.addColorStop(0, rgbCss(rgb, 0))
-    up.addColorStop(1, rgbCss(rgb, alpha))
-    ctx.strokeStyle = up
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    for (let y = bandY; y >= top; y -= 8) {
-      const reach = (bandY - y) / Math.max(1, bandY)
-      const sway = 4 * reach * Math.sin(y * 0.012 + time * 0.0006 + index * 1.7)
-      const bend = near * 10 * reach * Math.sign(pointer.x - x0)
-      if (y === bandY) ctx.moveTo(x0, y)
-      else ctx.lineTo(x0 + sway + bend, y)
-    }
-    ctx.stroke()
-
-    // 下段：沿二次曲线弯向汇聚点；悬停「进入」时收得更紧、更亮；离场时从光谱带一端缩进汇聚点
-    const cy = bandY + (fy - bandY) * (0.62 - energy * 0.18)
-    const down = ctx.createLinearGradient(0, bandY, 0, fy)
-    down.addColorStop(0, rgbCss(rgb, alpha * 0.9))
-    down.addColorStop(1, rgbCss(rgb, alpha * (0.2 + energy * 0.5)))
-    ctx.strokeStyle = down
-    ctx.lineWidth = 0.8
-    ctx.beginPath()
-    const steps = 28
-    const from = Math.min(steps, Math.ceil(steps * gather))
-    for (let i = from; i <= steps * appear; i++) {
-      const t = i / steps
-      const x = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * x0 + t * t * fx
-      const y = (1 - t) * (1 - t) * bandY + 2 * (1 - t) * t * cy + t * t * fy
-      if (i === from) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
-    ctx.stroke()
-
-    // 交点光斑
-    const r = 3 + 5 * thread.strength
-    const dot = ctx.createRadialGradient(x0, bandY, 0, x0, bandY, r)
-    dot.addColorStop(0, rgbCss(rgb, Math.min(1, alpha * 1.5) * (1 - gather)))
-    dot.addColorStop(1, rgbCss(rgb, 0))
-    ctx.fillStyle = dot
-    ctx.fillRect(x0 - r, bandY - r, r * 2, r * 2)
+  const { ink, accent } = palette(dark)
+  const { cx, cy, size, faint } = plate(W, H)
+  const keep = 1 - gather
+  const focus = introFocus(W, H)
+  const fx = focus.x
+  const fy = focus.y - 24
+  const pos = graph.nodes.map((n) => {
+    const x = cx + (n.x - 0.5) * size
+    const y = cy + (n.y - 0.5) * size
+    return { x: x + (fx - x) * gather, y: y + (fy - y) * gather }
   })
-  ctx.globalCompositeOperation = 'source-over'
+  const lit = graph.nodes.map((n) => ease((f.elapsed - n.delay) / 700))
+
+  // 1. 引用边：从一端向另一端生长；两端都已核验的边用期刊红
+  ctx.lineWidth = 0.8
+  for (const [i, j] of graph.edges) {
+    const t = Math.min(lit[i], lit[j])
+    if (t <= 0) continue
+    const both = graph.nodes[i].verified && graph.nodes[j].verified
+    ctx.strokeStyle = both
+      ? rgba(accent, (dark ? 0.42 : 0.34) * t * keep * faint)
+      : rgba(ink, (dark ? 0.16 : 0.13) * t * keep * faint)
+    ctx.beginPath()
+    ctx.moveTo(pos[i].x, pos[i].y)
+    ctx.lineTo(pos[i].x + (pos[j].x - pos[i].x) * t, pos[i].y + (pos[j].y - pos[i].y) * t)
+    ctx.stroke()
+  }
+
+  // 2. 汇聚线：已核验的节点各引一条细线到「进入」上沿（仅宽屏构图）
+  if (faint === 1) {
+    const converge = ease((f.elapsed - 2000) / 1200)
+    if (converge > 0) {
+      ctx.lineWidth = 0.6
+      graph.nodes.forEach((n, i) => {
+        if (!n.verified || lit[i] < 1) return
+        const a = (dark ? 0.1 : 0.08) + energy * (dark ? 0.22 : 0.16)
+        ctx.strokeStyle = rgba(accent, a * converge * keep)
+        const { x, y } = pos[i]
+        const ex = fx + (x - cx) * 0.06
+        ctx.beginPath()
+        ctx.moveTo(x, y)
+        ctx.bezierCurveTo(x, y + (fy - y) * 0.55, ex, fy - (fy - y) * 0.25, ex, fy)
+        ctx.stroke()
+      })
+    }
+  }
+
+  // 3. 节点：已核验实心期刊红，待核验空心墨圈
+  graph.nodes.forEach((n, i) => {
+    const t = lit[i]
+    if (t <= 0) return
+    const { x, y } = pos[i]
+    const r = n.r * (0.6 + 0.4 * t) * (1 - gather * 0.5)
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    if (n.verified) {
+      ctx.fillStyle = rgba(accent, (dark ? 0.9 : 0.85) * t * faint)
+      ctx.fill()
+    } else {
+      ctx.lineWidth = 1
+      ctx.strokeStyle = rgba(ink, (dark ? 0.5 : 0.42) * t * faint)
+      ctx.stroke()
+    }
+  })
 }

@@ -309,7 +309,7 @@ export default function ReaderPage() {
   if (reader.isError) {
     return (
       <section className="empty-state" role="alert">
-        <h1 className="empty-state-title">打不开这次精读</h1>
+        <h1 className="empty-state-title">无法打开论文精读视图</h1>
         <p className="hint">任务不存在，或你没有查看它的权限。</p>
         <Link className="btn btn-secondary" to="/history">
           返回任务记录
@@ -330,7 +330,7 @@ export default function ReaderPage() {
           <h1 className="reader-title">{current?.title || detail.data?.query || '论文精读'}</h1>
           <p className="reader-verse">{PAGE_VOICE.reader.verse}</p>
           <p className="hint">
-            右侧对照原文，左侧随时提问。回答默认只引用这篇论文，需要时再勾选资料库或联网检索。
+            右侧对照 PDF 原文与引文定位，左侧围绕方法机制、实验设计与结论边界提问；默认仅依据当前论文作答，可按需叠加知识库或联网来源。
           </p>
         </header>
 

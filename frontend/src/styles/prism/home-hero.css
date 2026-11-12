@@ -1,16 +1,16 @@
-/* 首页题句：一句话说出研究的走向，下一行白话说明怎么做。 */
+/* 首页页头：眉题 + 主张 + 说明，保持紧凑，确保输入框位于首屏 */
 
 .home-page .home-hero {
   align-items: start;
-  animation: rise-in 700ms var(--ease-out) both;
+  animation: rise-in 380ms var(--ease-out) both;
   background: none;
   border: 0;
   box-shadow: none;
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
   grid-template-columns: minmax(0, 1fr);
   min-height: 0;
-  padding: 4px 0 0;
+  padding: 2px 0 0;
 }
 
 .home-hero-title {
@@ -18,20 +18,23 @@
 }
 
 .home-hero-verse {
+  color: var(--text);
   display: block;
-  font-family: var(--font-serif);
-  font-size: clamp(26px, 3.2vw, 40px);
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  line-height: 1.25;
+  font-family: var(--font-display);
+  font-size: clamp(26px, 2.6vw, 36px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.26;
 }
 
 .home-page .home-hero-sub {
   color: var(--text-2);
-  font-family: var(--font-serif);
-  /* 白话说明句较长，字距收窄以免断成碎片；题句的疏朗留给上一行 */
-  letter-spacing: 0.02em;
-  margin: 10px 0 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  letter-spacing: 0.01em;
+  line-height: 1.6;
+  margin: 8px 0 0;
+  max-width: 66ch;
 }
 
 .home-hero .home-draft {

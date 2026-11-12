@@ -1,40 +1,61 @@
-/* 顶栏：通透无边框；左侧页名与本页谱线，右侧搜索 / 主题 / 身份头像 */
+/* 顶栏即书眉：左侧「§ 节号 · 栏目」与页名，中间卷期号，右侧工具与身份 */
 
 .topbar {
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
-  background: color-mix(in srgb, var(--bg) 40%, transparent);
-  border-bottom: 1px solid transparent;
+  backdrop-filter: none;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
   height: var(--topbar-height);
-  padding: 0 32px;
+  padding: 0 28px;
 }
 
 .topbar-title {
   align-items: baseline;
+  color: var(--text);
   display: flex;
-  font-family: var(--font-serif);
+  font-family: var(--font-display);
   font-size: var(--text-md);
+  font-weight: 600;
   gap: 12px;
 }
 
 .topbar-title small {
   align-items: center;
+  background: none;
+  border: 0;
   color: var(--text-3);
   display: inline-flex;
-  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 400;
   gap: 8px;
-  letter-spacing: 0.06em;
+  padding: 0;
 }
 
-/* 本页谱线：一道带辉光的竖线，颜色即波长 */
+.topbar-title .topbar-section {
+  color: var(--mark-text);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-variant-numeric: lining-nums tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+}
+
+/* 卷期号：书眉右侧的斜体小字，只作版式标识 */
+.topbar-issue {
+  color: var(--text-3);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-style: italic;
+  letter-spacing: 0.04em;
+  margin-left: auto;
+  padding-right: 12px;
+  white-space: nowrap;
+}
+
 .topbar-line {
-  background: var(--line);
-  border-radius: 1px;
-  box-shadow: 0 0 8px var(--line);
+  background: var(--border-strong);
   display: inline-block;
-  height: 13px;
-  width: 2px;
+  height: 11px;
+  width: 1px;
 }
 
 .topbar-actions {
@@ -49,28 +70,31 @@
   color: var(--text);
   cursor: pointer;
   display: flex;
-  gap: 12px;
-  margin-left: 10px;
-  padding: 4px 4px 4px 18px;
+  gap: 10px;
+  margin-left: 8px;
+  padding: 4px 6px 4px 16px;
   text-align: left;
 }
 
 .identity-avatar {
-  background: var(--iris);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: 50%;
+  color: var(--text-2);
   display: grid;
-  height: 36px;
-  padding: 2px;
+  height: 30px;
+  padding: 0;
   place-items: center;
-  width: 36px;
+  transition: border-color var(--duration) var(--ease), color var(--duration) var(--ease);
+  width: 30px;
 }
 
 .identity-avatar .app-icon {
-  background: var(--ink);
-  border-radius: 50%;
+  background: transparent;
+  border-radius: 0;
   box-sizing: content-box;
-  color: var(--ink-text);
-  padding: 7px;
+  color: inherit;
+  padding: 0;
 }
 
 .identity-text {
@@ -80,19 +104,18 @@
 }
 
 .identity-text strong {
-  font-family: var(--font-serif);
   font-size: var(--text-sm);
   font-weight: 600;
 }
 
 .identity-text small {
   color: var(--text-3);
-  font-family: var(--font-display);
   font-size: 11px;
 }
 
 .identity-chip:hover .identity-avatar {
-  animation: iris-spin 3s linear infinite;
+  border-color: var(--primary);
+  color: var(--primary-text);
 }
 
 .identity-chip:focus-visible {
@@ -103,6 +126,7 @@
 
 @media (max-width: 760px) {
   .identity-text,
+  .topbar-issue,
   .topbar-title small {
     display: none;
   }

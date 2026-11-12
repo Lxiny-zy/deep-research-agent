@@ -326,6 +326,13 @@ export class ControlledApi {
         }
         return reply(this.messages[0])
       }
+      if (path === '/api/runs/controlled-run/reader/paper-0/passages')
+        return reply({
+          document_id: 'paper-0',
+          title: '受控论文',
+          passages: [],
+          truncated: false,
+        })
       if (path === '/api/runs/controlled-run/reader')
         return reply({
           run_id: 'controlled-run',

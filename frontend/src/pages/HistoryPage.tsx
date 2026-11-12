@@ -19,14 +19,14 @@ function RunFingerprint({ spectrum, finished }: { spectrum?: number[]; finished:
   if (lines.length === 0) return null
   const { lit, dark, pending } = tallyLines(lines)
   const label =
-    `${lines.length} 条思路，${lit} 条已证` +
-    (dark ? `，${dark} 条暗线` : '') +
-    (pending ? `，${pending} 条待显` : '')
+    `${lines.length} 个子问题，${lit} 项已核验` +
+    (dark ? `，${dark} 项缺证据` : '') +
+    (pending ? `，${pending} 项检索中` : '')
   return (
     <span
       className={`run-print${lines.length > 12 ? ' is-dense' : ''}`}
       role="img"
-      aria-label={`谱纹：${label}`}
+      aria-label={`取证覆盖：${label}`}
       title={label}
     >
       <span className="run-print-lines" aria-hidden="true">
@@ -201,7 +201,7 @@ export default function HistoryPage() {
           )
         }
       >
-        查看任务进度，回看研究报告与引用来源。每条任务下的谱纹，亮线是已证的思路，暗线是仍待补的缺口。
+        检索与回看历次科研任务的执行进度、子问题取证覆盖度、原文核验记录与多格式交付文件。
       </PageHeader>
 
       <OperationsOverview allowWorkspace={access?.role === 'admin'} />
@@ -312,14 +312,14 @@ export default function HistoryPage() {
               filtersActive
                 ? '没有符合条件的记录'
                 : canCreate
-                  ? '此处尚无谱线，待你放入第一束光。'
+                  ? '尚无研究记录，从第一个科研命题开始'
                   : '还没有任务记录'
             }
             description={
               filtersActive
                 ? '换一个关键词，或清除筛选查看全部任务。'
                 : canCreate
-                  ? '创建第一个研究任务，或回到工作台选一个示例问题。'
+                  ? '前往工作台选择课题调研、文献综述、论文精读或数据分析任务，完整留存取证链路与交付物。'
                   : '当前账号暂无可见任务。'
             }
           >
@@ -353,7 +353,7 @@ export default function HistoryPage() {
               </span>
               <span role="columnheader">任务</span>
               <span role="columnheader" className="history-col-print">
-                研究谱
+                取证覆盖
               </span>
               <span role="columnheader">状态</span>
               <span role="columnheader" className="history-col-time">

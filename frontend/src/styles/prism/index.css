@@ -1,4 +1,4 @@
-/* 视觉层「棱镜」：按参考稿重做的品牌识别、背景光谱与交互动效 */
+/* 视觉层：品牌识别、谱线背景、表面与有含义的动效 */
 @import './backdrop.css';
 @import './shell.css';
 @import './topbar.css';
@@ -15,7 +15,6 @@
 @import './overlays.css';
 @import './workflow.css';
 @import './pages.css';
-@import './glass.css';
 @import './theme-transition.css';
 @import './details.css';
 @import './spectrum.css';

@@ -975,12 +975,17 @@ div.badge.error {
 }
 
 .markdown-body blockquote {
-  border-left: 3px solid var(--border-strong);
+  background: var(--surface-2);
+  border-left: 3px solid var(--primary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-2);
-  padding: 2px 0 2px 14px;
+  padding: 8px 14px;
 }
 
 .markdown-body table {
+  border-collapse: collapse;
+  border-bottom: 2px solid var(--border-strong);
+  border-top: 2px solid var(--border-strong);
   display: block;
   font-size: var(--text-sm);
   overflow-x: auto;
@@ -988,14 +993,19 @@ div.badge.error {
 
 .markdown-body th,
 .markdown-body td {
-  border: 1px solid var(--border);
-  padding: 7px 11px;
+  border-bottom: 1px solid var(--border);
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  padding: 8px 12px;
   text-align: left;
 }
 
 .markdown-body th {
   background: var(--surface-2);
-  font-weight: 600;
+  border-bottom: 1.5px solid var(--border-strong);
+  color: var(--text);
+  font-weight: 650;
 }
 
 .markdown-body img {

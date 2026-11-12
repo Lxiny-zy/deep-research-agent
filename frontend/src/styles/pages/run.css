@@ -5,7 +5,7 @@
 .run-workbench {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-4);
   margin: 0 auto;
   max-width: 1560px;
 }
@@ -156,8 +156,8 @@
   box-shadow: var(--shadow-xs);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-5);
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
 }
 
 .research-progress-summary {
@@ -817,23 +817,21 @@
 .workflow-state-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .workflow-state-head h2 { margin: .2rem 0 0; font-size: 1.05rem; }
 .workflow-next-action { color: var(--text-3); font-size: .82rem; font-weight: 650; }
-/* 阶段轨道是一段由红到紫的光谱：每个阶段一条谱线（--line 由组件按序给出）。
-   已完成为亮线，进行中为脉动的亮线，未开始为淡线，受阻处是一条暗线。 */
+/* 阶段轨道：按执行状态统一采用语义色（核验绿 / 学术蓝 / 琥珀待复核 / 珊瑚红受阻） */
 .workflow-phase-track { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: .45rem; margin-top: 1rem; }
 .workflow-phase { position: relative; min-width: 0; padding: .7rem .5rem .55rem; color: var(--text-3); }
-.workflow-phase::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; border-radius: 2px; background: var(--line); opacity: .22; transition: opacity .3s ease, box-shadow .3s ease; }
-.workflow-phase.done::before { opacity: .9; }
-.workflow-phase.active::before { opacity: 1; box-shadow: 0 0 10px var(--line); animation: workflow-line-pulse 1.8s ease-in-out infinite; }
-.workflow-phase.needs_review::before { background: var(--warning); opacity: .9; }
-.workflow-phase.blocked::before { background: var(--text); opacity: .85; height: 3px; }
-.workflow-phase.skipped::before { opacity: .12; }
+.workflow-phase::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2.5px; border-radius: 2px; background: var(--border-strong); opacity: .55; transition: opacity .3s ease, background-color .3s ease; }
+.workflow-phase.done::before { background: var(--success); opacity: 1; }
+.workflow-phase.active::before { background: var(--primary); opacity: 1; animation: workflow-line-pulse 1.8s ease-in-out infinite; }
+.workflow-phase.needs_review::before { background: var(--warning); opacity: 1; }
+.workflow-phase.blocked::before { background: var(--danger); opacity: 1; height: 3px; }
+.workflow-phase.skipped::before { opacity: .25; }
 .workflow-phase.done, .workflow-phase.active { color: var(--text); }
 .workflow-phase.needs_review { color: var(--warning); }
 .workflow-phase.blocked { color: var(--danger); }
-.workflow-phase { --line-ink: color-mix(in srgb, var(--line) 62%, var(--text)); }
-.workflow-phase-dot { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; margin-bottom: .35rem; border-radius: 50%; border: 1px solid color-mix(in srgb, var(--line-ink) 50%, transparent); color: var(--line-ink); }
-.workflow-phase.done .workflow-phase-dot { border-color: var(--line-ink); background: color-mix(in srgb, var(--line) 16%, transparent); }
-.workflow-phase.active .workflow-phase-dot { border-color: var(--line-ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--line) 18%, transparent); }
+.workflow-phase-dot { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; margin-bottom: .35rem; border-radius: 50%; border: 1px solid var(--border-strong); color: var(--text-3); }
+.workflow-phase.done .workflow-phase-dot { border-color: var(--success); background: var(--success-soft); color: var(--success-text); }
+.workflow-phase.active .workflow-phase-dot { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-text); box-shadow: 0 0 0 3px var(--primary-soft); }
 .workflow-phase.blocked .workflow-phase-dot { border-color: var(--danger); color: var(--danger); }
 .workflow-phase strong, .workflow-phase small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-phase strong { font-size: .78rem; }

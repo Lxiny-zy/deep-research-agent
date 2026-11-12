@@ -1,91 +1,91 @@
 /* ============================================================================
-   Science Research 颜色令牌 · 亮色「棱镜纸」
-   米白纸面 + 虹彩光谱 + 墨色与金色点睛；深色「墨夜」见 tokens-dark.css，
-   字体 / 间距 / 动效见 tokens-layout.css。正文色在所有底色上 ≥ 4.5:1。
+   颜色令牌 · 亮色「期刊」
+   暖白纸面 + 墨色正文；深海军蓝是操作与链接，期刊红（--mark）只用于栏目眉题、
+   节号、刊头细线等编辑标记。语义色表达证据状态：核验（绿）、缺口（琥珀）、冲突（朱红）。
+   所有正文与辅助字色在对应背景上对比度均 ≥ 4.5:1（WCAG AA）。
    ========================================================================== */
 
 :root {
   color-scheme: light;
 
-  --bg: #f5f4f1;
-  --bg-subtle: #eeece8;
-  --surface: #fcfbf9;
-  --surface-2: #f8f7f4;
-  /* 不透明原值：玻璃卡片内部会把 --surface 改成半透明，弹层用这两个值恢复实底（见 prism/glass.css） */
-  --surface-solid: #fcfbf9;
-  --surface-2-solid: #f8f7f4;
-  --surface-3: #efede9;
-  --surface-hover: #f2f0ec;
-  --border: #e3e0da;
-  --border-strong: #cdc8bf;
-  --glass: rgba(252, 251, 249, 0.62);
+  --bg: #f6f4ef;
+  --bg-subtle: #efece5;
+  --surface: #fffefb;
+  --surface-2: #f9f7f2;
+  --surface-solid: #fffefb;
+  --surface-2-solid: #f9f7f2;
+  --surface-3: #ebe7de;
+  --surface-hover: #f3f0e9;
+  --border: #e3ded3;
+  --border-strong: #cbc4b5;
+  --glass: rgba(255, 254, 251, 0.94);
 
-  --text: #16151a;
-  --text-2: #44424c;
-  --text-3: #55525e;
-  --text-muted: #5d5a66;
+  --text: #1c1a17;
+  --text-2: #3d3a34;
+  --text-3: #5a554c;
+  --text-muted: #5f5a51;
   --text-inverse: #ffffff;
-  --thinking-bg: #edf4f3;
-  --thinking-surface: #f6faf9;
-  --thinking-border: #c5dcd7;
-  --thinking-text: #345650;
-  --thinking-muted: #526e68;
-  --thinking-accent: #28796d;
+  --thinking-bg: #f3f1eb;
+  --thinking-surface: #f9f8f4;
+  --thinking-border: #ddd7cb;
+  --thinking-text: #2e2b26;
+  --thinking-muted: #5a554c;
+  --thinking-accent: #1f3f66;
 
-  /* 主色：墨靛（导航指示、链接）；金色：选中态描线 */
-  --primary: #3a45a8;
-  --primary-hover: #313b93;
-  --primary-active: #29317c;
-  --primary-soft: #eceefa;
-  --primary-soft-2: #dde1f6;
-  --primary-text: #2f3890;
-  --focus-ring: 0 0 0 3px rgba(58, 69, 168, 0.22);
-  --gold: #b07d2e;
-  --gold-text: #8a5d17;
-  --gold-soft: #f8efe0;
+  /* 主色：深海军蓝，只用于主操作、焦点、链接与当前位置 */
+  --primary: #1f3f66;
+  --primary-hover: #193457;
+  --primary-active: #132a47;
+  --primary-soft: #ebeff5;
+  --primary-soft-2: #d6dfeb;
+  --primary-text: #1f3f66;
+  --focus-ring: 0 0 0 3px rgba(31, 63, 102, 0.22);
 
-  /* 墨色：主操作按钮与强调块 */
-  --ink: #1b1a24;
-  --ink-2: #2a2936;
-  --ink-text: #f7f5f0;
-  --ink-muted: #bdb9c8;
+  /* 期刊红：栏目眉题、节号、刊头细线等编辑标记 */
+  --mark: #8c1d18;
+  --mark-text: #8c1d18;
+  --mark-soft: #f6ebe7;
 
-  /* 虹彩光谱：品牌色带与光环 */
-  --spectrum: linear-gradient(100deg, #7aa7ff, #b28cff 28%, #ff9fc2 52%, #ffc56b 76%, #8fe3c8);
-  /* 只存色标；--iris 本身在 tokens-layout.css 里逐元素声明，才能跟着各自的 --iris-angle 转 */
-  --iris-stops: #ff9fc2, #ffc56b, #c8f0a0, #8fe3c8, #7aa7ff, #b28cff, #ff9fc2;
+  /* 墨色：高权重块（如引导卡片、印刷预览）；主按钮改用主色 */
+  --ink: #1c1a17;
+  --ink-2: #33302b;
+  --ink-text: #fffefb;
+  --ink-muted: #8f897d;
 
-  --success: #1f8a58;
-  --success-soft: #e6f4ec;
-  --success-text: #146c43;
-  --warning: #b8740a;
-  --warning-soft: #fbf1df;
-  --warning-text: #8d5700;
-  --danger: #c93c3c;
-  --danger-soft: #fbeaea;
-  --danger-text: #a52620;
-  --info: #2f6fd6;
-  --info-soft: #e7effb;
-  --info-text: #1f58b3;
+  /* 进度条、细线：主色实色（保留变量名以兼容旧选择器） */
+  --spectrum: linear-gradient(90deg, #1f3f66 0%, #1f3f66 100%);
+  --iris-stops: #1f3f66, #4d6a92, #8c1d18, #b4574c, #1f3f66;
 
-  /* 侧栏：浅色毛玻璃，与内容区同一纸面，靠留白与细线分隔 */
-  --sidebar-bg: rgba(248, 247, 244, 0.72);
-  --sidebar-border: #e3e0da;
-  --sidebar-text: #44424c;
-  --sidebar-text-strong: #16151a;
-  --sidebar-hover: rgba(27, 26, 36, 0.045);
-  --sidebar-active: rgba(27, 26, 36, 0.075);
-  --sidebar-accent: #3a45a8;
-  --sidebar-muted: #5d5a66;
-  --brand-gradient: linear-gradient(120deg, #1b1a24, #2d2b3d);
+  --success: #13795b;
+  --success-soft: #e5f4ee;
+  --success-text: #0f5f47;
+  --warning: #a65f0c;
+  --warning-soft: #fbf1e3;
+  --warning-text: #7d4606;
+  --danger: #b0342b;
+  --danger-soft: #fbeceb;
+  --danger-text: #8f231c;
+  --info: #1f5c99;
+  --info-soft: #eaf1f8;
+  --info-text: #1a4f85;
+
+  --sidebar-bg: #f1eee7;
+  --sidebar-border: #e0dacd;
+  --sidebar-text: #3d3a34;
+  --sidebar-text-strong: #1c1a17;
+  --sidebar-hover: rgba(28, 26, 23, 0.045);
+  --sidebar-active: #e7e2d7;
+  --sidebar-accent: #8c1d18;
+  --sidebar-muted: #6b655b;
+  --brand-gradient: linear-gradient(135deg, #1f3f66, #8c1d18);
   --on-primary: #ffffff;
   --knob: #ffffff;
 
-  --tooltip-bg: #1b1a24;
-  --tooltip-text: #f7f5f0;
+  --tooltip-bg: #1c1a17;
+  --tooltip-text: #f6f4ef;
 
-  --shadow-xs: 0 1px 2px rgba(30, 24, 16, 0.04);
-  --shadow-sm: 0 1px 3px rgba(30, 24, 16, 0.06), 0 1px 2px rgba(30, 24, 16, 0.03);
-  --shadow-md: 0 10px 24px -10px rgba(30, 24, 16, 0.14);
-  --shadow-lg: 0 24px 48px -18px rgba(30, 24, 16, 0.22);
+  --shadow-xs: 0 1px 2px rgba(28, 26, 23, 0.05);
+  --shadow-sm: 0 1px 2px rgba(28, 26, 23, 0.05), 0 1px 3px rgba(28, 26, 23, 0.04);
+  --shadow-md: 0 4px 12px -2px rgba(28, 26, 23, 0.08), 0 2px 4px rgba(28, 26, 23, 0.04);
+  --shadow-lg: 0 16px 32px -8px rgba(28, 26, 23, 0.14), 0 4px 8px rgba(28, 26, 23, 0.05);
 }

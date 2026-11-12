@@ -15,7 +15,7 @@
 }
 
 .welcome-tour-progress i.active::after {
-  animation: tour-fill 460ms var(--ease-out) both;
+  animation: tour-fill 380ms var(--ease-out) both;
   background: var(--spectrum);
   content: '';
   inset: 0;
@@ -39,7 +39,7 @@
 }
 
 ::selection {
-  background: color-mix(in srgb, #b28cff 28%, transparent);
+  background: color-mix(in srgb, var(--mark) 24%, transparent);
 }
 
 /* 减少动态效果：关闭旋转、漂移、流光与抬升，只保留配色与层次 */
@@ -64,17 +64,15 @@
 /* 侧栏「最近任务」与导航项同一缩进 */
 .sidebar-recent a,
 .sidebar-recent-empty {
-  padding-left: 24px;
-  padding-right: 20px;
+  padding-left: 22px;
+  padding-right: 18px;
 }
 
-/* 学术问答：整块对话面板改为毛玻璃，让底部升起的光谱透出来 */
+/* 学术问答：实底对话台面，会话列表用次级底色 */
 .qa-layout {
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
-  background: var(--glass);
+  background: var(--surface-solid);
 }
 
 .qa-sidebar {
-  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  background: var(--surface-2-solid);
 }

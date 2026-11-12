@@ -1,13 +1,5 @@
-import type { CSSProperties } from 'react'
 import type { WorkflowAction, WorkflowPhaseStatus, WorkflowState } from '../types'
-import { rgbCss, wavelengthToRgb } from '../lib/spectralLines'
 import { AppIcon } from './AppIcon'
-
-/** 第 index 个阶段的谱线颜色：从 Hα 的红（656 nm）均匀走到 Hδ 的紫（410 nm）。 */
-function phaseLine(index: number, total: number): CSSProperties {
-  const nm = 656 - (246 * index) / Math.max(1, total - 1)
-  return { '--line': rgbCss(wavelengthToRgb(nm)) } as CSSProperties
-}
 
 const STATUS: Record<WorkflowPhaseStatus, string> = {
   pending: '待开始', active: '进行中', done: '已完成', needs_review: '待处理',
@@ -40,12 +32,11 @@ export default function WorkflowStatePanel({
         )}
       </div>
       <div className="workflow-phase-track" role="list" aria-label="研究阶段">
-        {state.phases.map((phase, index) => (
+        {state.phases.map((phase) => (
           <div
             key={phase.id}
             className={`workflow-phase ${phase.status}`}
             role="listitem"
-            style={phaseLine(index, state.phases.length)}
             title={phase.detail || undefined}
           >
             <span className="workflow-phase-dot" aria-hidden="true">

@@ -1,83 +1,84 @@
 /* ============================================================================
-   颜色令牌 · 深色「墨夜」
-   近黑墨底上，光谱自发光更亮；保留金色点睛。正文色在所有底色上 ≥ 4.5:1。
+   颜色令牌 · 深色「夜读」
+   暖黑底面 + 米白正文；主色与期刊红各提亮一档，含义与亮色主题一致。
    ========================================================================== */
 
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #07070b;
-  --bg-subtle: #0c0c12;
-  --surface: #0f0f16;
-  --surface-2: #13131c;
-  --surface-solid: #0f0f16;
-  --surface-2-solid: #13131c;
-  --surface-3: #1a1a25;
-  --surface-hover: #1d1d29;
-  --border: #262634;
-  --border-strong: #37374a;
-  --glass: rgba(15, 15, 22, 0.58);
+  --bg: #131211;
+  --bg-subtle: #171614;
+  --surface: #1b1a18;
+  --surface-2: #211f1c;
+  --surface-solid: #1b1a18;
+  --surface-2-solid: #211f1c;
+  --surface-3: #2b2925;
+  --surface-hover: #252320;
+  --border: #2f2c28;
+  --border-strong: #45413a;
+  --glass: rgba(27, 26, 24, 0.94);
 
-  --text: #f3f1eb;
-  --text-2: #cac7d4;
-  --text-3: #aeabbb;
-  --text-muted: #9a97a8;
-  --thinking-bg: #102422;
-  --thinking-surface: #132d29;
-  --thinking-border: #284b44;
-  --thinking-text: #c2ded5;
-  --thinking-muted: #9cbbb1;
-  --thinking-accent: #7ad7bc;
+  --text: #ece8df;
+  --text-2: #cfc9bd;
+  --text-3: #aaa395;
+  --text-muted: #a39c8e;
+  --thinking-bg: #181715;
+  --thinking-surface: #1d1c19;
+  --thinking-border: #34312b;
+  --thinking-text: #d6d0c4;
+  --thinking-muted: #a39c8e;
+  --thinking-accent: #9db9de;
 
-  --primary: #9ea8ff;
-  --primary-hover: #b1b9ff;
-  --primary-active: #8a95f5;
-  --primary-soft: #1a1c38;
-  --primary-soft-2: #24274d;
-  --primary-text: #bcc3ff;
-  --focus-ring: 0 0 0 3px rgba(158, 168, 255, 0.35);
-  --gold: #e2b86a;
-  --gold-text: #f0cd8c;
-  --gold-soft: #2a2213;
+  --primary: #8fb0d9;
+  --primary-hover: #a8c3e4;
+  --primary-active: #7a9ccb;
+  --primary-soft: #1a2433;
+  --primary-soft-2: #22314a;
+  --primary-text: #a9c4e6;
+  --focus-ring: 0 0 0 3px rgba(143, 176, 217, 0.32);
 
-  /* 深色下的「墨色」按钮反转为暖白，保持最强色差 */
-  --ink: #f3f1eb;
-  --ink-2: #dedad0;
-  --ink-text: #111018;
-  --ink-muted: #4d4a57;
+  --mark: #e07a66;
+  --mark-text: #ec9481;
+  --mark-soft: #2c1814;
 
-  --spectrum: linear-gradient(100deg, #6f9bff, #a77dff 28%, #ff8fb8 52%, #ffbd5c 76%, #6fdcbc);
+  --ink: #ece8df;
+  --ink-2: #d5cfc3;
+  --ink-text: #131211;
+  --ink-muted: #6c665c;
 
-  --success: #3cc47f;
-  --success-soft: #11251a;
-  --success-text: #74dca6;
-  --warning: #e6a23c;
-  --warning-soft: #2a2011;
-  --warning-text: #f0c273;
-  --danger: #f06a6a;
-  --danger-soft: #2c1515;
-  --danger-text: #ff9d9d;
-  --info: #5ea0ff;
-  --info-soft: #121f35;
-  --info-text: #9dc4ff;
+  --spectrum: linear-gradient(90deg, #8fb0d9 0%, #8fb0d9 100%);
+  --iris-stops: #8fb0d9, #b9cde6, #e07a66, #eca595, #8fb0d9;
 
-  --sidebar-bg: rgba(10, 10, 15, 0.7);
-  --sidebar-border: #1f1f2b;
-  --sidebar-text: #bdbac9;
-  --sidebar-text-strong: #ffffff;
-  --sidebar-hover: rgba(255, 255, 255, 0.05);
-  --sidebar-active: rgba(255, 255, 255, 0.08);
-  --sidebar-accent: #bcc3ff;
-  --sidebar-muted: #9a97a8;
-  --brand-gradient: linear-gradient(120deg, #f3f1eb, #d9d4c8);
-  --on-primary: #111018;
-  --knob: #f3f1eb;
+  --success: #46c08f;
+  --success-soft: #10251c;
+  --success-text: #7cdcb0;
+  --warning: #e3a246;
+  --warning-soft: #2a2012;
+  --warning-text: #f0c47c;
+  --danger: #f07167;
+  --danger-soft: #2c1615;
+  --danger-text: #ffa29b;
+  --info: #6fa8e6;
+  --info-soft: #16263a;
+  --info-text: #92c0f0;
 
-  --tooltip-bg: #24232f;
-  --tooltip-text: #f3f1eb;
+  --sidebar-bg: #161513;
+  --sidebar-border: #2a2824;
+  --sidebar-text: #c4beb2;
+  --sidebar-text-strong: #f1ede5;
+  --sidebar-hover: rgba(255, 255, 255, 0.04);
+  --sidebar-active: #24221e;
+  --sidebar-accent: #e07a66;
+  --sidebar-muted: #958e80;
+  --brand-gradient: linear-gradient(135deg, #8fb0d9, #e07a66);
+  --on-primary: #131211;
+  --knob: #ece8df;
+
+  --tooltip-bg: #2b2925;
+  --tooltip-text: #f1ede5;
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
-  --shadow-md: 0 12px 28px -10px rgba(0, 0, 0, 0.6);
-  --shadow-lg: 0 26px 52px -18px rgba(0, 0, 0, 0.7);
+  --shadow-md: 0 6px 16px -4px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 20px 40px -12px rgba(0, 0, 0, 0.7);
 }

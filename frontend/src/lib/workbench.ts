@@ -70,7 +70,7 @@ export function stepLabel(label: string, agent: string): string {
 
 /** 模板图标名来自后端数据；未知名回退为通用图标，而不是渲染出一个空洞。 */
 export function templateIcon(icon: string): AppIconName {
-  return TEMPLATE_ICONS.has(icon as AppIconName) ? (icon as AppIconName) : 'sparkles'
+  return TEMPLATE_ICONS.has(icon as AppIconName) ? (icon as AppIconName) : 'file-search'
 }
 
 export function formatLabel(format: string): string {

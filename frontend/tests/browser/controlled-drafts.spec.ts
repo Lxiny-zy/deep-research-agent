@@ -8,6 +8,8 @@ for (const path of ['/qa/controlled-conversation', '/runs/controlled-run/read'])
     await expect(input).toBeEnabled()
     await input.fill('尚未发送的下一问')
     await page.locator('.sidebar-nav a[href="/history"]').click()
+    // 路由懒加载完成后才会写入历史记录，先等跳转落地再后退
+    await expect(page).toHaveURL(/\/history$/)
     await page.goBack()
     await expect(input).toHaveValue('尚未发送的下一问')
     await page.reload()

@@ -5,19 +5,19 @@ import { useDialogFocus } from '../hooks/useDialogFocus'
 
 const steps: { icon: AppIconName; title: string; text: string }[] = [
   {
-    icon: 'sparkles',
-    title: '放入一个问题',
-    text: '选一项科研任务：综述、精读、审稿、数据分析、汇报幻灯片或思维导图。检索深度按任务选择。',
+    icon: 'flask',
+    title: '选定科研任务与命题',
+    text: '覆盖课题调研、文献综述、论文精读、同行评审、数据分析、汇报幻灯片与思维导图，可按需搭配私有文献库与检索策略。',
   },
   {
     icon: 'shield',
-    title: '亮线有据，暗线可补',
-    text: '证据逐字核对原文；缺证据的地方会被标出并补充检索，交付前再经引用、结构与文体检查，不合格自动返工。',
+    title: '原文逐字核验与补证',
+    text: '每条论断均与来源原文逐字比对并检验语义支持度；证据缺口自动触发补充检索，交付前再经引用、数值与学术文体门禁复核。',
   },
   {
     icon: 'download',
-    title: '带走整张光谱',
-    text: 'Word、PDF、PPT 与导图同源生成，留在任务记录里，可随时下载或继续追问。',
+    title: '同源生成多格式交付',
+    text: '定稿同源导出 Markdown、Word、PDF、PPT、Excel 与交互导图，完整留存于任务记录中，随时支持原文回查与多轮追问。',
   },
 ]
 

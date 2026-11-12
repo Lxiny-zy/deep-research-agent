@@ -245,7 +245,7 @@ export default function LibraryPage() {
   return (
     <div className="stack page-stack library-page">
       <PageHeader page="library" title="资料库">
-        按项目整理文献与资料；纳入的来源会在新建任务时作为证据参与核验。
+        按研究课题归集论文、网页、DOI 与实验笔记；标记为纳入的文献片段将与开放检索结果同权参与逐字核验。
       </PageHeader>
 
       {error && (
@@ -264,22 +264,22 @@ export default function LibraryPage() {
             <span className="library-onboarding-icon" aria-hidden="true">
               <AppIcon name="library" size={24} strokeWidth={1.6} />
             </span>
-            <h2>建立第一个研究项目</h2>
+            <h2>创建首个课题文献库</h2>
             <p className="hint">
-              项目用于归集同一研究主题的来源、原文片段和审核状态。创建后即可导入资料。
+              按研究项目统一管理原始文献、分块摘录与纳入状态，为专题综述、课题调研与学术问答提供可信私有语料。
             </p>
             <ol className="library-steps">
               <li>
-                <strong>创建项目</strong>
-                <span>写下研究主题与交付目标。</span>
+                <strong>立项归档</strong>
+                <span>定义课题名称、研究边界与预期目标。</span>
               </li>
               <li>
-                <strong>导入来源</strong>
-                <span>支持网页、DOI、文本、Markdown 与 PDF，导入后自动分块。</span>
+                <strong>导入文献</strong>
+                <span>支持 PDF、DOI、网页、Markdown 与纯文本，自动解析页码与章节分块。</span>
               </li>
               <li>
-                <strong>审核与复用</strong>
-                <span>纳入的来源会在新建任务时作为证据参与核验。</span>
+                <strong>筛选入证</strong>
+                <span>逐条控制文献纳入或排除，在工作台与问答中直接参与证据核验。</span>
               </li>
             </ol>
           </div>

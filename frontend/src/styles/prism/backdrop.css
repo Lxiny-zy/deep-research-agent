@@ -1,6 +1,5 @@
-/* 背景层：谱线画布（见 SpectrumBackdrop），固定在内容之下 */
+/* 外壳底面：暖白纸面（深色为墨底），主栏透明叠在其上 */
 
-/* 外壳成为层叠上下文：背景层 z-index:-1 画在外壳底色之上、内容之下 */
 .app-shell {
   background: var(--bg);
   isolation: isolate;
@@ -9,19 +8,4 @@
 .main-column {
   background: transparent;
   position: relative;
-}
-
-.backdrop {
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  position: fixed;
-  z-index: -1;
-}
-
-.spectrum-canvas {
-  height: 100%;
-  inset: 0;
-  position: absolute;
-  width: 100%;
 }

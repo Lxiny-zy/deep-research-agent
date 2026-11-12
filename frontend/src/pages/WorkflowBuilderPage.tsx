@@ -182,7 +182,7 @@ export default function WorkflowBuilderPage() {
           </button>
         }
       >
-        研究的次第：广泛检索，追问来源，反思补洞，逐字核验，落笔成文。先按研究目标选择策略；日常任务不需要理解 Agent、Step 或分支。底层流程编排保留在本页的高级区域，供管理员调试和扩展。
+        面向不同研究深度与时效要求编排执行链路：问题拆解、并发检索、反思补证、逐字核验与成文复核。日常科研直接选用预设策略即可，底层流程画布供管理员定制与扩展。
       </PageHeader>
 
       <details className="panel workflow-templates" ref={templatesRef} open>
@@ -244,8 +244,8 @@ export default function WorkflowBuilderPage() {
         {!workflows.isLoading && !workflows.isError && workflows.data?.length === 0 && (
           <EmptyState
             icon="workflow"
-            title="为你的研究，保存一套策略"
-            description="从内置策略开始，或进入高级编排器创建专属链路。"
+            title="尚未创建自定义研究策略"
+            description="可克隆上方预设策略快速微调，或进入可视化编排画布定义专属多智能体链路。"
           >
             <button
               className="btn btn-secondary"

@@ -8,7 +8,7 @@ export function NotFoundPage() {
         404
       </span>
       <h1>页面不存在</h1>
-      <p>这一段光谱上什么也没有。地址可能已经变更，可以回到工作台继续。</p>
+      <p>未找到对应的工作台页面，链接可能已变更或失效，可返回工作台继续研究。</p>
       <div className="route-state-actions">
         <Link className="btn btn-primary" to="/">
           <AppIcon name="arrow-left" size={16} aria-hidden="true" />

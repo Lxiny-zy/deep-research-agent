@@ -1,14 +1,14 @@
 import { useEffect, useRef } from 'react'
-import { drawIntro, introThreads } from '../lib/introRender'
+import { drawIntro, introGraph } from '../lib/introRender'
 
 /**
- * 欢迎画面的谱线画布。
- * - 谱线依次显影：先是光谱带，再是一条条谱线；
- * - `hot`：指针悬停「进入」时，下段谱线收紧、汇聚点变亮；
- * - `leaving`：离场时谱线与光谱带在约 0.45 秒内收拢进汇聚点（随后由样式层从这一点打开圆孔）；
+ * 欢迎画面的扉页插图画布（文献引用网络，见 lib/introRender）。
+ * - 节点依次出现、引用边逐条生长，已核验的节点最后汇向「进入」；
+ * - `hot`：指针悬停「进入」时，汇聚线加深；
+ * - `leaving`：离场时整张网络在约 0.45 秒内收拢进「进入」（随后由样式层从这一点打开圆孔）；
  * - 标签页隐藏时停帧，「减少动态效果」时直接画出完成态的一帧。
  */
-export default function IntroSpectrum({
+export default function IntroPlate({
   hot,
   leaving,
   dark,
@@ -34,14 +34,13 @@ export default function IntroSpectrum({
     const context = ctx
     const motion = window.matchMedia?.('(prefers-reduced-motion: reduce)')
     let reduced = motion?.matches ?? false
-    const threads = introThreads()
+    const graph = introGraph()
     let width = 0
     let height = 0
     let frame = 0
     let born = -1
     let energy = 0
     let leaveAt = -1
-    const pointer = { x: -9999, y: -9999, s: 0, tx: -9999, ty: -9999, ts: 0 }
 
     const render = (time: number) => {
       const s = state.current
@@ -51,19 +50,14 @@ export default function IntroSpectrum({
       if (!s.leaving) leaveAt = -1
       const t = leaveAt < 0 ? 0 : Math.min(1, (time - leaveAt) / 450)
       const gather = t * t * (3 - 2 * t)
-      pointer.x += (pointer.tx - pointer.x) * 0.1
-      pointer.y += (pointer.ty - pointer.y) * 0.1
-      pointer.s += (pointer.ts - pointer.s) * 0.06
       drawIntro(context, {
         width,
         height,
-        time,
         elapsed: reduced ? 1e6 : time - born,
         energy: reduced ? 0 : energy,
         gather: reduced ? 0 : gather,
-        pointer,
         dark: s.dark,
-        threads,
+        graph,
       })
     }
     const loop = (time: number) => {
@@ -84,20 +78,6 @@ export default function IntroSpectrum({
       context.setTransform(dpr, 0, 0, dpr, 0, 0)
       if (reduced) render(0)
     }
-    const onMove = (event: PointerEvent) => {
-      if (reduced || event.pointerType === 'touch') return
-      const rect = canvas.getBoundingClientRect()
-      pointer.tx = event.clientX - rect.left
-      pointer.ty = event.clientY - rect.top
-      if (pointer.s < 0.01) {
-        pointer.x = pointer.tx
-        pointer.y = pointer.ty
-      }
-      pointer.ts = 1
-    }
-    const onLeave = () => {
-      pointer.ts = 0
-    }
     const onMotion = () => {
       reduced = motion?.matches ?? false
       start()
@@ -107,19 +87,15 @@ export default function IntroSpectrum({
     observer?.observe(canvas)
     resize()
     start()
-    window.addEventListener('pointermove', onMove, { passive: true })
-    document.documentElement.addEventListener('pointerleave', onLeave)
     motion?.addEventListener?.('change', onMotion)
     document.addEventListener('visibilitychange', start)
     return () => {
       cancelAnimationFrame(frame)
       observer?.disconnect()
-      window.removeEventListener('pointermove', onMove)
-      document.documentElement.removeEventListener('pointerleave', onLeave)
       document.removeEventListener('visibilitychange', start)
       motion?.removeEventListener?.('change', onMotion)
     }
   }, [])
 
-  return <canvas ref={ref} className="intro-spectrum" aria-hidden="true" />
+  return <canvas ref={ref} className="intro-plate" aria-hidden="true" />
 }

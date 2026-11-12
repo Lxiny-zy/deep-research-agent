@@ -403,7 +403,7 @@ export default function RunPage() {
               className="btn btn-primary btn-sm run-followup"
               onClick={askFollowUp}
             >
-              <AppIcon name="sparkles" size={14} aria-hidden="true" />
+              <AppIcon name="chat" size={14} aria-hidden="true" />
               继续追问
             </button>
           )}

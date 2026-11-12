@@ -1,60 +1,45 @@
-/* 按钮家族：墨色实底（主操作，见 surface.css）· 描线 · 文字 · 圆形图标 · 危险。
-   悬停只改变底色与描边，不加彩色光效；首页专属按钮见 buttons-home.css。 */
+/* 按钮家族：主色实底主按钮（见 surface.css）· 描边次按钮 · 文字按钮 */
 
-/* 描线按钮：一道墨色细线框，悬停时墨色从底部涨满、文字反白 */
 .btn-secondary {
-  background: linear-gradient(var(--ink), var(--ink)) no-repeat bottom / 100% 0%;
-  background-color: transparent;
-  border: 1px solid color-mix(in srgb, var(--ink) 55%, transparent);
-  border-radius: 2px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
   color: var(--text);
-  font-family: var(--font-serif);
-  letter-spacing: 0.04em;
+  font-weight: 600;
   transition:
-    background-size 360ms var(--ease-out),
+    background-color var(--duration) var(--ease),
     border-color var(--duration) var(--ease),
-    color 240ms var(--ease);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background-color: transparent;
-  background-size: 100% 100%;
-  border-color: var(--ink);
-  color: var(--ink-text);
-}
-
-/* 文字按钮：没有底色，悬停时一道细线从左向右划出 */
-.btn-ghost:not(.icon-button) {
-  background: linear-gradient(currentColor, currentColor) no-repeat 0 calc(100% - 6px) / 0% 1px;
-  background-color: transparent;
-  background-origin: content-box;
-  transition:
-    background-size 320ms var(--ease-out),
     color var(--duration) var(--ease);
 }
 
+.btn-secondary:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--border-strong));
+  color: var(--text);
+}
+
+.btn-ghost:not(.icon-button) {
+  border-radius: var(--radius-md);
+}
+
 .btn-ghost:not(.icon-button):hover:not(:disabled) {
-  background-color: transparent;
-  background-size: 100% 1px;
+  background-color: var(--surface-hover);
   color: var(--primary-text);
 }
 
-/* 圆形图标按钮：悬停时只泛起一层底色 */
-/* :where 让各组件自己的定位 / 圆角规则仍能覆盖这里 */
 :where(.icon-button) {
   position: relative;
 }
 
 .btn.icon-button {
-  border-radius: 50%;
+  border-radius: var(--radius-md);
 }
 
 .btn.icon-button:hover:not(:disabled) {
-  background-color: var(--surface-2);
+  background-color: var(--surface-hover);
   color: var(--text);
 }
 
-/* 危险操作：平时低调，悬停时底色泛红 */
 .btn.danger:hover:not(:disabled),
 .btn-danger:hover:not(:disabled) {
   background-color: var(--danger-soft);

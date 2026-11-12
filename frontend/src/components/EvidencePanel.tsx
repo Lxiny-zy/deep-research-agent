@@ -524,7 +524,7 @@ export default function EvidencePanel({
             {selectedLocationCount != null && selectedLocationCount > 1 && (
               <p className="muted small">本处引用关联 {selectedLocationCount} 处原文位置。</p>
             )}
-            <p className="evidence-verse">谱线不可伪造，结论必有其源。</p>
+            <p className="evidence-verse">引文经快照逐字核对，分歧与孤证显式标明。</p>
             <p className="evidence-snapshot-note">
               {selectionScope === 'fulltext_review'
                 ? '核查范围为本次取得的全文文本，来源更新后需要重新核查。'

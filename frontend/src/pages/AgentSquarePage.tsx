@@ -156,7 +156,7 @@ export default function AgentSquarePage() {
   return (
     <div className="stack page-stack catalog-page">
       <PageHeader page="agents" title="角色广场">
-        管理研究角色、模型档案与检索资源。工作流按标识引用这里的角色。
+        统一配置智能体角色指令、模型连接档案与多渠道检索凭据，为规划、检索、复核与写作环节分配合适能力。
       </PageHeader>
 
       <div className="tabs agent-tabs" role="tablist" aria-label="角色广场分类">
@@ -251,8 +251,8 @@ export default function AgentSquarePage() {
             {!agents.isLoading && !agents.isError && agents.data?.length === 0 && (
               <EmptyState
                 icon="user-cog"
-                title="把研究经验，交给专属角色"
-                description="需要专属提示词或模型？创建自定义角色。"
+                title="尚未创建自定义研究角色"
+                description="可基于规划、检索、反思或综合行为模板，定制领域专属提示词、模型与检索档案。"
               >
                 <button className="btn btn-secondary" onClick={() => openAgentEditor(null)}>
                   创建自定义角色
@@ -377,8 +377,8 @@ export default function AgentSquarePage() {
             {!models.isLoading && !models.isError && models.data?.length === 0 && (
               <EmptyState
                 icon="server"
-                title="连接适合你的研究模型"
-                description="保存模型与连接信息，设为全局默认，或为不同的研究角色单独指定。"
+                title="尚未添加模型连接档案"
+                description="配置 OpenAI 兼容端点、密钥与上下文容量，可设为全局默认或按研究角色独立绑定。"
               >
                 <button className="btn btn-secondary" onClick={() => openModelEditor(null)}>
                   创建模型档案

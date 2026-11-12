@@ -3,7 +3,7 @@ import { PAGE_VOICE } from '../lib/pageVoice'
 import { stripX, tallyLines, type ThoughtLine } from '../lib/thoughtLines'
 import SpectrumStrip from './SpectrumStrip'
 
-const STATE_TEXT = { lit: '已证', dark: '暗线', pending: '待显' } as const
+const STATE_TEXT = { lit: '已核验', dark: '缺证据', pending: '检索中' } as const
 
 function evidenceText(line: ThoughtLine): string {
   if (line.state === 'lit') {
@@ -17,8 +17,8 @@ function evidenceText(line: ThoughtLine): string {
 }
 
 function describe(line: ThoughtLine, index: number): string {
-  const round = line.round > 0 ? `，第 ${line.round} 轮补洞新增` : ''
-  return `思路 ${index + 1}${round}，${STATE_TEXT[line.state]}：${line.question}。${evidenceText(line)}`
+  const round = line.round > 0 ? `，第 ${line.round} 轮补证新增` : ''
+  return `子问题 ${index + 1}${round}，${STATE_TEXT[line.state]}：${line.question}。${evidenceText(line)}`
 }
 
 /**
@@ -43,12 +43,12 @@ export default function ResearchSpectrum({
     <section className="panel research-spectrum" aria-labelledby={headingId}>
       <header className="research-spectrum-head">
         <div>
-          <span className="panel-kicker">本题之谱</span>
+          <span className="panel-kicker">子问题取证概览</span>
           <h2 id={headingId}>
-            {lines.length} 条思路
-            <span className="is-lit">{tally.lit} 条已证</span>
-            {tally.dark > 0 && <span className="is-dark">{tally.dark} 条暗线</span>}
-            {tally.pending > 0 && <span className="is-pending">{tally.pending} 条待显</span>}
+            {lines.length} 个子问题
+            <span className="is-lit">{tally.lit} 项已核验</span>
+            {tally.dark > 0 && <span className="is-dark">{tally.dark} 项缺证据</span>}
+            {tally.pending > 0 && <span className="is-pending">{tally.pending} 项检索中</span>}
           </h2>
         </div>
         <p className="research-spectrum-verse">{PAGE_VOICE.run.verse}</p>
@@ -79,8 +79,8 @@ export default function ResearchSpectrum({
             aria-hidden="true"
           >
             <span className="research-spectrum-tip-head">
-              思路 {active + 1}
-              {current.round > 0 && ` · 第 ${current.round} 轮补洞`}
+              子问题 {active + 1}
+              {current.round > 0 && ` · 第 ${current.round} 轮补证`}
               <em>{STATE_TEXT[current.state]}</em>
             </span>
             <strong>{current.question}</strong>
@@ -90,9 +90,9 @@ export default function ResearchSpectrum({
       </div>
 
       <ul className="research-spectrum-legend" aria-hidden="true">
-        <li className="is-lit">亮线 · 有逐字核验的证据</li>
-        <li className="is-dark">暗线 · 检索过，尚无可核验的证据</li>
-        {tally.pending > 0 && <li className="is-pending">待显 · 尚在检索</li>}
+        <li className="is-lit">已核验 · 找到通过原文逐字比对的支撑证据</li>
+        <li className="is-dark">缺证据 · 已检索但尚无满足核验标准的依据</li>
+        {tally.pending > 0 && <li className="is-pending">检索中 · 正在检索与核对原始来源</li>}
       </ul>
     </section>
   )

@@ -765,8 +765,7 @@ span.home-option-label {
 /* ---- 提交操作条：保留正常占位，不在滚动时覆盖表单或配置 ---- */
 .home-actionbar {
   align-items: center;
-  backdrop-filter: saturate(180%) blur(8px);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);

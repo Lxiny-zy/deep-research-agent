@@ -1,10 +1,16 @@
-/* 工作台首页 · 任务标签页：图标 + 中文名 + 英文副标题，选中项金色下划线 */
+/* 首页任务类型切换：无框标签行，选中项底边一道主色线 */
+
+.home-page .task-picker {
+  margin-top: 13px;
+}
 
 .task-grid {
   border-bottom: 1px solid var(--border);
+  border-top: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
   flex-wrap: nowrap;
   gap: 0;
   overflow-x: auto;
+  padding: 0;
   scrollbar-width: none;
 }
 
@@ -18,58 +24,75 @@
   border-radius: 0;
   box-shadow: none;
   flex: 1 0 auto;
-  gap: 12px;
+  gap: 9px;
   justify-content: center;
-  padding: 12px 18px 14px;
+  padding: 11px 16px 12px;
   position: relative;
   transform: none;
+  transition:
+    background-color var(--duration) var(--ease),
+    color var(--duration) var(--ease);
 }
 
-/* 标签之间的细竖线 */
 .task-picker .task-card + .task-card::before {
-  background: var(--border);
+  background: color-mix(in srgb, var(--border-strong) 65%, transparent);
   content: '';
-  height: 22px;
+  height: 16px;
   left: 0;
   position: absolute;
-  top: calc(50% - 11px);
+  top: calc(50% - 8px);
   width: 1px;
 }
 
 .task-picker .task-card::after {
-  background: var(--gold);
-  bottom: -1px;
+  background: var(--mark);
+  bottom: 0;
   content: '';
   height: 2px;
-  left: 14px;
+  left: 12px;
   position: absolute;
-  right: 14px;
+  right: 12px;
   transform: scaleX(0);
-  transition: transform 420ms var(--ease-out);
+  transition: transform 340ms var(--ease-out);
+}
+
+.task-picker .task-card:hover {
+  background: color-mix(in srgb, var(--mark) 6%, transparent);
+  box-shadow: none;
+  transform: none;
+}
+
+.task-picker .task-card.is-selected {
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in srgb, var(--mark) 9%, transparent) 100%
+  );
+  box-shadow: none;
 }
 
 .task-picker .task-card.is-selected::after {
   transform: scaleX(1);
 }
 
-.task-picker .task-card:hover {
-  background: var(--sidebar-hover);
-  box-shadow: none;
-  transform: none;
-}
-
-.task-picker .task-card-icon,
-.task-picker .task-card.is-selected .task-card-icon {
+.task-picker .task-card-icon {
   background: transparent;
+  border-radius: 0;
   box-shadow: none;
-  color: var(--text);
+  color: var(--text-3);
   height: auto;
-  transition: transform 420ms var(--ease-out);
+  transition: color var(--duration) var(--ease), transform 320ms var(--ease-out);
   width: auto;
 }
 
 .task-picker .task-card:hover .task-card-icon {
-  transform: rotate(-8deg) scale(1.08);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.task-picker .task-card.is-selected .task-card-icon {
+  background: transparent;
+  color: var(--mark-text);
 }
 
 .task-card-text {
@@ -78,11 +101,16 @@
   line-height: 1.3;
 }
 
-.task-picker .task-card-title,
+.task-picker .task-card-title {
+  color: var(--text-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
 .task-picker .task-card.is-selected .task-card-title {
   color: var(--text);
-  font-family: var(--font-serif);
-  font-size: var(--text-sm);
   font-weight: 700;
 }
 

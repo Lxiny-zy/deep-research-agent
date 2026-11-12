@@ -27,6 +27,7 @@ import {
 } from '../lib/workflowTemplates'
 import type { ConversationTurn, WorkflowInfo } from '../types'
 import { PAGE_VOICE } from '../lib/pageVoice'
+import { PAGE_META } from '../lib/pageMeta'
 
 const DEFAULT_QUERY = '快照式高光谱成像中，深度展开网络相比端到端网络的优势与局限是什么？'
 const SAMPLES = [
@@ -367,12 +368,15 @@ function ResearchComposer() {
     <div className="home-page">
       <header className="page-header home-hero">
         <div className="home-hero-copy">
+          <p className="home-hero-kicker page-section" aria-hidden="true">
+            § {PAGE_META.home.section} · {PAGE_META.home.stage} · 科研工作台
+          </p>
           <h1 className="home-hero-title">
-            <span className="visually-hidden">Science Research 科研工作台：</span>
+            <span className="visually-hidden">Science Research 实证研究工作台：</span>
             <span className="home-hero-verse">{PAGE_VOICE.home.verse}</span>
           </h1>
           <p className="home-hero-sub">
-            从一个问题出发：拆成可以检索的子问题，逐条取证，补上暗线，再汇成一份有出处的研究。
+            围绕研究命题、学术论文或实验数据，自动规划子问题检索、逐字比对原文依据、补齐证据缺口，生成经质量门验收的多格式交付物。
           </p>
         </div>
         {draft.status !== 'idle' && (
@@ -472,7 +476,7 @@ function ResearchComposer() {
               placeholder={
                 thread.length
                   ? '接着上文追问，例如「那第二个呢」…'
-                  : (activeTemplate?.input_placeholder ?? '写下你正在思考的问题……')
+                  : (activeTemplate?.input_placeholder ?? '输入具体研究命题、对比维度、时间范围或实验条件……')
               }
             />
             {isDataTask && (
@@ -494,7 +498,7 @@ function ResearchComposer() {
                       ? '作为本次综述的指定文献，会逐份核对并引用。'
                       : strategy === 'none' && ['slides', 'mindmap'].includes(templateKey)
                         ? '仅使用这些文件与输入框中的指定链接，逐份读取，不补充外部资料。'
-                        : '可补充论文或背景材料。'}
+                          : '可上传 PDF、Word、PPT、Excel、Markdown 或 CSV，与检索来源同权参与原文核验。'}
                 </span>
               </span>
               <AttachmentDropzone
@@ -700,7 +704,7 @@ function ResearchComposer() {
             {submitLabel}
             {!submitting && <AppIcon name="arrow-right" size={16} aria-hidden="true" />}
           </button>
-          <span aria-hidden="true">放入第一束光</span>
+          <span aria-hidden="true">原文核验 · 出处可溯</span>
         </div>
       </div>
     </div>

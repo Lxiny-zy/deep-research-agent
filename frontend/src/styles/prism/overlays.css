@@ -1,13 +1,12 @@
 /* 浮层：遮罩、侧边抽屉、证据抽屉 */
 
-/* 遮罩统一加一点模糊，浮层与底下的光谱背景分得开 */
+/* 遮罩：纯色压暗，浮层与底下的页面分得开 */
 .modal-backdrop {
-  -webkit-backdrop-filter: blur(6px) saturate(0.9);
-  backdrop-filter: blur(6px) saturate(0.9);
+  background: rgba(20, 26, 34, 0.4);
 }
 
 :root[data-theme='dark'] .modal-backdrop {
-  background: rgba(3, 3, 8, 0.66);
+  background: rgba(5, 8, 12, 0.62);
 }
 
 /* 侧边抽屉（角色 / 模型档案编辑）同时带着 .editor-modal，
@@ -39,9 +38,7 @@
 
 .drawer .editor-actions,
 .drawer > .stack > .row.between:last-child {
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  background: var(--surface);
   box-shadow: 0 -10px 24px -18px rgba(0, 0, 0, 0.35);
   margin-top: var(--space-4);
 }

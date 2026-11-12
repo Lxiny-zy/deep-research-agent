@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { AppIcon } from './AppIcon'
-import IntroSpectrum from './IntroSpectrum'
+import IntroPlate from './IntroPlate'
 
 const LEAVE_MS = 1100
 /** 只收拢、不开孔（访客）时的时长：谱线收成光核后直接浮出登录框 */
 const GATHER_MS = 480
 
 /**
- * 欢迎界面：一条横贯画面的光谱带，思路线在其上依次显影。
- * 带以上，谱线笔直垂下——位置早已写定，像命运；
- * 带以下，所有谱线弯向「进入」——许多条思路，最终汇成一个回答。
+ * 欢迎界面：一条横贯画面的基准线是问题本身，思路线在其上依次升起；
+ * 有依据处是实线，落在缺口处只留一小截；
+ * 基准线以下，所有思路线弯向「进入」——许多条思路，最终汇成一个回答。
  * 点击后整幅谱线收拢进「进入」，再从这一点打开圆孔，露出主界面（或登录框）。
  * 明暗两套由主题令牌驱动；「减少动态效果」时跳过过渡直接进入。
  */
@@ -66,12 +66,12 @@ export default function WelcomePage({
       }}
       data-testid="welcome"
     >
-      <IntroSpectrum hot={hot} leaving={leaving || held} dark={dark} />
+      <IntroPlate hot={hot} leaving={leaving || held} dark={dark} />
 
       <header className="intro-top">
         <span className="intro-kicker">
           <i aria-hidden="true" />
-          Science Research · 科研工作台
+          Science Research · 实证研究工作台
         </span>
         {onToggleTheme && (
           <button
@@ -91,16 +91,14 @@ export default function WelcomePage({
 
       <main className="intro-copy">
         <p className="intro-eyebrow">
-          一个问题，拆开来是许多条思路；
-          <br />
-          每一条，都要拿证据去照亮。
+          课题调研 · 文献综述 · 论文精读 · 同行评审 · 数据分析
         </p>
         <h1 className="intro-verse">
-          <span>一问一谱，</span>
-          <span>明暗皆真。</span>
+          <span>每一条科学论断，</span>
+          <span>皆可回溯至原始文献。</span>
         </h1>
         <p className="intro-lede">
-          有证据的地方亮起，找不到的地方如实留暗。交给你的不只是一篇报告，而是这个问题此刻真实的明暗。
+          拆解研究命题、并发检索学术与私域文献、逐字对勘原文快照并反思补证；经机械质量门复核后，同源凝练为多格式学术手稿。
         </p>
       </main>
 
@@ -115,11 +113,11 @@ export default function WelcomePage({
         onBlur={() => setHot(false)}
       >
         <span className="intro-enter-cn">进入</span>
-        <span className="intro-enter-en">开始读谱</span>
+        <span className="intro-enter-en">ENTER</span>
       </button>
 
       <footer className="intro-foot">
-        <span>亮线是已证之事，暗线是未解之问。</span>
+        <span>原文逐字核验 · 跨源独立印证 · 证据缺口留白 · 多格式同源交付</span>
         {onTour && (
           <button type="button" className="intro-link" onClick={onTour} disabled={leaving}>
             使用引导

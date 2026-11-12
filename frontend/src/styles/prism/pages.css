@@ -1,15 +1,4 @@
-/* 子页面细节：标题压在光谱上的可读性、吸底条漏底、骨架屏、以及此前没有样式的容器 */
-
-/* 页头标题和说明常压在背景光谱的峰上：给文字描一圈底色光晕，谱线从字后穿过而不打架 */
-/* 首页大字里有 background-clip: text 的渐变字，文字阴影会盖住它，所以排除 .home-hero */
-.page-header:not(.home-hero) h1,
-.page-header:not(.home-hero) p,
-.run-q {
-  text-shadow:
-    0 0 2px var(--bg),
-    0 0 10px var(--bg),
-    0 0 18px var(--bg);
-}
+/* 子页面细节：吸底条遮缝、骨架屏、时间线脉冲与意图诊断卡片 */
 
 /* 设置页吸底保存条离底边留了 16px，下面的内容会从缝里露出来；用底色把这道缝盖住 */
 .settings-savebar::after {
@@ -81,8 +70,8 @@
 }
 
 .intent-clarify {
-  background: color-mix(in srgb, var(--gold-soft) 60%, transparent);
-  border: 1px solid color-mix(in srgb, var(--gold) 35%, transparent);
+  background: color-mix(in srgb, var(--mark-soft) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--mark) 35%, transparent);
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
 }

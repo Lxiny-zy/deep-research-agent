@@ -2,14 +2,18 @@
 
 :root {
   --font-sans:
-    'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', system-ui,
-    -apple-system, 'Segoe UI', sans-serif;
+    'Inter', 'HarmonyOS Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI',
+    'Microsoft YaHei', 'Noto Sans SC', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  /* 中文衬线：标题、导航、任务名；拉丁展示字：品牌大字与英文副标题 */
+  /* 衬线：阅读内容（报告正文、原文摘录、引文） */
   --font-serif:
-    'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
+    'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', 'STSong', Georgia, 'Times New Roman',
+    serif;
+  /* 期刊标题体：页名、题句、刊头、欢迎页主标题；拉丁字母走 Georgia 等书刊衬线。
+     界面控件、表单、表格仍用无衬线 */
   --font-display:
-    'Playfair Display', 'Didot', 'Bodoni 72', 'Bodoni MT', 'Times New Roman', var(--font-serif);
+    Georgia, 'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', 'STSong', 'Times New Roman',
+    serif;
 
   --text-xs: 12px;
   --text-sm: 13px;
@@ -20,10 +24,11 @@
   --text-2xl: 24px;
   --text-3xl: 30px;
 
+  /* 圆角：外容器 8px，内嵌控件 6px */
   --radius-sm: 4px;
   --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
   --radius-full: 999px;
 
   --space-1: 4px;

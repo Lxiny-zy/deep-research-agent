@@ -1,18 +1,10 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import LoginGate from './components/LoginGate'
 import WelcomePage from './components/WelcomePage'
 import OnboardingTour from './components/OnboardingTour'
-import SpectrumBackdrop from './components/SpectrumBackdrop'
-import {
-  PAGE_SPECTRA,
-  rgbCss,
-  spectrumKey,
-  wavelengthToRgb,
-  type SpectrumKey,
-} from './lib/spectralLines'
-import { usePointerSpotlight } from './hooks/usePointerSpotlight'
+import { PAGE_META, issueLabel, pageKey, type PageKey } from './lib/pageMeta'
 import { hasSeenIntro, hasSeenTour, markIntroSeen, markTourSeen } from './lib/onboarding'
 import { AppIcon, type AppIconName } from './components/AppIcon'
 import {
@@ -32,8 +24,8 @@ type Role = 'admin' | 'researcher' | 'reader'
 interface NavItem {
   to: string
   label: string
-  /** 这一页在研究流程中的一步（见 lib/spectralLines） */
-  spectrum: SpectrumKey
+  /** 这一页在期刊目录中的一节（见 lib/pageMeta） */
+  page: PageKey
   icon: AppIconName
   end?: boolean
   roles: Role[]
@@ -41,18 +33,18 @@ interface NavItem {
 
 // 一级入口按科研人员的工作场景组织；工作流构建与角色广场属于高级定制，
 // 归在「研究工具」分组里，普通研究者不会被它们打扰。
-// 每一页是研究流程中的一步，由紫到红排开，侧栏从上到下读下来就是一段完整的光谱。
+// 侧栏是一本期刊的目录：每一页是一节，带 § 节号。
 const WORKSPACE_NAV: NavItem[] = [
-  { to: '/', label: '工作台', spectrum: 'home', icon: 'sparkles', end: true, roles: ['admin', 'researcher'] },
-  { to: '/qa', label: '学术问答', spectrum: 'qa', icon: 'chat', roles: ['admin', 'researcher'] },
-  { to: '/history', label: '任务记录', spectrum: 'history', icon: 'history', roles: ['admin', 'researcher', 'reader'] },
-  { to: '/library', label: '资料库', spectrum: 'library', icon: 'library', roles: ['admin', 'researcher', 'reader'] },
+  { to: '/', label: '工作台', page: 'home', icon: 'flask', end: true, roles: ['admin', 'researcher'] },
+  { to: '/qa', label: '学术问答', page: 'qa', icon: 'chat', roles: ['admin', 'researcher'] },
+  { to: '/history', label: '任务记录', page: 'history', icon: 'history', roles: ['admin', 'researcher', 'reader'] },
+  { to: '/library', label: '资料库', page: 'library', icon: 'library', roles: ['admin', 'researcher', 'reader'] },
 ]
 
 const ADVANCED_NAV: NavItem[] = [
-  { to: '/workflows', label: '研究策略', spectrum: 'workflows', icon: 'workflow', roles: ['admin'] },
-  { to: '/agents', label: '角色广场', spectrum: 'agents', icon: 'users', roles: ['admin'] },
-  { to: '/settings', label: '设置', spectrum: 'tools', icon: 'settings', roles: ['admin'] },
+  { to: '/workflows', label: '研究策略', page: 'workflows', icon: 'workflow', roles: ['admin'] },
+  { to: '/agents', label: '角色广场', page: 'agents', icon: 'users', roles: ['admin'] },
+  { to: '/settings', label: '设置', page: 'tools', icon: 'settings', roles: ['admin'] },
 ]
 
 const PAGE_TITLE: [RegExp, string][] = [
@@ -66,11 +58,6 @@ const PAGE_TITLE: [RegExp, string][] = [
   [/^\/agents/, '角色广场'],
   [/^\/settings/, '设置'],
 ]
-
-/** 本页所在一步的颜色，写成 CSS 变量供侧栏色标、顶栏与页面强调色使用。 */
-function lineStyle(key: SpectrumKey): CSSProperties {
-  return { '--line': rgbCss(wavelengthToRgb(PAGE_SPECTRA[key].nm)) } as CSSProperties
-}
 
 const ROLE_LABEL: Record<Role, string> = {
   admin: '管理员',
@@ -136,7 +123,6 @@ export default function App() {
   const [introDone, setIntroDone] = useState(hasSeenIntro)
   const [showTour, setShowTour] = useState(() => hasSeenIntro() && !hasSeenTour())
   const theme = useTheme()
-  usePointerSpotlight()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -264,7 +250,7 @@ export default function App() {
         </div>
         <div>
           <span className="boot-kicker">Science Research</span>
-          <p>正在连接研究服务…</p>
+          <p>正在连接循证研究服务…</p>
         </div>
         <AppIcon name="loader" size={18} className="spin" aria-label="正在连接" />
       </main>
@@ -315,8 +301,7 @@ export default function App() {
 
   const titleEntry = PAGE_TITLE.find(([pattern]) => pattern.test(location.pathname))
   const pageTitle = titleEntry?.[1] ?? 'Science Research'
-  const pageSpectrum = spectrumKey(location.pathname)
-  const pageLine = PAGE_SPECTRA[pageSpectrum]
+  const pageMeta = PAGE_META[pageKey(location.pathname)]
   const showIntro = !introDone || location.pathname === '/welcome'
   const roleCn = ROLE_LABEL[role]
   const identity = getApiKeyStorage() === 'none' ? '本地研究者' : roleCn
@@ -342,13 +327,12 @@ export default function App() {
       to={item.to}
       end={item.end}
       className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
-      title={collapsed ? item.label : PAGE_SPECTRA[item.spectrum].note}
-      style={lineStyle(item.spectrum)}
+      title={collapsed ? item.label : PAGE_META[item.page].note}
     >
-      <AppIcon name={item.icon} size={19} strokeWidth={1.6} aria-hidden="true" />
+      <AppIcon name={item.icon} size={18} strokeWidth={1.5} aria-hidden="true" />
       <span className="sidebar-link-label">
         {item.label}
-        <small>{PAGE_SPECTRA[item.spectrum].stage}</small>
+        <small>§ {PAGE_META[item.page].section}</small>
       </span>
     </NavLink>
   )
@@ -363,7 +347,7 @@ export default function App() {
           <span className="sidebar-logo" aria-hidden="true" />
           <span className="sidebar-brand-text">
             <strong>Science Research</strong>
-            <small>科研工作台</small>
+            <small>实证研究工作台</small>
           </span>
         </NavLink>
         <nav className="sidebar-nav" aria-label="主导航">
@@ -381,9 +365,7 @@ export default function App() {
         </nav>
         <div className="sidebar-footer">
           <p className="sidebar-motto" aria-hidden="true">
-            亮线是已证之事，
-            <br />
-            暗线是未解之问。
+            有一分证据，说一分话。
           </p>
           <button
             type="button"
@@ -391,7 +373,7 @@ export default function App() {
             onClick={() => setShowTour(true)}
             title="使用引导"
           >
-            <AppIcon name="help" size={18} aria-hidden="true" />
+            <AppIcon name="help" size={17} strokeWidth={1.5} aria-hidden="true" />
             <span className="sidebar-link-label">使用引导</span>
           </button>
           <button
@@ -401,16 +383,17 @@ export default function App() {
             aria-pressed={collapsed}
             title={collapsed ? '展开侧边栏' : '收起侧边栏'}
           >
-            <AppIcon name={collapsed ? 'panel-open' : 'panel-close'} size={18} aria-hidden="true" />
+            <AppIcon
+              name={collapsed ? 'panel-open' : 'panel-close'}
+              size={17}
+              strokeWidth={1.5}
+              aria-hidden="true"
+            />
             <span className="sidebar-link-label">收起侧边栏</span>
           </button>
         </div>
       </aside>
       <div className="sidebar-scrim" onClick={() => setMobileOpen(false)} aria-hidden="true" />
-      {/* 环境背景：横贯页面的光谱带与本页认领的谱线，固定在内容区后方 */}
-      <div className="backdrop" data-signature={pageSpectrum} aria-hidden="true">
-        <SpectrumBackdrop route={location.pathname} dark={theme.dark} />
-      </div>
 
       <div className="main-column">
         <header className="topbar">
@@ -423,12 +406,14 @@ export default function App() {
           >
             <AppIcon name={mobileOpen ? 'x' : 'menu'} size={18} aria-hidden="true" />
           </button>
-          <span className="topbar-title" style={lineStyle(pageSpectrum)}>
-            {pageTitle}
-            <small title={pageLine.note}>
-              <i className="topbar-line" aria-hidden="true" />
-              {pageLine.stage}
+          <span className="topbar-title">
+            <small className="topbar-section" title={pageMeta.note}>
+              § {pageMeta.section} · {pageMeta.stage}
             </small>
+            {pageTitle}
+          </span>
+          <span className="topbar-issue" aria-hidden="true">
+            {issueLabel()}
           </span>
           <div className="topbar-actions">
             <button
@@ -438,7 +423,7 @@ export default function App() {
               aria-label="搜索任务记录"
               title="搜索任务记录"
             >
-              <AppIcon name="search" size={17} aria-hidden="true" />
+              <AppIcon name="search" size={17} strokeWidth={1.5} aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -450,7 +435,7 @@ export default function App() {
               aria-label={theme.dark ? '切换到浅色主题' : '切换到深色主题'}
               title={theme.dark ? '浅色主题' : '深色主题'}
             >
-              <AppIcon name={theme.dark ? 'sun' : 'moon'} size={17} aria-hidden="true" />
+              <AppIcon name={theme.dark ? 'sun' : 'moon'} size={17} strokeWidth={1.5} aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -472,12 +457,7 @@ export default function App() {
           </div>
         </header>
 
-        <main
-          className="main-content"
-          id="workspace-main"
-          tabIndex={-1}
-          style={lineStyle(pageSpectrum)}
-        >
+        <main className="main-content" id="workspace-main" tabIndex={-1}>
           <div className={`content-area${wide ? ' is-wide' : ''}`} key={location.pathname}>
             {forbidden ? (
               <section className="panel permission-state" role="status">

@@ -37,9 +37,9 @@ const STARTERS = [
 
 /** 阅读提示与回答内的核验记录分工：这里说明如何使用和判断回答。 */
 const STEPS = [
-  { title: '查看出处', text: '点击引用，回到原文核对结论与适用条件。' },
-  { title: '继续追问', text: '补充论文、方法或实验条件，让问题更具体。' },
-  { title: '留意证据不足', text: '未找到支持材料时，回答会说明局限。' },
+  { title: '核查原文出处', text: '点击正文引用编号，对照原始文献段落确认结论与实验前提。' },
+  { title: '限定范围追问', text: '结合私有文献库或指定任务材料，围绕方法细节与基线差异连续深挖。' },
+  { title: '甄别证据边界', text: '缺乏可靠文献支撑时，回答会明确交代局限，不做无依据外推。' },
 ]
 
 export default function QaPage() {
@@ -329,7 +329,7 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
               <Link to={`/runs/${encodeURIComponent(runId)}`}>返回任务</Link>
             </p>
           ) : (
-            <p className="hint">问概念、找文献、比较研究方法，也可以接着上一轮追问。</p>
+            <p className="hint">辨析学术概念、检索代表文献、对比方法机制，支持挂载知识库或联网来源多轮深挖。</p>
           )}
         </header>
 
@@ -345,7 +345,7 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
           {empty && !runId && (
             <div className="qa-welcome">
               <h2>{PAGE_VOICE.qa.verse}</h2>
-              <p className="hint">选一个示例，或直接写下你的问题；每个回答都会标出它从哪里来。</p>
+              <p className="hint">选择下方学术命题，或直接输入你的研究疑问；关键论断均附可回查的文献依据。</p>
             </div>
           )}
           {scopeNotice && (
@@ -620,9 +620,9 @@ function QaWorkspace({ id, requestedRunId }: { id?: string; requestedRunId?: str
           </ol>
         </section>
         <p className="qa-context-motto" aria-hidden="true">
-          言必有据，
+          每句回答交出底本，
           <br />
-          如线必有其源。
+          未知之处坦诚留白。
         </p>
       </aside>
     </div>
