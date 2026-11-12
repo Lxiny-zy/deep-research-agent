@@ -2300,6 +2300,8 @@ export interface components {
             max_run_seconds?: number | null;
             /** Max Sub Questions */
             max_sub_questions?: number | null;
+            /** Provider Max Concurrency */
+            provider_max_concurrency?: number | null;
             /** Quality */
             quality?: {
                 [key: string]: unknown;
@@ -2352,6 +2354,11 @@ export interface components {
             max_run_seconds: number;
             /** Max Sub Questions */
             max_sub_questions: number;
+            /**
+             * Provider Max Concurrency
+             * @default 2
+             */
+            provider_max_concurrency?: number;
             /** Quality */
             quality?: {
                 [key: string]: unknown;
@@ -2394,7 +2401,7 @@ export interface components {
              * @default rewrite
              * @enum {string}
              */
-            mode?: "rewrite" | "research";
+            mode?: "rewrite" | "research" | "slides" | "mindmap";
             /** Request Id */
             request_id: string;
             /** Source Version */
@@ -4920,6 +4927,11 @@ export interface components {
         TableCell: {
             /** Citations */
             citations?: number[];
+            /**
+             * Cited Inline
+             * @default false
+             */
+            cited_inline?: boolean;
             /**
              * Disputed
              * @default false

@@ -17,6 +17,8 @@ export const SETTINGS_HELP: Record<string, string> = {
     '反思补洞的最大轮数：每轮由质检员判断证据是否足够，不足则追加子问题继续检索。0 表示不补洞。',
   max_concurrency:
     '同时进行的检索与抽取数量上限。调高能缩短耗时，但更容易触发检索服务或模型服务的限流。',
+  provider_max_concurrency:
+    '同一模型密钥同时进行的调用数。这是软限流：名额占满时后续调用排队等待，不会让任务失败；按模型服务商的并发配额设置，调高可缩短耗时。',
   results_per_search:
     '每个子问题取回多少条检索结果参与证据抽取。调高增加候选来源，也会增加阅读与核验的 token 消耗。',
   fulltext_max_chars:

@@ -90,6 +90,10 @@ class Settings:
     provider_max_concurrency: int = field(
         default_factory=lambda: _int_env("DR_PROVIDER_MAX_CONCURRENCY", 2)
     )
+    # 排队等待模型名额的最长时间（秒）；名额是软限流，等到为止，超过才让出本次尝试。
+    provider_queue_seconds: float = field(
+        default_factory=lambda: _float_env("DR_PROVIDER_QUEUE_SECONDS", 1800.0)
+    )
     provider_max_waiters: int = field(
         default_factory=lambda: _int_env("DR_PROVIDER_MAX_WAITERS", 128)
     )

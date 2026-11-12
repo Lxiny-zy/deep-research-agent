@@ -321,6 +321,7 @@ class ConfigView(BaseModel):
     max_sub_questions: int
     max_rounds: int
     max_concurrency: int
+    provider_max_concurrency: int = 2
     results_per_search: int
     fulltext_enabled: bool
     fulltext_max_chars: int
@@ -350,6 +351,7 @@ class ConfigUpdate(BaseModel):
     max_sub_questions: int | None = Field(default=None, ge=1, le=12)
     max_rounds: int | None = Field(default=None, ge=0, le=5)
     max_concurrency: int | None = Field(default=None, ge=1, le=16)
+    provider_max_concurrency: int | None = Field(default=None, ge=1, le=32)
     results_per_search: int | None = Field(default=None, ge=1, le=15)
     fulltext_enabled: bool | None = None
     fulltext_max_chars: int | None = Field(default=None, ge=1, le=200_000)
@@ -365,6 +367,7 @@ class ConfigUpdate(BaseModel):
         "max_sub_questions",
         "max_rounds",
         "max_concurrency",
+        "provider_max_concurrency",
         "results_per_search",
         "fulltext_enabled",
         "fulltext_max_chars",
@@ -643,6 +646,7 @@ def _config_view(s: Settings) -> ConfigView:
         max_sub_questions=s.max_sub_questions,
         max_rounds=s.max_rounds,
         max_concurrency=s.max_concurrency,
+        provider_max_concurrency=s.provider_max_concurrency,
         results_per_search=s.results_per_search,
         fulltext_enabled=s.fulltext_enabled,
         fulltext_max_chars=s.fulltext_max_chars,

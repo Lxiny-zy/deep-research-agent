@@ -124,8 +124,14 @@ class ProviderCoordinator:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise ProviderBusyError(1)
-                if gate.retry_at > time.monotonic():
-                    raise ProviderBusyError(gate.retry_at - time.monotonic())
+                cooling = gate.retry_at - time.monotonic()
+                if cooling > 0:
+                    # Soft limit: wait out a provider cooldown in place when it fits the
+                    # queue budget instead of aborting the whole attempt.
+                    if cooling > remaining:
+                        raise ProviderBusyError(cooling)
+                    await asyncio.sleep(cooling)
+                    continue
                 if gate.head() is not waiter:
                     waiter.ready.clear()
                     try:
@@ -144,7 +150,9 @@ class ProviderCoordinator:
                         lease, earliest = await self._try_acquire(identity)
                     except ProviderBusyError as exc:
                         gate.retry_at = time.monotonic() + exc.retry_after
-                        raise
+                        if exc.retry_after > deadline - time.monotonic():
+                            raise
+                        continue
                     if lease is not None:
                         gate.interactive_streak = (
                             gate.interactive_streak + 1 if waiter.interactive else 0
@@ -347,7 +355,9 @@ def coordinator_for(repo: Any, settings: Settings) -> ProviderCoordinator | None
         sessions,
         concurrency=settings.provider_max_concurrency,
         requests_per_minute=settings.provider_requests_per_minute,
-        wait_seconds=min(30, settings.request_timeout),
+        # Concurrency is a soft limit: requests queue for a slot (up to the queue budget)
+        # rather than failing the attempt after a few seconds.
+        wait_seconds=max(settings.provider_queue_seconds, settings.request_timeout),
         max_waiters=settings.provider_max_waiters,
     )
 

@@ -18,6 +18,7 @@ interface NumField {
     | 'max_sub_questions'
     | 'max_rounds'
     | 'max_concurrency'
+    | 'provider_max_concurrency'
     | 'results_per_search'
     | 'fulltext_max_chars'
     | 'max_run_seconds'
@@ -30,6 +31,7 @@ const NUM_FIELDS: NumField[] = [
   { key: 'max_sub_questions', label: '子问题数上限', min: 1, max: 12 },
   { key: 'max_rounds', label: '反思补洞轮数', min: 0, max: 5 },
   { key: 'max_concurrency', label: '并行检索上限', min: 1, max: 16 },
+  { key: 'provider_max_concurrency', label: '模型同时调用数', min: 1, max: 32 },
   { key: 'results_per_search', label: '每问检索来源数', min: 1, max: 15 },
   { key: 'fulltext_max_chars', label: '全文选读目标长度', min: 1_000, max: 200_000 },
   { key: 'max_run_seconds', label: '每次尝试期限（秒，0 按任务档位）', min: 0, max: 86400 },
@@ -43,6 +45,7 @@ interface FormState {
   max_sub_questions: number
   max_rounds: number
   max_concurrency: number
+  provider_max_concurrency: number
   results_per_search: number
   fulltext_enabled: boolean
   fulltext_max_chars: number
@@ -63,6 +66,7 @@ function toForm(c: ConfigView): FormState {
     max_sub_questions: c.max_sub_questions,
     max_rounds: c.max_rounds,
     max_concurrency: c.max_concurrency,
+    provider_max_concurrency: c.provider_max_concurrency ?? 2,
     results_per_search: c.results_per_search,
     fulltext_enabled: c.fulltext_enabled,
     fulltext_max_chars: c.fulltext_max_chars,
@@ -271,6 +275,7 @@ export default function SettingsPage() {
       max_sub_questions: form.max_sub_questions,
       max_rounds: form.max_rounds,
       max_concurrency: form.max_concurrency,
+      provider_max_concurrency: form.provider_max_concurrency,
       results_per_search: form.results_per_search,
       fulltext_enabled: form.fulltext_enabled,
       fulltext_max_chars: form.fulltext_max_chars,
@@ -296,7 +301,7 @@ export default function SettingsPage() {
   return (
     <div className="stack page-stack settings-page">
       <PageHeader page="tools" title="设置">
-        设置默认模型、检索档案、研究参数与交付质量。保存后对新建任务生效。
+        配置全局兜底模型、默认检索档案、并发与轮次阈值及学术交付验收门禁。保存后对新建任务生效。
       </PageHeader>
 
       <div className="settings-layout">
